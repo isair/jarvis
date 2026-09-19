@@ -240,6 +240,8 @@ class AudioIngress:
         self._selected_reason: dict = {}
         #: ``(key) -> int`` monotonic_ns of the lock.
         self._selected_at_ns: dict = {}
+        #: ``(key) -> int`` stated-EOS stamps, read by the pipeline close.
+        self._eos_stated: dict = {}
         #: ``(key, channel) -> total samples`` in the whole current buffer.
         self._window_samples: dict = {}
         self._packet_index: dict = {}
@@ -935,6 +937,63 @@ class AudioIngress:
             except Exception:
                 pass
         self._destroy_lane(self._stream_key(marker.stream))
+        #: Per-stream EOS record: the marker was stated and its padded tail is
+        #: already queued on the listener. A following pipeline close reads
+        #: this instead of wiping the utterance that is mid-finalisation.
+        self._eos_stated[self._stream_key(marker.stream)] = int(time.monotonic_ns())
+
+    def eos_pending(self, stream: Optional[StreamId] = None) -> bool:
+        """True when this stream's EOS was stated already or still waits."""
+        key = self._stream_key(stream or self._stream)
+        if key in self._eos_stated:
+            return True
+        return any(
+            isinstance(item, EndOfStream) and self._stream_key(item.stream) == key
+            for item in self._items
+        )
+
+    def drain(self) -> int:
+        """Deliver every queued item synchronously; returns the item count.
+
+        Used by the pipeline-close path so the whole utterance (blocks, the
+        EOS marker and its silence tail) reaches the listener queue before
+        the close is written; the pump then finds the FIFO empty.
+        """
+        loop_budget = 4096
+        delivered = 0
+        while self._items and delivered < loop_budget:
+            item = self._items.popleft()
+            if self._wake is not None:
+                self._wake.clear()
+            if isinstance(item, EndOfStream):
+                self._close_stream(item)
+                delivered += 1
+                continue
+            if not getattr(item, "samples", None):
+                continue
+            self._pending_samples = max(
+                0, self._pending_samples - _item_sample_len(item.samples)
+            )
+            if isinstance(item, LocalMicFrame):
+                payload = item
+            elif isinstance(item.samples, (bytes, bytearray)):
+                payload = SatelliteAudioFrame(
+                    item.stream,
+                    item.source,
+                    pcm16_to_float32(item.samples),
+                    int(item.channel),
+                )
+            else:
+                payload = item
+            try:
+                self._listener._audio_q.put_nowait(payload)
+            except Exception:
+                self._metrics["audio_dropped_chunks"] = int(
+                    self._metrics.get("audio_dropped_chunks", 0)
+                ) + 1
+            delivered += 1
+        self._metrics["microphone_queue_depth_ms"] = self.depth_ms()
+        return delivered
 
     # -- lifecycle --------------------------------------------------------
 
@@ -954,6 +1013,7 @@ class AudioIngress:
         self._first_ns.clear()
         self._first_voiced.clear()
         self._first_admissible_ns.clear()
+        self._eos_stated.clear()
         for key in list(self._lane_handles):
             from ...listening import audio_io as _aio
 

@@ -863,6 +863,21 @@ class VoicePEDevice:
     async def handle_pipeline_stop(self, abort: bool) -> None:
         """Close or abort the current run without replaying old audio."""
         if abort:
+            # The firmware answers the microphone-end marker with a plain
+            # pipeline close; when that end-of-stream was already stated (or
+            # still waits in the FIFO), the close is the *normal* terminal of
+            # the run. Drain first, then close without wiping the audio that
+            # the VAD is still finalizing.
+            eos = self._ingress is not None and self._ingress.eos_pending(
+                getattr(self._ingress, "stream", None) or self._stream()
+            )
+            if eos:
+                try:
+                    self._ingress.drain()
+                except Exception:
+                    pass
+                await self.abort_run(self.session_generation, "microphone_end")
+                return
             await self.abort_run(self.session_generation, "aborted")
             return
         # ``abort=False`` is the microphone end marker. The EOS marker is queued
@@ -910,13 +925,24 @@ class VoicePEDevice:
         if close_key in self._closed_runs:
             self._mark_event(f"ignored_duplicate:{close_key[-1]}")
             return
-        # Released first and idempotently, so a caller that already dropped the
-        # session sees the same state immediately.
-        self._release_local_state()
-        self._cancel_tts_task()
-        if self._ingress is not None:
-            self._ingress.reset()
-        self._clear_listener_audio()
+        # ``microphone_end`` is the normal terminal of a drained run: its
+        # audio (plus the padded silence tail) is already on the listener
+        # queue or still mid-finalisation there, so this close keeps both the
+        # audio and the session that owns them. Everything else is a hard
+        # close and releases first, idempotently.
+        keep_audio = str(reason) == "microphone_end"
+        if not keep_audio:
+            self._release_local_state()
+            self._cancel_tts_task()
+            if self._ingress is not None:
+                self._ingress.reset()
+            self._clear_listener_audio()
+        else:
+            # Drain already delivered the whole utterance; only the per-run
+            # input bookkeeping is closed here, the listener queue stays.
+            self._cancel_tts_task()
+            if self._ingress is not None:
+                self._ingress.reset()
         try:
             if self.media is not None and self.media.is_active():
                 self.media.stop()

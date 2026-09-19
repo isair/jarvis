@@ -137,6 +137,32 @@ def native_create(cfg) -> int:
                 cfg, "audio_diagnostic_multitrack", 0),
         )
         _STATUS = int(st)
+        if st == 2:
+            # ``NO_RAW_CAPTURE``: the endpoint opened its shared mix without
+            # the RAW option (typical for 44.1 kHz mixes). The very same
+            # event-driven stream serves the engine without RAW, so retry
+            # once with the option off before failing closed.
+            st, engine = _na.engine_create(
+                capture_endpoint_id=str(
+                    getattr(cfg, "voice_capture_endpoint_id", "") or ""),
+                render_endpoint_id=str(
+                    getattr(cfg, "voice_render_endpoint_id", "") or ""),
+                endpoint_role=_role_code(cfg),
+                require_raw_capture=0,
+                default_profile=_int_attr(
+                    cfg, "native_profile", _na.PROFILE_HOSTILE_PLAYBACK),
+                aec_mode=_int_attr(
+                    cfg, "native_aec_mode", _na.AEC_MODE_WEBRTC_AEC3),
+                diagnostic_multitrack=_int_attr(
+                    cfg, "audio_diagnostic_multitrack", 0),
+            )
+            _STATUS = int(st)
+            if st == NATIVE_OK and engine:
+                debug_log(
+                    "native: RAW unavailable, engine running on the plain "
+                    "shared capture stream (status 2 recovered)",
+                    "voice",
+                )
         if st == NATIVE_OK and engine:
             _ENGINE = int(engine)
             tel = _na.engine_telemetry(_ENGINE) or {}
