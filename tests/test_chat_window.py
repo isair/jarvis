@@ -20,6 +20,78 @@ import pytest
 
 
 @pytest.mark.unit
+class TestPhoneShell:
+    def test_window_controls_and_rounded_frame(self, qapp, monkeypatch):
+        from desktop_app.chat_window import ChatWindow
+        from PyQt6.QtCore import Qt, QPoint
+        from PyQt6.QtTest import QTest
+        from PyQt6.QtWidgets import QSizeGrip
+        monkeypatch.setattr('desktop_app.chat_window.get_hot_window_messages', lambda: [])
+        win = ChatWindow()
+        win.show()
+        QTest.qWait(30)
+        rendered = win.grab().toImage()
+        assert rendered.pixelColor(0, 0).alpha() == 0
+        centre = rendered.rect().center()
+        assert rendered.pixelColor(centre).alpha() == 255
+        assert win.findChild(QSizeGrip).isVisible()
+        QTest.mouseDClick(win.title_bar, Qt.MouseButton.LeftButton, pos=QPoint(50, 10))
+        assert win.isMaximized()
+        QTest.mouseDClick(win.title_bar, Qt.MouseButton.LeftButton, pos=QPoint(50, 10))
+        assert not win.isMaximized()
+        win.minimise_button.click()
+        assert win.isMinimized()
+        win.showNormal()
+        win.close()
+
+    def test_custom_frame_close_preserves_conversation(self, qapp, monkeypatch):
+        from desktop_app.chat_window import ChatWindow
+        from PyQt6.QtCore import Qt
+        monkeypatch.setattr('desktop_app.chat_window.get_hot_window_messages', lambda: [])
+        win = ChatWindow()
+        win.show()
+        win._append_assistant('Still here')
+        assert win.windowFlags() & Qt.WindowType.FramelessWindowHint
+        win.close_button.click()
+        assert not win.isVisible()
+        win.show()
+        assert win.transcript_text() == 'Still here'
+        win.close()
+
+    def test_empty_state_disappears_without_becoming_a_message(self, qapp, monkeypatch):
+        from desktop_app.chat_window import ChatWindow
+        monkeypatch.setattr('desktop_app.chat_window.get_hot_window_messages', lambda: [])
+        win = ChatWindow()
+        win.show()
+        assert win.empty_state.isVisible()
+        assert win.transcript_text() == ''
+        win._append_user('Hello')
+        assert not win.empty_state.isVisible()
+        win.close()
+
+    @pytest.mark.parametrize('size', [(380, 560), (480, 780), (800, 650)])
+    def test_controls_fit_and_messages_are_literal_at_all_sizes(self, qapp, monkeypatch, size):
+        from desktop_app.chat_window import ChatWindow
+        from PyQt6.QtCore import Qt
+        from PyQt6.QtWidgets import QLabel
+        from PyQt6.QtTest import QTest
+        monkeypatch.setattr('desktop_app.chat_window.get_hot_window_messages', lambda: [])
+        win = ChatWindow()
+        win.resize(*size)
+        win.show()
+        win._append_assistant('<b>literal message</b> ' * 20)
+        win._set_thinking(True)
+        QTest.qWait(50)
+        for widget in (win.input_widget, win.send_button, win.stop_button, win.close_button):
+            assert win.rect().contains(widget.mapTo(win, widget.rect().bottomRight()))
+            assert widget.width() >= 36
+        bubble = next(w for w in win.findChildren(QLabel) if w.objectName() == 'bubble')
+        assert bubble.textFormat() == Qt.TextFormat.PlainText
+        assert bubble.width() < win.transcript_widget.viewport().width()
+        win.close()
+
+
+@pytest.mark.unit
 class TestChatWindowStructure:
     """The window exposes the UI elements the spec requires."""
 
