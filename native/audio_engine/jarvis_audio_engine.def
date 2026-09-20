@@ -25,3 +25,5 @@ EXPORTS
     JarvisAeLanePopClean
     JarvisAeLaneReadTelemetry
     JarvisAeLaneReset
+    JarvisAeV2Step
+    JarvisAeEnumDiag

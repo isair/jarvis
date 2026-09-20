@@ -658,3 +658,83 @@ class TestSpeechSettingsResolution:
 
             settings = load_settings()
         assert settings.speech_spellcheck_languages == ["en", "cs"]
+
+
+class TestLiveDialogRoundTrip:
+    """Regression tests that drive the real widgets of ``SettingsWindow``.
+
+    The metadata-only tests above never construct the dialog, which is how
+    the unhandled field types (``mmdevice_capture`` / ``mmdevice_render``
+    backed by ``QComboBox``) slipped through: the value-extraction fallback
+    assumed ``QLineEdit`` and raised ``AttributeError``, killing the app on
+    the Save click. These tests build the real dialog and exercise the
+    Save / Reset code paths.
+    """
+
+    def _make_dialog(self, qapp, tmp_path, monkeypatch, existing=None):
+        import json
+        from desktop_app.settings_window import SettingsWindow
+        from PyQt6.QtWidgets import QMessageBox
+
+        cfg = tmp_path / "config.json"
+        cfg.write_text(json.dumps(existing or {}), encoding="utf-8")
+        monkeypatch.setattr(
+            "desktop_app.settings_window.default_config_path", lambda: cfg
+        )
+        # Keep the modal message boxes from blocking the offscreen loop.
+        monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
+        monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: None)
+        monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: None)
+        return SettingsWindow(), cfg
+
+    def test_save_covers_every_declared_field_type(self, qapp, tmp_path, monkeypatch):
+        dialog, cfg = self._make_dialog(qapp, tmp_path, monkeypatch)
+        for fm in _build_field_metadata():
+            assert fm.key in dialog._widgets, f"no widget built for '{fm.key}'"
+            # Each type must extract without an AttributeError from the
+            # QLineEdit-only fallback.
+            dialog._get_value(fm)
+
+        dialog._on_save()
+        import json
+        saved = json.loads(cfg.read_text(encoding="utf-8"))
+        assert isinstance(saved, dict)
+
+    def test_save_preserves_unknown_keys(self, qapp, tmp_path, monkeypatch):
+        existing = {"mcps": {"searxng": {"command": "srv"}}, "_config_version": 1}
+        dialog, cfg = self._make_dialog(qapp, tmp_path, monkeypatch, existing)
+        dialog._on_save()
+        import json
+        saved = json.loads(cfg.read_text(encoding="utf-8"))
+        assert saved["_config_version"] == 1
+        assert saved["mcps"]["searxng"]["command"] == "srv"
+
+    def test_set_widget_value_covers_every_declared_field_type(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        dialog, _ = self._make_dialog(qapp, tmp_path, monkeypatch)
+        defaults = dialog._defaults
+        for fm in _build_field_metadata():
+            dialog._set_widget_value(fm, defaults.get(fm.key))
+
+    def test_mmdevice_combo_uses_item_data_not_text(self, qapp, tmp_path, monkeypatch):
+        """System-default MMDevice rows read back as ``None`` (omitted)."""
+        dialog, _ = self._make_dialog(qapp, tmp_path, monkeypatch)
+        for key in ("voice_capture_endpoint_id", "voice_render_endpoint_id"):
+            fm = next(f for f in _build_field_metadata() if f.key == key)
+            dialog._widgets[key].setCurrentIndex(0)  # "System Default (role)" -> data ""
+            assert dialog._get_value(fm) is None
+
+    def test_password_field_reads_masked_line_edit(
+        self, qapp, tmp_path, monkeypatch
+    ):
+        dialog, cfg = self._make_dialog(qapp, tmp_path, monkeypatch)
+        fm = next(
+            f for f in _build_field_metadata() if f.key == "llm_api_key"
+        )
+        dialog._widgets["llm_api_key"].setText("secret-key")
+        assert dialog._get_value(fm) == "secret-key"
+        dialog._on_save()
+        import json
+        saved = json.loads(cfg.read_text(encoding="utf-8"))
+        assert saved["llm_api_key"] == "secret-key"
