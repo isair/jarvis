@@ -1098,9 +1098,12 @@ class SettingsWindow(QDialog):
             w.addItem("🔧 System Default (role)", "")
             try:
                 from jarvis import native_audio as _na
+                from jarvis import native_bridge as _nb
                 if not _na.is_loaded():
                     _na.load()
-                for line in _na.endpoint_lines(
+                if not _nb.is_loaded():
+                    _nb.load()
+                for line in (_na if _na.is_loaded() else _nb).endpoint_lines(
                     2 if fm.field_type == "mmdevice_capture" else 3
                 ):
                     parts = line.split(" id=", 1)
@@ -1516,7 +1519,7 @@ class SettingsWindow(QDialog):
         if fm.field_type == "float":
             return round(w.value(), 3)
 
-        if fm.field_type in ("choice", "device"):
+        if fm.field_type in ("choice", "device", "mmdevice_capture", "mmdevice_render"):
             val = w.currentData()
             if val == "":
                 return None
@@ -1540,6 +1543,19 @@ class SettingsWindow(QDialog):
         if fm.field_type == "list":
             list_w = w._list_widget
             return [list_w.item(i).text() for i in range(list_w.count())]
+
+        if fm.field_type == "password":
+            # Masked QLineEdit: same extraction as a plain string field.
+            text = w.text().strip()
+            if fm.nullable and text == "":
+                return None
+            return text
+
+        # Unhandled combo-based field types fall back to item data so a new
+        # dropdown type never reaches the QLineEdit-only branch below.
+        if isinstance(w, QComboBox):
+            val = w.currentData()
+            return None if val == "" else val
 
         # str
         text = w.text().strip()
@@ -1638,7 +1654,7 @@ class SettingsWindow(QDialog):
             except (TypeError, ValueError):
                 w.setValue(0.0)
 
-        elif fm.field_type in ("choice", "device"):
+        elif fm.field_type in ("choice", "device", "mmdevice_capture", "mmdevice_render"):
             idx = _select_choice_index(
                 w, "" if value in (None, "") else value
             )
@@ -1655,6 +1671,10 @@ class SettingsWindow(QDialog):
                 for item in value:
                     if isinstance(item, str) and item.strip():
                         list_w.addItem(item.strip())
+
+        elif fm.field_type == "password":
+            # Masked QLineEdit shares the plain string handling below.
+            w.setText(str(value) if value not in (None, "") else "")
 
         else:  # str
             w.setText(str(value) if value not in (None, "") else "")

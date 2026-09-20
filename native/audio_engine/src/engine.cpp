@@ -831,30 +831,85 @@ HRESULT V2InitCapture(IMMDevice* dev, bool want_raw, V2Source& s) {
   s.fmt = FormatOf(s.mix);
   if (!s.rate || !s.channels) return E_FAIL;
 
-  AudioClientProperties props{};
-  props.cbSize = sizeof(props);
-  props.bIsOffload = FALSE;
-  props.eCategory = static_cast<AUDIO_STREAM_CATEGORY>(1);
-  if (want_raw) props.Options = AUDCLNT_STREAMOPTIONS_RAW;
-  const HRESULT props_hr = s.client->SetClientProperties(&props);
+  /* Ordered init attempts. On some endpoints the very first attempt (no
+   * SetClientProperties at all, then Initialize with (0, 0)) is the only one
+   * that returns S_OK; others want the explicit option structs. Each attempt
+   * runs on a fresh IAudioClient after the previous failed, because a failed
+   * Initialize can leave the first client's period cached for the next one. */
   const UINT32 flags = static_cast<UINT32>(AUDCLNT_STREAMFLAGS_EVENTCALLBACK);
-  HRESULT hr =
-      s.client->Initialize(AUDCLNT_SHAREMODE_SHARED, flags, 0, 0, s.mix, nullptr);
-  bool raw_active = want_raw && SUCCEEDED(props_hr);
-  if (FAILED(hr) && !want_raw) return hr;
-  if (FAILED(hr)) {
-    /* exact 5-step retry: RAW optional => clear the option, re-init once. */
-    AudioClientProperties cleared{};
-    cleared.cbSize = sizeof(cleared);
-    cleared.bIsOffload = FALSE;
-    cleared.eCategory = static_cast<AUDIO_STREAM_CATEGORY>(1);
-    cleared.Options = AUDCLNT_STREAMOPTIONS_NONE;
-    (void)s.client->SetClientProperties(&cleared);
-    hr = s.client->Initialize(AUDCLNT_SHAREMODE_SHARED, flags, 0, 0, s.mix, nullptr);
-    raw_active = false;
-    if (FAILED(hr)) return hr;
+  UINT32 npb = 0;
+  bool got_raw = false;
+  HRESULT hr = E_FAIL;
+  for (uint32_t attempt = 0; attempt < 4; ++attempt) {
+    IAudioClient3* c = s.client;
+    if (attempt > 0 && c) {
+      c->Stop();
+      c->Release();
+      s.client = nullptr;
+    }
+    if (FAILED(dev->Activate(__uuidof(IAudioClient3), CLSCTX_INPROC_SERVER,
+                             nullptr, reinterpret_cast<void**>(&s.client))) ||
+        !s.client) {
+      if (s.mix) CoTaskMemFree(s.mix), s.mix = nullptr;
+      return E_FAIL;
+    }
+    got_raw = false;
+    switch (attempt) {
+      case 0:  // no properties, periodic default
+        hr = s.client->Initialize(AUDCLNT_SHAREMODE_SHARED, flags, 0, 0, s.mix,
+                                  nullptr);
+        npb = 0;
+        break;
+      case 1: {  // RAW option honored?
+        AudioClientProperties props{};
+        props.cbSize = sizeof(props);
+        props.bIsOffload = FALSE;
+        props.eCategory = static_cast<AUDIO_STREAM_CATEGORY>(1);
+        props.Options = AUDCLNT_STREAMOPTIONS_RAW;
+        const HRESULT ph = s.client->SetClientProperties(&props);
+        got_raw = want_raw && SUCCEEDED(ph);
+        hr = s.client->Initialize(AUDCLNT_SHAREMODE_SHARED, flags, 0, 0, s.mix,
+                                  nullptr);
+        if (FAILED(hr) && want_raw) {
+          AudioClientProperties cleared{};
+          cleared.cbSize = sizeof(cleared);
+          cleared.bIsOffload = FALSE;
+          cleared.eCategory = static_cast<AUDIO_STREAM_CATEGORY>(1);
+          cleared.Options = AUDCLNT_STREAMOPTIONS_NONE;
+          (void)s.client->SetClientProperties(&cleared);
+          got_raw = false;
+          hr = s.client->Initialize(AUDCLNT_SHAREMODE_SHARED, flags, 0, 0,
+                                    s.mix, nullptr);
+        }
+        npb = 0;
+        break;
+      }
+      case 2: {  // explicit single periodic buffer
+        AudioClientProperties props{};
+        props.cbSize = sizeof(props);
+        props.bIsOffload = FALSE;
+        props.eCategory = static_cast<AUDIO_STREAM_CATEGORY>(1);
+        props.Options = AUDCLNT_STREAMOPTIONS_NONE;
+        (void)s.client->SetClientProperties(&props);
+        hr = s.client->Initialize(AUDCLNT_SHAREMODE_SHARED, flags, 0, 1, s.mix,
+                                  nullptr);
+        npb = 1;
+        break;
+      }
+      default: {  // periodic default after an honored RAW attempt
+        hr = s.client->Initialize(AUDCLNT_SHAREMODE_SHARED, flags, 0, 0, s.mix,
+                                  nullptr);
+        npb = 0;
+        break;
+      }
+    }
+    if (SUCCEEDED(hr)) break;
+    s.client->Release();
+    s.client = nullptr;
   }
-  s.raw = raw_active ? 1u : 0u;
+  if (FAILED(hr) || !s.client) return FAILED(hr) ? hr : E_FAIL;
+  (void)npb;
+  s.raw = got_raw ? 1u : 0u;
   if (FAILED(s.client->GetBufferSize(&s.period_frames))) return E_FAIL;
   if (FAILED(s.client->GetService(__uuidof(IAudioCaptureClient),
                                   reinterpret_cast<void**>(&s.capture))) || !s.capture)
@@ -885,36 +940,62 @@ HRESULT V2InitLoopback(IMMDevice* dev, V2Source& s) {
       static_cast<UINT32>(AUDCLNT_STREAMFLAGS_EVENTCALLBACK);
   s.ref_tap = JARVIS_AE_REF_TAP_PRE_VOLUME;
 
-  AudioClientProperties props{};
-  props.cbSize = sizeof(props);
-  props.bIsOffload = FALSE;
-  props.eCategory = static_cast<AUDIO_STREAM_CATEGORY>(1);
-  try {
-    /* the post-volume constant exists only in newer SDKs; the numeric value
-     * is stable (4) and matches AUDCLNT_STREAMOPTIONS_POST_VOLUME_LOOPBACK. */
-    props.Options = static_cast<AUDCLNT_STREAMOPTIONS>(4);
-    if (FAILED(s.client->SetClientProperties(&props))) {
-      props.Options = AUDCLNT_STREAMOPTIONS_MATCH_FORMAT;
-      if (FAILED(s.client->SetClientProperties(&props)))
-        props.Options = AUDCLNT_STREAMOPTIONS_NONE;
-    } else {
-      s.ref_tap = JARVIS_AE_REF_TAP_POST_VOLUME;
+  /* Same cascade as the capture path: the first attempt without any
+   * SetClientProperties call is the one several real endpoints accept; the
+   * option-providing attempts follow for the rest. */
+  HRESULT hr = E_FAIL;
+  for (uint32_t attempt = 0; attempt < 3; ++attempt) {
+    if (attempt > 0 && s.client) {
+      s.client->Stop();
+      s.client->Release();
+      s.client = nullptr;
     }
-  } catch (...) {
-    props.Options = AUDCLNT_STREAMOPTIONS_NONE;
+    if (FAILED(dev->Activate(__uuidof(IAudioClient3), CLSCTX_INPROC_SERVER,
+                             nullptr, reinterpret_cast<void**>(&s.client))) ||
+        !s.client) {
+      if (s.mix) CoTaskMemFree(s.mix), s.mix = nullptr;
+      return E_FAIL;
+    }
+    if (attempt == 0) {
+      hr = s.client->Initialize(AUDCLNT_SHAREMODE_SHARED, base_flags, 0, 0,
+                                s.mix, nullptr);
+      break;
+    }
+    AudioClientProperties props{};
+    props.cbSize = sizeof(props);
+    props.bIsOffload = FALSE;
+    props.eCategory = static_cast<AUDIO_STREAM_CATEGORY>(1);
+    if (attempt == 1) {
+      try {
+        /* the post-volume constant exists only in newer SDKs; the numeric
+         * value is stable (4) and matches
+         * AUDCLNT_STREAMOPTIONS_POST_VOLUME_LOOPBACK. */
+        props.Options = static_cast<AUDCLNT_STREAMOPTIONS>(4);
+        if (FAILED(s.client->SetClientProperties(&props))) {
+          props.Options = AUDCLNT_STREAMOPTIONS_MATCH_FORMAT;
+          if (FAILED(s.client->SetClientProperties(&props)))
+            props.Options = AUDCLNT_STREAMOPTIONS_NONE;
+        }
+      } catch (...) {
+        props.Options = AUDCLNT_STREAMOPTIONS_NONE;
+      }
+      if (props.Options == static_cast<AUDCLNT_STREAMOPTIONS>(4))
+        s.ref_tap = JARVIS_AE_REF_TAP_POST_VOLUME;
+      hr = s.client->Initialize(AUDCLNT_SHAREMODE_SHARED, base_flags, 0, 0,
+                                s.mix, nullptr);
+    } else {
+      props.Options = AUDCLNT_STREAMOPTIONS_NONE;
+      (void)s.client->SetClientProperties(&props);
+      hr = s.client->Initialize(AUDCLNT_SHAREMODE_SHARED, base_flags, 0, 1,
+                                s.mix, nullptr);
+    }
+    if (SUCCEEDED(hr)) break;
+    s.client->Release();
+    s.client = nullptr;
   }
-  HRESULT hr =
-      s.client->Initialize(AUDCLNT_SHAREMODE_SHARED, base_flags, 0, 0, s.mix, nullptr);
-  if (FAILED(hr)) {
+  if (FAILED(hr) || !s.client) {
     s.ref_tap = JARVIS_AE_REF_TAP_PRE_VOLUME;
-    AudioClientProperties cleared{};
-    cleared.cbSize = sizeof(cleared);
-    cleared.bIsOffload = FALSE;
-    cleared.eCategory = static_cast<AUDIO_STREAM_CATEGORY>(1);
-    cleared.Options = AUDCLNT_STREAMOPTIONS_NONE;
-    (void)s.client->SetClientProperties(&cleared);
-    hr = s.client->Initialize(AUDCLNT_SHAREMODE_SHARED, base_flags, 0, 0, s.mix, nullptr);
-    if (FAILED(hr)) return hr;
+    return FAILED(hr) ? hr : E_FAIL;
   }
   if (FAILED(s.client->GetBufferSize(&s.period_frames))) return E_FAIL;
   if (FAILED(s.client->GetService(__uuidof(IAudioCaptureClient),
@@ -1050,9 +1131,11 @@ struct EngineV2 {
 };
 
 /* ---------------- endpoint enumeration + helpers ---------------------- */
-std::string DefaultIdFor(IMMDeviceEnumerator* en, ERole role) {
+namespace { uint32_t g_v2_step = 0; }
+__declspec(dllexport) uint32_t JarvisAeV2Step(void) { return g_v2_step; }
+std::string DefaultIdFor(IMMDeviceEnumerator* en, EDataFlow flow, ERole role) {
   IMMDevice* d = nullptr;
-  if (SUCCEEDED(en->GetDefaultAudioEndpoint(eAll, role, &d)) && d) {
+  if (SUCCEEDED(en->GetDefaultAudioEndpoint(flow, role, &d)) && d) {
     LPWSTR w = nullptr;
     std::string id;
     if (SUCCEEDED(d->GetId(&w)) && w) id = ToNarrow(w);
@@ -1063,8 +1146,9 @@ std::string DefaultIdFor(IMMDeviceEnumerator* en, ERole role) {
   return {};
 }
 
-void FillEndpoint(IMMDevice* dev, const std::string& def_console,
-                  const std::string& def_mm, const std::string& def_comm,
+void FillEndpoint(IMMDevice* dev, const std::string& cons_cap, const std::string& cons_ren,
+                  const std::string& mm_cap, const std::string& mm_ren,
+                  const std::string& com_cap, const std::string& com_ren,
                   JarvisAeEndpointInfo* out) {
   std::memset(out, 0, sizeof(*out));
   out->struct_size = sizeof(JarvisAeEndpointInfo);
@@ -1073,6 +1157,15 @@ void FillEndpoint(IMMDevice* dev, const std::string& def_console,
     const std::string id = ToNarrow(wid);
     std::snprintf(out->id, sizeof(out->id), "%s", id.c_str());
     CoTaskMemFree(wid);
+  }
+  IMMEndpoint* ep = nullptr;
+  if (SUCCEEDED(dev->QueryInterface(__uuidof(IMMEndpoint),
+                                    reinterpret_cast<void**>(&ep))) &&
+      ep) {
+    EDataFlow df = static_cast<EDataFlow>(0);
+    if (SUCCEEDED(ep->GetDataFlow(&df)))
+      out->data_flow = df == eAll ? 1u : (df == eCapture ? 2u : (df == eRender ? 3u : 0u));
+    ep->Release();
   }
   IPropertyStore* ps = nullptr;
   if (SUCCEEDED(dev->OpenPropertyStore(STGM_READ, &ps)) && ps) {
@@ -1088,9 +1181,9 @@ void FillEndpoint(IMMDevice* dev, const std::string& def_console,
   DWORD state = 0;
   if (SUCCEEDED(dev->GetState(&state))) out->state = static_cast<uint32_t>(state);
   const std::string id(out->id);
-  out->default_console = (id == def_console) ? 1u : 0u;
-  out->default_multimedia = (id == def_mm) ? 1u : 0u;
-  out->default_communications = (id == def_comm) ? 1u : 0u;
+  out->default_console = (id == cons_cap || id == cons_ren) ? 1u : 0u;
+  out->default_multimedia = (id == mm_cap || id == mm_ren) ? 1u : 0u;
+  out->default_communications = (id == com_cap || id == com_ren) ? 1u : 0u;
 
   /* Mix format of the first active stream role. */
   IAudioClient* ac = nullptr;
@@ -1416,8 +1509,35 @@ extern "C" {
 
 uint32_t JarvisAeAbiVersion(void) { return JARVIS_AE_ABI_VERSION; }
 
+/* tiny diagnostic: (hr_code, count) of the enumeration inside the DLL, so the
+ * python side can tell apart CoCreate/Enum/count failures. */
+static HRESULT g_enum_hr = 0;
+static HRESULT g_enum2_hr = 0;
+uint32_t JarvisAeEnumDiag(HRESULT* hr_enum, HRESULT* hr_create, uint32_t* count) {
+  (void)CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+  IMMDeviceEnumerator* en = nullptr;
+  const HRESULT h1 = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr,
+                                      CLSCTX_INPROC_SERVER,
+                                      __uuidof(IMMDeviceEnumerator), (void**)&en);
+  g_enum_hr = h1;
+  uint32_t n = 0;
+  if (SUCCEEDED(h1) && en) {
+    IMMDeviceCollection* coll = nullptr;
+    const HRESULT h2 = en->EnumAudioEndpoints(eAll, 0, &coll);
+    g_enum2_hr = h2;
+    if (SUCCEEDED(h2) && coll) coll->GetCount(reinterpret_cast<UINT*>(&n));
+    if (coll) coll->Release();
+    en->Release();
+  }
+  if (hr_create) *hr_create = h1;
+  if (hr_enum) *hr_enum = g_enum2_hr;
+  if (count) *count = n;
+  return n;
+}
+
 uint32_t JarvisAeEnumerateEndpoints(uint32_t flow, JarvisAeEndpointInfo* entries,
                                     uint32_t capacity, uint32_t* required) {
+  (void)CoInitializeEx(nullptr, COINIT_MULTITHREADED);
   IMMDeviceEnumerator* en = nullptr;
   if (FAILED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr,
                               CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&en))))
@@ -1425,16 +1545,20 @@ uint32_t JarvisAeEnumerateEndpoints(uint32_t flow, JarvisAeEndpointInfo* entries
   const EDataFlow df = flow == 3u ? eRender : (flow == 2u ? eCapture : eAll);
   IMMDeviceCollection* coll = nullptr;
   uint32_t n = 0;
-  if (SUCCEEDED(en->EnumAudioEndpoints(df, 0, &coll)) && coll) {
+  if (SUCCEEDED(en->EnumAudioEndpoints(df, DEVICE_STATEMASK_ALL, &coll)) && coll) {
     coll->GetCount(reinterpret_cast<UINT*>(&n));
-    const std::string def_c = DefaultIdFor(en, eConsole);
-    const std::string def_m = DefaultIdFor(en, eMultimedia);
-    const std::string def_k = DefaultIdFor(en, eCommunications);
+    const std::string cons_cap = DefaultIdFor(en, eCapture, eConsole);
+    const std::string cons_ren = DefaultIdFor(en, eRender, eConsole);
+    const std::string mm_cap = DefaultIdFor(en, eCapture, eMultimedia);
+    const std::string mm_ren = DefaultIdFor(en, eRender, eMultimedia);
+    const std::string com_cap = DefaultIdFor(en, eCapture, eCommunications);
+    const std::string com_ren = DefaultIdFor(en, eRender, eCommunications);
     if (entries && capacity >= n) {
       for (UINT i = 0; i < n; ++i) {
         IMMDevice* dev = nullptr;
         if (SUCCEEDED(coll->Item(i, &dev)) && dev) {
-          FillEndpoint(dev, def_c, def_m, def_k, &entries[i]);
+          FillEndpoint(dev, cons_cap, cons_ren, mm_cap, mm_ren, com_cap, com_ren,
+                       &entries[i]);
           dev->Release();
         }
       }
@@ -1670,6 +1794,9 @@ void JarvisAeRun(void) {
 /* ------------------------------ v2: engine ------------------------------ */
 JarvisAeStatusCode JarvisAeEngineCreate(const JarvisAeEngineConfigV2* config,
                                     JarvisAeEngineHandle** out_engine) {
+  /* The MMDevice family needs an initialized apartment on *this* thread;
+   * CoInitializeEx is ref-counted per thread, so repeat calls are no-ops. */
+  (void)CoInitializeEx(nullptr, COINIT_MULTITHREADED);
   if (!config || !out_engine) return JARVIS_AE_ERR_BAD_ARG;
   if (config->struct_size != sizeof(JarvisAeEngineConfigV2) ||
       config->abi_version != JARVIS_AE_ABI_VERSION)
@@ -1788,6 +1915,7 @@ void JarvisAeEngineDestroy(JarvisAeEngineHandle* h) {
 }
 
 void JarvisAeEngineRun(JarvisAeEngineHandle* h) {
+  (void)CoInitializeEx(nullptr, COINIT_MULTITHREADED);
   EngineV2* e = reinterpret_cast<EngineV2*>(h);
   if (!e) return;
   V2Run(e);
@@ -2237,8 +2365,14 @@ uint32_t JarvisAeEngineDumpDiagnostics(JarvisAeEngineHandle* h, const char* pref
 namespace {
 
 void V2Run(EngineV2* e) {
-  e->mmcss = AvSetMmThreadCharacteristicsW(L"Pro Audio", nullptr);
+  g_v2_step = 1;
+  {
+    DWORD mmcss_index = 0;
+    e->mmcss = AvSetMmThreadCharacteristicsW(L"Pro Audio", &mmcss_index);
+  }
+  g_v2_step = 2;
   if (e->mmcss) AvSetMmThreadPriority(e->mmcss, AVRT_PRIORITY_CRITICAL);
+  g_v2_step = 12;
 
   HANDLE handles[2] = {e->mic.ev, e->loop.ev};
   const DWORD n_handles = (e->mic.ev ? 1u : 0u) + (e->loop.ev ? 1u : 0u);
@@ -2251,10 +2385,13 @@ void V2Run(EngineV2* e) {
     else Sleep(10);
 
     V2Drain(e->loop, e->ref_overruns, e->qpc_freq);
+    g_v2_step = 3;
     if (e->has_mic) V2Drain(e->mic, e->ref_overruns, e->qpc_freq);
+    g_v2_step = 4;
 
     /* Endpoint/default changes: deterministic reopen + full lane reset. */
     const UINT64 now = NowQpc(e->qpc_freq);
+    g_v2_step = 5;
     if (now - e->last_check_qpc > static_cast<UINT64>(e->qpc_freq.QuadPart * 0.05)) {
       e->last_check_qpc = now;
       IMMDeviceEnumerator* en = nullptr;
@@ -2335,6 +2472,7 @@ void V2Run(EngineV2* e) {
     }
 
     /* Drain render into the timestamped reference timeline. */
+    g_v2_step = 6;
     while (NextBlock(e->loop, ref_block, 480, t_ref)) {
       const uint32_t h = e->ref_head % e->ref_cap;
       if (e->ref.size() < e->ref_cap) e->ref.push_back(RefFrame{});
@@ -2344,6 +2482,7 @@ void V2Run(EngineV2* e) {
     }
 
     /* Process all 48k mic lanes inline. */
+    g_v2_step = 7;
     for (auto& lp : e->lanes) {
       V2Lane& lane = *lp;
       if (lane.cfg.source_type != JARVIS_AE_SOURCE_LOCAL_WASAPI || !e->has_mic) continue;
@@ -2354,8 +2493,10 @@ void V2Run(EngineV2* e) {
           lane.engine_generation = e->generation;
           ++lane.n_disc;
         }
+        g_v2_step = 8;
         ProcessLane480(lane, *e, mic_block, fi >= 0 ? e->ref[fi].f : nullptr, t_mic,
                        NowQpc(e->qpc_freq), e->qpc_freq);
+        g_v2_step = 7;
       }
     }
   }

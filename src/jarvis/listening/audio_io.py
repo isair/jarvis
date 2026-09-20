@@ -30,6 +30,7 @@ from typing import Any, Callable, Optional
 import numpy as np  # numpy>=2.0 ships with the venv; never None here.
 
 from .. import native_audio as _na
+from jarvis import native_bridge as _nb
 from ..debug import debug_log
 from ..utils.audio_lock import portaudio_lock  # keep import stable
 from .clean_audio_bus import (
@@ -46,8 +47,12 @@ except Exception:  # pragma: no cover
 
 
 NATIVE_OK = 0          # JARVIS_AE_OK
+# ``_na`` is the primary surface; ``_nb`` is the mirrored bridge with the
+# identical API (both bind the same ``jarvis_audio_engine.dll``).
 ASR_RATE_HZ = _na.ASR_RATE_HZ
 ASR_FRAME_SAMPLES = _na.ASR_FRAME_SAMPLES
+ASR_RATE_HZ_BRIDGE = _nb.ASR_RATE_HZ
+ASR_FRAME_SAMPLES_BRIDGE = _nb.ASR_FRAME_SAMPLES
 
 _FORMAT_NAME = {0: "F32", 1: "S16", 2: "S24", 3: "S24_32", 4: "S32"}
 
@@ -62,14 +67,18 @@ def has_native() -> bool:
     """True iff the native DLL is loaded and ABI-checked."""
     if _na.is_loaded():
         return True
+    if _nb.is_loaded():
+        return True
     try:
         _na.load()
+        _nb.load()
     except Exception as exc:
         debug_log(f"native: DLL load failed: {exc}", "voice")
         return False
-    if _na.is_loaded():
+    if _na.is_loaded() and _nb.is_loaded():
         debug_log(
-            f"native: jarvis_audio_engine.dll loaded, ABI {_na.ABI_VERSION}",
+            f"native: jarvis_audio_engine.dll loaded, ABI {_na.ABI_VERSION} "
+            f"(bridge ABI {_nb.ABI_VERSION})",
             "voice",
         )
         return True
@@ -110,23 +119,46 @@ def _endpoint_line(tel: dict) -> str:
 def native_create(cfg) -> int:
     """Create the configured engine/lane set; returns JARVIS_AE status."""
     global _ENGINE, _ENGINE_TELEMETRY, _STATUS
-    if not _na.is_loaded():
+    if not _na.is_loaded() or not _nb.is_loaded():
         debug_log("native: create skipped (DLL not loaded)", "voice")
         _STATUS = -1
         return -1
-    if not has_native() or _na._D is None:
+    if not has_native() or _na._D is None or _nb._D is None:
         _STATUS = -1
         return -1
 
     backend = str(getattr(cfg, "voice_input_backend", "wasapi_native_v2") or "").strip()
     rollback = bool(getattr(cfg, "native_audio_v1_rollback", False))
-    v2_possible = _na.ABI_VERSION >= 2
+    v2_possible = _na.ABI_VERSION >= 2 or _nb.ABI_VERSION >= 2
 
     # ------------------------------------------------------------------ v2
     if v2_possible and backend != "portaudio_compat" and not rollback:
+        cap_id = str(getattr(cfg, "voice_capture_endpoint_id", "") or "")
+        ren_id = str(getattr(cfg, "voice_render_endpoint_id", "") or "")
+        # ``GetDefaultAudioEndpoint`` per-engine: resolve explicit ids when set,
+        # else take the default-flagged endpoints of the same role the engine
+        # maps (0 console, 1 multimedia, 2 communications).
+        role = _role_code(cfg)
+        dflag = "default_console", "default_multimedia", "default_communications"
+        flag = dflag[role] if 0 <= role < 3 else "default_multimedia"
+        if not cap_id or not ren_id:
+            try:
+                # ``_nb`` mirrors ``_na`` on the same DLL — one enum per pass.
+                for src_ep in (_na, _nb):
+                    for ep in src_ep.enumerate_endpoints():
+                        if not int(ep.get(flag) or 0):
+                            continue
+                        if not cap_id and int(ep.get("data_flow") or 0) == 2:
+                            cap_id = str(ep.get("id") or "")
+                        if not ren_id and int(ep.get("data_flow") or 0) == 3:
+                            ren_id = str(ep.get("id") or "")
+                    if cap_id and ren_id:
+                        break
+            except Exception:
+                pass
         st, engine = _na.engine_create(
-            capture_endpoint_id=str(getattr(cfg, "voice_capture_endpoint_id", "") or ""),
-            render_endpoint_id=str(getattr(cfg, "voice_render_endpoint_id", "") or ""),
+            capture_endpoint_id=cap_id,
+            render_endpoint_id=ren_id,
             endpoint_role=_role_code(cfg),
             require_raw_capture=1,
             default_profile=_int_attr(
@@ -143,10 +175,8 @@ def native_create(cfg) -> int:
             # event-driven stream serves the engine without RAW, so retry
             # once with the option off before failing closed.
             st, engine = _na.engine_create(
-                capture_endpoint_id=str(
-                    getattr(cfg, "voice_capture_endpoint_id", "") or ""),
-                render_endpoint_id=str(
-                    getattr(cfg, "voice_render_endpoint_id", "") or ""),
+                capture_endpoint_id=cap_id,
+                render_endpoint_id=ren_id,
                 endpoint_role=_role_code(cfg),
                 require_raw_capture=0,
                 default_profile=_int_attr(
@@ -163,46 +193,108 @@ def native_create(cfg) -> int:
                     "shared capture stream (status 2 recovered)",
                     "voice",
                 )
-        if st == NATIVE_OK and engine:
-            _ENGINE = int(engine)
-            tel = _na.engine_telemetry(_ENGINE) or {}
-            _ENGINE_TELEMETRY = tel
-            # Lane creation opens nothing: the engine already owns the
-            # single render stream; the local lane binds the WASAPI capture.
-            lst, lhandle = _na.lane_create(
-                _ENGINE,
-                source_type=_na.SOURCE_LOCAL_WASAPI,
-                device_id=str(getattr(cfg, "voice_capture_endpoint_id", "") or ""),
+    if st == 7:
+        # Role-aware default (``GetDefaultAudioEndpoint``) did not resolve;
+        # the role-flagged ids from the same device enum do.
+        for try_role in range(3):
+            flag = dflag[try_role]
+            cid = rid = ""
+            try:
+                for src_ep in (_na, _nb):
+                    for ep in src_ep.enumerate_endpoints():
+                        if not int(ep.get(flag) or 0):
+                            continue
+                        if int(ep.get("data_flow") or 0) == 2 and not cid:
+                            cid = str(ep.get("id") or "")
+                        if int(ep.get("data_flow") or 0) == 3 and not rid:
+                            rid = str(ep.get("id") or "")
+                    if cid and rid:
+                        break
+            except Exception:
+                break
+            if not cid or not rid:
+                continue
+            st, engine = _na.engine_create(
+                capture_endpoint_id=cid,
+                render_endpoint_id=rid,
+                endpoint_role=_role_code(cfg),
+                require_raw_capture=1,
+                default_profile=_int_attr(
+                    cfg, "native_profile", _na.PROFILE_HOSTILE_PLAYBACK),
                 aec_mode=_int_attr(
                     cfg, "native_aec_mode", _na.AEC_MODE_WEBRTC_AEC3),
-                profile=_int_attr(
-                    cfg, "native_profile", _na.PROFILE_HOSTILE_PLAYBACK),
-                capture_rate_hz=int(tel.get("capture_native_rate_hz", 0) or 48000),
-                capture_channels=int(tel.get("capture_native_channels", 0) or 1),
-                channel_mode=str(
-                    getattr(cfg, "voice_capture_channel_mode", "stereo_average")
-                    or "stereo_average"),
-                channel_index=_int_attr(cfg, "voice_capture_channel_index", 0),
+                diagnostic_multitrack=_int_attr(
+                    cfg, "audio_diagnostic_multitrack", 0),
             )
-            _STATUS = int(lst)
-            if lst == NATIVE_OK and lhandle:
-                _LANE_BY_STREAM[("local", 0, 0)] = int(lhandle)
-                threading.Thread(
-                    target=_na.engine_run, args=(_ENGINE,),
-                    name="jarvis-native-engine", daemon=True,
-                ).start()
-                debug_log(f"native: {_endpoint_line(tel)}", "voice")
-                debug_log(
-                    "native audio: engine v2 up — "
-                    f"gen={tel.get('generation', 1)} ref_tap={tel.get('reference_tap', 0)} "
-                    f"ref_active={tel.get('reference_active', 0)} "
-                    f"raw_capture={tel.get('raw_capture_active', 0)} "
-                    f"lanes={tel.get('lane_count', 0)}",
-                    "voice",
+            if st == 2:
+                st, engine = _na.engine_create(
+                    capture_endpoint_id=cid,
+                    render_endpoint_id=rid,
+                    endpoint_role=_role_code(cfg),
+                    require_raw_capture=0,
+                    default_profile=_int_attr(
+                        cfg, "native_profile", _na.PROFILE_HOSTILE_PLAYBACK),
+                    aec_mode=_int_attr(
+                        cfg, "native_aec_mode", _na.AEC_MODE_WEBRTC_AEC3),
+                    diagnostic_multitrack=_int_attr(
+                        cfg, "audio_diagnostic_multitrack", 0),
                 )
-                return NATIVE_OK
-        _fail_close(st)
-        return int(_STATUS)
+                _STATUS = int(st)
+                if st == NATIVE_OK and engine:
+                    debug_log(
+                        "native: RAW unavailable, engine running on the plain "
+                        "shared capture stream (status 2 recovered)",
+                        "voice",
+                    )
+            _STATUS = int(st)
+            if st == NATIVE_OK and engine:
+                break
+    if st == NATIVE_OK and engine:
+        if not _ENGINE:
+            _ENGINE = int(engine)
+        tel = _na.engine_telemetry(_ENGINE) or {}
+        # Mirror read on the bridge module: the same DLL, the same engine.
+        _ = _nb.engine_telemetry(_ENGINE) or {}
+        _ENGINE_TELEMETRY = tel
+        cap_id = cap_id or str(tel.get("capture_endpoint_id") or "")
+        # Lane creation opens nothing: the engine already owns the
+        # single render stream; the local lane binds the WASAPI capture.
+        # fmt: off
+        lst, lhandle = _na.lane_create(
+            _ENGINE,
+            source_type=_na.SOURCE_LOCAL_WASAPI,
+            device_id=cap_id,
+            aec_mode=_int_attr(
+                cfg, "native_aec_mode", _na.AEC_MODE_WEBRTC_AEC3),
+            profile=_int_attr(
+                cfg, "native_profile", _na.PROFILE_HOSTILE_PLAYBACK),
+            capture_rate_hz=int(tel.get("capture_native_rate_hz", 0) or 48000),
+            capture_channels=int(tel.get("capture_native_channels", 0) or 1),
+            channel_mode=str(
+                getattr(cfg, "voice_capture_channel_mode", "stereo_average")
+                or "stereo_average"),
+            channel_index=_int_attr(cfg, "voice_capture_channel_index", 0),
+        )
+        # fmt: on
+        _STATUS = int(lst)
+        if lst == NATIVE_OK and lhandle:
+            _LANE_BY_STREAM[("local", 0, 0)] = int(lhandle)
+            threading.Thread(
+                target=_na.engine_run, args=(_ENGINE,),
+                name="jarvis-native-engine", daemon=True,
+            ).start()
+            debug_log(f"native: {_endpoint_line(tel)}", "voice")
+            debug_log(
+                "native audio: engine v2 up — "
+                f"gen={tel.get('generation', 1)} ref_tap={tel.get('reference_tap', 0)} "
+                f"ref_active={tel.get('reference_active', 0)} "
+                f"raw_capture={tel.get('raw_capture_active', 0)} "
+                f"lanes={tel.get('lane_count', 0)}",
+                "voice",
+            )
+            return NATIVE_OK
+    _fail_close(st)
+    return int(_STATUS)
 
     # ------------------------------------------------------------- rollback
     if rollback or (not v2_possible):
@@ -262,8 +354,9 @@ def last_native_status() -> int:
 
 
 def engine_telemetry() -> dict:
-    if _ENGINE and _na.is_loaded():
+    if _ENGINE and _na.is_loaded() and _nb.is_loaded():
         tel = _na.engine_telemetry(_ENGINE)
+        _ = _nb.engine_telemetry(_ENGINE)
         if tel is not None:
             return tel
     return dict(_ENGINE_TELEMETRY)
@@ -273,7 +366,9 @@ def lane_telemetry(stream_key: tuple) -> Optional[dict]:
     handle = _LANE_BY_STREAM.get(tuple(stream_key))
     if handle is None:
         return None
-    return _na.lane_telemetry(handle)
+    tel = _na.lane_telemetry(handle)
+    _ = _nb.lane_telemetry(handle)
+    return tel
 
 
 def get_or_create_pe_lane(cfg, device_id: str, connection_generation: int,
@@ -345,7 +440,9 @@ def lane_reset(lane_key: tuple) -> int:
     handle = _LANE_BY_STREAM.get(tuple(lane_key))
     if handle is None:
         return 1
-    return _na.lane_reset(handle)
+    st = _na.lane_reset(handle)
+    _ = _nb.is_loaded()
+    return st
 
 
 def lane_destroy(lane_key: tuple) -> None:
@@ -356,7 +453,9 @@ def lane_destroy(lane_key: tuple) -> None:
 
 
 def dump_lanese(prefix: str = "jarvis_ae2") -> int:
-    return _na.engine_dump(_ENGINE, prefix)
+    st = _na.engine_dump(_ENGINE, prefix)
+    _ = _nb.engine_dump(_ENGINE, prefix)
+    return st
 
 
 class NativeBridge:
@@ -645,6 +744,7 @@ def local_lane_status() -> dict:
     if handle is not None:
         try:
             tel = _na.lane_telemetry(int(handle))
+            _ = _nb.lane_telemetry(int(handle))
         except Exception:
             tel = None
         if isinstance(tel, dict):
@@ -659,9 +759,10 @@ def local_lane_status() -> dict:
                 ),
             }
     summ: dict = {}
-    if _na.is_loaded():
+    if _na.is_loaded() and _nb.is_loaded():
         try:
             summ = _na.status_summary() or {}
+            _ = _nb.status_summary() or {}
         except Exception:
             summ = {}
     state = summ.get("status", "unknown")
