@@ -16,7 +16,10 @@ Other public names: :class:`OllamaBackend`, :class:`OpenAICompatibleBackend`,
 :class:`ToolsNotSupportedError` (raised when a model rejects native tool
 calling so the reply engine can fall back to text-based), and
 :func:`extract_text_from_response` (normalises content across known
-response shapes).
+:func:`extract_text_from_response` (normalises content across known
+response shapes). :class:`Provider`, :func:`available_providers`, and
+:func:`register_provider` define the process-local catalogue for built-in and
+optional self-hosted adapters.
 
 ``import requests`` is re-exported so tests that patch
 ``jarvis.llm.requests.post`` to intercept HTTP traffic work without
@@ -32,18 +35,22 @@ from .backend import LLMBackend, ToolsNotSupportedError
 from .ollama import OllamaBackend, check_version, extract_text_from_response
 from .openai_compatible import OpenAICompatibleBackend, ServerCapabilities
 from .factory import get_embedding_backend, get_llm_backend
+from .providers import Provider, available_providers, register_provider
 from .tiers import Tier, resolve_model
 
 __all__ = [
     "LLMBackend",
     "OllamaBackend",
     "OpenAICompatibleBackend",
+    "Provider",
     "ServerCapabilities",
     "Tier",
     "ToolsNotSupportedError",
     "check_version",
     "get_llm_backend",
     "get_embedding_backend",
+    "available_providers",
+    "register_provider",
     "resolve_model",
     "extract_text_from_response",
     "call_llm_direct",

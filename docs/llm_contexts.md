@@ -2,7 +2,7 @@
 
 Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it is gated. This is the reference for optimising the app's main bottleneck (LLM latency). Keep it in sync with the code — see the note at the bottom.
 
-> **Backend abstraction.** Every context below routes through `jarvis.llm` ([spec](../src/jarvis/llm/llm.spec.md)) via `get_llm_backend(cfg)` / `get_embedding_backend(cfg)`. Picking `llm_provider: openai_compatible` swaps the wire shape end-to-end without touching call sites. The active chat model is read directly from `cfg.llm_chat_model` (the `Settings` field that always carries the resolved value, populated by config-load from `ollama_chat_model` when the provider-aware key is left empty).
+> **Backend abstraction.** Every context below routes through `jarvis.llm` ([spec](../src/jarvis/llm/llm.spec.md)) via `get_llm_backend(cfg)` / `get_embedding_backend(cfg)`. The provider catalogue resolves the configured name to an `LLMBackend` adapter, so selecting `llm_provider: openai_compatible` swaps the wire shape end-to-end without touching call sites. Optional self-hosted adapters can register with the same catalogue and contract; config loading validates provider names against that catalogue. The active chat model is read directly from `cfg.llm_chat_model` (the `Settings` field that always carries the resolved value, populated by config-load from `ollama_chat_model` when the provider-aware key is left empty).
 
 ---
 
