@@ -1,0 +1,21 @@
+{
+  "engine_generation": 1,
+  "lane_id": 3722304989,
+  "source_type": 3722304989,
+  "device_id": "",
+  "connection_generation": 0,
+  "session_generation": 0,
+  "capture_endpoint": {"id": "", "name": "", "rate_hz": 0, "channels": 0, "format": 0},
+  "render_endpoint": {"id": "", "name": "", "rate_hz": 0, "channels": 0, "format": 0},
+  "reference_tap": 0, "reference_active": 0,
+  "frame_count": 0, "frame_samples": 480,
+  "capture_start_s": -1456815990147462891125136942359339382185244158826619267593931664968442323048246672764155341958241671875972237215762610409185128240974392406835200.000000, "capture_stride_s": 0.01,
+  "aec_state": 0, "estimated_delay_ms": 0.000, "delay_confidence": 0.000,
+  "erle_db": 0.000, "erl_db": 0.000, "residual_echo_likelihood": 0.000,
+  "drift_ppm": {"satellite": -1456815990147462891125136942359339382185244158826619267593931664968442323048246672764155341958241671875972237215762610409185128240974392406835200.000},
+  "resampler_ratio": 2122312829149332618553608809999836694533996036234807246678705853387127889732444575612685129835422226205321166676681629279468822013158307287387184212432460895702981867316585863156966798873995397691332542464363362574212298630883240080514164584347035422704158490156078135414640829530112.000000000,
+  "queue": {"jitter_depth_ms": 0.000, "capture_queue_ms": 0.000, "reference_window_ms": 5120.000},
+  "counters": {"overruns": 0, "underruns": 0, "dropped": 0, "duplicates": 0, "discontinuities": 0, "reconvergences": 0, "limiter_hits": 0},
+  "latency_ms": {"p50": 0.000, "p95": 0.000, "max": 0.000},
+  "wav_sha256": "6e04812482b747b7851fccc0218fa7f28d23266eec0705405a685560e3aa76c3"
+}

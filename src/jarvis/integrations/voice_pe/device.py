@@ -1566,6 +1566,36 @@ class VoicePEDevice:
         await self._event("INTENT_START", {})
         self._record_latency("stt_end_ms", started)
 
+    def egress_mode(self) -> int:
+        """Which in-run TTS egress the decoded feature bits select.
+
+        ``1`` raw PCM frames over the Native API (``API_AUDIO`` with a
+        ``SPEAKER``), ``0`` a WAV the satellite fetches itself. Same branch
+        order as :meth:`_on_reply_async`, so the number is the path in force.
+        The out-of-run announcement RPC is the late-reply fallback and is
+        reported separately by :meth:`media_delivery`.
+        """
+        return 1 if self.capabilities.uses_api_audio else 0
+
+    def _detected_language(self) -> Optional[str]:
+        """ISO-639-1 code of the current turn, as resolved by the Whisper stage.
+
+        Feeds the Piper voice selection so a cs/vi answer is spoken with the
+        matching neural voice. Falls back to the STT record of the last turn
+        when the live attribute is not yet stamped.
+        """
+        value = getattr(self._listener, "_last_detected_language", None)
+        if isinstance(value, str) and value.strip():
+            return value.strip().lower()
+        metrics = getattr(self._listener, "metrics", None)
+        if isinstance(metrics, dict):
+            segment = metrics.get("last_segment")
+            if isinstance(segment, dict):
+                stamp = segment.get("last_detected_language")
+                if isinstance(stamp, str) and stamp.strip():
+                    return stamp.strip().lower()
+        return None
+
     async def _on_reply_async(self, reply: str, token: Any = None) -> None:
         # Only the device that owns the run speaks; a device without an open
         # session leaves the reply to the local microphone. The token of the
@@ -1693,9 +1723,10 @@ class VoicePEDevice:
             egress="pcm",
         ))
 
+        language = self._detected_language()
         for sentence in sentences:
             try:
-                pcm = await synthesize_pcm_async(self._tts, sentence) or b""
+                pcm = await synthesize_pcm_async(self._tts, sentence, language) or b""
             except Exception as err:
                 self.last_error = f"tts: {err}"
                 await self._close_stream(generation, reply)
@@ -1760,7 +1791,9 @@ class VoicePEDevice:
             self.session_generation if generation is None else int(generation)
         )
         try:
-            pcm = await synthesize_pcm_async(self._tts, reply) or b""
+            pcm = await synthesize_pcm_async(
+                self._tts, reply, self._detected_language()
+            ) or b""
         except Exception as err:
             self.last_error = f"tts: {err}"
             await self._end_run("", generation, stream=False)
@@ -1827,7 +1860,9 @@ class VoicePEDevice:
     async def tts_media_url(self, text: str) -> str:
         """Public synthesis helper: LAN URL of ``text``, ``""`` when unavailable."""
         try:
-            pcm = await synthesize_pcm_async(self._tts, text) or b""
+            pcm = await synthesize_pcm_async(
+                self._tts, text, self._detected_language()
+            ) or b""
         except Exception as err:
             self.last_error = f"tts: {err}"
             return ""
@@ -2011,6 +2046,7 @@ class VoicePEDevice:
             "device": self.identity.get("node_name") or self._host,
             "api_version": self.identity.get("api_version", ""),
             "voice_features": self.capabilities.names(),
+            "pcm_egress": self.egress_mode(),
             "audio_queue_ms": queue_ms,
             "session_state": self.session_state.value,
             "wake_words_disabled": self.wake_words_disabled,
@@ -2055,6 +2091,9 @@ class VoicePEDevice:
                 "effects": list(self.capabilities.led_effects),
             },
             "media": self.media.snapshot(),
+            # The last WAV delivery, so the card shows the satellite's own GET:
+            # key, port, status, served bytes and the hit counter.
+            "delivery": self.media_delivery(),
             "buttons": dict(self.config.button_actions),
             "entities": describe_entities(self.entities),
             "metrics": dict(self.metrics),

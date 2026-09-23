@@ -75,6 +75,9 @@ for _entry in _MODEL_VRAM_TABLE:
 # Detection
 # ---------------------------------------------------------------------------
 
+#: Upper bound for the DXGI adapter walk (see :func:`_dxgi_adapter_vram_mb`).
+_MAX_DXGI_ADAPTERS = 16
+
 
 def detect_total_vram_mb() -> Optional[int]:
     """Return total dedicated video memory in MB for the primary GPU, or
@@ -120,8 +123,13 @@ def _detect_via_dxgi() -> Optional[int]:
 
 
 def _dxgi_adapter_vram_mb() -> Optional[int]:
-    """Core DXGI COM call: enumerate the first adapter and read
-    ``DedicatedVideoMemory`` from ``DXGI_ADAPTER_DESC1``.
+    """Core DXGI COM call: walk every adapter and read
+    ``DedicatedVideoMemory`` from each ``DXGI_ADAPTER_DESC1``; the largest
+    dedicated pool is the one the models land on.
+
+    Adapter 0 is not necessarily the biggest: on hybrid machines the small
+    integrated adapter is enumerated first, so all of them are read and the
+    maximum wins.
 
     COM interface hierarchy (indices are vtable offsets):
 
@@ -138,7 +146,7 @@ def _dxgi_adapter_vram_mb() -> Optional[int]:
     IDXGIAdapter1 (IDXGIAdapter): + [10] GetDesc1
     """
     from ctypes import (windll, wintypes, Structure, POINTER, c_void_p,
-                        c_size_t, byref, c_uint32, WINFUNCTYPE, addressof)
+                        c_size_t, byref, c_uint32, WINFUNCTYPE)
 
     class GUID(Structure):
         _fields_ = [
@@ -148,10 +156,10 @@ def _dxgi_adapter_vram_mb() -> Optional[int]:
             ("Data4", wintypes.BYTE * 8),
         ]
 
-    # IID_IDXGIFactory1 = {7706F476-3C83-4E51-BFE0-5E143C7E1A66}
+    # IID_IDXGIFactory1 = {770AAE78-F26F-4DBA-A829-253C83D1B387}
     _IID_IDXGIFACTORY1 = GUID(
-        0x7706F476, 0x3C83, 0x4E51,
-        (wintypes.BYTE * 8)(0xBF, 0xE0, 0x5E, 0x14, 0x3C, 0x7E, 0x1A, 0x66),
+        0x770AAE78, 0xF26F, 0x4DBA,
+        (wintypes.BYTE * 8)(0xA8, 0x29, 0x25, 0x3C, 0x83, 0xD1, 0xB3, 0x87),
     )
 
     class DXGI_ADAPTER_DESC1(Structure):
@@ -176,6 +184,15 @@ def _dxgi_adapter_vram_mb() -> Optional[int]:
         wintypes.HRESULT, c_void_p, POINTER(DXGI_ADAPTER_DESC1),
     )
 
+    def _vtable(obj: int) -> Any:
+        """The object's vtable as a fixed-size pointer array.
+
+        The first machine word of a COM object is its vtable pointer, so one
+        word is read at ``obj`` and re-read as the entry array.
+        """
+        vtable = int((c_void_p * 1).from_address(obj)[0])
+        return (c_void_p * 14).from_address(vtable)
+
     dxgi = windll.dxgi
     create_factory = dxgi.CreateDXGIFactory1
     create_factory.restype = wintypes.HRESULT
@@ -188,48 +205,37 @@ def _dxgi_adapter_vram_mb() -> Optional[int]:
         return None
 
     # SAFETY: factory_ptr is alive until we Release() it below.
-    factory_vtable = POINTER(c_void_p).from_address(
-        POINTER(c_void_p).from_address(factory_ptr)[0]
-    )
-    # Access the vtable array. Since we only need indices 2 (Release)
-    # and 12 (EnumAdapters1), cast to a fixed-size array of known length.
-    # We need at least 13 entries for the IDXGIFactory1 layout.
-    factory_vtable_arr = (c_void_p * 14).from_address(
-        addressof(factory_vtable)
-    )
-
-    release_fn = ReleaseFunc(factory_vtable_arr[2])
+    factory_vtable = _vtable(int(factory_ptr.value))
+    release_fn = ReleaseFunc(factory_vtable[2])
 
     # EnumAdapters1 is at vtable offset 12
-    enum_adapters1_fn = EnumAdapters1Func(factory_vtable_arr[12])
+    enum_adapters1_fn = EnumAdapters1Func(factory_vtable[12])
 
-    adapter_ptr = c_void_p()
-    hr = enum_adapters1_fn(factory_ptr, 0, byref(adapter_ptr))
-    if hr != 0 or not adapter_ptr:
-        release_fn(factory_ptr)
-        return None
+    best_mb: Optional[int] = None
+    # A hard cap keeps the walk bounded even if a driver never reports
+    # DXGI_ERROR_NOT_FOUND; real hosts carry far fewer adapters.
+    for index in range(_MAX_DXGI_ADAPTERS):
+        adapter_ptr = c_void_p()
+        hr = enum_adapters1_fn(factory_ptr, index, byref(adapter_ptr))
+        if hr != 0 or not adapter_ptr.value:
+            break
 
-    adapter_vtable_arr = (c_void_p * 11).from_address(
-        addressof(
-            POINTER(c_void_p).from_address(adapter_ptr)[0]
-        )
-    )
-    adapter_release_fn = ReleaseFunc(adapter_vtable_arr[2])
+        adapter_vtable = _vtable(int(adapter_ptr.value))
+        adapter_release_fn = ReleaseFunc(adapter_vtable[2])
 
-    # GetDesc1 is at vtable offset 10
-    get_desc1_fn = GetDesc1Func(adapter_vtable_arr[10])
+        # GetDesc1 is at vtable offset 10
+        get_desc1_fn = GetDesc1Func(adapter_vtable[10])
 
-    desc = DXGI_ADAPTER_DESC1()
-    hr = get_desc1_fn(adapter_ptr, byref(desc))
+        desc = DXGI_ADAPTER_DESC1()
+        if get_desc1_fn(adapter_ptr, byref(desc)) == 0:
+            mb = int(desc.DedicatedVideoMemory) // (1024 * 1024)
+            if mb and (best_mb is None or mb > best_mb):
+                best_mb = mb
 
-    adapter_release_fn(adapter_ptr)
+        adapter_release_fn(adapter_ptr)
+
     release_fn(factory_ptr)
-
-    if hr != 0:
-        return None
-
-    # DedicatedVideoMemory is in bytes → convert to MB
-    return desc.DedicatedVideoMemory // (1024 * 1024)
+    return best_mb
 
 
 def _detect_via_nvidia_smi() -> Optional[int]:
@@ -590,9 +596,18 @@ def format_cuda_vram_budget(plan: Dict[str, Any]) -> str:
         delta = int(used) - required
         pct = abs(delta) / max(required, 1) * 100.0
         verdict = "matches" if pct <= 15.0 else "differs from"
+        detail = ""
+        if not plan.get("llm_weights_mb"):
+            # The measured figure also carries the chat runtime, which has no
+            # catalogue entry here, so the gap is explained rather than read
+            # as a mis-budgeted GPU.
+            detail = (
+                "; the chat model has no catalogue figure, so its resident "
+                "runtime only shows up in the measured value"
+            )
         lines.append(
             f"     🔎 Measured in-use {_fmt_mb(int(used))} {verdict} the estimate "
-            f"({_fmt_mb(required)}, Δ {delta:+d} MB)"
+            f"({_fmt_mb(required)}, Δ {delta:+d} MB){detail}"
         )
     if note:
         lines.append(f"     ℹ️  {note}")

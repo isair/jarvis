@@ -33,6 +33,94 @@ from .audio_device import (
 PIPER_DEFAULT_VOICE = "cs_CZ-jirka-medium"
 PIPER_VOICE_BASE_URL = "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0"
 
+# Per-language Piper voice map, keyed by the ISO-639-1 code Whisper reports.
+# When the ASR stage detects one of these codes, the matching model is used
+# instead of the default. The default (cs_CZ-jirka-medium) is also the "cs"
+# entry, so a forced-Czech config and an auto-detected "cs" agree.
+#
+# HuggingFace ships three Vietnamese Piper models under vi/vi_VN:
+#   vi_VN-vais1000-medium     - female single speaker, 22.05 kHz
+#   vi_VN-25hours_single-low  - single speaker, 16 kHz (used here)
+#   vi_VN-vivos-x_low         - 65 speakers, 16 kHz; select one of them
+#                               through tts_piper_speaker
+PIPER_VOICE_BY_LANGUAGE: dict[str, str] = {
+    "cs": "cs_CZ-jirka-medium",
+    "vi": "vi_VN-25hours_single-low",
+    "en": "en_US-lessac-medium",
+    "sk": "sk_SK-lili-medium",
+    "pl": "pl_PL-gosia-medium",
+    "de": "de_DE-thorsten-medium",
+    "fr": "fr_FR-siwis-medium",
+    "es": "es_ES-davefx-medium",
+    "ru": "ru_RU-dmitri-medium",
+    "uk": "uk_UA-ukrainian_tts-medium",
+    "it": "it_IT-paola-medium",
+    "nl": "nl_NL-mls-medium",
+    "sv": "sv_SE-nst-medium",
+    "pt": "pt_PT-tugão-medium",
+    "tr": "tr_TR-dfki-medium",
+    "ro": "ro_RO-mihai-medium",
+    "da": "da_DK-talesyntese-medium",
+    "el": "el_GR-rapunzelina-medium",
+    "hu": "hu_HU-anna-medium",
+    "ca": "ca_ES-upc_ona-medium",
+    "ar": "ar_JO-kareem-medium",
+    "fa": "fa_IR-gyro-medium",
+    "he": "he_IL-saspeech-medium",
+    "th": "th_TH-tsync2-medium",
+    "ja": "ja_JP-hi_fi_captain-medium",
+    "ko": "ko_KR-kss-medium",
+    "zh": "zh_CN-huayan-medium",
+    "bg": "bg_BG-dimitar-medium",
+    "fi": "fi_FI-harri-medium",
+    "no": "no_NO-talesyntese-medium",
+    "is": "is_IS-bui-medium",
+    "id": "id_ID-news_tts-medium",
+}
+
+# Per-language Piper speed multipliers, applied on top of the configured
+# tts_piper_length_scale (0.65 by default; lower = faster speech). 1.0 keeps
+# the configured pace, 2.0 halves it. Czech jirka sits well at the default;
+# the Vietnamese models run noticeably faster out of the box, so they get
+# half speed (e.g. 0.65 -> 1.30 with the shipped default).
+PIPER_LENGTH_SCALE_MULTIPLIER_BY_LANGUAGE: dict[str, float] = {
+    "cs": 1.0,
+    "vi": 2.0,
+}
+
+# Words-per-minute estimates matching the speed table above, used when a
+# duration estimate is needed before the exact synthesis length is known.
+PIPER_WPM_BY_LANGUAGE: dict[str, int] = {
+    "cs": 200,
+    "vi": 100,
+}
+
+
+def _lang_code_from_voice_name(name: str) -> str:
+    """Extract the ISO-639-1 prefix from a Piper voice model name.
+
+    ``cs_CZ-jirka-medium`` -> ``cs``; ``en_US-lessac-medium`` -> ``en``.
+    A name without an underscore falls back to the part before the first
+    hyphen so custom single-token models still resolve.
+    """
+    base = name.replace(".onnx", "")
+    head = base.split("_", 1)[0] if "_" in base else base.split("-", 1)[0]
+    return head.lower()
+
+
+def _whisper_language_codes(value: Optional[str]) -> list[str]:
+    """Split a configured Whisper language value into ISO-639-1 codes.
+
+    ``"cs+vi"`` -> ``["cs", "vi"]``; a single code -> one entry; ``None`` or
+    ``"auto"`` -> empty list, meaning the default voice alone is enough.
+    """
+    if not value:
+        return []
+    text = str(value).strip().lower()
+    if not text or text == "auto":
+        return []
+    return [part.strip() for part in text.split("+") if part.strip()]
+
 
 def _get_piper_models_dir() -> Path:
     """Get the directory for storing Piper voice models."""
@@ -156,17 +244,23 @@ DEFAULT_WPM = 200  # Default rate used in config (words per minute)
 AUDIO_BUFFER_DELAY_SEC = 0.5  # Extra delay for audio buffer latency
 
 
-def _estimate_tts_duration(text: str, wpm: int) -> float:
+def _estimate_tts_duration(text: str, wpm: int, language: Optional[str] = None) -> float:
     """
     Estimate how long TTS audio will take to play.
 
     Args:
         text: The text being spoken
         wpm: Words per minute rate
+        language: Optional ISO-639-1 code; known codes override the default
+            WPM so per-language pace differences are reflected.
 
     Returns:
         Estimated duration in seconds
     """
+    lang = (language or "").strip().lower()
+    if lang in PIPER_WPM_BY_LANGUAGE:
+        wpm = PIPER_WPM_BY_LANGUAGE[lang]
+
     # Count words (simple split on whitespace)
     words = len(text.split())
 
@@ -467,7 +561,8 @@ class ChatterboxTTS:
         self._stop.clear()
 
     def speak(self, text: str, completion_callback: Optional[Callable[[], None]] = None,
-              duration_callback: Optional[Callable[[float], None]] = None) -> None:
+              duration_callback: Optional[Callable[[float], None]] = None,
+              language: Optional[str] = None) -> None:
         if not self.enabled or not text.strip():
             return
         # Lazy start the worker thread and lazy init on first speak
@@ -636,6 +731,7 @@ class PiperTTS:
         noise_scale: float = 0.667,
         noise_w: float = 0.8,
         sentence_silence: float = 0.2,
+        whisper_language: Optional[str] = None,
     ) -> None:
         self.enabled = enabled
         self.voice = voice  # Not used in Piper, kept for interface compatibility
@@ -646,6 +742,10 @@ class PiperTTS:
         self.noise_scale = noise_scale
         self.noise_w = noise_w
         self.sentence_silence = sentence_silence
+        # Closed-set Whisper language code(s) such as "cs+vi". Every mapped
+        # voice is preloaded at init so a per-turn language switch resolves
+        # instantly; None/auto keeps the single default-voice behavior.
+        self.whisper_language = whisper_language
 
         # Threading and queue setup (same pattern as other TTS engines)
         self._q: queue.Queue[str] = queue.Queue()
@@ -657,9 +757,13 @@ class PiperTTS:
         self._duration_callback: Optional[Callable[[float], None]] = None
         self._should_interrupt = threading.Event()
 
-        # Piper voice (lazy loaded)
-        self._voice = None
-        self._sample_rate: int = 22050  # Piper default, updated on model load
+        # Piper voices (lazy loaded), keyed by ISO-639-1 language code. The
+        # default model is stored under its own prefix; extra per-language
+        # models are loaded on demand in _resolve_voice.
+        self._voices: dict = {}
+        self._sample_rates: dict = {}
+        self._default_lang: str = _lang_code_from_voice_name(PIPER_DEFAULT_VOICE)
+        self._sample_rate: int = 22050  # fallback sample rate, updated on load
         self._initialized = False
         self._init_lock = threading.Lock()
         # Piper/onnxruntime synthesis is shared by local playback and Voice PE
@@ -678,13 +782,13 @@ class PiperTTS:
         If no model is configured, automatically downloads the default voice.
         """
         if self._initialized:
-            return self._voice is not None
+            return bool(self._voices)
         if not self.enabled:
             return False
 
         with self._init_lock:
             if self._initialized:
-                return self._voice is not None
+                return bool(self._voices)
 
             try:
                 # Use configured path or default
@@ -738,10 +842,41 @@ class PiperTTS:
                 # Import piper and load model
                 from piper.voice import PiperVoice
 
-                self._voice = PiperVoice.load(model_path, config_path)
-                self._sample_rate = self._voice.config.sample_rate
+                voice = PiperVoice.load(model_path, config_path)
+                lang = _lang_code_from_voice_name(os.path.basename(model_path))
+                self._voices[lang] = voice
+                self._sample_rates[lang] = voice.config.sample_rate
+                self._default_lang = lang
+                self._sample_rate = voice.config.sample_rate
 
-                debug_log(f"Piper TTS initialized: sample_rate={self._sample_rate}", "tts")
+                debug_log(f"Piper TTS initialized: lang={lang}, sample_rate={voice.config.sample_rate}", "tts")
+
+                # Preload every voice in the configured closed set (e.g. the
+                # default "cs+vi" pair) so the per-turn language switch in
+                # _resolve_voice never blocks on a download mid-conversation.
+                # Unmapped or failed codes fall back to the default at
+                # resolve time; the default voice itself is already loaded.
+                for code in _whisper_language_codes(self.whisper_language):
+                    if code in self._voices:
+                        continue
+                    extra_name = PIPER_VOICE_BY_LANGUAGE.get(code)
+                    if not extra_name:
+                        debug_log(
+                            f"Piper TTS: no voice mapped for language '{code}', "
+                            f"keeping default '{self._default_lang}'",
+                            "tts",
+                        )
+                        continue
+                    loaded = self._load_extra_voice(extra_name)
+                    if loaded is not None:
+                        extra_voice, extra_rate = loaded
+                        self._voices[code] = extra_voice
+                        self._sample_rates[code] = extra_rate
+                        debug_log(
+                            f"Piper TTS preloaded closed-set voice: "
+                            f"{extra_name} (lang={code})",
+                            "tts",
+                        )
 
             except ImportError as e:
                 self._init_error = f"piper-tts not installed: {e}"
@@ -751,7 +886,66 @@ class PiperTTS:
                 debug_log(f"Piper TTS init failed: {self._init_error}", "tts")
 
             self._initialized = True
-            return self._voice is not None
+            return bool(self._voices)
+
+    def _load_extra_voice(self, voice_name: str):
+        """Load an additional Piper voice by model name (download if missing)."""
+        models_dir = _get_piper_models_dir()
+        model_path = models_dir / f"{voice_name}.onnx"
+        config_path = models_dir / f"{voice_name}.onnx.json"
+        if not model_path.exists() or not config_path.exists():
+            downloaded = _download_piper_voice(voice_name)
+            if not downloaded:
+                return None
+            model_path = Path(downloaded)
+            config_path = Path(downloaded + ".json")
+        if not model_path.exists() or not config_path.exists():
+            return None
+        try:
+            from piper.voice import PiperVoice
+            voice = PiperVoice.load(str(model_path), str(config_path))
+        except Exception as e:
+            debug_log(f"Piper extra voice load failed ({voice_name}): {e}", "tts")
+            return None
+        return voice, voice.config.sample_rate
+
+    def _resolve_voice(self, language: Optional[str]):
+        """Return (PiperVoice, sample_rate) for an ISO-639-1 code, loading on demand.
+
+        Falls back to the default voice when the code has no mapped model.
+        """
+        lang = (language or "").strip().lower() or self._default_lang
+        if lang in self._voices:
+            return self._voices[lang], self._sample_rates[lang]
+        name = PIPER_VOICE_BY_LANGUAGE.get(lang)
+        # Composite config values like "cs+vi" are not keys themselves; resolve
+        # against their parts in order so a preloaded closed-set voice wins.
+        if name is None and "+" in lang:
+            for part in _whisper_language_codes(lang):
+                if part in self._voices:
+                    return self._voices[part], self._sample_rates[part]
+                name = PIPER_VOICE_BY_LANGUAGE.get(part)
+                if name:
+                    lang = part
+                    break
+        if name:
+            loaded = self._load_extra_voice(name)
+            if loaded is not None:
+                voice, rate = loaded
+                self._voices[lang] = voice
+                self._sample_rates[lang] = rate
+                return voice, rate
+        if self._default_lang in self._voices:
+            return self._voices[self._default_lang], self._sample_rates[self._default_lang]
+        return None, self._sample_rate
+
+    def _length_scale_for(self, language: Optional[str]) -> float:
+        """Configured length scale with the per-language multiplier applied."""
+        base = float(self.length_scale) if self.length_scale else 1.0
+        multiplier = PIPER_LENGTH_SCALE_MULTIPLIER_BY_LANGUAGE.get(
+            (language or "").strip().lower(), 1.0
+        )
+        return base * multiplier
 
     def start(self) -> None:
         if not self.enabled or self._thread is not None:
@@ -779,7 +973,8 @@ class PiperTTS:
         self._stop.clear()
 
     def speak(self, text: str, completion_callback: Optional[Callable[[], None]] = None,
-              duration_callback: Optional[Callable[[float], None]] = None) -> None:
+              duration_callback: Optional[Callable[[float], None]] = None,
+              language: Optional[str] = None) -> None:
         if not self.enabled or not text.strip():
             return
         # Lazy start the worker thread
@@ -790,7 +985,7 @@ class PiperTTS:
         # Preprocess text for speech
         processed_text = _preprocess_for_speech(text)
         try:
-            self._q.put_nowait(processed_text)
+            self._q.put_nowait((processed_text, language))
         except Exception:
             pass
 
@@ -808,18 +1003,24 @@ class PiperTTS:
     def _run(self) -> None:
         while not self._stop.is_set():
             try:
-                text = self._q.get(timeout=0.5)
+                item = self._q.get(timeout=0.5)
             except queue.Empty:
                 continue
+            if not item:
+                continue
+            if isinstance(item, tuple):
+                text, language = item
+            else:
+                text, language = item, None
             if not text:
                 continue
             try:
-                self._speak_once(text)
+                self._speak_once(text, language)
             except Exception as e:
                 debug_log(f"Piper TTS error in _speak_once: {e}", "tts")
                 continue
 
-    def _speak_once(self, text: str) -> None:
+    def _speak_once(self, text: str, language: Optional[str] = None) -> None:
         self._is_speaking.set()
         self._last_spoken_text = text
         self._should_interrupt.clear()
@@ -838,6 +1039,11 @@ class PiperTTS:
             import sounddevice as sd
             import numpy as np
 
+            voice, sample_rate = self._resolve_voice(language)
+            if voice is None:
+                debug_log(f"Piper TTS: no voice for language '{language}'", "tts")
+                return
+
             start_time = time.time()
 
             debug_log(f"Piper TTS starting synthesis: {len(text.split())} words", "tts")
@@ -851,13 +1057,13 @@ class PiperTTS:
             from piper.config import SynthesisConfig
             syn_config = SynthesisConfig(
                 speaker_id=self.speaker,
-                length_scale=self.length_scale,
+                length_scale=self._length_scale_for(language),
                 noise_scale=self.noise_scale,
                 noise_w_scale=self.noise_w,
             )
             audio_chunks = []
             with self._synthesis_lock:
-                for chunk in self._voice.synthesize(text, syn_config):
+                for chunk in voice.synthesize(text, syn_config):
                     if self._should_interrupt.is_set():
                         debug_log("Piper TTS interrupted during synthesis", "tts")
                         return
@@ -880,7 +1086,7 @@ class PiperTTS:
                 return
 
             # Calculate exact duration from actual samples
-            exact_duration = len(full_audio) / self._sample_rate
+            exact_duration = len(full_audio) / sample_rate
             debug_log(f"Piper TTS synthesis complete: {exact_duration:.2f}s, {len(full_audio)} samples", "tts")
 
             # Notify listener of exact duration for precise echo detection
@@ -922,10 +1128,10 @@ class PiperTTS:
             # (otherwise PortAudio returns paInvalidSampleRate / -9997), so
             # match the device and resample the synthesis to it. Seconds-of-
             # speech are identical before and after the resample.
-            stream_rate = output_stream_samplerate(sd, output_device, self._sample_rate)
-            if stream_rate != self._sample_rate:
+            stream_rate = output_stream_samplerate(sd, output_device, sample_rate)
+            if stream_rate != sample_rate:
                 full_audio = resample_int16(
-                    np, full_audio, self._sample_rate, stream_rate
+                    np, full_audio, sample_rate, stream_rate
                 )
 
             with self._audio_lock:
@@ -1018,6 +1224,7 @@ def create_tts_engine(
     piper_noise_scale: float = 0.667,
     piper_noise_w: float = 0.8,
     piper_sentence_silence: float = 0.2,
+    whisper_language: Optional[str] = None,
 ):
     """Factory function to create the appropriate TTS engine.
 
@@ -1047,6 +1254,7 @@ def create_tts_engine(
             noise_scale=piper_noise_scale,
             noise_w=piper_noise_w,
             sentence_silence=piper_sentence_silence,
+            whisper_language=whisper_language,
         )
 
 

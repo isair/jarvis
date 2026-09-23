@@ -1,0 +1,21 @@
+{
+  "engine_generation": 1,
+  "lane_id": 2,
+  "source_type": 1,
+  "device_id": "",
+  "connection_generation": 0,
+  "session_generation": 0,
+  "capture_endpoint": {"id": "{0.0.1.00000000}.{43650f4d-ee8a-4cd2-8190-ab1e1e209222}", "name": "Headset Microphone (Plantronics Blackwire 3220 Series)", "rate_hz": 16000, "channels": 1, "format": 0},
+  "render_endpoint": {"id": "{0.0.0.00000000}.{6d5f061c-a112-437c-bfa0-d9fe2c93a3b4}", "name": "Speakers (JBL Xtreme 4)", "rate_hz": 44100, "channels": 2, "format": 0},
+  "reference_tap": 3, "reference_active": 0,
+  "frame_count": 600, "frame_samples": 480,
+  "capture_start_s": 83901.260107, "capture_stride_s": 0.01,
+  "aec_state": 3, "estimated_delay_ms": 8.000, "delay_confidence": 1.000,
+  "erle_db": 0.176, "erl_db": -29.085, "residual_echo_likelihood": 0.000,
+  "drift_ppm": {"satellite": 999.993},
+  "resampler_ratio": 0.333381652,
+  "queue": {"jitter_depth_ms": 4.271, "capture_queue_ms": 4.271, "reference_window_ms": 5120.000},
+  "counters": {"overruns": 0, "underruns": 944, "dropped": 0, "duplicates": 0, "discontinuities": 0, "reconvergences": 1632, "limiter_hits": 0},
+  "latency_ms": {"p50": 0.032, "p95": 0.047, "max": 0.076},
+  "wav_sha256": "eef953b8d631bad8f9a97c007d5d39c45346b6dce47f820b6407137b72328b14"
+}

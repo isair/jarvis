@@ -23,7 +23,9 @@ def test_dsp_domain_constants_parity() -> None:
 def test_dsp_v1_engine_and_ducking_reads_parity() -> None:
     # Fresh v1 engine (rollback path) — identical answers from both modules.
     st1 = _na.create(profile=_na.PROFILE_HOSTILE_PLAYBACK)
-    assert st1 in (0, 2)           # 2 = shared mix without the RAW option
+    # 2 = shared mix without the RAW option, 3 = no loopback tap here; both
+    # are legitimate degraded-but-working create() outcomes on real hardware.
+    assert st1 in (0, 2, 3)
     assert _nb.last_status() == _na.last_status()
     caps = _nb.capabilities()
     assert caps == _na.capabilities()

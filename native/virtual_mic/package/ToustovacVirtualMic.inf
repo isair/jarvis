@@ -16,17 +16,63 @@ ClassGuid   = {4d36e96c-e325-11ce-bfc1-08002be10318}
 Provider    = %Viverra%
 CatalogFile = ToustovacVirtualMic.cat
 DriverVer   = 09/19/2026,1.0.0.0
-PnPLockdown = 1
+PnpLockdown = 1
 
+[DestinationDirs]
+DefaultDestDir = 12
+ToustovacVirtualMic.CopyList = 12
+
+[SourceDisksNames]
+1 = %DiskId%,,
+
+[SourceDisksFiles]
+ToustovacVirtualMic.sys = 1
+
+; NTamd64 matches the 64-bit SetupAPI; the generic NT section is the fallback
+; so the 32-bit (WOW64) SetupAPI also resolves a model section instead of
+; returning "Operation not allowed in WOW64".
 [Manufacturer]
 %Viverra% = Viverra, NTamd64
+%Viverra% = Viverra, NT
 
 [Viverra.NTamd64]
 %Toustovac.Clean.Mic.Name% = ToustovacVirtualMic, ROOT\VIVERRA\TOUSTOVAC_CLEAN_MIC
 
+[Viverra.NT]
+%Toustovac.Clean.Mic.Name% = ToustovacVirtualMic, ROOT\VIVERRA\TOUSTOVAC_CLEAN_MIC
+
 [ToustovacVirtualMic]
-Include   = machine.inf
-Needs     = PCI_NOT_STARTED_ON
+AlsoInstall = ks.registration(ks.inf),wdmaudio.registration(wdmaudio.inf)
+CopyFiles   = ToustovacVirtualMic.CopyList
+AddReg      = ToustovacVirtualMic.AddReg
+
+; Function-driver association (Case B fix, per setupapi.dev.log
+; "No INF AddService directives contained the flag SPSVCINST_ASSOCSERVICE").
+; 0x00000002 = SPSVCINST_ASSOCSERVICE marks the one function driver service.
+; ServiceBinary uses %12% to match DefaultDestDir=12 (system32\drivers).
+[ToustovacVirtualMic.Services]
+AddService = ToustovacVirtualMic,0x00000002,ToustovacVirtualMic.Service
+
+[ToustovacVirtualMic.Service]
+DisplayName   = %ServiceDesc%
+ServiceType   = 1
+StartType     = 3
+ErrorControl  = 1
+ServiceBinary = %12%\ToustovacVirtualMic.sys
+
+[ToustovacVirtualMic.CopyList]
+ToustovacVirtualMic.sys
+
+[ToustovacVirtualMic.AddReg]
+HKR,,AssociatedFilters,,"wdmaud,swmidi,redbook"
+HKR,,Driver,,ToustovacVirtualMic.sys
+HKR,Drivers,SubClasses,,"wave,midi,mixer"
+HKR,Drivers\wave\wdmaud.drv,Driver,,wdmaud.drv
+HKR,Drivers\midi\wdmaud.drv,Driver,,wdmaud.drv
+HKR,Drivers\mixer\wdmaud.drv,Driver,,wdmaud.drv
+HKR,Drivers\wave\wdmaud.drv,Description,,%Toustovac.Clean.Mic.Name%
+HKR,Drivers\midi\wdmaud.drv,Description,,%Toustovac.Clean.Mic.Name%
+HKR,Drivers\mixer\wdmaud.drv,Description,,%Toustovac.Clean.Mic.Name%
 
 [ToustovacVirtualMic.Interfaces]
 ; KS audio categories keep the standard GUIDs.  The private control
@@ -45,6 +91,8 @@ HKR,,%KSCATEGORY_AUDIO%,,TOP
 
 [Strings]
 Viverra                  = "Viverra"
+DiskId                   = "Toustovac Clean Microphone Driver Disk"
 Toustovac.Clean.Mic.Name = "Toustovač Clean Microphone"
+ServiceDesc              = "Toustovač Clean Microphone Driver"
 KSCATEGORY_AUDIO         = "{6994AD00-93EF-11D0-A3CC-00A0C9223196}"
 KSCATEGORY_CAPTURE       = "{65E8773D-8F56-11D0-A3B9-00A0C9223196}"

@@ -272,6 +272,11 @@ class OpenAICompatibleBackend(LLMBackend):
                     content = msg.get("content")
                     if isinstance(content, str) and content.strip():
                         return content
+                    # Reasoning-first servers (Qwen3/Gemma builds) often leave
+                    # ``content`` empty and put the answer in ``reasoning_content``.
+                    reasoning = msg.get("reasoning_content")
+                    if isinstance(reasoning, str) and reasoning.strip():
+                        return reasoning
                 debug_log(
                     f"OpenAICompatibleBackend.direct: empty content from response keys={list(data.keys())}",
                     "llm",

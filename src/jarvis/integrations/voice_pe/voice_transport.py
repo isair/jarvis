@@ -893,7 +893,8 @@ class AudioIngress:
             if isinstance(item, EndOfStream):
                 self._close_stream(item)
                 continue
-            if not getattr(item, "samples", None):
+            payload = getattr(item, "samples", None)
+            if _item_sample_len(payload if payload is not None else b"") == 0:
                 self._close_stream(
                     EndOfStream(item.stream if isinstance(item, (LocalMicFrame, SatelliteAudioFrame)) else LOCAL_STREAM,
                              getattr(item, "source", AUDIO_SOURCE_VOICE_PE))
@@ -969,7 +970,8 @@ class AudioIngress:
                 self._close_stream(item)
                 delivered += 1
                 continue
-            if not getattr(item, "samples", None):
+            payload = getattr(item, "samples", None)
+            if _item_sample_len(payload if payload is not None else b"") == 0:
                 continue
             self._pending_samples = max(
                 0, self._pending_samples - _item_sample_len(item.samples)

@@ -7,5 +7,5 @@
 #include "minip.h"
 
 // One WaveRT instance and one shared PCM ring exist per device.
-PCMiniportWaveRT  g_pWaveRt     = NULL;
-CPCMRing*         g_pRing       = NULL;
+extern PCMiniportWaveRT g_pWaveRt;
+extern CPCMRing*        g_pRing;

@@ -900,11 +900,16 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     # because the relevant ones are already named for them; and tool steps
     # come out concrete ("getWeather location='Paris'") so the direct-exec
     # fast path parses without needing the resolver LLM round-trip.
+    direct_mode = bool(getattr(cfg, "direct_instruct_mode", True))
     context_hint = _build_enrichment_context_hint(cfg, recent_messages)
     try:
         strategy = ToolSelectionStrategy(getattr(cfg, "tool_selection_strategy", "llm"))
     except ValueError:
         strategy = ToolSelectionStrategy.LLM
+    if direct_mode:
+        # Direct-instruct: keyword scoring first, the LLM router only as a
+        # tiebreak when nothing matched (handled in the branch below).
+        strategy = ToolSelectionStrategy.KEYWORD
     # Hot-window cache: router output for the same redacted query and
     # tool catalogue is reused within one conversation. Catalogue
     # signature includes builtin + MCP tool names so a mid-window MCP
@@ -927,6 +932,16 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     if isinstance(_cached_routed, list):
         routed_tools = list(_cached_routed)
         debug_log("tool router served from hot-window cache", "planning")
+    elif _deterministic_routed and direct_mode:
+        # Direct-instruct: the deterministic table answers the turn with
+        # zero LLM calls — no router round-trip at all.
+        routed_tools = list(_deterministic_routed)
+        debug_log(
+            f"tool router won by deterministic route: {routed_tools}",
+            "planning",
+        )
+        if dialogue_memory and hasattr(dialogue_memory, "hot_cache_put"):
+            dialogue_memory.hot_cache_put(_router_cache_key, list(routed_tools))
     else:
         routed_tools = select_tools(
             query=redacted,
@@ -941,6 +956,28 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             embed_timeout_sec=float(getattr(cfg, "llm_embedding_timeout_sec", 10.0)),
             context_hint=context_hint,
         )
+        # Direct-instruct tiebreak: the keyword pass answered with the full
+        # catalogue (nothing matched), so spend exactly one LLM router call
+        # to narrow it. Keeps the LLM router as fallback, not as default.
+        if (
+            direct_mode
+            and routed_tools is not None
+            and len(routed_tools) == len(_full_catalog_names)
+            and set(routed_tools) == set(_full_catalog_names)
+        ):
+            routed_tools = select_tools(
+                query=redacted,
+                builtin_tools=BUILTIN_TOOLS,
+                mcp_tools=mcp_tools,
+                strategy=ToolSelectionStrategy.LLM,
+                llm_backend=get_llm_backend(cfg),
+                llm_model=resolve_model(cfg, Tier.FAST),
+                llm_timeout_sec=float(getattr(cfg, "llm_tools_timeout_sec", 8.0)),
+                embedding_backend=get_embedding_backend(cfg),
+                embed_model=cfg.embedding_model,
+                embed_timeout_sec=float(getattr(cfg, "llm_embedding_timeout_sec", 10.0)),
+                context_hint=context_hint,
+            )
         # Don't cache the router's "fall open to all tools" fallback. That
         # path fires when the LLM router times out, returns empty, or emits
         # a response no token of which matches a known tool name — i.e. the
@@ -965,8 +1002,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     # The deterministic route wins the final allow-list when it fires; the
     # router above still ran (its pick is what the cache stores), so the
     # router stays the authoritative picker for everything the deterministic
-    # table does not cover.
-    if _deterministic_routed:
+    # table does not cover. In direct mode the deterministic answer was
+    # already applied in the branch chain above.
+    if not direct_mode and _deterministic_routed:
         routed_tools = list(_deterministic_routed)
         debug_log(
             f"tool router won by deterministic route: {routed_tools}",
@@ -1053,6 +1091,12 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             f"{_query_word_count} words — using reply-only plan",
             "planning",
         )
+    elif direct_mode:
+        # Direct-instruct: no planner round-trip. An empty plan keeps the
+        # fail-open behaviour downstream — the memory extractor still gates
+        # enrichment and the allow-list comes from the router alone.
+        action_plan = []
+        debug_log("planner skipped: direct_instruct_mode is on", "planning")
     else:
         try:
             action_plan = plan_query(
@@ -1138,21 +1182,23 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         "WARM_PROFILE_CACHE_KEY",
         "warm_profile_block",
     ) if dialogue_memory else "warm_profile_block"
-    _wp_cached = (
-        dialogue_memory.hot_cache_get(_wp_cache_key)
-        if dialogue_memory and hasattr(dialogue_memory, "hot_cache_get") else None
-    )
-    if isinstance(_wp_cached, str):
-        warm_profile_block = _wp_cached
-        debug_log("warm profile served from conversation cache", "memory")
-    else:
+
+    def _load_warm_profile_block() -> str:
+        # Conversation-scoped hot cache first; SQLite BFS only on a miss.
+        _wp_cached = (
+            dialogue_memory.hot_cache_get(_wp_cache_key)
+            if dialogue_memory and hasattr(dialogue_memory, "hot_cache_get") else None
+        )
+        if isinstance(_wp_cached, str):
+            debug_log("warm profile served from conversation cache", "memory")
+            return _wp_cached
         try:
             from ..memory.graph import GraphMemoryStore
             from ..memory.graph_ops import build_warm_profile, format_warm_profile_block
             _graph_store_warm = GraphMemoryStore(cfg.db_path)
             _warm_profile = build_warm_profile(_graph_store_warm)
-            warm_profile_block = format_warm_profile_block(_warm_profile)
-            if warm_profile_block:
+            warm_block = format_warm_profile_block(_warm_profile)
+            if warm_block:
                 _user_len = len(_warm_profile.get("user", ""))
                 _dir_len = len(_warm_profile.get("directives", ""))
                 print(
@@ -1165,9 +1211,11 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     "memory",
                 )
             if dialogue_memory and hasattr(dialogue_memory, "hot_cache_put"):
-                dialogue_memory.hot_cache_put(_wp_cache_key, warm_profile_block)
+                dialogue_memory.hot_cache_put(_wp_cache_key, warm_block)
+            return warm_block
         except Exception as e:
             debug_log(f"warm profile load failed (non-fatal): {e}", "memory")
+            return ""
 
     # Step 4: Memory enrichment — controlled by cfg.memory_enrichment_source
     # "all" = diary + graph, "diary" = diary only, "graph" = graph only
@@ -1187,12 +1235,19 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
     search_params: dict = {}
 
-    # Extract keywords and implicit questions only when the planner asked
-    # for a memory search (or the planner failed and we're falling open).
-    # For queries the planner classified as reply-only ("what are you
-    # thinking", a greeting, a pure opinion) this skips an LLM call we'd
-    # have paid unconditionally in the old flow.
-    if needs_memory:
+    # The warm profile (SQLite BFS, query-agnostic) and the memory
+    # extractor (fast-tier LLM) are independent, so both are submitted
+    # before either is awaited — one combined wait instead of two serial
+    # ones on the reply's critical path.
+    def _run_memory_extractor() -> dict:
+        # Extract keywords and implicit questions only when the planner asked
+        # for a memory search (or the planner failed and we're falling open).
+        # For queries the planner classified as reply-only ("what are you
+        # thinking", a greeting, a pure opinion) this skips an LLM call we'd
+        # have paid unconditionally in the old flow.
+        if not needs_memory:
+            debug_log("memory enrichment skipped: planner did not request it", "memory")
+            return {}
         try:
             _extractor_query = redacted
             if _memory_topic_hint:
@@ -1210,28 +1265,35 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 if dialogue_memory and hasattr(dialogue_memory, "hot_cache_get") else None
             )
             if isinstance(_cached_params, dict):
-                search_params = _cached_params
                 debug_log("memory extractor served from hot-window cache", "memory")
-            else:
-                search_params = extract_search_params_for_memory(
-                    _extractor_query, cfg, resolve_model(cfg, Tier.FAST),
-                    timeout_sec=float(getattr(cfg, 'llm_tools_timeout_sec', 8.0)),
-                    thinking=getattr(cfg, 'llm_thinking_enabled', False),
-                    context_hint=context_hint,
-                )
-                if dialogue_memory and hasattr(dialogue_memory, "hot_cache_put"):
-                    dialogue_memory.hot_cache_put(_extractor_cache_key, search_params)
-            keywords = search_params.get('keywords', [])
-            questions = search_params.get('questions', [])
-            if keywords:
-                print(f"  🔍 Memory search: {', '.join(keywords)}", flush=True)
-                debug_log(f"extracted keywords: {keywords}", "memory")
-            if questions:
-                debug_log(f"implicit questions: {questions}", "memory")
+                return _cached_params
+            _params = extract_search_params_for_memory(
+                _extractor_query, cfg, resolve_model(cfg, Tier.FAST),
+                timeout_sec=float(getattr(cfg, 'llm_tools_timeout_sec', 8.0)),
+                thinking=getattr(cfg, 'llm_thinking_enabled', False),
+                context_hint=context_hint,
+            ) or {}
+            if dialogue_memory and hasattr(dialogue_memory, "hot_cache_put"):
+                dialogue_memory.hot_cache_put(_extractor_cache_key, _params)
+            return _params
         except Exception as e:
             debug_log(f"keyword extraction failed: {e}", "memory")
-    else:
-        debug_log("memory enrichment skipped: planner did not request it", "memory")
+            return {}
+
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=2) as _prep_pool:
+        _f_warm_profile = _prep_pool.submit(_load_warm_profile_block)
+        _f_extractor = _prep_pool.submit(_run_memory_extractor)
+        warm_profile_block = _f_warm_profile.result()
+        search_params = _f_extractor.result() or {}
+
+    keywords = list(search_params.get('keywords', []) or [])
+    questions = list(search_params.get('questions', []) or [])
+    if keywords:
+        print(f"  🔍 Memory search: {', '.join(keywords)}", flush=True)
+        debug_log(f"extracted keywords: {keywords}", "memory")
+    if questions:
+        debug_log(f"implicit questions: {questions}", "memory")
 
     # Step 4a: Diary enrichment (episodic conversation history)
     if enrichment_source in ("all", "diary") and keywords:
@@ -1486,7 +1548,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         or "jarvis"
     ).strip().capitalize()
     _persona_prompt = build_system_prompt(
-        _assistant_name, getattr(cfg, "persona_lines", None)
+        _assistant_name, getattr(cfg, "persona_lines", None), language=language
     )
 
     def _build_initial_system_message() -> str:

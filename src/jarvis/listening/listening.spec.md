@@ -121,6 +121,17 @@ The intent judge receives full context and makes intelligent decisions:
 
 **Model residency (`keep_alive`):** Each intent-judge request asks Ollama to keep the model resident after the call. The default duration is 30 minutes, which avoids cold reloads between utterances. When `cfg.low_power_mode` is true, the duration is 1 minute so the model can unload soon after an active exchange. The trade-off is latency: low-power sessions can pay a cold-load cost after idle periods, while default sessions keep the judge model (default `gemma4:e2b`, ~2 GB) in RAM/VRAM during active voice use.
 
+**Response parsing chain.** `_parse_response` walks four steps and stops at the first hit, so one truncation never discards the whole turn:
+
+1. Balanced `{...}` object in `message.content` (brace-matching, fence-tolerant — `_extract_json_object`).
+2. Balanced object in the thinking text (`reasoning_content` on OpenAI-compatible servers, `thinking` on Ollama — `_reasoning_of`). The **last** object wins, because the model echoes the system-prompt example before writing the verdict.
+3. Repaired object: `_repair_truncated_json` closes the last *unclosed* object in `content` (one `"` plus one `}` per open brace), keeping the decisive `directed` / `query` keys; absent `stop` / `confidence` take their defaults.
+4. `None`, which lets the listener fall back to the local wake-word check.
+
+A complete object outranks a repaired one at every step, so a truncated `content` cannot mask a full verdict inside the reasoning.
+
+**Failure diagnostics.** When all four steps miss, the log line is `🧠 Intent judge: failed to parse: <repr> · <summary>` where the summary is `_response_diagnostics`: `cap=`, `content_len=`, `reasoning_len=`, `finish_reason=` (top level or `choices[0]`), `completion_tokens=` / `eval_count=`, `reasoning_tokens=`, brace counters per field, and a `cause=` tag — `server_returned_no_text`, `cap_eaten_by_reasoning` (empty `content`, reasoning at the cap), or `structurally_incomplete_json`. `cause` also lands in `last_failure_reason`, which the desktop UI prints verbatim. The earlier bare `no JSON found in response: ` line showed nothing for an empty `content` and could not tell those three cases apart.
+
 ## Startup & Model Warmup
 
 Before the listener announces "Listening!", it pre-loads every model the first engagement will need. All warmup output is grouped under a single `🔥 Warming up models...` header with indented child status lines, e.g.
@@ -342,14 +353,14 @@ If the intent judge later rejects the query (and no hot window override applies)
 | `transcript_buffer_duration_sec` | 120 | Duration (seconds) for rolling ambient speech transcript. Provides conversation context so the intent judge can synthesise a complete query when someone involves Jarvis. Separate from dialogue memory. |
 | `whisper_min_confidence` | 0.3 | Minimum `avg_logprob`-derived confidence score for a transcribed segment. Segments below this are discarded before the intent judge sees them. |
 | `whisper_no_speech_threshold` | 0.5 | Hard cutoff on Whisper's `no_speech_prob` field. Any segment at or above this value is discarded **regardless of `avg_logprob`** — Whisper can be confident about a hallucinated phrase even when no real speech is present (e.g. the "MBC 뉴스" hallucination on background noise). This filter runs before the `avg_logprob` check so it catches high-confidence hallucinations that would otherwise survive. Applies to both the faster-whisper and MLX backends. |
-| `whisper_language` | `"auto"` | Forced ASR language. The value is lowercased on load and only `en`, `cs`, `vi`, `sk` survive, anything else becomes `"auto"`. A code goes to Whisper as the forced language on the warmup clip and on every utterance; `"auto"` keeps per-utterance detection. Exposed as a choice in the Settings window under *Whisper* (Auto, English, Čeština, Tiếng Việt, Slovenčina). |
+| `whisper_language` | `"cs+vi"` | ASR language selector. The value is lowercased on load and only `en`, `cs`, `vi`, `sk`, `cs+vi` survive, anything else becomes `"cs+vi"`. A single code goes to Whisper as the forced language on the warmup clip and on every utterance; `"cs+vi"` resolves every utterance as the Czech/Vietnamese closed set — two forced decodes (one per code), the higher first-row `avg_logprob` wins (see *Whisper Decode Settings*). The legacy `"auto"` folds into `"cs+vi"`. Exposed as a choice in the Settings window under *Whisper* (Čeština + Tiếng Việt, English, Čeština, Tiếng Việt, Slovenčina). |
 | `speech_spellcheck_enabled` | `true` | Master switch for the offline Hunspell repair of the final transcript. `false` is a transparent bypass. |
-| `speech_spellcheck_languages` | `["en", "cs", "vi", "sk"]` | The codes that ship a vendored dictionary (ids `en_US`, `cs_CZ`, `vi_VN`, `sk_SK`). Any other code gets the raw text. |
+| `speech_spellcheck_languages` | `["en", "cs", "vi", "sk"]` | The codes that ship a vendored dictionary (ids `en_US`, `cs_CZ`, `vi_VN`, `sk_SK`). Any other code gets the raw text. It is also the fallback candidate set for the closed-set resolution when `whisper_language` holds none of the recognized selector values; the `"cs+vi"` selector uses the fixed pair `["cs", "vi"]` directly. |
 | `speech_spellcheck_protected_terms` | `[]` | Extra names and terms the post-processor keeps verbatim, on top of the built-in protected set (wake aliases, persona name, satellite entity names). Compared casefolded, the output keeps the original spelling. |
 
 Note: Intent judge is always used when available (no enable flag). Falls back to simple wake word detection when Ollama is unavailable.
 
-**Judge budget:** `intent_judge_timeout_sec` is one contract with the judge's generation cap, not an independent knob. The decode floor is `max_tokens / tokens_per_sec` on top of the prompt prefill (a ~2k-token system prompt plus up to ~1.5k tokens of transcript buffer). Plain mode caps at 400 tokens, thinking mode at 1500 and multiplies the wall clock by 3, so a 45 tok/s host stays inside the window instead of answering with `unavailable (no response from backend)`.
+**Judge budget:** `intent_judge_timeout_sec` is one contract with the judge's generation cap, not an independent knob. The decode floor is `max_tokens / tokens_per_sec` on top of the prompt prefill (a ~2k-token system prompt plus up to ~1.5k tokens of transcript buffer). Plain mode caps at 1400 tokens and multiplies the wall clock by 2.5 (37.5 s against a 15 s base), thinking mode caps at 1500 and multiplies by 3 (45 s), so a 45 tok/s host stays inside the window instead of answering with `unavailable (no response from backend)`. The plain cap is sized to the **thinking** length, not the answer: an OpenAI-compatible server does not honour the `think` flag, so the same request burned 909-1309 reasoning tokens (measured on LM Studio) before one answer token. With the old 400 cap the whole budget went to `reasoning_content`, `content` came back `` with `finish_reason="length"`, and every judgment was lost to the keyword fallback.
 
 ### Whisper Decode Settings
 
@@ -357,11 +368,11 @@ Endpointing is the outer webrtcvad/RMS path, so the decoder receives an already-
 
 | Flag | Value | Reason |
 |------|-------|--------|
-| `language` | `cfg.whisper_language` code, `None` for `"auto"` | A configured code is the forced language on the warmup clip and on every utterance in both backends, which lifts transcript precision for that language. `"auto"` passes `None` and keeps per-utterance detection. `self._last_detected_language` holds the code in play (the configured code overrides it when one is set) and is the label the post-processing step reads. |
+| `language` | `cfg.whisper_language` code, `None` for `"cs+vi"` | A single configured code is the forced language on the warmup clip and on every utterance in both backends, which lifts transcript precision for that language. `"cs+vi"` passes `None` per call and resolves as a closed set instead: one forced decode per member code under `transcribe_lock`, winner = highest first-row `avg_logprob` (tiebreak: lower `no_speech_prob`), so short clips cannot drift to an unrelated code the way the single-pass argmax does (e.g. `vi→ko`, `cs→pt`). The winner fills `_decoder_language_argument` / `_reported_language`, `_language_source` reads `"multiselect"`, and `self._last_detected_language` is the label the post-processing step reads. |
 | `vad_filter` | `False` (faster-whisper) | The outer VAD did the endpointing; a second Silero pass would only re-cut the clip. |
 | `condition_on_previous_text` | `False` | Clips are short and self-contained. Carrying the previous segment's text is what makes the decoder emit its boilerplate (`Thank you.`, `If so....`, `Let's go.`) on the next near-empty clip. All decision-relevant context rides in the transcript buffer instead. |
 | `without_timestamps` | `True` | Only `text`, `avg_logprob` and `no_speech_prob` are read from segments; buffer timings come from the VAD. Fewer emitted tokens per clip. |
-| `suppress_nospeech_text` | `True` (faster-whisper) | Drops non-speech marker tokens so bare `(mrmusic)`-style rows cannot reach the judge. |
+| non-speech suppression | `suppress_tokens=[-1]` (faster-whisper), `suppress_nospeech_text=True` (MLX) | Drops non-speech marker tokens so bare `(mrmusic)`-style rows cannot reach the judge. faster-whisper 1.x folds that flag into `suppress_tokens`, where the `-1` entry expands to the marker set; MLX keeps the named flag. Each backend gets its own preferred set, resolved once from the installed signature. |
 
 `_filter_noisy_segments` then applies the two configured gates in order: the `no_speech_prob` hard cutoff, then the `avg_logprob`-derived confidence. Between `whisper_min_confidence / 3` and `whisper_min_confidence` the segment is dropped and the marginal-confidence line is printed; below that it is debug-only.
 

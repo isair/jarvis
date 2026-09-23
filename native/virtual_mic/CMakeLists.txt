@@ -10,7 +10,8 @@
 cmake_minimum_required(VERSION 3.23)
 project(ToustovacAudioStack LANGUAGES CXX)
 
-add_compile_options(/W4 /utf-8)
+# /FS serializes parallel cl.exe PDB writes (C1041) under the MSBuild generator.
+add_compile_options(/W4 /utf-8 /FS)
 
 # --- broker service ---------------------------------------------------------
 add_executable(ToustovacAudioBroker

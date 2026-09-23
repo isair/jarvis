@@ -277,10 +277,12 @@ def _build_field_metadata() -> List[FieldMeta]:
       choices=[("wasapi_native_v2", "WASAPI native v2 (default)"),
                ("portaudio_compat", "PortAudio compatibility lane")])
     f("voice_capture_endpoint_id", "Capture Endpoint (MMDevice)",
-      "Microphone MMDevice ID; empty uses the role default.",
+      "Microphone MMDevice (rows show the friendly name, the ID is stored); "
+      "empty uses the role default.",
       "voice_input", "mmdevice_capture", nullable=True)
     f("voice_render_endpoint_id", "Render Endpoint (MMDevice)",
-      "Loopback reference MMDevice ID; empty uses the role default.",
+      "Loopback reference MMDevice (rows show the friendly name, the ID is "
+      "stored); empty uses the role default.",
       "voice_input", "mmdevice_render", nullable=True)
     f("voice_endpoint_role", "Default Endpoint Role",
       "Role used to resolve the empty endpoint ids, per the Windows "
@@ -354,10 +356,12 @@ def _build_field_metadata() -> List[FieldMeta]:
       "Reject segments where no_speech_prob is at or above this value (filters hallucinations during silence)",
       "whisper", "float", min_val=0.0, max_val=1.0, step=0.05)
     f("whisper_language", "Transcript Language",
-      "Forced language for speech recognition. A fixed code is sent to Whisper "
-      "and raises transcript precision for that language; Auto detects per utterance.",
+      "Language for speech recognition. cs+vi resolves each utterance as a "
+      "closed two-pass set (Čeština + Tiếng Việt, best score wins); a fixed "
+      "code is sent to Whisper as the forced language and raises transcript "
+      "precision for that language.",
       "whisper", "choice",
-      choices=[("auto", "Auto (detect per utterance)"),
+      choices=[("cs+vi", "Čeština + Tiếng Việt (cs+vi, two-pass)"),
                ("en", "English (en)"),
                ("cs", "Čeština (cs)"),
                ("vi", "Tiếng Việt (vi)"),
@@ -638,6 +642,100 @@ def get_input_devices() -> List[tuple[str, str]]:
     except Exception as e:
         debug_log(f"could not enumerate audio devices: {e}", "settings")
     return devices
+
+
+def _mmdevice_tail(dev_id: str) -> str:
+    """Short disambiguating tail of an MMDevice ID (interface GUID segment).
+
+    Both published ID shapes are handled: the dotted
+    ``{0.0.1.00000000}.{guid}`` and the comma-separated
+    ``{0.0.000000000},{guid}``. Name-only rows are ambiguous (one device is
+    listed at 44.1 k and at 48 k), so this GUID segment keeps the rows apart.
+    """
+    return dev_id.replace(",", ".").split(".")[-1].strip("{}")[:8]
+
+
+def _mmdevice_rows(source, flow: int) -> List[tuple[str, str]]:
+    """Return ``(id, display)`` for the MMDevice endpoints of one data flow.
+
+    ``flow`` is 2 (capture) or 3 (render). The stored value stays the
+    ``IMMDevice`` ID, because that is the only key ``GetDevice`` accepts; the
+    display leads with the resolved friendly name
+    (``PKEY_Device_FriendlyName``), then the mix format the endpoint has to be
+    opened at, then the role letters of which this endpoint is the default
+    (``C`` console, ``M`` multimedia, ``K`` communications), then a short ID
+    tail — several rows legitimately share one name (same device at 44.1 k
+    and at 48 k). Endpoints whose ``IAudioClient`` yields no mix format are
+    named as such instead of printing ``0Hz/0ch/0bit``.
+
+    ``source`` is whichever bridge is loaded (``jarvis.native_audio``, or
+    ``jarvis.native_bridge`` for the v1 rollback): both expose the struct-form
+    ``enumerate_endpoints`` and the text-form ``endpoint_lines``.
+    """
+    rows: List[tuple[str, str]] = []
+    entries: list = []
+    try:
+        enumerate_struct = getattr(source, "enumerate_endpoints", None)
+        if callable(enumerate_struct):
+            entries = list(enumerate_struct(flow) or [])
+    except Exception as e:  # pragma: no cover - DLL without ABI v2
+        debug_log(f"mmdevice struct enumeration failed: {e}", "settings")
+        entries = []
+
+    for e in entries:
+        dev_id = str(e.get("id") or "")
+        if not dev_id:
+            continue
+        name = str(e.get("friendly_name") or "").strip() or "(unnamed endpoint)"
+        rate = int(e.get("mix_rate_hz") or 0)
+        if rate:
+            mix = (
+                f"{rate} Hz/{int(e.get('mix_channels') or 0)}ch/"
+                f"{int(e.get('mix_bits') or 0)}bit"
+            )
+        else:
+            mix = "no mix format"
+        roles = "".join(
+            letter
+            for letter, flag in (
+                ("C", e.get("default_console")),
+                ("M", e.get("default_multimedia")),
+                ("K", e.get("default_communications")),
+            )
+            if flag
+        )
+        display = f"🎙 {name[:60]} · {mix}"
+        if roles:
+            display += f" [default {roles}]"
+        display += f" · …{_mmdevice_tail(dev_id)}"
+        rows.append((dev_id, display))
+    if rows:
+        return rows
+
+    # Text-only bridge: ``-M- 48000Hz/2ch/32bit id={…},{…} name=Friendly``.
+    try:
+        lines = list(getattr(source, "endpoint_lines", lambda _flow: [])(flow) or [])
+    except Exception as e:  # pragma: no cover - defensive
+        debug_log(f"mmdevice line enumeration failed: {e}", "settings")
+        return rows
+    for line in lines:
+        head, _, rest = str(line).partition(" id=")
+        dev_id, _, name = rest.partition(" name=")
+        dev_id = dev_id.strip()
+        if not dev_id:
+            continue
+        flags, _, rate = head.strip().partition(" ")
+        rate_txt = (rate or "").replace("Hz", " Hz") or "no mix format"
+        if rate_txt.startswith("0 Hz"):
+            rate_txt = "no mix format"
+        display = (
+            f"🎙 {(name.strip() or '(unnamed endpoint)')[:60]} · {rate_txt}"
+        )
+        if flags and set(flags) != {"-"}:
+            display += f" [default {flags}]"
+        display += f" · …{_mmdevice_tail(dev_id)}"
+        rows.append((dev_id, display))
+    return rows
 
 
 # ---------------------------------------------------------------------------
@@ -1096,6 +1194,7 @@ class SettingsWindow(QDialog):
         if fm.field_type in ("mmdevice_capture", "mmdevice_render"):
             w = QComboBox()
             w.addItem("🔧 System Default (role)", "")
+            flow = 2 if fm.field_type == "mmdevice_capture" else 3
             try:
                 from jarvis import native_audio as _na
                 from jarvis import native_bridge as _nb
@@ -1103,20 +1202,21 @@ class SettingsWindow(QDialog):
                     _na.load()
                 if not _nb.is_loaded():
                     _nb.load()
-                for line in (_na if _na.is_loaded() else _nb).endpoint_lines(
-                    2 if fm.field_type == "mmdevice_capture" else 3
-                ):
-                    parts = line.split(" id=", 1)
-                    val = parts[1].split(" name=", 1)[0] if len(parts) > 1 else ""
-                    disp = parts[0][:120] if val else line
-                    if val:
-                        w.addItem(f"{val}  {disp[:70]}", val)
+                source = _na if _na.is_loaded() else _nb
+                # Name-first display, ID as item data + tooltip: the ID is what
+                # ``GetDevice`` takes, the name is what a person recognises.
+                for dev_id, display in _mmdevice_rows(source, flow):
+                    w.addItem(display, dev_id)
+                    w.setItemData(w.count() - 1, dev_id, Qt.ItemDataRole.ToolTipRole)
             except Exception as exc:
                 debug_log(f"mmdevice enumeration failed: {exc}", "settings")
             current = "" if current in (None, "") else str(current)
             idx = w.findData(current) if current else 0
             if idx < 0 and current:
-                w.addItem(f"{current}  (not in current enumeration)", current)
+                w.addItem(
+                    f"🎙 {current[:60]}  (not in current enumeration)", current
+                )
+                w.setItemData(w.count() - 1, current, Qt.ItemDataRole.ToolTipRole)
                 idx = w.count() - 1
             w.setCurrentIndex(max(0, idx))
             w.setToolTip(fm.description)

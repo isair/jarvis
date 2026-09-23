@@ -82,7 +82,7 @@
   "whisper_min_confidence": 0.3,
   "whisper_min_audio_duration": 0.15,
   "whisper_min_word_length": 1,
-  "whisper_language": "auto",
+  "whisper_language": "cs+vi",
   "speech_spellcheck_enabled": true,
   "speech_spellcheck_languages": [
     "en",

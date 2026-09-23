@@ -1,0 +1,126 @@
+........................................................................ [  2%]
+........................................................................ [  5%]
+........s............................................................... [  8%]
+..................................ss.................................... [ 10%]
+......................................................................ss [ 13%]
+ss..............................................ssssssssssssssssssssssFF [ 16%]
+FF...FFFFFFFFF.......FFF......................................ssss...... [ 18%]
+..............................................F..F.F...FF..F.FF.FFF..... [ 21%]
+.....F.................................................................. [ 24%]
+........................................................................ [ 27%]
+........................................................................ [ 29%]
+........................................................................ [ 32%]
+........................................................................ [ 35%]
+................................[  state   ] face state set to LISTENING (hot window activated)
+....................F..F.F....                              .......... [ 37%]
+........................................................................ [ 40%]
+..................................................                              ...................... [ 43%]
+.............................F.......................................... [ 46%]
+..............................F......................................... [ 48%]
+...............................................sssssssssssssssss........ [ 51%]
+...........................................[   tts    ] setting face state to SPEAKING (piper)
+............................. [ 54%]
+........................................................................ [ 56%]
+.....FFFF.................................................                              .............. [ 59%]
+........................................................................ [ 62%]
+........................................................................ [ 65%]
+.......................FF...FF.......................................... [ 67%]
+............................F.....................Windows fatal exception: access violation
+
+Thread 0x00010538 [_DiscoveryWorker] (most recent call first):
+  File "C:\Python314\Lib\site-packages\urllib3\util\connection.py", line 73 in create_connection
+  File "C:\Python314\Lib\site-packages\urllib3\connection.py", line 204 in _new_conn
+  File "C:\Python314\Lib\site-packages\urllib3\connection.py", line 331 in connect
+  File "C:\Python314\Lib\http\client.py", line 1085 in send
+  File "C:\Python314\Lib\http\client.py", line 1141 in _send_output
+  File "C:\Python314\Lib\http\client.py", line 1381 in endheaders
+  File "C:\Python314\Lib\site-packages\urllib3\connection.py", line 500 in request
+  File "C:\Python314\Lib\site-packages\urllib3\connectionpool.py", line 493 in _make_request
+  File "C:\Python314\Lib\site-packages\urllib3\connectionpool.py", line 788 in urlopen
+  File "C:\Python314\Lib\site-packages\requests\adapters.py", line 696 in send
+  File "C:\Python314\Lib\site-packages\requests\sessions.py", line 784 in send
+  File "C:\Python314\Lib\site-packages\requests\sessions.py", line 651 in request
+  File "C:\Python314\Lib\site-packages\requests\api.py", line 71 in request
+  File "C:\Python314\Lib\site-packages\requests\api.py", line 87 in get
+  File "D:\_SATIN_AI\Toastovac\jarvis\src\jarvis\llm\openai_compatible.py", line 503 in list_models
+  File "D:\_SATIN_AI\Toastovac\jarvis\src\jarvis\llm\openai_compatible.py", line 57 in wrapped
+  File "D:\_SATIN_AI\Toastovac\jarvis\src\desktop_app\setup_wizard.py", line 1275 in _fetch_models
+  File "D:\_SATIN_AI\Toastovac\jarvis\src\desktop_app\setup_wizard.py", line 1286 in _discover_servers
+  File "D:\_SATIN_AI\Toastovac\jarvis\src\desktop_app\setup_wizard.py", line 1032 in run
+
+Thread 0x000105f8 [Thread-240 (_run)] (most recent call first):
+  File "C:\Python314\Lib\threading.py", line 373 in wait
+  File "C:\Python314\Lib\queue.py", line 210 in get
+  File "D:\_SATIN_AI\Toastovac\jarvis\src\jarvis\output\tts.py", line 1006 in _run
+  File "C:\Python314\Lib\threading.py", line 1024 in run
+  File "C:\Python314\Lib\threading.py", line 1082 in _bootstrap_inner
+  File "C:\Python314\Lib\threading.py", line 1044 in _bootstrap
+
+Thread 0x00011b40 [Thread-239 (_run)] (most recent call first):
+  File "C:\Python314\Lib\threading.py", line 373 in wait
+  File "C:\Python314\Lib\queue.py", line 210 in get
+  File "D:\_SATIN_AI\Toastovac\jarvis\src\jarvis\output\tts.py", line 1006 in _run
+  File "C:\Python314\Lib\threading.py", line 1024 in run
+  File "C:\Python314\Lib\threading.py", line 1082 in _bootstrap_inner
+  File "C:\Python314\Lib\threading.py", line 1044 in _bootstrap
+
+Thread 0x0000e030 [Thread-235 (_run)] (most recent call first):
+  File "C:\Python314\Lib\threading.py", line 373 in wait
+  File "C:\Python314\Lib\queue.py", line 210 in get
+  File "D:\_SATIN_AI\Toastovac\jarvis\src\jarvis\output\tts.py", line 1006 in _run
+  File "C:\Python314\Lib\threading.py", line 1024 in run
+  File "C:\Python314\Lib\threading.py", line 1082 in _bootstrap_inner
+  File "C:\Python314\Lib\threading.py", line 1044 in _bootstrap
+
+Thread 0x0001030c [Thread-221 (engine_run)] (most recent call first):
+  File "D:\_SATIN_AI\Toastovac\jarvis\src\jarvis\native_bridge.py", line 773 in engine_run
+  File "C:\Python314\Lib\threading.py", line 1024 in run
+  File "C:\Python314\Lib\threading.py", line 1082 in _bootstrap_inner
+  File "C:\Python314\Lib\threading.py", line 1044 in _bootstrap
+
+Thread 0x00011a04 [Thread-220 (engine_run)] (most recent call first):
+  File "D:\_SATIN_AI\Toastovac\jarvis\src\jarvis\native_audio.py", line 773 in engine_run
+  File "C:\Python314\Lib\threading.py", line 1024 in run
+  File "C:\Python314\Lib\threading.py", line 1082 in _bootstrap_inner
+  File "C:\Python314\Lib\threading.py", line 1044 in _bootstrap
+
+Current thread 0x0000edd8 (most recent call first):
+  File "D:\_SATIN_AI\Toastovac\jarvis\src\jarvis\utils\vram.py", line 119 in _detect_via_dxgi
+  File "D:\_SATIN_AI\Toastovac\jarvis\src\jarvis\utils\vram.py", line 92 in detect_total_vram_mb
+  File "D:\_SATIN_AI\Toastovac\jarvis\src\desktop_app\setup_wizard.py", line 2050 in __init__
+  File "D:\_SATIN_AI\Toastovac\jarvis\tests\test_setup_wizard.py", line 1134 in test_uses_combobox_for_fast_model
+  File "C:\Python314\Lib\site-packages\_pytest\python.py", line 167 in pytest_pyfunc_call
+  File "C:\Python314\Lib\site-packages\pluggy\_callers.py", line 121 in _multicall
+  File "C:\Python314\Lib\site-packages\pluggy\_manager.py", line 120 in _hookexec
+  File "C:\Python314\Lib\site-packages\pluggy\_hooks.py", line 512 in __call__
+  File "C:\Python314\Lib\site-packages\_pytest\python.py", line 1707 in runtest
+  File "C:\Python314\Lib\site-packages\_pytest\runner.py", line 184 in pytest_runtest_call
+  File "C:\Python314\Lib\site-packages\pluggy\_callers.py", line 121 in _multicall
+  File "C:\Python314\Lib\site-packages\pluggy\_manager.py", line 120 in _hookexec
+  File "C:\Python314\Lib\site-packages\pluggy\_hooks.py", line 512 in __call__
+  File "C:\Python314\Lib\site-packages\_pytest\runner.py", line 250 in <lambda>
+  File "C:\Python314\Lib\site-packages\_pytest\runner.py", line 361 in from_call
+  File "C:\Python314\Lib\site-packages\_pytest\runner.py", line 249 in call_and_report
+  File "C:\Python314\Lib\site-packages\_pytest\runner.py", line 139 in runtestprotocol
+  File "C:\Python314\Lib\site-packages\_pytest\runner.py", line 118 in pytest_runtest_protocol
+  File "C:\Python314\Lib\site-packages\pluggy\_callers.py", line 121 in _multicall
+  File "C:\Python314\Lib\site-packages\pluggy\_manager.py", line 120 in _hookexec
+  File "C:\Python314\Lib\site-packages\pluggy\_hooks.py", line 512 in __call__
+  File "C:\Python314\Lib\site-packages\_pytest\main.py", line 408 in pytest_runtestloop
+  File "C:\Python314\Lib\site-packages\pluggy\_callers.py", line 121 in _multicall
+  File "C:\Python314\Lib\site-packages\pluggy\_manager.py", line 120 in _hookexec
+  File "C:\Python314\Lib\site-packages\pluggy\_hooks.py", line 512 in __call__
+  File "C:\Python314\Lib\site-packages\_pytest\main.py", line 384 in _main
+  File "C:\Python314\Lib\site-packages\_pytest\main.py", line 330 in wrap_session
+  File "C:\Python314\Lib\site-packages\_pytest\main.py", line 377 in pytest_cmdline_main
+  File "C:\Python314\Lib\site-packages\pluggy\_callers.py", line 121 in _multicall
+  File "C:\Python314\Lib\site-packages\pluggy\_manager.py", line 120 in _hookexec
+  File "C:\Python314\Lib\site-packages\pluggy\_hooks.py", line 512 in __call__
+  File "C:\Python314\Lib\site-packages\_pytest\config\__init__.py", line 229 in _main
+  File "C:\Python314\Lib\site-packages\_pytest\config\__init__.py", line 253 in _console_main
+  File "C:\Python314\Lib\site-packages\pytest\__main__.py", line 9 in <module>
+  File "<frozen runpy>", line 88 in _run_code
+  File "<frozen runpy>", line 203 in _run_module_as_main
+
+Current thread's C stack trace (most recent call first):
+  <cannot get C stack on this system>

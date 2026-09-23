@@ -1006,6 +1006,9 @@ def main(smoke_test: bool = False) -> None:
         piper_noise_scale=cfg.tts_piper_noise_scale,
         piper_noise_w=cfg.tts_piper_noise_w,
         piper_sentence_silence=cfg.tts_piper_sentence_silence,
+        # Preload the closed-set voices (e.g. cs + vi) so the per-turn
+        # Whisper language code can switch voices without a mid-call download.
+        whisper_language=getattr(cfg, "whisper_language", None),
     )
     _global_tts_engine = tts  # Expose for face widget speaking animation
     if tts.enabled:
@@ -1224,6 +1227,33 @@ def main(smoke_test: bool = False) -> None:
     last_proactive_check = 0.0
     proactive_check_interval = 10.0
 
+    def _proactive_busy_check() -> bool:
+        """True while a turn owns the pipeline (no non-critical remarks then).
+
+        Complements ``tts.is_speaking()`` with the signals it misses: the
+        shared query lock (reply engine in flight), an open listener turn or
+        collection/hot-window state, and a satellite that still holds its run.
+        """
+        try:
+            if _chat_query_lock.locked():
+                return True
+            if voice_thread is not None:
+                state_mgr = getattr(voice_thread, "state_manager", None)
+                if state_mgr is not None and (
+                    state_mgr.is_collecting() or state_mgr.is_hot_window_active()
+                ):
+                    return True
+                if getattr(voice_thread, "_turn_context", None) is not None:
+                    return True
+            if (
+                _global_voice_pe_manager is not None
+                and _global_voice_pe_manager.holds_session()
+            ):
+                return True
+        except Exception:
+            pass
+        return False
+
     # Start stdin monitor thread.
     # Two jobs:
     #   1. Windows shutdown signal: CTRL_BREAK_EVENT doesn't work reliably with
@@ -1300,6 +1330,7 @@ def main(smoke_test: bool = False) -> None:
                         dialogue_memory=_global_dialogue_memory,
                         llm_base_url=cfg.llm_base_url,
                         tts=tts,
+                        busy_check=_proactive_busy_check,
                     ):
                         emit_remark(_remark, tts)
                 except Exception as e:

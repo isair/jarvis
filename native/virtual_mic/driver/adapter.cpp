@@ -1,158 +1,218 @@
 /*--
     adapter.cpp - the driver entry points for the Toustovač Clean Microphone.
+    Modern PortCls model: DriverEntry -> PcInitializeAdapterDriver;
+    AddDevice -> PcAddAdapterDevice; StartDevice creates the topology +
+    WaveRT miniports, registers them as subdevices, and registers the
+    private control device interface.
 --*/
 
 #include "adapter.h"
 #include "minip.h"
+#include "minwavert.h"
 #include "control_device.h"
+
+#define MIMETYPE_TOPOLOGY_ID   L"0"
+#define MIMETYPE_WAVE_PORT_ID  L"1"
 
 static CAdapter* PAdapter;
 
-#pragma code_seg("PAGE")
+// ---------------------------------------------------------------------------
+// CAdapter (IAdapterPnpManagement).
+// ---------------------------------------------------------------------------
 
+#pragma code_seg("PAGE")
 CAdapter::CAdapter() :
-    m_NbMiniports(0),
-    m_pPorts(NULL)
+    m_RefCount(1),
+    m_Device(NULL)
 {
 }
 
 CAdapter::~CAdapter()
 {
-    delete m_pPorts;
 }
 
 /* static */
 NTSTATUS
 CAdapter::Create
 (
-    _In_    PNPAUDIO_DEVICE_CONTEXT DevCtx,
-    _In_    PADAPTER_PROTOCOL_SET   ProtoSet,
-    _Outptr_ IAdapter**             PPAdapter
+    _Inout_ PDEVICE_OBJECT DeviceObject,
+    _Outptr_ IAdapterPnpManagement **PPAdapter
 )
 {
     if (PPAdapter == NULL)
         return STATUS_INVALID_PARAMETER;
 
-    PAdapter = new (PoolFlagPaged) CAdapter;
-    if (NULL == PAdapter) {
+    PAdapter = new (NonPagedPoolNx) CAdapter;
+    if (PAdapter == NULL)
         return STATUS_NO_MEMORY;
-    }
 
-    NTSTATUS status = PAdapter->Init(DevCtx, ProtoSet);
+    NTSTATUS status = PAdapter->Init(DeviceObject);
     if (!NT_SUCCESS(status)) {
         delete PAdapter;
         PAdapter = NULL;
         return status;
     }
-
-    *PPAdapter = (IAdapter*)PAdapter;
-    return status;
-}
-
-/* static */
-NTSTATUS
-CAdapter::Adapter(
-    _Inout_ PNPAUDIO_DEVICE_CONTEXT DevCtx
-)
-{
-    return PAdapter ? STATUS_SUCCESS : STATUS_UNSUCCESSFUL;
-}
-
-NTSTATUS
-CAdapter::Init
-(
-    _In_    PNPAUDIO_DEVICE_CONTEXT    DevCtx,
-    _In_    PADAPTER_PROTOCOL_SET      ProtoSet
-)
-{
-    if (ProtoSet == NULL || ProtoSet->Size < sizeof(*ProtoSet))
-        return STATUS_INVALID_PARAMETER;
-
-    // Two miniport descriptors: index 0 -> topology, index 1 -> capture wave.
-    PMINIPORT_ARRAY ports = new (PoolFlagPaged) MINIPORT_ARRAY;
-    if (NULL == ports)
-        return STATUS_NO_MEMORY;
-
-    ports->MaxDeviceId = 1;
-    ports->nItems = 2;
-    ports->ItemSize = sizeof(MINIPORT_DESCRIPTOR);
-    ports->Items = new (PoolFlagPaged) MINIPORT_DESCRIPTOR[2];
-    if (NULL == ports->Items) {
-        delete ports;
-        return STATUS_NO_MEMORY;
-    }
-
-    // Topology miniport.
-    ports->Items[0].Interface = NULL;
-    ports->Items[0].Pins = 0;
-    NTSTATUS status = CMiniportTopology::Create(DevCtx, ProtoSet->MaxDeviceNameLen,
-                                                NULL);
-    if (!NT_SUCCESS(status)) {
-            delete [] ports->Items; delete ports; return status;
-    }
-
-    // WaveRT capture miniport (single capture endpoint / single pin).
-    PWCHAR pnpInterface = ProtoSet->AdapterInterfaceName;
-    status = CMiniportWaveRT::Create(DevCtx, ProtoSet->MaxDeviceNameLen, pnpInterface);
-
-    if (!NT_SUCCESS(status)) {
-        if (ports->Items[0].Interface) ((IUnknown*)ports->Items[0].Interface)->Release();
-        delete [] ports->Items;
-        delete ports;
-        return status;
-    }
-
-    // Control device (broker IPC: negotiate / write frames / status).
-    status = CreateControlDevice(DevCtx.DeviceObject, &DevInterfaceTvmicControl,
-                                TVMIC_SDDL);
-    if (!NT_SUCCESS(status)) {
-        // Non-fatal for the adapter; the endpoint still enumerates.
-        status = STATUS_SUCCESS;
-    }
-
-    m_pPorts = ports;
-    m_NbMiniports = ports->nItems;
-    return status;
-}
-
-/* IAdapter */
-NTSTATUS
-CAdapter::GetMiniports
-(
-    _Inout_ PMINIPORT_ARRAY*  Miniports,
-    _Inout_ PULONG            NbMiniports
-)
-{
-    if (m_pPorts == NULL || Miniports == NULL || NbMiniports == NULL)
-        return STATUS_INVALID_PARAMETER;
-
-    *Miniports = (PMINIPORT_ARRAY)m_pPorts;
-    *NbMiniports = m_NbMiniports;
-    m_pPorts->AddRef?;  no: classic port model ref counts are manual.
+    *PPAdapter = (IAdapterPnpManagement*)PAdapter;
     return STATUS_SUCCESS;
 }
 
-NTSTATUS CAdapter::Init?; declared above.
+NTSTATUS
+CAdapter::Init(_Inout_ PDEVICE_OBJECT DeviceObject)
+{
+    m_Device = DeviceObject;
+    return STATUS_SUCCESS;
+}
 
+ULONG CAdapter::AddRef()   { return (ULONG)InterlockedIncrement(&m_RefCount); }
+ULONG CAdapter::Release()
+{
+    LONG n = InterlockedDecrement(&m_RefCount);
+    if (n == 0) delete this;
+    return (ULONG)n;
+}
+
+NTSTATUS
+CAdapter::QueryInterface(_In_ REFGUID Guid, _Outptr_ PVOID *Object)
+{
+    if (Object == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    if (IsEqualGUID(Guid, IID_IUnknown) ||
+        IsEqualGUID(Guid, IID_IAdapterPnpManagement)) {
+        *Object = (PVOID)this;
+        AddRef();
+        return STATUS_SUCCESS;
+    }
+    *Object = NULL;
+    return STATUS_NOT_SUPPORTED;
+}
+
+PC_REBALANCE_TYPE CAdapter::GetSupportedRebalanceType()
+{
+    return PcRebalanceNotSupported;
+}
+VOID CAdapter::PnpQueryStop()  { }
+VOID CAdapter::PnpCancelStop() { }
+VOID CAdapter::PnpStop()       { }
 #pragma code_seg()
 
-/* DriverEntry: modelled on SysVAD's adapter.cpp. */
+// ---------------------------------------------------------------------------
+// AddDevice / StartDevice.
+// ---------------------------------------------------------------------------
+
+#pragma code_seg("PAGE")
+NTSTATUS StartDevice(_In_ PDEVICE_OBJECT DeviceObject, _In_ PIRP Irp,
+                     _In_ PRESOURCELIST ResourceList);
+
 NTSTATUS
-DriverEntry
+AddDevice
 (
     _In_ PDRIVER_OBJECT  DriverObject,
     _In_ PDEVICE_OBJECT  DeviceObject
 )
 {
-    NTSTATUS               status;
-    WDF_DRIVER_CONFIG      config;
-    PWDF_DRIVER_CONFIG     pConfig = &config;
+    NTSTATUS status;
+    UNREFERENCED_PARAMETER(DriverObject);
 
-    UNREFERENCED_PARAMETER(DeviceObject);
-
-    WDF_DRIVER_CONFIG_INIT(pConfig, WDF_NO_EVENT_CALLBACK);
-
-    // Port class initialization follows below (see sysvad AdapterInit).
-    status = STATUS_SUCCESS;
+    status = PcAddAdapterDevice(DriverObject, DeviceObject, StartDevice,
+                                MAX_MINIPORTS, 0);
     return status;
 }
+
+NTSTATUS
+StartDevice
+(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _In_ PIRP          Irp,
+    _In_ PRESOURCELIST ResourceList
+)
+{
+    PPORT                Port = NULL;
+    PPORTTOPOLOGY        Port2Topo;
+    PPORTWAVERT          Port2Wave;
+    PMINIPORTTOPOLOGY    MiniportTopology = NULL;
+    PMINIPORTWAVERT      MiniportWaveRT   = NULL;
+    NTSTATUS             status;
+    IAdapterPnpManagement* pAdapter = NULL;
+
+    UNREFERENCED_PARAMETER(Irp);
+    UNREFERENCED_PARAMETER(ResourceList);
+
+    // ---- topology port + miniport ----
+    status = PcNewPort(&Port, CLSID_PortTopology);
+    if (!NT_SUCCESS(status)) {
+        return status;
+    }
+    Port2Topo = (PPORTTOPOLOGY)Port;
+
+    status = CMiniportTopology::Create(NULL, NULL, Port2Topo, &MiniportTopology);
+    if (!NT_SUCCESS(status)) {
+        Port->Release();
+        return status;
+    }
+    status = PcRegisterSubdevice(DeviceObject, MIMETYPE_TOPOLOGY_ID,
+                                 (IUnknown*)MiniportTopology);
+    Port->Release();
+    Port = NULL;
+    if (!NT_SUCCESS(status)) {
+        return status;
+    }
+
+    // ---- WaveRT port + capture miniport ----
+    status = PcNewPort(&Port, CLSID_PortWaveRT);
+    if (!NT_SUCCESS(status)) {
+        return status;
+    }
+    Port2Wave = (PPORTWAVERT)Port;
+
+    status = CMiniportWaveRT::Create(NULL, NULL, Port2Wave, &MiniportWaveRT);
+    if (!NT_SUCCESS(status)) {
+        Port->Release();
+        return status;
+    }
+    status = PcRegisterSubdevice(DeviceObject, MIMETYPE_WAVE_PORT_ID,
+                                 (IUnknown*)MiniportWaveRT);
+    Port->Release();
+    Port = NULL;
+    if (!NT_SUCCESS(status)) {
+        return status;
+    }
+
+    // ---- adapter PnP management ----
+    status = CAdapter::Create(DeviceObject, &pAdapter);
+    if (NT_SUCCESS(status)) {
+        status = PcRegisterAdapterPnpManagement((IUnknown*)pAdapter,
+                                                DeviceObject);
+    }
+    if (!NT_SUCCESS(status)) {
+        return status;
+    }
+
+    // ---- private control device (broker IPC) ----
+    TvmicInitControlStrings();
+    status = CreateControlDevice(DeviceObject->DriverObject, DeviceObject,
+                                 &g_TvmicInterfaceGuid, TVMIC_SDDL);
+    if (!NT_SUCCESS(status)) {
+        // Non-fatal: the endpoint still enumerates without the broker pipe.
+        status = STATUS_SUCCESS;
+    }
+
+    return status;
+}
+#pragma code_seg()
+
+// ---------------------------------------------------------------------------
+// DriverEntry.
+// ---------------------------------------------------------------------------
+
+#pragma code_seg("INIT")
+NTSTATUS
+DriverEntry
+(
+    _In_ PDRIVER_OBJECT  DriverObject,
+    _In_ PUNICODE_STRING RegistryPath
+)
+{
+    return PcInitializeAdapterDriver(DriverObject, RegistryPath, AddDevice);
+}
+#pragma code_seg()

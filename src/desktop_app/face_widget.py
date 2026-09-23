@@ -231,7 +231,7 @@ class LowPolyFaceWidget(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setMinimumSize(300, 400)
+        self.setMinimumSize(240, 320)
 
         # Current assistant state
         self._state_manager = get_jarvis_state()
@@ -648,8 +648,8 @@ class FaceWindow(QWidget):
             self.setWindowTitle(f"🍞 {BRANDING['display_name']}")
         except Exception:
             self.setWindowTitle("Toustovač")
-        self.setMinimumSize(320, 420)
-        self.resize(350, 450)
+        self.setMinimumSize(280, 360)
+        self.resize(300, 380)
 
         # Set window flags for floating window (always-on-top; recording mode
         # keeps the overlay persistent but unobtrusive).
@@ -663,7 +663,8 @@ class FaceWindow(QWidget):
 
         # Layout
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(0)
 
         # Toaster widget
         self.face = LowPolyFaceWidget()

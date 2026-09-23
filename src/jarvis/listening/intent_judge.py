@@ -20,13 +20,23 @@ from .transcript_buffer import TranscriptSegment
 DEFAULT_OLLAMA_KEEP_ALIVE = "30m"
 LOW_POWER_OLLAMA_KEEP_ALIVE = "1m"
 
-# Generation cap for a judgment with thinking disabled: the bare JSON answer
-# plus the measured 326-token reasoning+answer baseline, with margin.
-_PLAIN_MAX_TOKENS = 400
+# Generation cap for a judgment with thinking disabled. Measured on a live
+# host, the judge prompt+answer costs ~330 tokens, but an OpenAI-compatible
+# server keeps its chain of thought even when ``thinking=False`` (LM Studio
+# reports it as ``reasoning_content``) and those tokens are billed against
+# this same cap. Observed uncapped thinking lengths: 909, 1095, 1218, 1309
+# reasoning tokens. A 400-token cap was therefore eaten whole by thinking
+# (``reasoning_tokens=397`` of 400, ``content=""``, ``finish_reason="length"``)
+# and the judgment was lost. 1400 covers every measured thinking run plus the
+# ~45-token JSON answer, with margin.
+_PLAIN_MAX_TOKENS = 1400
 # Thinking mode pays for thinking tokens on top of the answer, so its wall
 # clock is roughly 3x the plain budget (1500-token cap, ~33s of decode plus
-# prefill at 45 tok/s against a 15s plain budget).
+# prefill at 45 tok/s against a 15s plain budget). Plain mode needs a smaller
+# bump than thinking: 1400 tokens ≈ 31.1s at the 45 tok/s floor (≈ 11s at the
+# measured 126 tok/s), so 2.5x ≈ 37.5s keeps the decode floor in the window.
 _THINKING_TIMEOUT_FACTOR = 3.0
+_PLAIN_TIMEOUT_FACTOR = 2.5
 
 
 def _is_low_power_mode_enabled(cfg: Any) -> bool:
@@ -124,6 +134,131 @@ def _extract_json_object(text: str, last: bool = False) -> str:
     if not candidates:
         return ""
     return candidates[-1] if last else candidates[0]
+
+
+def _repair_truncated_json(text: str) -> str:
+    """Return the last object in ``text`` with its open braces/quotes closed.
+
+    A token cap can cut the answer off mid-object
+    (``{"directed": true, "query": "jak se``), which leaves no balanced object
+    for :func:`_extract_json_object` and the whole judgment is lost even though
+    the two decisive fields are already on the wire. This closes one ``"`` when
+    the cut lands inside a string and appends one ``}`` per still-open brace.
+    Values are the model's own; only structural characters are added. "" when
+    there is no unclosed ``{`` at all.
+    """
+    # Start of the last *unclosed* top-level object: earlier complete objects
+    # (system-prompt examples echoed inside the thinking) are skipped, and a
+    # nested inner brace never becomes the start.
+    start = -1
+    depth = 0
+    in_string = False
+    escape = False
+    for i, ch in enumerate(text):
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth <= 0:
+                depth = 0
+                start = -1
+    if start == -1:
+        return ""
+    fragment = text[start:]
+    depth = 0
+    in_string = False
+    escape = False
+    for ch in fragment:
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+    if depth <= 0 and not in_string:
+        return fragment
+    return fragment + ('"' if in_string else "") + ("}" * max(depth, 0))
+
+
+def _reasoning_of(message: Any) -> str:
+    """The model's thinking text from either wire shape, or "".
+
+    OpenAI-compatible servers name it ``reasoning_content`` (LM Studio,
+    llama.cpp, vLLM); Ollama's ``/api/chat`` names it ``thinking``. Both are
+    plain strings.
+    """
+    if not isinstance(message, dict):
+        return ""
+    for key in ("reasoning_content", "thinking"):
+        value = message.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return ""
+
+
+def _response_diagnostics(
+    resp: Any, content: str, reasoning: str, cap: int
+) -> str:
+    """One-line summary of an unparseable judge response.
+
+    The bare ``no JSON found in response: `` line printed nothing at all when
+    ``content`` was empty, so nobody could tell the three real causes apart.
+    These fields do: cap eaten by reasoning (``finish_reason=length`` with
+    ``reasoning_tokens`` at the cap), a server that returned no text at all,
+    and JSON that is present but structurally incomplete
+    (``*_braces=open/close``).
+    """
+    parts = [f"cap={cap}", f"content_len={len(content)}", f"reasoning_len={len(reasoning)}"]
+    if isinstance(resp, dict):
+        finish = resp.get("finish_reason")
+        if not isinstance(finish, str):
+            choices = resp.get("choices")
+            if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+                finish = choices[0].get("finish_reason")
+        if isinstance(finish, str) and finish:
+            parts.append(f"finish_reason={finish}")
+        usage = resp.get("usage")
+        if isinstance(usage, dict):
+            for key in ("completion_tokens", "prompt_tokens", "eval_count",
+                        "prompt_eval_count"):
+                value = usage.get(key)
+                if isinstance(value, int):
+                    parts.append(f"{key}={value}")
+            details = usage.get("completion_tokens_details")
+            if isinstance(details, dict) and isinstance(
+                details.get("reasoning_tokens"), int
+            ):
+                parts.append(f"reasoning_tokens={details['reasoning_tokens']}")
+    for name, text in (("content", content), ("reasoning", reasoning)):
+        if text:
+            parts.append(f"{name}_braces={text.count('{')}/{text.count('}')}")
+    if not content and not reasoning:
+        parts.append("cause=server_returned_no_text")
+    elif not content and reasoning:
+        parts.append("cause=cap_eaten_by_reasoning")
+    elif content:
+        parts.append("cause=structurally_incomplete_json")
+    return " ".join(parts)
 
 
 @dataclass
@@ -353,11 +488,18 @@ Examples:
 
         return "\n".join(lines)
 
-    def _parse_response(self, response_text: str) -> Optional[IntentJudgment]:
+    def _parse_response(
+        self, response_text: str, repair: bool = True
+    ) -> Optional[IntentJudgment]:
         """Parse the LLM response into a judgment.
 
         Args:
             response_text: Raw response from the LLM
+            repair: Close an unterminated object with :func:`_repair_truncated_json`
+                when no balanced object exists. Pass ``False`` for the strict
+                passes so a complete object found elsewhere outranks a partial
+                one (a repaired object loses ``stop`` / ``confidence`` /
+                ``reasoning`` to their defaults).
 
         Returns:
             IntentJudgment or None if parsing failed
@@ -366,13 +508,41 @@ Examples:
         # markdown code fences and JSON whose string values contain braces
         # — cases the old `\{[^{}]*\}` regex missed.
         json_text = _extract_json_object(response_text)
-        if not json_text:
-            debug_log(f"intent judge: no JSON found in response: {response_text[:100]}", "voice")
+        data: Any = None
+        if json_text:
+            try:
+                data = json.loads(json_text)
+            except (json.JSONDecodeError, ValueError) as e:
+                debug_log(
+                    f"intent judge: invalid JSON object ({type(e).__name__}: {e}) "
+                    f"at offset {getattr(e, 'pos', '?')}: {json_text[:120]!r}",
+                    "voice",
+                )
+        if not isinstance(data, dict) and repair:
+            # Cap-truncated answers leave an unbalanced object. Close it and
+            # keep whatever keys already arrived rather than losing the call.
+            repaired = _repair_truncated_json(response_text)
+            if repaired:
+                try:
+                    data = json.loads(repaired)
+                except (json.JSONDecodeError, ValueError):
+                    data = None
+                if isinstance(data, dict):
+                    debug_log(
+                        f"intent judge: recovered truncated JSON object "
+                        f"({len(repaired)} chars): {repaired[:120]!r}",
+                        "voice",
+                    )
+        if not isinstance(data, dict):
+            debug_log(
+                f"intent judge: no JSON object in {response_text[:100]!r} "
+                f"(braces open={response_text.count('{')} "
+                f"close={response_text.count('}')})",
+                "voice",
+            )
             return None
 
         try:
-            data = json.loads(json_text)
-
             # Alias normalisation also applies to the output query: the judge
             # occasionally echoes a misheard wake word back verbatim ("Chavis"
             # stayed in the transcript, judge emitted it in the query), which
@@ -461,9 +631,11 @@ Examples:
             # Thinking mode pays for thinking tokens; plain mode answers with a
             # bare JSON object.
             max_tokens = 1500 if self.config.thinking else _PLAIN_MAX_TOKENS
-            timeout_sec = self.config.timeout_sec * (
-                _THINKING_TIMEOUT_FACTOR if self.config.thinking else 1.0
+            timeout_factor = (
+                _THINKING_TIMEOUT_FACTOR if self.config.thinking
+                else _PLAIN_TIMEOUT_FACTOR
             )
+            timeout_sec = self.config.timeout_sec * timeout_factor
             try:
                 resp = get_llm_backend(self.config.cfg).chat(
                     self.config.model,
@@ -476,11 +648,13 @@ Examples:
                         # tight a cap truncates ``content`` mid-JSON on complex
                         # transcripts and the whole judgment is lost (500 cut
                         # this exact case off at "I said tomorro"), so thinking
-                        # mode keeps the wide 1500. Without thinking the answer
-                        # is the JSON object alone and 400 covers the measured
-                        # 326-token reasoning+answer baseline while holding the
-                        # decode floor inside ``intent_judge_timeout_sec``. The
-                        # model normally stops long before the cap either way.
+                        # mode keeps the wide 1500. Plain mode uses 1400 because
+                        # servers that do not honour ``think`` still spend the
+                        # cap on 909-1309 reasoning tokens (see the measured
+                        # lengths on ``_PLAIN_MAX_TOKENS``), and a cap below
+                        # that budget returns an empty ``content`` with
+                        # ``finish_reason="length"``. The model normally stops
+                        # long before the cap either way.
                         "max_tokens": max_tokens,
                         "num_ctx": 8192,
                         "keep_alive": _ollama_keep_alive_for_power_mode(
@@ -509,8 +683,9 @@ Examples:
                 content = message.get("content")
                 if isinstance(content, str):
                     response_text = content
+            reasoning_text = _reasoning_of(message)
 
-            judgment = self._parse_response(response_text)
+            judgment = self._parse_response(response_text, repair=False)
 
             # Reasoning models (e.g. Qwen3.5 / Gemma 4 e2b on LM Studio)
             # put their thinking in ``reasoning_content`` and the answer in
@@ -519,16 +694,31 @@ Examples:
             # model usually ends its thinking with the full JSON answer, so
             # recover it from the reasoning text when content did not parse.
             # The last balanced object wins — the answer comes after any
-            # earlier echoes of the system prompt's JSON example.
-            if judgment is None and isinstance(message, dict):
-                reasoning = message.get("reasoning_content")
-                if isinstance(reasoning, str):
-                    extracted = _extract_json_object(reasoning, last=True)
-                    if extracted:
-                        recovered = self._parse_response(extracted)
-                        if recovered is not None:
-                            judgment = recovered
-                            response_text = extracted
+            # earlier echoes of the system prompt's JSON example — and a tail
+            # cut off by the cap is closed by ``_repair_truncated_json``.
+            if judgment is None and reasoning_text:
+                source = _extract_json_object(reasoning_text, last=True)
+                if source:
+                    recovered = self._parse_response(source, repair=False)
+                    if recovered is not None:
+                        judgment = recovered
+                        response_text = source
+
+            # Still nothing complete: accept a cap-truncated object, canonical
+            # ``content`` first and the reasoning tail second. Both outrank a
+            # hard ``None``, which costs the whole turn to the keyword fallback.
+            if judgment is None:
+                for source in (
+                    _repair_truncated_json(response_text),
+                    _repair_truncated_json(reasoning_text),
+                ):
+                    if not source:
+                        continue
+                    recovered = self._parse_response(source)
+                    if recovered is not None:
+                        judgment = recovered
+                        response_text = source
+                        break
 
             if judgment is None and not response_text:
                 # Ollama's /api/generate returned ``response``; chat() shape
@@ -551,8 +741,18 @@ Examples:
                 )
                 debug_log(f"   Reasoning: {judgment.reasoning}", "voice")
             else:
-                self._last_failure_reason = f"unparseable response: {response_text[:80]}"
-                debug_log(f"🧠 Intent judge: failed to parse: {response_text[:100]}", "voice")
+                # One line that separates the three real failure modes instead
+                # of the old "unparseable response: " with nothing after it.
+                diag = _response_diagnostics(
+                    resp, response_text, reasoning_text, max_tokens
+                )
+                self._last_failure_reason = (
+                    f"unparseable response: {response_text[:80] or diag}"
+                )
+                debug_log(
+                    f"🧠 Intent judge: failed to parse: {response_text[:100]!r} · {diag}",
+                    "voice"
+                )
 
             return judgment
 
@@ -562,13 +762,21 @@ Examples:
             return None
 
 
-def create_intent_judge(cfg) -> IntentJudge:
+def create_intent_judge(cfg) -> Optional[IntentJudge]:
     """Build an :class:`IntentJudge` bound to the Jarvis settings.
 
     The judge dispatches every chat call through ``get_llm_backend(cfg)``,
     so the active provider (Ollama / OpenAI-compatible) handles the wire
     shape automatically.
+
+    With ``intent_judge_enabled`` set to false the LLM classification pass
+    is skipped entirely: wake detection keeps the plain wake-word / echo /
+    hot-window heuristics, which removes one round-trip from the front of
+    every voice turn.
     """
+    if not bool(getattr(cfg, "intent_judge_enabled", True)):
+        debug_log("intent judge disabled by config (direct instruct mode)", "voice")
+        return None
     config = IntentJudgeConfig(
         assistant_name=str(getattr(cfg, "wake_word", "jarvis")).capitalize(),
         aliases=list(getattr(cfg, "wake_aliases", [])),

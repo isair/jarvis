@@ -478,6 +478,30 @@ class VoicePEManager:
             "metrics": self.metrics(),
         }
 
+    def mirror_local(self, text: str) -> int:
+        """Push one locally spoken line to every idle satellite as well.
+
+        The same synthesized PCM travels both ways: the Windows default device
+        plays it through ``PiperTTS.speak`` and each idle satellite gets the WAV
+        published on the LAN HTTP server (the ``TTS_END``/``announce`` media id,
+        i.e. LAN-WAV egress with the announce RPC as its completion path).
+
+        A device that still holds an open run is skipped on purpose: that
+        generation already owns the wire through its own ``TTS_START`` chain, and
+        a second payload would only misalign the modelled AEC reference. Returns
+        the number of satellites the line was handed to.
+        """
+        if not text or not str(text).strip():
+            return 0
+        mirrored = 0
+        for device in self._devices:
+            if device.holds_session():
+                continue
+            device.announce_reply(str(text), None, start_conversation=False)
+            mirrored += 1
+        return mirrored
+
+
     # ------------------------------------------------------------------
     # Direct commands used by the CLI
     # ------------------------------------------------------------------

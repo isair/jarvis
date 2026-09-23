@@ -1,0 +1,35 @@
+At line:1 char:907
++ ... ; [W.U]::FormatMessage(0x311,[IntPtr]::Zero,$c,0,[IntPtr][void*]0,0,[ ...
++                                                                  ~
+Missing ] at end of attribute or type literal.
+At line:1 char:909
++ ... [W.U]::FormatMessage(0x311,[IntPtr]::Zero,$c,0,[IntPtr][void*]0,0,[In ...
++                                                                  ~
+You must provide a value expression following the '*' operator.
+At line:1 char:909
++ ... [W.U]::FormatMessage(0x311,[IntPtr]::Zero,$c,0,[IntPtr][void*]0,0,[In ...
++                                                                  ~
+Missing ')' in method call.
+At line:1 char:909
++ ... W.U]::FormatMessage(0x311,[IntPtr]::Zero,$c,0,[IntPtr][void*]0,0,[Int ...
++                                                                 ~
+Unexpected token ']' in expression or statement.
+At line:1 char:807
++ ... Namespace W; foreach($c in 0xE0000201,0xE0000203,0xE0000200){$sb=New- ...
++                                                                 ~
+Missing closing '}' in statement block or type definition.
+At line:1 char:928
++ ... (0x311,[IntPtr]::Zero,$c,0,[IntPtr][void*]0,0,[IntPtr]::Zero) | Out-N ...
++                                                                 ~
+Unexpected token ')' in expression or statement.
+At line:1 char:930
++ ... x311,[IntPtr]::Zero,$c,0,[IntPtr][void*]0,0,[IntPtr]::Zero) | Out-Nul ...
++                                                                 ~
+An empty pipe element is not allowed.
+At line:1 char:940
++ ... 11,[IntPtr]::Zero,$c,0,[IntPtr][void*]0,0,[IntPtr]::Zero) | Out-Null}
++                                                                         ~
+Unexpected token '}' in expression or statement.
+    + CategoryInfo          : ParserError: (:) [], ParentContainsErrorRecordException
+    + FullyQualifiedErrorId : EndSquareBracketExpectedAtEndOfAttribute
+ 

@@ -12,18 +12,10 @@
 #include "topology.h"
 
 // ---------------------------------------------------------------------------
-// The single 48 kHz / mono / 16-bit format constraint.
+// The single KS data range for the capture pin (48 kHz / mono / 16-bit PCM).
 // ---------------------------------------------------------------------------
 
-static const LONG Spec48Mono[3] = { 1, 48000, 16 };  // mono, 48 kHz, 16 bits
-
-const KSRESAMPLE_32_16_3 WaveFormat48kMono = { 2, 1, Spec48Mono };
-
-// ---------------------------------------------------------------------------
-// The single KS data range for the capture pin.
-// ---------------------------------------------------------------------------
-
-static const KSDATARANGE_AUDIO DataRange48Audio =
+const KSDATARANGE_AUDIO DataRange48Audio =
 {
     {
         (ULONG)sizeof(KSDATARANGE_AUDIO),
@@ -39,65 +31,55 @@ static const KSDATARANGE_AUDIO DataRange48Audio =
     48000,      // maximum samples per second
     16,         // maximum bits per sample (int16)
 };
+static const PKSDATARANGE DataRangeList[]      = { (PKSDATARANGE)&DataRange48Audio };
 
 // ---------------------------------------------------------------------------
-// Node / connection / pin tables (the one capture endpoint).
+// Node / connection / pin tables (the one capture endpoint), modern PC types.
 // ---------------------------------------------------------------------------
 
-static NODE_DESCRIPTOR NodeTable[TOPO_NUM_NODES] = {
-    { sizeof(NODE_DESCRIPTOR), TOPO_NODE_DEVICE_ID, KSNODETYPE_DEV_SPECIFIC, 1 },
-    { sizeof(NODE_DESCRIPTOR), TOPO_NODE_MIC_ID, KSNODETYPE_MICROPHONE, 1 },
+static PCNODE_DESCRIPTOR NodeTable[TOPO_NUM_NODES] = {
+    { 0, NULL, &KSNODETYPE_DEV_SPECIFIC, NULL },
+    { 0, NULL, &KSNODETYPE_MICROPHONE,   NULL },
 };
 
-static CONNECTION_DESCRIPTOR ConnectionTable[TOPO_NUM_CONNECTIONS] = {
+static PCCONNECTION_DESCRIPTOR ConnectionTable[TOPO_NUM_CONNECTIONS] = {
     // node 1 (mic) source pin 0 -> node 0 (device) destination pin 1.
-    { sizeof(CONNECTION_DESCRIPTOR), 1, 0, 0, 1 },
+    { 1, 0, 0, 1 },
 };
 
-static PIN_DESCRIPTOR PinTable[TOPO_NUM_PINS] = {
+static PCPIN_DESCRIPTOR PinTable[TOPO_NUM_PINS] = {
     {
-        1,                                       /* pin id (eCapture)        */
-        (WORD)(sizeof(WaveFormat48kMono) + 1) / sizeof(LONG),  /* fmt count */
-        1,                                       /* one data format          */
-        (ULONG_PTR)&DataRange48Audio,            /* data range start         */
-        1,                                       /* data range count         */
-        0,                                       /* connection matrix index  */
+        1, 1, 1, NULL,                 // MaxGlobal, MaxFilter, MinFilter, AutomationTable
+        {
+            0, NULL,                   // InterfacesCount, Interfaces
+            0, NULL,                   // MediumsCount, Mediums
+            1, DataRangeList,          // DataRangesCount, DataRanges
+            KSPIN_DATAFLOW_IN,         // capture pin
+            KSPIN_COMMUNICATION_NONE,
+            &KSCATEGORY_AUDIO,
+            NULL,                      // Name
+            0                          // union: Reserved (LONGLONG)
+        },
     },
-};
-
-// ---------------------------------------------------------------------------
-// Property tables for the two-node, one-pin topology (int indices).
-// ---------------------------------------------------------------------------
-
-static const LONG NodeIds[TOPO_NUM_NODES] = { TOPO_NODE_DEVICE_ID,
-                                              TOPO_NODE_MIC_ID };
-
-static const PROPERTY_ITEM NodePropertyItems[TOPO_NUM_NODES] = {
-    { 0, NodeIds },                       // node ids
-    { 1, (LPCVOID)&WaveFormat48kMono },   // format id 0 -> the 48k format
-};
-
-static const PROPERTY_ITEM PinPropertyItems[TOPO_NUM_PINS] = {
-    { 0, (LPCVOID)&DataRange48Audio },    // pin id 0 (pin 1) data ranges
 };
 
 // ---------------------------------------------------------------------------
 // Accessors.
 // ---------------------------------------------------------------------------
 
-NODE_DESCRIPTOR *GetTopologyNodes(_Out_ ULONG *pcbNodes)
+PCNODE_DESCRIPTOR *GetTopologyNodes(_Out_ ULONG *pcbNodes)
 {
     *pcbNodes = TOPO_NUM_NODES;
     return NodeTable;
 }
 
-CONNECTION_DESCRIPTOR *GetTopologyConnections(_Out_ ULONG *pcbConnections)
+PCCONNECTION_DESCRIPTOR *GetTopologyConnections(_Out_ ULONG *pcbConnections)
 {
     *pcbConnections = TOPO_NUM_CONNECTIONS;
     return ConnectionTable;
 }
 
-PIN_DESCRIPTOR *GetTopologyPins(_Out_ ULONG *pcbPins)
+PCPIN_DESCRIPTOR *GetTopologyPins(_Out_ ULONG *pcbPins)
 {
     *pcbPins = TOPO_NUM_PINS;
     return PinTable;

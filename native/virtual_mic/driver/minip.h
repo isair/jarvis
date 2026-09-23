@@ -11,14 +11,20 @@ Abstract:
     (see native/virtual_mic/NOTICE for the pinned upstream commit). Bodies
     live in minip.cpp and minwavert.cpp.
 
+    Modern PortCls (WDM portcls.h): miniports are created in StartDevice and
+    registered with PcRegisterSubdevice; property dispatch uses the
+    PCPROPERTY_ITEM / PCPFNPROPERTY_HANDLER model.
+
 --*/
 
 #pragma once
 
-#include <windows.h>
+#define INITGUID
+#include <ntddk.h>
+#include <portcls.h>
+#include <stdunk.h>
 #include <ks.h>
 #include <ksmedia.h>
-#include <portcls.h>
 #include <ntstrsafe.h>
 
 #include "formats.h"
@@ -32,17 +38,8 @@ Abstract:
 class CMiniportWaveRT;
 typedef CMiniportWaveRT *PCMiniportWaveRT;
 
-extern CPCMRing* g_pRing;
-
-// ---------------------------------------------------------------------------
-// Property table entry for the KS property dispatch.
-// ---------------------------------------------------------------------------
-
-typedef struct _TVMIC_PROPERTY_ITEM {
-    ULONG nProperty;
-    ULONG nItems;
-    LPCVOID pData;
-} TVMIC_PROPERTY_ITEM;
+extern CPCMRing*        g_pRing;
+extern PCMiniportWaveRT g_pWaveRt;
 
 // ---------------------------------------------------------------------------
 // CPortInfo - KS property dispatch against static tables (see minip.cpp).
@@ -54,29 +51,21 @@ public:
     NTSTATUS
     GetProperty
     (
-        _In_  PNGUID  pPropertySet,
-        _In_  ULONG   nPropId,
-        _In_  ULONG   nPropLen,
-        _Out_writes_bytes_to_opt_(nPropLen, *PNPropLen) PVOID pProp,
-        _Out_opt_ PULONG PNPropLen
+        _In_ PPCPROPERTY_REQUEST PropertyRequest
     );
 
     NTSTATUS
     GetPropertyRange
     (
-        _In_  PNGUID  pPropertySet,
-        _In_  ULONG   nPropId,
-        _Out_ PLONG   pnMin,
-        _Out_ PLONG   pnMax,
-        _Out_ PMPI32  pStep
+        _In_ PPCPROPERTY_REQUEST PropertyRequest
     );
 
 protected:
-    PNPAUDIO_DEVICE_CONTEXT m_Device;       // the 1st one is the dev object itself
-    ULONG                   m_nDevices;
-    PPCRANGES_INFORMATION   m_pRangesInfo;  // set from Init
-    ULONG                   m_MinipNameSize;
-    PMINIPORT_DESCRIPTOR    m_pMinipDescriptors; // adapter topology descriptor
+    PDEVICE_OBJECT            m_Device;           // the 1st one is the dev object itself
+    ULONG                     m_nDevices;
+    PPCSTREAMRESOURCE_DESCRIPTOR m_pRangesInfo;   // set from Init
+    ULONG                     m_MinipNameSize;
+    PCM_PARTIAL_RESOURCE_DESCRIPTOR m_pMinipDescriptors; // adapter topo descriptor
 };
 
 // ---------------------------------------------------------------------------
@@ -86,35 +75,34 @@ protected:
 class CMiniportTopology : public IMiniportTopology, public CPortInfo
 {
 public:
-    static NTSTATUS Create(_In_ PNPAUDIO_DEVICE_CONTEXT DevCtx,
-                           _In_ ULONG MaxNameLen,
-                           _In_ PMINIPORT_TOPOLOGY_DESCRIPTOR Descriptor);
+    static NTSTATUS Create(_In_ PUNKNOWN UnknownAdapter,
+                           _In_ PRESOURCELIST ResourceList,
+                           _In_ PPORTTOPOLOGY Port,
+                           _Outptr_ PMINIPORTTOPOLOGY *Miniport);
 
     ~CMiniportTopology();
 
     /* IUnknown */
+    NTSTATUS QueryInterface(_In_ REFGUID Guid, _Outptr_ PVOID *Object);
     ULONG AddRef();
     ULONG Release();
 
     /* IMiniport */
-    NTSTATUS Init(_In_ PNPAUDIO_DEVICE_CONTEXT DevCtx,
-                  _In_ ULONG MaxNameLen,
-                  _In_ PMINIPORT_TOPOLOGY_DESCRIPTOR Descriptor);
-    VOID GetDescription(_Out_ PWSTR* ppwName);
+    NTSTATUS Init(_In_ PUNKNOWN UnknownAdapter,
+                  _In_ PRESOURCELIST ResourceList,
+                  _In_ PPORTTOPOLOGY Port);
+    NTSTATUS GetDescription(_Out_ PPCFILTER_DESCRIPTOR *ppwDescription);
+    NTSTATUS DataRangeIntersection(_In_ ULONG PinId,
+                                   _In_ PKSDATARANGE DataRange,
+                                   _In_ PKSDATARANGE MatchingDataRange,
+                                   _In_ ULONG OutputBufferLength,
+                                   _Out_writes_bytes_to_opt_(OutputBufferLength, *ResultantFormatLength) PVOID ResultantFormat,
+                                   _Out_ PULONG ResultantFormatLength);
     VOID SetPowerState(_In_ POWER_STATE state);
-    NTSTATUS InitRanges();
 
     /* IMiniportTopology */
-    NTSTATUS GetProperty(_In_ PNGUID pPropertySet,
-                         _In_ ULONG nPropId,
-                         _In_ ULONG nPropLen,
-                         _Out_writes_bytes_to_opt_(nPropLen, *PNPropLen) PVOID pProp,
-                         _Out_opt_ PULONG PNPropLen);
-    NTSTATUS GetPropertyRange(_In_ PNGUID pPropertySet,
-                              _In_ ULONG nPropId,
-                              _Out_ PLONG pnMin,
-                              _Out_ PLONG pnMax,
-                              _Out_ PMPI32 pStep);
+    NTSTATUS GetProperty(_In_ PPCPROPERTY_REQUEST PropertyRequest);
+    NTSTATUS GetPropertyRange(_In_ PPCPROPERTY_REQUEST PropertyRequest);
 
 protected:
     LONG                    m_RefCount;
@@ -130,32 +118,47 @@ protected:
 class CMiniportWaveRT : public IMiniportWaveRT, public CPortInfo
 {
 public:
-    static NTSTATUS Create(_In_ PNPAUDIO_DEVICE_CONTEXT DevCtx,
-                           _In_ ULONG MaxNameLen,
-                           _In_ PWCHAR PnpInterface);
+    static NTSTATUS Create(_In_ PUNKNOWN UnknownAdapter,
+                           _In_ PRESOURCELIST ResourceList,
+                           _In_ PPORTWAVERT Port,
+                           _Outptr_ PMINIPORTWAVERT *Miniport);
 
     ~CMiniportWaveRT();
 
     /* IUnknown */
+    NTSTATUS QueryInterface(_In_ REFGUID Guid, _Outptr_ PVOID *Object);
     ULONG AddRef();
     ULONG Release();
 
     /* IMiniport */
-    NTSTATUS Init(_In_ PNPAUDIO_DEVICE_CONTEXT DevCtx,
-                  _In_ ULONG MaxNameLen,
-                  _In_ PWCHAR PnpInterface);
-    VOID GetDescription(_Out_ PWSTR* ppwName);
-    VOID SetPowerState(_In_ POWER_STATE state);
-    NTSTATUS InitRanges();
+    NTSTATUS Init(_In_ PUNKNOWN UnknownAdapter,
+                  _In_ PRESOURCELIST ResourceList,
+                  _In_ PPORTWAVERT Port);
+    NTSTATUS GetDescription(_Out_ PPCFILTER_DESCRIPTOR *ppwDescription);
+    NTSTATUS DataRangeIntersection(_In_ ULONG PinId,
+                                   _In_ PKSDATARANGE DataRange,
+                                   _In_ PKSDATARANGE MatchingDataRange,
+                                   _In_ ULONG OutputBufferLength,
+                                   _Out_writes_bytes_to_opt_(OutputBufferLength, *ResultantFormatLength) PVOID ResultantFormat,
+                                   _Out_ PULONG ResultantFormatLength);
 
     /* IMiniportWaveRT */
-    NTSTATUS CreateStream(_In_ ULONG nStream,
-                          _In_ PVOID pPhysicalDevice,
-                          _In_ PMINIPORT_PROPERTY pProperty,
-                          _Out_ IMiniportWaveRTStream** PpStream);
+    NTSTATUS NewStream(_Out_ PMINIPORTWAVERTSTREAM *Stream,
+                       _In_ PPORTWAVERTSTREAM PortStream,
+                       _In_ ULONG Pin,
+                       _In_ BOOLEAN Capture,
+                       _In_ PKSDATAFORMAT DataFormat);
+    NTSTATUS GetDeviceDescription(_Out_ PDEVICE_DESCRIPTION DeviceDescription);
+    VOID SetPowerState(_In_ POWER_STATE state);
 
     LONG GetRef() const { return m_RefCount; }
 
     // Shared with the control device (broker) + the stream DPC.
     CPCMRing* m_pRing;
+
+protected:
+    LONG                    m_RefCount;
+    PWSTR                   m_pwMyName;
+    ULONG                   m_MaxNameLen;
+    LONG                    m_nRanges;
 };

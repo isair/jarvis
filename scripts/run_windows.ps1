@@ -92,9 +92,13 @@ $KM_INC    = $null
 if (Test-Path -LiteralPath (Join-Path $KITS_INC 'km')) {
     $KM_INC = Join-Path $KITS_INC 'km'
 } elseif (Test-Path -LiteralPath $KITS_INC) {
-    $ver = (Get-ChildItem $KITS_INC -Directory | Sort-Object Name | Select-Object -Last 1).Name
-    $cand = Join-Path (Join-Path $KITS_INC $ver) 'km'
-    if (Test-Path -LiteralPath $cand) { $KM_INC = $cand }
+    # Pick the highest version dir that actually contains a 'km' subfolder.
+    # (A plain 'Sort-Object Name | Select -Last 1' lands on the 'wdf' dir,
+    # which has no 'km', and would falsely report the headers as missing.)
+    foreach ($d in (Get-ChildItem $KITS_INC -Directory | Sort-Object Name)) {
+        $cand = Join-Path $d.FullName 'km'
+        if (Test-Path -LiteralPath $cand) { $KM_INC = $cand }
+    }
 }
 $DRV_SYS  = Join-Path $VM_DRV_OUT 'ToustovacVirtualMic.sys'
 $PKG_INF  = Join-Path $VM_PKG 'ToustovacVirtualMic.inf'

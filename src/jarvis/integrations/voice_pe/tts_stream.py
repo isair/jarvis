@@ -203,7 +203,42 @@ def resample_pcm16(pcm: bytes, src_rate: int, dst_rate: int = SAMPLE_RATE) -> by
 # Synthesis on the existing engine
 # ---------------------------------------------------------------------------
 
-def synthesize_pcm(engine, text: str) -> Optional[bytes]:
+def _resolve_engine_voice(engine, language: Optional[str] = None) -> tuple:
+    """Piper voice plus its native sample rate, for either engine shape.
+
+    Supports a bare ``_voice`` attribute (single-model wrappers) and the
+    multi-language ``PiperTTS`` layout: a ``_voices`` dict keyed by ISO code
+    with ``_default_lang`` fallback, optionally through ``_resolve_voice``.
+    ``language`` (the Whisper-detected ISO code) selects the matching voice;
+    ``None`` keeps the default. Returns ``(None, SAMPLE_RATE)`` when empty.
+    """
+    voice = getattr(engine, "_voice", None)
+    rate = int(getattr(engine, "_sample_rate", SAMPLE_RATE) or SAMPLE_RATE)
+    if voice is None:
+        voices = getattr(engine, "_voices", None)
+        if isinstance(voices, dict) and voices:
+            default_lang = getattr(engine, "_default_lang", None)
+            want = (language or "").strip().lower() or default_lang
+            resolver = getattr(engine, "_resolve_voice", None)
+            if callable(resolver):
+                try:
+                    voice, resolved_rate = resolver(want)
+                    if resolved_rate:
+                        rate = int(resolved_rate)
+                except Exception:
+                    voice = None
+            if voice is None:
+                voice = (
+                    voices.get(want or "")
+                    or voices.get(default_lang or "")
+                    or next(iter(voices.values()), None)
+                )
+    return voice, rate
+
+
+def synthesize_pcm(
+    engine, text: str, language: Optional[str] = None
+) -> Optional[bytes]:
     """Return resampled 16 kHz mono PCM16 for ``text`` from the shared engine."""
     if engine is None or not text or not text.strip():
         return None
@@ -216,21 +251,30 @@ def synthesize_pcm(engine, text: str) -> Optional[bytes]:
         prepared = text.strip()
 
     pcm: Optional[bytes] = None
-    src_rate = SAMPLE_RATE
-
-    voice = getattr(engine, "_voice", None)
+    # One lazy-init pass for both engine shapes; Piper fills ``_voices`` only
+    # on success, so a failed init falls through to the model branch (which
+    # then also finds nothing) instead of misreading a ``None`` return.
+    ensure = getattr(engine, "_ensure_initialized", None)
+    if callable(ensure):
+        ensure()
+    voice, src_rate = _resolve_engine_voice(engine, language)
     if voice is not None:
-        ensure = getattr(engine, "_ensure_initialized", None)
-        if callable(ensure) and not ensure():
-            return None
-        voice = getattr(engine, "_voice", None)
-        if voice is None:
-            return None
         from piper.config import SynthesisConfig
+
+        # Mirror the per-language speed multiplier the main worker applies,
+        # so local playback and Voice PE egress speak at the same pace.
+        length_fn = getattr(engine, "_length_scale_for", None)
+        if callable(length_fn):
+            try:
+                length_scale = float(length_fn(language))
+            except Exception:
+                length_scale = float(getattr(engine, "length_scale", 1.0))
+        else:
+            length_scale = float(getattr(engine, "length_scale", 1.0))
 
         syn_config = SynthesisConfig(
             speaker_id=getattr(engine, "speaker", None),
-            length_scale=float(getattr(engine, "length_scale", 1.0)),
+            length_scale=length_scale,
             noise_scale=float(getattr(engine, "noise_scale", 0.667)),
             noise_w_scale=float(getattr(engine, "noise_w", 0.8)),
         )
@@ -243,7 +287,11 @@ def synthesize_pcm(engine, text: str) -> Optional[bytes]:
             ]
         if not parts:
             return None
-        src_rate = int(getattr(engine, "_sample_rate", SAMPLE_RATE) or SAMPLE_RATE)
+        # ``src_rate`` already carries the per-voice rate from
+        # ``_resolve_engine_voice``; the engine-level scalar is only the
+        # fallback for bare single-model wrappers.
+        if not src_rate:
+            src_rate = SAMPLE_RATE
         try:
             import numpy as np
 
@@ -254,12 +302,6 @@ def synthesize_pcm(engine, text: str) -> Optional[bytes]:
 
     model = getattr(engine, "_model", None)
     if model is not None:
-        ensure = getattr(engine, "_ensure_initialized", None)
-        if callable(ensure) and not ensure():
-            return None
-        model = getattr(engine, "_model", None)
-        if model is None:
-            return None
         wav = model.generate(prepared)
         src_rate = int(getattr(model, "sr", SAMPLE_RATE) or SAMPLE_RATE)
         try:
@@ -284,10 +326,22 @@ def synthesize_pcm(engine, text: str) -> Optional[bytes]:
 _TTS_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="voice_pe_tts")
 
 
-async def synthesize_pcm_async(engine, text: str) -> Optional[bytes]:
-    """``synthesize_pcm`` off the event loop, on the dedicated executor."""
+async def synthesize_pcm_async(
+    engine, text: str, language: Optional[str] = None
+) -> Optional[bytes]:
+    """``synthesize_pcm`` off the event loop, on the dedicated executor.
+
+    The language is passed positionally only when known, so two-argument
+    stubs of ``synthesize_pcm`` keep working.
+    """
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(_TTS_EXECUTOR, synthesize_pcm, engine, text)
+    if language:
+        return await loop.run_in_executor(
+            _TTS_EXECUTOR, lambda: synthesize_pcm(engine, text, language)
+        )
+    return await loop.run_in_executor(
+        _TTS_EXECUTOR, lambda: synthesize_pcm(engine, text)
+    )
 
 
 def split_sentences(text: str) -> list:

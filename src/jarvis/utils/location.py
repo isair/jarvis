@@ -50,6 +50,12 @@ _cgnat_resolution_cache: Dict[str, tuple[datetime, Optional[str]]] = {}
 # TTL for CGNAT OpenDNS resolution attempts
 _CGNAT_RESOLUTION_TTL = timedelta(hours=1)
 
+# Memo for the formatted (context, timezone) tuples returned by
+# get_location_context_with_timezone, keyed by the parameter set and stamped
+# with the time of the first lookup. The per-turn context line and the router
+# hint read through this, so the IP probes run once per TTL window.
+_CONTEXT_TUPLE_CACHE: Dict[tuple, tuple[datetime, tuple[str, Optional[str]]]] = {}
+
 # Disk cache paths (share directory with geoip DB for locality)
 def _cache_base_dir() -> Path:
     return Path.home() / ".local" / "share" / "jarvis"
@@ -633,7 +639,28 @@ def get_location_context_with_timezone(
     resolve_cgnat_public_ip: bool = True,
     location_cache_minutes: int = 60,
 ) -> tuple[str, Optional[str]]:
-    """Return the location context string and the IANA timezone (if known) in one lookup."""
+    """Return the location context string and the IANA timezone (if known) in one lookup.
+
+    The tuple is memoised by the exact parameter set for ``location_cache_minutes``
+    minutes: every voice turn re-reads the context line, and the first lookup
+    already pays for the UPnP / socket / OpenDNS probes plus the GeoIP read.
+    Subsequent turns inside the TTL window are pure cache hits with no network
+    or disk traffic at all.
+    """
+    global _CONTEXT_TUPLE_CACHE
+    now = datetime.now(timezone.utc)
+    memo_key = (
+        config_ip or "",
+        bool(auto_detect),
+        bool(resolve_cgnat_public_ip),
+        int(location_cache_minutes),
+    )
+    with _cache_lock:
+        cached = _CONTEXT_TUPLE_CACHE.get(memo_key)
+        if cached:
+            ts, value = cached
+            if now - ts < timedelta(minutes=max(1, int(location_cache_minutes))):
+                return value
     info = get_location_info(
         config_ip=config_ip,
         auto_detect=auto_detect,
@@ -641,7 +668,10 @@ def get_location_context_with_timezone(
         location_cache_minutes=location_cache_minutes,
     )
     tz_name = info.get("timezone") if isinstance(info, dict) else None
-    return _format_location_context(info), tz_name
+    value = (_format_location_context(info), tz_name)
+    with _cache_lock:
+        _CONTEXT_TUPLE_CACHE[memo_key] = (now, value)
+    return value
 
 
 def is_location_available() -> bool:

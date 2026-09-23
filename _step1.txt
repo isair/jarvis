@@ -1,0 +1,6 @@
+create/open=1 devInst=2 gle=0x0
+setHwid=1 gle=0
+diInstall=1 needReboot=False gle=0x0
+DevDesc=
+Class=MEDIA
+Driver=<none gle=13>

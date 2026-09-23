@@ -123,26 +123,27 @@ class SplashScreen(QWidget):
     def __init__(self):
         super().__init__()
 
-        # Frameless, always on top, tool window (no taskbar entry). The
-        # minimize-button hint lets ``showMinimized()`` collapse the splash to
-        # the taskbar while startup keeps running on its worker threads.
+        # Frameless tool window (no taskbar entry), not pinned on top so other
+        # windows can come forward normally. The minimize-button hint lets
+        # ``showMinimized()`` collapse the splash to the taskbar while startup
+        # keeps running on its worker threads.
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint |
-            Qt.WindowType.WindowStaysOnTopHint |
             Qt.WindowType.WindowMinimizeButtonHint |
             Qt.WindowType.Tool
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
 
-        self.setFixedSize(300, 280)
+        # 16:9 landscape (480x270) so the panel reads as a wide banner.
+        self.setFixedSize(480, 270)
         self._setup_ui()
         self._center_on_screen()
 
     def _setup_ui(self):
         """Set up the UI components."""
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 30, 20, 30)
-        layout.setSpacing(20)
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(14)
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         # Title

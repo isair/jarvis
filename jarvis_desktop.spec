@@ -6,7 +6,7 @@ Builds a standalone executable for Windows, macOS, and Linux
 
 import sys
 from pathlib import Path
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, collect_submodules
 
 block_cipher = None
 
@@ -50,7 +50,7 @@ for _ae_dll in (_ae_dll_debug, _ae_dll_release):
         print(f"Bundling native audio engine DLL: {_ae_dll}")
         break
 else:
-    print("Native audio engine DLL not built — running scripts/build_native.ps1 first")
+    print("Native audio engine DLL not built - run scripts/run_windows.ps1 or scripts/build_one.ps1 first")
 
 # Toustovač Clean Microphone stack — the WDK driver package plus the broker
 # and the idempotent bootstrapper. The daemon drives first-run/in-place
@@ -464,7 +464,22 @@ if sys.platform == 'darwin':
         else:
             print(f"Warning: OpenSSL library {lib_name} not found - SSL may not work!")
 
-    a.binaries = filtered_binaries
+a.binaries = filtered_binaries
+
+# CTranslate2 loads its cuDNN/cuBLAS as loose DLLs next to ctranslate2.dll, so
+# the import graph alone does not pull them in and the CUDA probe in
+# jarvis.listening.listener falls back to CPU. Collect every DLL from the wheel
+# directory into the same relative folder the package expects.
+# ``collect_dynamic_libs`` yields ``(source, dest_dir)``; the Analysis TOC wants
+# ``(destination_name, source, typecode)``.
+import os as _os
+
+for _pkg in ('ctranslate2', 'faster_whisper'):
+    for _source, _dest_dir in collect_dynamic_libs(_pkg) or []:
+        _dest = _os.path.join(_dest_dir, _os.path.basename(str(_source))) if _dest_dir else _os.path.basename(str(_source))
+        a.binaries.append((_dest, str(_source), 'BINARY'))
+        print(f"Bundling {_pkg} dependency: {_dest}")
+
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 

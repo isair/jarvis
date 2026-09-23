@@ -1193,10 +1193,28 @@ class DictationEngine:
         Same rule as the voice loop: one configured code is sent to both
         Whisper backends, which lifts transcript precision for that language.
         """
-        code = str(getattr(self._cfg, "whisper_language", "auto") or "auto").strip().lower()
-        if not code or code == "auto":
-            return None
-        return code
+        code = str(getattr(self._cfg, "whisper_language", "cs+vi") or "cs+vi").strip().lower()
+        if code in ("en", "cs", "vi", "sk"):
+            return code
+        return None
+
+    def _multiselect_candidates(self) -> list[str]:
+        """Codes to resolve a ``None`` language argument against, in order.
+
+        ``"cs+vi"`` is the fixed closed pair ``["cs", "vi"]``: one forced
+        decode per code, highest first-segment ``avg_logprob`` wins. Every
+        other value falls back to ``speech_spellcheck_languages``.
+        """
+        code = str(getattr(self._cfg, "whisper_language", "cs+vi") or "cs+vi").strip().lower()
+        if code == "cs+vi":
+            return ["cs", "vi"]
+        raw = getattr(self._cfg, "speech_spellcheck_languages", None) or []
+        codes: list[str] = []
+        for entry in raw:
+            folded = str(entry).strip().lower()
+            if folded and folded not in codes:
+                codes.append(folded)
+        return codes
 
     def _transcribe(self, audio) -> str:
         """Transcribe audio using the shared Whisper model."""
@@ -1212,12 +1230,53 @@ class DictationEngine:
                 debug_log("no whisper model available", "dictation")
                 return ""
 
+    def _multiselect_score(self, segments) -> float:
+        """First segment's ``avg_logprob`` as the closed-set score; neutral
+        ``-9.9`` when a row carries no numeric value."""
+        for seg in segments or []:
+            value = (
+                seg.get("avg_logprob")
+                if isinstance(seg, dict)
+                else getattr(seg, "avg_logprob", None)
+            )
+            if value is None:
+                continue
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return -9.9
+        return -9.9
+
     def _transcribe_mlx(self, audio) -> str:
         repo = self._mlx_repo_ref()
         if not repo:
             return ""
         try:
             import mlx_whisper
+            candidates = (
+                self._multiselect_candidates()
+                if self._language_code() is None
+                else []
+            )
+            if len(candidates) >= 2:
+                # Closed-set resolution: one forced decode per configured
+                # code so the short-clip argmax of auto-detection cannot
+                # drift to an unrelated code; highest avg_logprob wins.
+                best_text = ""
+                best_score = None
+                for code in candidates:
+                    result = mlx_whisper.transcribe(
+                        audio,
+                        path_or_hf_repo=repo,
+                        language=code,
+                    )
+                    if not isinstance(result, dict):
+                        continue
+                    score = self._multiselect_score(result.get("segments") or [])
+                    if best_score is None or score > best_score:
+                        best_score = score
+                        best_text = result.get("text", "").strip()
+                return best_text
             result = mlx_whisper.transcribe(
                 audio,
                 path_or_hf_repo=repo,
@@ -1231,7 +1290,25 @@ class DictationEngine:
 
     def _transcribe_faster_whisper(self, model, audio) -> str:
         language = self._language_code()
+        candidates = self._multiselect_candidates() if language is None else []
         try:
+            if len(candidates) >= 2:
+                # Closed-set resolution, same contract as the MLX branch.
+                best_text = ""
+                best_score = None
+                for code in candidates:
+                    try:
+                        segments, _info = model.transcribe(
+                            audio, language=code, vad_filter=False
+                        )
+                    except TypeError:
+                        segments, _info = model.transcribe(audio, language=code)
+                    rows = list(segments)
+                    score = self._multiselect_score(rows)
+                    if best_score is None or score > best_score:
+                        best_score = score
+                        best_text = " ".join(seg.text for seg in rows).strip()
+                return best_text
             try:
                 segments, _info = model.transcribe(audio, language=language, vad_filter=False)
             except TypeError:

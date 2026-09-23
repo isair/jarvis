@@ -33,6 +33,10 @@ def _print_health(snapshot: dict) -> None:
     print(f"     🎚️  audio queue: {snapshot.get('audio_queue_ms', 0)} ms", flush=True)
     features = snapshot.get("voice_features") or []
     print(f"     🧩 features: {', '.join(features) or 'none'}", flush=True)
+    egress = snapshot.get("pcm_egress")
+    if egress is not None:
+        label = {0: "LAN WAV", 1: "Native API PCM"}.get(int(egress), "?")
+        print(f"     🔊 TTS egress: {label}", flush=True)
     print(
         f"     👂 wake words: {'disabled' if snapshot.get('wake_words_disabled') else 'enabled'}",
         flush=True,
@@ -112,6 +116,11 @@ def handle(argv: list[str], settings: Any, manager: Any = None) -> int:
                 f"🧩 {', '.join(features) or 'none'}",
                 flush=True,
             )
+            egress = {
+                0: "LAN WAV",
+                1: "Native API PCM",
+            }.get(int(connection.get("pcm_egress", -1)), "?")
+            print(f"     🔊 TTS egress: {egress}", flush=True)
         return 1 if any(
             device.health_snapshot().get("device_state") == "error"
             for device in devices
@@ -125,6 +134,14 @@ def handle(argv: list[str], settings: Any, manager: Any = None) -> int:
             return 1
         print(f"🛰️ {device.identity.get('node_name') or device._host}", flush=True)
         _print_health(device.health_snapshot())
+        trail = device.media_delivery()
+        if trail.get("key"):
+            print(
+                f"     📦 last WAV: {trail['key']} on :{trail.get('port', 0)} "
+                f"status {trail.get('status', '-')}, "
+                f"{trail.get('served_bytes', 0)} B in {trail.get('hits', 0)} hit(s)",
+                flush=True,
+            )
         return 0
 
     if command == "set-led":

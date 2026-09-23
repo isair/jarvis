@@ -45,6 +45,21 @@ def get_manager() -> VoicePEManager | None:
     return _MANAGER
 
 
+def mirror_local(text: str) -> int:
+    """Hand one locally spoken line to the idle satellites too.
+
+    Returns the number of satellites that received it, ``0`` when the
+    integration is off. Non-blocking: every device posts its own coroutine onto
+    the manager loop, so the caller's (listener or proactive) thread keeps going.
+    """
+    if _MANAGER is None:
+        return 0
+    try:
+        return int(_MANAGER.mirror_local(text))
+    except Exception:
+        return 0
+
+
 def run_cli(argv: list) -> int:
     """Entry point for ``jarvis voice-pe ...`` (hand-rolled argv style)."""
     from jarvis.config import load_settings
@@ -79,6 +94,7 @@ __all__ = [
     "VoicePEManager",
     "get_manager",
     "health_snapshot",
+    "mirror_local",
     "run_cli",
     "start",
     "stop",

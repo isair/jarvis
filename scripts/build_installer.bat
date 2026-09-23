@@ -46,6 +46,27 @@ echo [build_installer] Cleaning previous builds...
 if exist "build" rmdir /s /q build
 if exist "dist"  rmdir /s /q dist
 
+REM ---- Native audio engine (CMake + MSVC). jarvis_desktop.spec stages the
+REM      DLL from build\native_audio_engine, and the daemon fails closed
+REM      (AUDIO_DSP_ERROR) when the bundle lacks it.
+where cmake >nul 2>nul
+if errorlevel 1 (
+    echo [build_installer] ERROR: cmake not on PATH. Install cmake ^(^>=3.23^) + MSVC Build Tools.
+    exit /b 1
+)
+echo [build_installer] Configuring native audio engine...
+cmake -S "%PROJECT_ROOT%\native\audio_engine" -B "%PROJECT_ROOT%\build\native_audio_engine"
+if errorlevel 1 (
+    echo [build_installer] ERROR: cmake configure failed
+    exit /b 1
+)
+echo [build_installer] Building native audio engine...
+cmake --build "%PROJECT_ROOT%\build\native_audio_engine" --parallel 8
+if errorlevel 1 (
+    echo [build_installer] ERROR: native audio engine build failed
+    exit /b 1
+)
+
 REM ---- PyInstaller produces dist\Jarvis\.
 echo [build_installer] Running PyInstaller...
 "%MAMBA_ENV%\python.exe" -m PyInstaller jarvis_desktop.spec

@@ -26,6 +26,9 @@
 
 UNICODE_STRING g_TvmicControlName;
 UNICODE_STRING g_TvmicSddl;
+GUID           g_TvmicInterfaceGuid = GUID_DEVINTERFACE_TOUSTOVAC_VIRTUAL_MIC_CONTROL;
+UNICODE_STRING g_TvmicInterfaceRef;
+
 static const WCHAR s_TvmicControlName[] = L"\\Device\\ToustovacCleanMic";
 static const WCHAR s_TvmicSddlText[] =
     L"D:"
@@ -51,7 +54,6 @@ static LONG       g_Muted = 0;
 static LONG       g_RejectedPackets = 0;
 static LONG       g_ProtocolVersion = 0;
 static ULONGLONG  g_Generation = 0;
-static LONG       g_DeviceNumber = 0;
 
 // CRC32C (Castagnoli, reflected poly 0x82F63B78).
 static ULONG TvmicCrc32c(const UCHAR* pData, ULONG nLength)
@@ -80,28 +82,30 @@ static ULONG TvmicCrc32c(const UCHAR* pData, ULONG nLength)
 // Device creation.
 // ---------------------------------------------------------------------------
 
+#pragma code_seg("PAGE")
 NTSTATUS
 CreateControlDevice
 (
+    _In_ PDRIVER_OBJECT   DriverObject,
     _In_ PDEVICE_OBJECT   PhysicalDeviceObject,
-    _In_ LPCGUID          pInterfaceGuid
+    _In_ LPCGUID          pInterfaceGuid,
+    _In_ PCUNICODE_STRING pSddl
 )
 {
     NTSTATUS        status;
     PDEVICE_OBJECT  controlObject = NULL;
-    INTERFACE_REFERENCE ifaceRef;
 
-    TvmicInitControlStrings();
+    UNREFERENCED_PARAMETER(pSddl);
 
     status = IoCreateDeviceSecure(
-        PhysicalDeviceObject,
+        DriverObject,
         0,
         &g_TvmicControlName,
         FILE_DEVICE_UNKNOWN,
         FILE_DEVICE_SECURE_OPEN,
         FALSE,
         &g_TvmicSddl,
-        &g_DeviceNumber,
+        pInterfaceGuid,
         &controlObject
     );
     if (!NT_SUCCESS(status)) {
@@ -109,18 +113,19 @@ CreateControlDevice
     }
 
     status = IoRegisterDeviceInterface(PhysicalDeviceObject, pInterfaceGuid,
-                                       NULL, &ifaceRef);
+                                       NULL, &g_TvmicInterfaceRef);
     if (!NT_SUCCESS(status)) {
         IoDeleteDevice(controlObject);
         return status;
     }
-    status = IoSetDeviceInterfaceState(&ifaceRef, TRUE);
+    status = IoSetDeviceInterfaceState(&g_TvmicInterfaceRef, TRUE);
     if (!NT_SUCCESS(status)) {
         IoDeleteDevice(controlObject);
         return status;
     }
     return STATUS_SUCCESS;
 }
+#pragma code_seg()
 
 // ---------------------------------------------------------------------------
 // IRP_MJ_DEVICE_CONTROL dispatcher.
@@ -300,15 +305,19 @@ TvmicCtlDispatch
         pSt->producer_generation = g_Generation;
         if (g_pCtlRing != NULL) {
             pSt->active_capture_clients = 1;
-            pSt->sequence = g_pCtlRing->LastSequence();
-            pSt->qpc_100ns = g_pCtlRing->LastQpc();
+            pSt->ring_capacity_frames = g_pCtlRing->CapacityFrames();
+            pSt->ring_depth_frames = g_pCtlRing->Depth();
+            pSt->last_sequence = g_pCtlRing->LastSequence();
+            pSt->last_timestamp_100ns = g_pCtlRing->LastQpc();
             pSt->frames_produced = g_pCtlRing->FramesProduced();
-            pSt->frames_injected = g_pCtlRing->FramesProduced();
-            pSt->frames_consumed = g_pCtlRing->FramesProduced();
             pSt->silence_frames = g_pCtlRing->SilenceFrames();
             pSt->driver_underflows = g_pCtlRing->Underruns();
-            pSt->driver_overflows = g_pCtlRing→FramesDropped?; no: see below
+            pSt->driver_overflows = g_pCtlRing->FramesDropped();
+            pSt->stale_packets = g_pCtlRing->StalePackets();
+            pSt->sequence_gaps = g_pCtlRing->SequenceGaps();
+            pSt->max_ring_depth_frames = g_pCtlRing->MaxDepth();
         }
+        pSt->rejected_packets = (UINT64)g_RejectedPackets;
         bytesReturned = sizeof(TvmicCtlStatus);
         break;
     }

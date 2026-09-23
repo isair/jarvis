@@ -14,20 +14,21 @@ Abstract:
 
 #pragma once
 
-#include <ntifs.h>
+#include <ntddk.h>
+#include <wdmsec.h>
 #include "public/toustovac_virtual_mic_ioctl.h"
 
 // Creation of the control device + device interface.
 NTSTATUS
 CreateControlDevice
 (
+    _In_ PDRIVER_OBJECT     DriverObject,
     _In_ PDEVICE_OBJECT     PhysicalDeviceObject,
     _In_ LPCGUID            pInterfaceGuid,
     _In_ PCUNICODE_STRING   pSddl
 );
 
-// IRP_MJ_DEVICE_CONTROL dispatcher for the IOCTLs above. Called from the
-// adapter's EvtDeviceIoControl with NULL-checked IRPs.
+// IRP_MJ_DEVICE_CONTROL dispatcher for the IOCTLs above.
 VOID
 TvmicCtlDispatch
 (
@@ -43,9 +44,9 @@ TvmicInitControlStrings
 );
 
 // Module-level state (defined in control_device.cpp).
-extern UNICODE_STRING              g_TvmicControlName;
-extern UNICODE_STRING              g_TvmicSddl;
-extern DEVICE_INTERFACE_REFERENCE  g_TvmicInterfaceRef;
-extern LONG                        ControlDeviceNumber;
+extern UNICODE_STRING  g_TvmicControlName;
+extern UNICODE_STRING  g_TvmicSddl;
+extern GUID            g_TvmicInterfaceGuid;
+extern UNICODE_STRING  g_TvmicInterfaceRef;
 
 #define TVMIC_SDDL &g_TvmicSddl

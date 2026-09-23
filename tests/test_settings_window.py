@@ -19,6 +19,8 @@ from desktop_app.settings_window import (
     get_input_devices,
     _build_field_metadata,
     _is_default_value,
+    _mmdevice_rows,
+    _mmdevice_tail,
     _MCPCatalogueDialog,
     _MCPEditDialog,
 )
@@ -738,3 +740,92 @@ class TestLiveDialogRoundTrip:
         import json
         saved = json.loads(cfg.read_text(encoding="utf-8"))
         assert saved["llm_api_key"] == "secret-key"
+
+
+class _StructBridge:
+    """Fake bridge exposing only the struct-form enumerator (ABI v2 shape)."""
+
+    ROWS = [
+        {
+            "id": "{0.0.000000000},{0007bfda-0f7b-4e9d-871a-5df3b0b66e41}",
+            "friendly_name": "Speakers (JBL Xtreme 4)",
+            "mix_rate_hz": 48000,
+            "mix_channels": 2,
+            "mix_bits": 32,
+            "default_console": 0,
+            "default_multimedia": 1,
+            "default_communications": 0,
+        },
+        {
+            "id": "{0.0.000000000},{0340ef36-3a5b-4b2a-91d6-0209ffabcb67}",
+            "friendly_name": "Headset Microphone (Plantronics Blackwire 3220 Series)",
+            "mix_rate_hz": 0,
+            "mix_channels": 0,
+            "mix_bits": 0,
+            "default_console": 1,
+            "default_multimedia": 1,
+            "default_communications": 1,
+        },
+        {"id": "", "friendly_name": "skipped"},
+    ]
+
+    @staticmethod
+    def enumerate_endpoints(flow: int) -> list:
+        return [row for row in _StructBridge.ROWS if row]
+
+
+class _TextBridge:
+    """Fake bridge with the older text-only ``endpoint_lines`` shape."""
+
+    @staticmethod
+    def endpoint_lines(flow: int) -> list:
+        return [
+            "-M- 44100Hz/2ch/32bit id={0.0.1.00000000}.{ab12cd34-1-2-3} name=ADAT (1+2)",
+            "--- 0Hz/0ch/0bit id={0.0.1.00000000}.{ef56ab78-4-5-6} name=Stereo Mix",
+            "no id segment at all",
+        ]
+
+
+class TestMmDeviceRows:
+    """The MMDevice dropdowns resolve the friendly name, store the ID."""
+
+    def test_name_is_displayed_and_id_is_the_value(self):
+        rows = dict(_mmdevice_rows(_StructBridge, 3))
+        assert rows["{0.0.000000000},{0007bfda-0f7b-4e9d-871a-5df3b0b66e41}"] == (
+            "🎙 Speakers (JBL Xtreme 4) · 48000 Hz/2ch/32bit [default M] · …0007bfda"
+        )
+
+    def test_zero_mix_format_is_named_not_printed_as_zeros(self):
+        _, display = _mmdevice_rows(_StructBridge, 2)[1]
+        assert "no mix format" in display
+        assert "0 Hz" not in display
+        assert "[default CMK]" in display
+
+    def test_empty_id_rows_are_dropped(self):
+        ids = [dev_id for dev_id, _ in _mmdevice_rows(_StructBridge, 0)]
+        assert "" not in ids and len(ids) == 2
+
+    def test_text_only_bridge_is_parsed(self):
+        rows = _mmdevice_rows(_TextBridge, 3)
+        assert [dev_id for dev_id, _ in rows] == [
+            "{0.0.1.00000000}.{ab12cd34-1-2-3}",
+            "{0.0.1.00000000}.{ef56ab78-4-5-6}",
+        ]
+        # The ``C/M/K`` flag column is carried over verbatim from the text row.
+        assert rows[0][1] == "🎙 ADAT (1+2) · 44100 Hz/2ch/32bit [default -M-] · …ab12cd34"
+        assert "no mix format" in rows[1][1]
+
+    def test_struct_bridge_wins_over_text_form(self):
+        combined = _mmdevice_rows(type("B", (_StructBridge, _TextBridge), {}), 2)
+        assert all(dev_id.startswith("{0.0.000000000}") for dev_id, _ in combined)
+
+    def test_missing_bridge_methods_yield_no_rows(self):
+        assert _mmdevice_rows(type("Empty", (), {}), 2) == []
+
+    def test_mmdevice_tail_handles_both_id_shapes(self):
+        assert _mmdevice_tail(
+            "{0.0.000000000},{0007bfda-0f7b-4e9d-871a-5df3b0b66e41}"
+        ) == "0007bfda"
+        assert _mmdevice_tail(
+            "{0.0.1.00000000}.{056341d6-72ca-4792-9602-7fb7cb72b7fd}"
+        ) == "056341d6"

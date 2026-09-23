@@ -29,13 +29,13 @@ CPCMRing::Create(
         return STATUS_INVALID_PARAMETER;
     }
 
-    pThis = (CPCMRing*)ExAllocatePool2(PoolFlagNxPaged, sizeof(CPCMRing), 'cimV');
+    pThis = (CPCMRing*)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(CPCMRing), 'cimV');
     if (pThis == NULL) {
         return STATUS_NO_MEMORY;
     }
 
     buf = (INT16*)ExAllocatePool2(
-        PoolFlagNxPaged, nFrames * TVMIC_FRAME_SAMPLES * sizeof(INT16), 'cimV');
+        POOL_FLAG_NON_PAGED, nFrames * TVMIC_FRAME_SAMPLES * sizeof(INT16), 'cimV');
     if (buf == NULL) {
         ExFreePoolWithTag(pThis, 'cimV');
         return STATUS_NO_MEMORY;

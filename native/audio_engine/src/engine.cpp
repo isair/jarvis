@@ -1481,7 +1481,7 @@ bool NextBlock(V2Source& s, float* mono, size_t mono_cap, double& t_out) {
     if (s.chunks.empty()) return got == need;
     Chunk& front = s.chunks.front();
     if (front.pos >= front.frames) {
-      s.chunks.erase(s.chunks.begin());
+      if (!s.chunks.empty()) s.chunks.erase(s.chunks.begin());
       continue;
     }
     if (got == 0) t_out = front.t0_s + static_cast<double>(front.pos) /
@@ -1967,6 +1967,12 @@ JarvisAeStatusCode JarvisAeLaneCreate(JarvisAeEngineHandle* h,
     return JARVIS_AE_ERR_ABI_MISMATCH;
   auto lane = std::make_unique<V2Lane>();
   lane->cfg = *config;
+  /* The diagnostic rings are indexed by `d_i % kDiagN` from both the realtime
+   * thread (ProcessLane480) and the control thread (dump); size them here so
+   * no observer can see the 0 -> kDiagN transition. */
+  lane->d_ref.resize(V2Lane::kDiagN);
+  lane->d_raw.resize(V2Lane::kDiagN);
+  lane->d_clean.resize(V2Lane::kDiagN);
   lane->id = e->lane_next_id++;
   lane->engine_generation = e->generation;
   std::snprintf(lane->tel.device_id, sizeof(lane->tel.device_id), "%s",
@@ -2155,13 +2161,15 @@ JarvisAeStatusCode JarvisAeLanePushReference(JarvisAeLaneHandle* lh,
   size_t off = 0;
   while (off + 480u <= n) {
     const uint32_t h = g2->ref_head % g2->ref_cap;
+    /* Grow first, then index: `operator[]` bounds-checks against the current
+     * size (vector:1931 in the Debug STL), so the slot must exist already. */
+    if (g2->ref.size() < g2->ref_cap) g2->ref.push_back(RefFrame{});
     if (g2->ref[h].t_s == 0.0 || t < g2->ref[h].t_s) {
       /* fresh slot */
     }
     g2->ref[h].t_s = t;
     std::memcpy(g2->ref[h].f, up.data() + off, sizeof(float) * 480u);
     g2->ref_head = (g2->ref_head + 1u) % g2->ref_cap;
-    if (g2->ref.size() < g2->ref_cap) g2->ref.push_back(RefFrame{});
     t += 0.01;
     off += 480u;
   }

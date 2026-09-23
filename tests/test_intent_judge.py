@@ -1,5 +1,7 @@
 """Tests for the intent judge module."""
 
+import json
+
 import pytest
 from unittest.mock import patch, MagicMock
 
@@ -8,6 +10,9 @@ from jarvis.listening.intent_judge import (
     IntentJudgeConfig,
     IntentJudgment,
     create_intent_judge,
+    _repair_truncated_json,
+    _reasoning_of,
+    _response_diagnostics,
 )
 from jarvis.listening.transcript_buffer import TranscriptSegment
 
@@ -582,20 +587,22 @@ class TestJudgeBudgetScaling:
         return kwargs["timeout_sec"], kwargs["extra_options"]["max_tokens"]
 
     def test_plain_mode_caps_generation_and_uses_the_plain_budget(self):
-        """Without thinking the answer is bare JSON: 400 tokens, base budget."""
+        """Plain mode: 1400 tokens (measured thinking ceiling plus answer),
+        and a budget wide enough to decode that cap on a slow host."""
         timeout, max_tokens = self._run(thinking=False)
 
-        assert max_tokens == 400
-        assert timeout == 15.0
-        # Arithmetic floor on a 45 tok/s host must sit inside the budget.
+        assert max_tokens == 1400
+        # 1400 tokens at the 45 tok/s floor is 31.1s of decode, so the plain
+        # budget must clear it — 2.5x the base 15s = 37.5s.
+        assert timeout == 37.5
         assert timeout >= max_tokens / 45.0
 
     def test_thinking_mode_widens_cap_and_budget_together(self):
         """Thinking mode pays for thinking tokens: wider cap, wider budget."""
         timeout, max_tokens = self._run(thinking=True)
 
-        assert max_tokens > 400
-        assert timeout > 15.0
+        assert max_tokens > 1400
+        assert timeout > 37.5
         assert timeout >= max_tokens / 45.0
 
     def test_factory_reads_the_configured_budget(self):
@@ -1094,9 +1101,10 @@ class TestReasoningModelHandling:
             '"reasoning": "hot window follow-up"}'
         )
 
-    def test_truncated_content_without_reasoning_returns_none(self):
-        """Truncated ``content`` with no reasoning text to recover from is
-        still a hard failure (fail-open to the listener's fallback)."""
+    def test_truncated_content_without_reasoning_is_repaired(self):
+        """A cap-truncated ``content`` object keeps the keys that did arrive:
+        the two decisive fields are repaired into a usable judgment, and the
+        missing ones fall back to their defaults instead of losing the turn."""
         result = self._run_judge({
             "message": {
                 "content": (
@@ -1105,11 +1113,16 @@ class TestReasoningModelHandling:
                 ),
             }
         })
-        assert result is None
+        assert result is not None
+        assert result.directed is True
+        assert result.query == "No worries, by the way, I said tomorro"
+        # Never-received keys take their defaults.
+        assert result.stop is False
+        assert result.confidence == "low"
 
-    def test_truncated_content_with_unusable_reasoning_returns_none(self):
-        """Truncated ``content`` plus reasoning without a complete JSON
-        object → unparseable (no partial judgment is fabricated)."""
+    def test_truncated_content_repairs_before_bare_reasoning_is_used(self):
+        """A complete object in the reasoning outranks a repaired one; with
+        neither, the repaired ``content`` still yields a judgment."""
         result = self._run_judge({
             "message": {
                 "content": (
@@ -1119,7 +1132,9 @@ class TestReasoningModelHandling:
                 "reasoning_content": "still thinking, no answer yet",
             }
         })
-        assert result is None
+        assert result is not None
+        assert result.directed is True
+        assert result.query == "No worries, by the way, I said tomorro"
 
     def test_recovery_uses_last_json_object_in_reasoning(self):
         """The reasoning may echo the system prompt's JSON example before
@@ -1164,10 +1179,10 @@ class TestReasoningModelHandling:
         with patch("jarvis.listening.intent_judge.get_llm_backend", return_value=backend):
             judge.judge(segments)
         extra = backend.chat.call_args.kwargs["extra_options"]
-        assert extra["max_tokens"] == 400
+        assert extra["max_tokens"] == 1400
         assert "num_predict" not in extra
-        # The plain budget carries over to the request unchanged.
-        assert backend.chat.call_args.kwargs["timeout_sec"] == 15.0
+        # The plain budget travels with the cap (2.5x the configured 15s).
+        assert backend.chat.call_args.kwargs["timeout_sec"] == 37.5
 
         thinking_judge = IntentJudge(IntentJudgeConfig(thinking=True))
         with patch("jarvis.listening.intent_judge.get_llm_backend", return_value=backend):
@@ -1175,3 +1190,140 @@ class TestReasoningModelHandling:
         thinking_extra = backend.chat.call_args.kwargs["extra_options"]
         assert thinking_extra["max_tokens"] == 1500
         assert backend.chat.call_args.kwargs["timeout_sec"] == 45.0
+
+
+
+class TestReasoningModelDiagnostics:
+    """The failure path must say which of the three causes fired, and a
+    cap-truncated object must still yield a judgment."""
+
+    def test_repair_truncated_json_closes_string_and_braces(self):
+        repaired = _repair_truncated_json(
+            '```json\n{\n  "directed": true,\n  "query": "jak se'
+        )
+        assert json.loads(repaired) == {
+            "directed": True,
+            "query": "jak se",
+        }
+
+    def test_repair_truncated_json_closes_the_last_open_brace(self):
+        repaired = _repair_truncated_json('{"a": {"b": 1}  ')
+        # The outer object is still open, so exactly one "}" is appended and
+        # both objects survive: the nested one is not mistaken for the start.
+        assert repaired.strip() == '{"a": {"b": 1}  }'
+        assert json.loads(repaired) == {"a": {"b": 1}}
+
+    def test_repair_truncated_json_without_braces(self):
+        assert _repair_truncated_json("still thinking, no answer yet") == ""
+
+    def test_reasoning_of_reads_both_wire_shapes(self):
+        assert _reasoning_of({"reasoning_content": "openai shape"}) == "openai shape"
+        assert _reasoning_of({"thinking": "ollama shape"}) == "ollama shape"
+        assert _reasoning_of({"content": "x"}) == ""
+        assert _reasoning_of(None) == ""
+
+    def test_diagnostics_flag_cap_eaten_by_reasoning(self):
+        """The exact LM Studio payload from the reported failure: 400 tokens,
+        397 of them reasoning, empty content, finish_reason=length."""
+        resp = {
+            "choices": [{
+                "message": {"role": "assistant", "content": "", "reasoning_content": "x" * 50},
+                "finish_reason": "length",
+            }],
+            "usage": {
+                "completion_tokens": 400,
+                "prompt_tokens": 2267,
+                "completion_tokens_details": {"reasoning_tokens": 397},
+            },
+            "message": {"content": "", "reasoning_content": "x" * 50},
+        }
+        line = _response_diagnostics(resp, "", "x" * 50, 400)
+        assert "finish_reason=length" in line
+        assert "reasoning_tokens=397" in line
+        assert "completion_tokens=400" in line
+        assert "content_len=0" in line
+        assert "cause=cap_eaten_by_reasoning" in line
+
+    def test_diagnostics_flag_empty_body(self):
+        line = _response_diagnostics({"choices": []}, "", "", 1400)
+        assert "cause=server_returned_no_text" in line
+        assert "cap=1400" in line
+
+    def test_diagnostics_flag_incomplete_json(self):
+        resp = {"message": {"content": '{"directed": true, "query": "jak'}}
+        line = _response_diagnostics(resp, '{"directed": true, "query": "jak', "", 1400)
+        assert "content_braces=1/0" in line
+        assert "cause=structurally_incomplete_json" in line
+
+    def test_diagnostics_line_reaches_the_debug_log(self, capsys):
+        """The debug line carries the summary, not just a bare colon."""
+        judge = IntentJudge()
+        backend = MagicMock()
+        backend.chat.return_value = {
+            "choices": [{
+                "message": {"role": "assistant", "content": "",
+                            "reasoning_content": "still thinking"},
+                "finish_reason": "length",
+            }],
+            "usage": {"completion_tokens": 400,
+                      "completion_tokens_details": {"reasoning_tokens": 399}},
+            # ``_normalise_response`` lifts choices[0].message to top level.
+            "message": {"content": "", "reasoning_content": "still thinking"},
+        }
+        segments = [TranscriptSegment("jak se mas", 1000.0, 1002.0)]
+        with patch("jarvis.listening.intent_judge.get_llm_backend", return_value=backend):
+            assert judge.judge(segments, wake_timestamp=1000.5) is None
+        err = capsys.readouterr().err
+        assert "failed to parse" in err
+        assert "cause=cap_eaten_by_reasoning" in err
+        assert "finish_reason=length" in err
+
+    def test_last_failure_reason_carries_the_diagnostics(self):
+        judge = IntentJudge()
+        backend = MagicMock()
+        backend.chat.return_value = {
+            "message": {"content": "", "reasoning_content": "still thinking"},
+            "choices": [{"message": {"content": ""}, "finish_reason": "length"}],
+        }
+        segments = [TranscriptSegment("jak se mas", 1000.0, 1002.0)]
+        with patch("jarvis.listening.intent_judge.get_llm_backend", return_value=backend):
+            judge.judge(segments, wake_timestamp=1000.5)
+        assert "finish_reason=length" in judge.last_failure_reason
+
+    def test_complete_reasoning_object_outranks_repaired_content(self):
+        """A full object in the reasoning beats a repaired partial content."""
+        judge = IntentJudge()
+        backend = MagicMock()
+        backend.chat.return_value = {
+            "message": {
+                "content": '{"directed": true, "query": "No worries, tomorro',
+                "reasoning_content": (
+                    'thinking… {"directed": true, "query": "No worries, tomorrow '
+                    'what I meant today", "stop": false, "confidence": "high", '
+                    '"reasoning": "hot window"}'
+                ),
+            }
+        }
+        segments = [TranscriptSegment("jarvis what time is it", 1000.0, 1002.0)]
+        with patch("jarvis.listening.intent_judge.get_llm_backend", return_value=backend):
+            result = judge.judge(segments, wake_timestamp=1000.5)
+        assert result is not None
+        assert result.query == "No worries, tomorrow what I meant today"
+        assert result.confidence == "high"
+
+    def test_ollama_style_thinking_field_is_recovered(self):
+        """Ollama names the reasoning field ``thinking``; recover from it too."""
+        judge = IntentJudge()
+        backend = MagicMock()
+        backend.chat.return_value = {
+            "message": {
+                "content": "",
+                "thinking": '{"directed": true, "query": "what time is it", '
+                            '"stop": false, "confidence": "high", "reasoning": "wake"}',
+            }
+        }
+        segments = [TranscriptSegment("jarvis what time is it", 1000.0, 1002.0)]
+        with patch("jarvis.listening.intent_judge.get_llm_backend", return_value=backend):
+            result = judge.judge(segments, wake_timestamp=1000.5)
+        assert result is not None
+        assert result.query == "what time is it"

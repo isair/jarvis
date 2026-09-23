@@ -12,9 +12,11 @@ A two-stage unsolicited-remark pipeline: a lightweight deterministic policy deci
 
 | Mode | Policy | Reply source |
 |------|--------|--------------|
-| `polite` | min gap 900 s (15 min), max 2 unsolicited remarks/hour; only critical events or direct user interaction speak — ordinary inactivity and day-window (breakfast) prompts are not offered | LLM (CHAT tier) |
-| `authentic` (campaign build) | min gap 90 s, max 6 unsolicited remarks per hour; remarks prefer completed actions and natural silence; never mid-utterance (TTS/user speaking or full-screen foreground) | LLM (CHAT tier) |
+| `polite` | base gap 1800 s (30 min) doubled per unanswered remark, max 2 unsolicited remarks/hour; only critical events or direct user interaction speak — ordinary inactivity and day-window (breakfast) prompts are not offered | LLM (CHAT tier) |
+| `authentic` (campaign build) | base gap 180 s doubled per unanswered remark, max 6 unsolicited remarks per hour; remarks prefer completed actions and natural silence; never mid-utterance (TTS/user speaking, open turn, or full-screen foreground) | LLM (CHAT tier) |
 | `demo` | deterministic scripted triggers only (`demo_trigger`/`demo_reset`); `run_periodic_checks` does not fire — repeatable for recording | scripted strings only |
+
+Exponential backoff: the first remark waits `base`, the next `base*2`, then `base*4`, `base*8`, `base*16` (effective gap capped at 3600 s). After the ladder is exhausted with still no user reaction, the service enters **quiet mode** — only `CRITICAL_EVENT_TYPES` speak until any user message or the re-enable directive resets the counters. The effective gap, step count and quiet flag are visible in `stats()["backoff"]` and in each record's `cooldown` (`effective_gap_sec`, `backoff_steps`, `quiet_mode`).
 
 Critical events: `app.error`, `network.disconnected`, `battery.low`, `build.failed`, `system.temperature_high`. Direct-interaction types (allowed in polite alongside critical): `app.startup`, `user.login`, `user.unlock`, `microphone.available`. Completed-action types (preferred remark seams): `tool.completed`, `download.completed`, `build.success`, `build.failed`.
 
@@ -38,7 +40,7 @@ Every stimulus is a dict: `{"type": "<dotted.type>", "timestamp": <epoch or ISO>
 6. Gap: less than `min_gap_sec` since the last remark, or the hour ceiling used up → `gap`.
 7. Reply: demo uses the scripted string for the trigger; polite/authentic run a CHAT-tier call whose user block is `Event <type>: <note>` + a one-line spoken-remark instruction + the last three remarks as variety hints. Empty output → `empty`.
 
-Never interrupt while TTS is speaking: `run_periodic_checks` checks `tts.is_speaking()` and skips non-critical remarks; the same applies inside a full-screen foreground window (calls, presentations, recordings).
+Never interrupt while TTS is speaking: `run_periodic_checks` checks `tts.is_speaking()` plus the optional `busy_check` callable (shared query lock held, listener collection/hot-window open, an open turn context, or a satellite holding its run) and skips non-critical remarks; the same applies inside a full-screen foreground window (calls, presentations, recordings).
 
 ## Direct commands
 

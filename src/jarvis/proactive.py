@@ -133,15 +133,27 @@ DEMO_SCRIPTS: Dict[str, tuple] = {
         "Chyba aplikace. I topinka může být černá, ale naděje ne."),
 }
 
-# Per-mode policy profiles: (min_gap_sec, hour_limit).
+# Per-mode policy profiles: (base_min_gap_sec, hour_limit).
 # polite: reserve behaviour — long gaps, tiny hourly ceiling, critical +
 # direct-interaction events only. authentic: campaign build. demo: no timing
 # waits at all (explicit deterministic triggers only, see DEMO_SCRIPTS).
+#
+# The gap is a BASE: every remark the user leaves unanswered doubles it
+# (exponential backoff, see ``_effective_gap``), so an unattended session goes
+# quiet instead of firing on a fixed cadence.
 _MODE_PROFILES: Dict[str, tuple] = {
-    "polite":   (900.0, 2),      # 15 min, max 2 remarks / hour
-    "authentic": (90.0, 6),      # 90 s, max 6 remarks / hour
+    "polite":   (1800.0, 2),     # 30 min, max 2 remarks / hour
+    "authentic": (180.0, 6),     # 180 s base, max 6 remarks / hour
     "demo":     (0.0, 99),       # deterministic; no timing dependence
 }
+
+#: Backoff ceiling for the exponential gap (2^4 = 16x the base gap) and the
+#: number of unanswered remarks after which the service drops to quiet mode
+#: (critical events only) until the user speaks again.
+_BACKOFF_MAX_STEPS = 4
+_QUIET_AFTER = 4
+#: Hard ceiling of the effective gap, so the backoff never stalls a mode.
+_BACKOFF_CAP_SEC = 3600.0
 
 # Completed-action types preferred for authentic seams + direct interactions
 # (allowed even in polite mode alongside CRITICAL_EVENT_TYPES).
@@ -438,6 +450,10 @@ class ProactiveToasterService:
         self._dedup_stamps: Dict[str, float] = {}
         self._remark_times: List[float] = []
         self._recent_remarks: List[str] = []
+        # Exponential-backoff state: remarks the user never answered. A user
+        # message (or the re-enable directive) resets it and leaves quiet mode.
+        self._consecutive_unanswered = 0
+        self._quiet_mode = False
         self._skip_next = 0  # one-shot pass for "teď ne"-style directives
         # Session mute state (fail-closed, until re-enable or restart):
         #   _full_mute    – "Ticho"/"Buď ticho"/"Přestaň mluvit"
@@ -464,10 +480,21 @@ class ProactiveToasterService:
             self._remark_times.pop(0)
         return len(self._remark_times)
 
+    def _effective_gap(self) -> float:
+        """Base gap doubled once per unanswered remark, capped for sanity."""
+        base = float(self._min_gap_sec or 0.0)
+        if base <= 0.0:
+            return 0.0
+        steps = min(int(self._consecutive_unanswered), _BACKOFF_MAX_STEPS)
+        return min(base * float(2 ** steps), _BACKOFF_CAP_SEC)
+
     def _log(self, event: str, decision: str, reason: str, utterance: Optional[str]) -> None:
         try:
             cooldown: Dict[str, Any] = {
                 "min_gap_sec": self._min_gap_sec,
+                "effective_gap_sec": self._effective_gap(),
+                "backoff_steps": min(int(self._consecutive_unanswered), _BACKOFF_MAX_STEPS),
+                "quiet_mode": bool(self._quiet_mode),
                 "hour_used": self._hour_used(),
                 "hour_limit": self._hour_limit,
             }
@@ -548,6 +575,12 @@ class ProactiveToasterService:
 
             # Session mute state (open-ended until re-enable) --------------
             critical = event_type in CRITICAL_EVENT_TYPES
+            # Quiet mode (backoff exhausted): only critical signals still speak
+            # until the user answers something. Counters stay intact.
+            if self._quiet_mode and not critical:
+                self._suppress("quiet-mode")
+                self._log(event_type, "suppressed", "quiet-mode", None)
+                return None
             if self._full_mute:
                 self._suppress("directive")
                 self._log(event_type, "suppressed", "directive-active", None)
@@ -601,7 +634,8 @@ class ProactiveToasterService:
                 self._log(event_type, "suppressed", "dedup", None)
                 return None
 
-            # Cooldown / hourly ceiling (fail-closed).
+            # Cooldown / hourly ceiling (fail-closed). The gap already carries
+            # the exponential backoff for unanswered remarks.
             try:
                 if not self._gap_ok(now):
                     self._suppress("gap")
@@ -624,6 +658,7 @@ class ProactiveToasterService:
                     self._record_remark(scripted)
                     self._demo_uttered += 1
                     self._spoken += 1
+                    self._consecutive_unanswered += 1
                     self._log(event_type, "spoken", "demo-script", scripted)
                     debug_log(f"proactive demo remark for {event_type}", "proactive")
                     return scripted
@@ -641,6 +676,11 @@ class ProactiveToasterService:
             self._remark_times.append(self._now())
             self._record_remark(reply)
             self._spoken += 1
+            # Back the gap up exponentially while the user stays silent, and
+            # fall to quiet mode once the ladder is exhausted.
+            self._consecutive_unanswered += 1
+            if self._consecutive_unanswered > _BACKOFF_MAX_STEPS:
+                self._quiet_mode = True
             self._log(event_type, "spoken", "llm", reply)
             debug_log(f"proactive remark for {event_type}", "proactive")
             return reply
@@ -651,7 +691,8 @@ class ProactiveToasterService:
     def _gap_ok(self, now: float) -> bool:
         if self._hour_used() >= self._hour_limit:
             return False
-        if self._last_remark_time is not None and now - self._last_remark_time < self._min_gap_sec:
+        gap = self._effective_gap()
+        if self._last_remark_time is not None and now - self._last_remark_time < gap:
             return False
         return True
 
@@ -688,6 +729,10 @@ class ProactiveToasterService:
         if entry is None:
             return False
         kind = entry[0]
+        # Any matched directive is a user reaction: reset the backoff ladder
+        # and leave quiet mode with it.
+        self._consecutive_unanswered = 0
+        self._quiet_mode = False
         if kind == "next":
             self._skip_next = 1
         elif kind == "full":
@@ -703,7 +748,13 @@ class ProactiveToasterService:
         return True
 
     def mark_user_response(self) -> None:
-        """Flag the most recent spoken remark as answered by the user."""
+        """Flag the most recent spoken remark as answered by the user.
+
+        A user reaction also resets the exponential backoff and the quiet
+        mode, so the next remark returns to the base cadence.
+        """
+        self._consecutive_unanswered = 0
+        self._quiet_mode = False
         for record in reversed(self.records):
             if record["decision"] == "spoken":
                 record["responded"] = True
@@ -764,6 +815,12 @@ class ProactiveToasterService:
             "demo_uttered": self._demo_uttered,
             "hour_used": self._hour_used(),
             "directive_active": bool(self._full_mute or self._offers_mute),
+            "backoff": {
+                "base_gap_sec": float(self._min_gap_sec),
+                "effective_gap_sec": self._effective_gap(),
+                "unanswered": int(self._consecutive_unanswered),
+                "quiet_mode": bool(self._quiet_mode),
+            },
             "suppression": {
                 "full_mute": self._full_mute,
                 "offers_mute": self._offers_mute,
@@ -825,7 +882,9 @@ def emit_remark(
     """Print and speak one remark (emoji-led line per the output style).
 
     Also mirrors the reason label (e.g. ``CPU temperature``) into the face
-    widget so the UI can state why it just spoke.
+    widget so the UI can state why it just spoke. The very same text is handed to
+    every idle Voice PE satellite as a published WAV, so a remark is audible in
+    both places; a satellite with an open run keeps its own reply.
     """
     if not remark:
         return
@@ -835,6 +894,17 @@ def emit_remark(
     try:
         if tts is not None and getattr(tts, "enabled", False) and hasattr(tts, "speak"):
             tts.speak(remark)
+    except Exception:
+        pass
+    try:
+        from jarvis.integrations import voice_pe as _voice_pe
+
+        mirrored = _voice_pe.mirror_local(str(remark))
+        if mirrored:
+            debug_log(
+                f"component=proactive event=remark_mirrored devices={mirrored}",
+                "voice",
+            )
     except Exception:
         pass
 
@@ -953,19 +1023,30 @@ def run_periodic_checks(
     dialogue_memory: Any = None,
     llm_base_url: str = "",
     tts: Any = None,
+    busy_check: Optional[Callable[[], bool]] = None,
 ) -> List[str]:
     """Sample the environment once and feed every triggered stimulus in.
 
     Returns the non-empty remarks produced. All probes fail soft: a missing
     sensor or dead network leaves its event out of this tick. The active
     TTS/utterance is respected through ``tts.is_speaking()`` (never talk
-    over an in-flight utterance).
+    over an in-flight utterance). ``busy_check`` adds the listener-side
+    signals the TTS flag alone misses: an open turn (Whisper processed,
+    keyword detected, LLM preparing, TTS queued) also suppresses non-critical
+    remarks for this sweep.
     """
     remarks: List[str] = []
     now_epoch = time.time()
 
     def _speaking() -> bool:
-        return _tts_is_speaking(tts)
+        if _tts_is_speaking(tts):
+            return True
+        if busy_check is not None:
+            try:
+                return bool(busy_check())
+            except Exception:
+                return False
+        return False
 
     def _emit(event: Dict[str, Any], reason_label: Optional[str] = None) -> None:
         try:

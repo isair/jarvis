@@ -24,6 +24,7 @@
   <PropertyGroup Condition="'$(Configuration)'=='Release'" Label="Configuration">
     <PlatformToolset>v143</PlatformToolset>
     <TargetName>ToustovacVirtualMic</TargetName>
+    <TargetExt>.sys</TargetExt>
     <GenerateManifest>false</GenerateManifest>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)'=='Debug'" Label="Configuration">
@@ -37,10 +38,16 @@
       <WarningLevel>Level4</WarningLevel>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <Optimization>MaxSpeed</Optimization>
-      <AdditionalIncludeDirectories>$(KitsRoot10)Include\10.0.26100.0\shared;$(KitsRoot10)Include\10.0.26100.0\um;$(KitsRoot10)Include\10.0.26100.0\ucrt;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>_AMD64_;NTDDI_VERSION=0x0A000003;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(WindowsSdkDir)Include\10.0.26100.0\km;$(WindowsSdkDir)Include\10.0.26100.0\shared;$(WindowsSdkDir)Include\10.0.26100.0\um;$(WindowsSdkDir)Include\10.0.26100.0\ucrt;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>_AMD64_;_KERNEL_MODE;NTDDI_VERSION=0x0A00000C;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
+      <SubSystem>Native</SubSystem>
+      <TargetExt>.sys</TargetExt>
+      <EntryPointSymbol>DriverEntry</EntryPointSymbol>
+      <AdditionalDependencies>ntoskrnl.lib;hal.lib;bufferoverflowfastfailk.lib;portcls.lib;ks.lib;ksguid.lib;ntstrsafe.lib;wdmsec.lib;stdunk.lib;libcntpr.lib;libcpmt.lib;libcmt.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <IgnoreAllDefaultLibraries>true</IgnoreAllDefaultLibraries>
+      <AdditionalLibraryDirectories>$(WindowsSdkDir)Lib\10.0.26100.0\km\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalOptions>/INTEGRITYCHECK /OPT:NOLBR %(AdditionalOptions)</AdditionalOptions>
     </Link>
   </ItemDefinitionGroup>
@@ -62,6 +69,7 @@
     <OutDir>Toustova.5E9AEB52\x64\$(Configuration)\</OutDir>
     <IntDir>Toustova.5E9AEB52\x64\$(Configuration)\</IntDir>
     <TargetName>ToustovacVirtualMic</TargetName>
+    <TargetExt>.sys</TargetExt>
   </PropertyGroup>
   <ItemDefinitionGroup />
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

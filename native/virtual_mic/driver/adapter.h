@@ -8,18 +8,19 @@ Abstract:
 
     Adapter for the Toustovač Clean Microphone: topology + WaveRT capture
     miniports, following Microsoft SysVAD (Windows-driver-samples,
-    audio/sysvad, commit 3c3fb49073c047c4cc8e6c203c6331f62b426507).
+    audio/sysvad). Modern PortCls: the adapter is an IAdapterPnpManagement
+    registered via PcRegisterAdapterPnpManagement; the miniports are created
+    in StartDevice and registered with PcRegisterSubdevice.
 
 --*/
 
 #pragma once
 
-#include <windows.h>
+#include <ntddk.h>
 #include <portcls.h>
 #include <ks.h>
 #include <ksmedia.h>
 #include <ntstrsafe.h>
-
 #include "minip.h"
 
 // Product-owned identifiers. Generated once, committed; never SysVAD's.
@@ -28,59 +29,33 @@ Abstract:
 // Endpoint / mic (IMMDevice):
 //   {B72E94C4-1D3F-5A86-BC0A-9D7421E3F2B0}
 
-class CAdapter : public IWaveAdapterDevice
+#define MAX_MINIPORTS 2
+
+class CAdapter : public IAdapterPnpManagement
 {
 public:
-    static NTSTATUS Create(_Inout_ PNPAUDIO_DEVICE_CONTEXT DevCtx,
-                           _In_ PADAPTER_PROTOCOL_SET ProtoSet);
+    CAdapter();
+    static NTSTATUS Create(_Inout_ PDEVICE_OBJECT DeviceObject,
+                           _Outptr_ IAdapterPnpManagement **PPAdapter);
 
     ~CAdapter();
 
-    /* IWaveAdapterDevice */
-    NTSTATUS
-    GetMiniports
-    (
-        _Outptr_ PMINIPORT_ARRAY* Miniports,
-        _Out_ PULONG NbPorts
-    );
+    /* IUnknown */
+    NTSTATUS QueryInterface(_In_ REFGUID Guid, _Outptr_ PVOID *Object);
+    ULONG AddRef();
+    ULONG Release();
 
-    /* IPinDriverProperty */
-    NTSTATUS
-    GetProperty
-    (
-        _In_  PNGUID  pPropertySet,
-        _In_  ULONG   nPropId,
-        _In_  ULONG   nPropLen,
-        _Out_writes_bytes_to_opt_(nPropLen, *PNPropLen) PVOID pProp,
-        _Out_opt_ PULONG PNPropLen
-    );
-
-    NTSTATUS
-    GetPropertyRange
-    (
-        _In_  PNGUID  pPropertySet,
-        _In_  ULONG   nPropId,
-        _Out_ PLONG   nMin,
-        _Out_ PLONG   nMax,
-        _Out_ PMPI32  pStep
-    );
+    /* IAdapterPnpManagement */
+    PC_REBALANCE_TYPE GetSupportedRebalanceType();
+    VOID PnpQueryStop();
+    VOID PnpCancelStop();
+    VOID PnpStop();
 
 private:
-    NTSTATUS
-    Init
-    (
-        _In_ PNPAUDIO_DEVICE_CONTEXT Device,
-        _In_ PADAPTER_PROTOCOL_SET ProtoSet
-    );
+    NTSTATUS Init(_Inout_ PDEVICE_OBJECT DeviceObject);
 
-    LONG                    m_RefCount;
-    PNPAUDIO_DEVICE_CONTEXT m_Device;         // the dev object itself
-    ULONG                   m_nDevices;       // 2 for the adapter itself
-    PMINIPORT_ARRAY         m_Miniports;      // one wave + one topo port
-    ULONG                   m_NbMiniports;
-    PPCRANGES_INFORMATION   m_pRangesInfo;
-    ULONG                   m_MinipNameSize;
-    PMINIPORT_DESCRIPTOR    m_pMinipDescriptors; // adapter topo descriptor
+    LONG           m_RefCount;
+    PDEVICE_OBJECT m_Device;
 };
 
 // ---------------------------------------------------------------------------
@@ -90,9 +65,7 @@ private:
 NTSTATUS
 AdapterInitialization
 (
-    _Inout_ PDEVICE_OBJECT DeviceObject,
-    _Inout_ PADAPTER_PROTOCOL_SET ProtoSet,
-    _Inout_ PADAPTER_INIT_TABLE InitTable
+    _Inout_ PDEVICE_OBJECT DeviceObject
 );
 
 VOID

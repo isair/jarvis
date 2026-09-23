@@ -1,0 +1,21 @@
+{
+  "engine_generation": 1,
+  "lane_id": 1,
+  "source_type": 0,
+  "device_id": "",
+  "connection_generation": 0,
+  "session_generation": 0,
+  "capture_endpoint": {"id": "{0.0.1.00000000}.{43650f4d-ee8a-4cd2-8190-ab1e1e209222}", "name": "Headset Microphone (Plantronics Blackwire 3220 Series)", "rate_hz": 48000, "channels": 2, "format": 0},
+  "render_endpoint": {"id": "{0.0.0.00000000}.{dc0bd3f9-edfc-437a-8355-2701a8828408}", "name": "SAMSUNG -2 (HD Audio Driver for Display Audio)", "rate_hz": 48000, "channels": 2, "format": 0},
+  "reference_tap": 2, "reference_active": 0,
+  "frame_count": 23, "frame_samples": 480,
+  "capture_start_s": 0.000000, "capture_stride_s": 0.01,
+  "aec_state": 1, "estimated_delay_ms": -999.000, "delay_confidence": 0.000,
+  "erle_db": -999.000, "erl_db": -999.000, "residual_echo_likelihood": 0.000,
+  "drift_ppm": {"satellite": 0.000},
+  "resampler_ratio": 0.999897087,
+  "queue": {"jitter_depth_ms": 0.000, "capture_queue_ms": 0.000, "reference_window_ms": 5120.000},
+  "counters": {"overruns": 0, "underruns": 12, "dropped": 0, "duplicates": 0, "discontinuities": 1, "reconvergences": 1, "limiter_hits": 0},
+  "latency_ms": {"p50": 0.032, "p95": 0.333, "max": 0.349},
+  "wav_sha256": "1eacb5de2d9b48f25a474a5993c5de263c298f7e0a9f76c6e99ce99ffd70ed13"
+}

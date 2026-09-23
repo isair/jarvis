@@ -2402,11 +2402,14 @@ class JarvisSystemTray:
         self.chat_window._control_fn = getattr(self, "_chat_control_fn", None)
         self.chat_window.set_daemon_status(status)
 
-    def _connect_dictation_history(self, retries_left: int = 3) -> None:
+    def _connect_dictation_history(self, retries_left: int = 24) -> None:
         """Wire dictation engine's result callback to the history window signal.
 
         Called once after daemon startup so live entries appear immediately.
         Retries up to *retries_left* times (5 s apart) if the engine isn't ready.
+        The daemon publishes the engine only after the MCP discovery and the
+        Whisper load, which together exceed a minute on cold starts, so the
+        budget covers roughly two minutes of polling.
         """
         try:
             from jarvis.daemon import get_dictation_engine

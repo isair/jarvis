@@ -518,7 +518,9 @@ class Settings:
     #: Off by default; a campaign config turns it on.
     satellite_stt_auto_gain: bool
     # Language selector for the ASR stage. A three-letter code is handed to
-    # Whisper as the forced language; "auto" keeps auto-detection.
+    # Whisper as the forced language; "cs+vi" resolves each utterance as the
+    # Czech/Vietnamese closed set (two forced decodes, best avg_logprob
+    # wins); the legacy "auto" keeps the decoder's own per-clip detection.
     whisper_language: str
     # Offline Hunspell post-processing of the FINAL Whisper transcript only
     # (see src/jarvis/listening/listening.spec.md).
@@ -719,6 +721,18 @@ class Settings:
     # Local model cache root for Whisper weights (e.g. D:\_MODELS on the
     # preflight host; empty = HF default cache).
     whisper_cache_dir: str = ""
+
+    # ── Latency switches ────────────────────────────────────────────────
+    #: Master switch for the low-latency "direct instruct" voice path.
+    #: True  = per turn: deterministic tool route (LLM only as fallback for
+    #:         keyword scoring), no planner pass; independent preparation
+    #:         steps run in parallel. False = full router → planner →
+    #:         extractor pipeline (advisory plan for small models).
+    direct_instruct_mode: bool = True
+    #: Toggle for the LLM intent-judge pass (wake-word / hot-window
+    #: classification). False = wake detection falls back to the plain
+    #: wake-word / echo heuristics without an extra LLM round-trip.
+    intent_judge_enabled: bool = True
 
 
 
@@ -1120,8 +1134,11 @@ def get_default_config() -> Dict[str, Any]:
 
         # Proactive interruption service (see src/jarvis/proactive.spec.md)
         "proactive_mode": "authentic",  # "polite" | "authentic" | "demo"
-        "proactive_min_gap_sec": None,  # None = per-mode default (2 / 90 / 0 s)
-        "proactive_hour_limit": None,   # None = per-mode default (20 / 6 / 99)
+        # Gap is a BASE: it doubles per unanswered remark (exponential backoff,
+        # capped), then the service drops to critical-only remarks until the
+        # user speaks again.
+        "proactive_min_gap_sec": None,  # None = per-mode base (1800 / 180 / 0 s)
+        "proactive_hour_limit": None,   # None = per-mode default (2 / 6 / 99)
 
 
         # Whisper Speech Recognition
@@ -1148,8 +1165,9 @@ def get_default_config() -> Dict[str, Any]:
         "whisper_min_word_length": 1,
         # The preprocessor is opt-in: the campaign config sets it to true.
         "satellite_stt_auto_gain": False,
-        # Selector values: "auto" plus the four supported ISO-639-1 codes.
-        "whisper_language": "auto",
+        # Selector values: "cs+vi" closed set, the four ISO-639-1 codes,
+        # and the legacy "auto" single-pass. Default is the closed pair.
+        "whisper_language": "cs+vi",
         "speech_spellcheck_enabled": True,
         "speech_spellcheck_languages": ["en", "cs", "vi", "sk"],
         "speech_spellcheck_protected_terms": [],
@@ -1230,6 +1248,14 @@ def get_default_config() -> Dict[str, Any]:
         # Stop Commands
         "stop_commands": ["stop", "quiet", "shush", "silence", "enough", "shut up", "konec"],
         "stop_command_fuzzy_ratio": 0.8,
+
+        # Latency switches
+        # Direct-instruct path: keyword/deterministic tool route, no planner
+        # pass, independent turn-prep steps in parallel.
+        "direct_instruct_mode": True,
+        # Set false to skip the intent-judge LLM call and use plain wake /
+        # hot-window heuristics (lowest latency, slightly cruder gating).
+        "intent_judge_enabled": True,
 
         # Location Services
         "location_enabled": True,
@@ -1576,6 +1602,10 @@ def load_settings() -> Settings:
     dictation_custom_dictionary = list(raw_dict) if isinstance(raw_dict, list) else []
     mcps = _ensure_dict(merged.get("mcps"))
 
+    # Latency switches (defaults mirror get_default_config exactly).
+    direct_instruct_mode = bool(merged.get("direct_instruct_mode", True))
+    intent_judge_enabled = bool(merged.get("intent_judge_enabled", True))
+
     # Voice PE (see src/jarvis/integrations/voice_pe/voice_pe.spec.md). The
     # numeric ceilings keep the transport inside the stock ring-buffer and
     # reconnect-backoff windows even when a hand-edited config drifts.
@@ -1772,10 +1802,12 @@ def load_settings() -> Settings:
     whisper_min_word_length = int(merged.get("whisper_min_word_length", 1))
     satellite_stt_auto_gain = bool(merged.get("satellite_stt_auto_gain", False))
     # Language selector. A supported code is handed to Whisper as the forced
-    # language; every other value (including "auto") keeps auto-detection.
-    whisper_language = str(merged.get("whisper_language", "auto") or "auto").strip().lower()
-    if whisper_language not in ("en", "cs", "vi", "sk"):
-        whisper_language = "auto"
+    # language; "cs+vi" resolves every utterance as the Czech/Vietnamese
+    # closed set. Every other value (including the legacy "auto") folds
+    # into "cs+vi".
+    whisper_language = str(merged.get("whisper_language", "cs+vi") or "cs+vi").strip().lower()
+    if whisper_language not in ("en", "cs", "vi", "sk", "cs+vi"):
+        whisper_language = "cs+vi"
     speech_spellcheck_enabled = bool(merged.get("speech_spellcheck_enabled", True))
     speech_spellcheck_languages = [
         code.casefold()
@@ -1996,4 +2028,8 @@ def load_settings() -> Settings:
         proactive_mode=proactive_mode,
         proactive_min_gap_sec=proactive_min_gap_sec,
         proactive_hour_limit=proactive_hour_limit,
+
+        # Latency switches
+        direct_instruct_mode=direct_instruct_mode,
+        intent_judge_enabled=intent_judge_enabled,
     )

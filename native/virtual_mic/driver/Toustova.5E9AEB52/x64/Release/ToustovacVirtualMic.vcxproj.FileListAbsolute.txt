@@ -1,0 +1,1 @@
+D:\_SATIN_AI\Toastovac\jarvis\native\virtual_mic\driver\Toustova.5E9AEB52\x64\Release\ToustovacVirtualMic.sys

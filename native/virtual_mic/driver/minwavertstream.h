@@ -1,9 +1,10 @@
 /*--
     minwavertstream.h - WaveRT stream for the single 48 kHz capture pin.
 
-    Follows the sysvad pattern: the stream object holds
-    the DMA range, the DPC notification bookkeeping and the frame position;
-    it pulls cleaned PCM from the CPCMRing shared with the control device.
+    Follows the modern sysvad pattern: the stream implements
+    IMiniportWaveRTStreamNotification (the DPC-notification variant). It
+    holds the DMA range, the notification event and the frame position; it
+    pulls cleaned PCM from the CPCMRing shared with the control device.
 --*/
 
 #pragma once
@@ -12,109 +13,73 @@
 #include <ks.h>
 #include "pcm_ring.h"
 
-typedef struct _DMABuffer
-{
-    PVOID               VirtualAddress;
-    ULONG               PhysicalAddressLower32Bit;
-    ULONGLONG           PhysicalAddress;
-    ULONG               nContiguousRange;
-    ULONG               nDescriptorRange;
-    // The contiguous scatter/gather list for the cyclic DMA buffer.
-    PHYSICAL_ADDRESS    PhysicalAddressList[1];
-} DMABuffer;
+class CMiniportWaveRT;
+typedef CMiniportWaveRT *PCMiniportWaveRT;
 
-class CMiniportWaveRTStream : public IMiniportWaveRTStream
+class CMiniportWaveRTStream : public IMiniportWaveRTStreamNotification
 {
 public:
     static NTSTATUS Create(
-        PCMiniportWaveRT                WaveRt,
+        PCMiniportWaveRT                 WaveRt,
         CPCMRing*                        pRing,
-        _In_   PIN_DESCRIPTOR            *PinDescriptor,
+        _In_   PPORTWAVERTSTREAM         PortStream,
         _Outptr_ CMiniportWaveRTStream** ppStream);
 
     // IUnknown
+    virtual NTSTATUS QueryInterface(_In_ REFGUID Guid, _Outptr_ PVOID *Object);
     virtual ULONG AddRef();
     virtual ULONG Release();
 
+    // IMiniport
+    virtual NTSTATUS Init(_In_ PUNKNOWN UnknownAdapter,
+                          _In_ PRESOURCELIST ResourceList,
+                          _In_ PPORT Port);
+
     // IMiniportWaveRTStream
-    virtual NTSTATUS
-    GetSizeSerialized (
-        _Out_ PULONG          pnSamplesPerFrame
-    );
+    virtual NTSTATUS SetFormat(_In_ PKSDATAFORMAT DataFormat);
+    virtual NTSTATUS SetState(_In_ KSSTATE State);
+    virtual NTSTATUS GetPosition(_Out_ PKSAUDIO_POSITION Position);
+    virtual NTSTATUS AllocateAudioBuffer(
+        _In_  ULONG RequestedSize,
+        _Out_ PMDL *AudioBufferMdl,
+        _Out_ ULONG *ActualSize,
+        _Out_ ULONG *OffsetFromFirstPage,
+        _Out_ MEMORY_CACHING_TYPE *CacheType);
+    virtual VOID FreeAudioBuffer(_In_opt_ PMDL AudioBufferMdl,
+                                 _In_ ULONG BufferSize);
+    virtual VOID GetHWLatency(_Out_ KSRTAUDIO_HWLATENCY *hwLatency);
+    virtual NTSTATUS GetPositionRegister(_Out_ KSRTAUDIO_HWREGISTER *Register);
+    virtual NTSTATUS GetClockRegister(_Out_ KSRTAUDIO_HWREGISTER *Register);
 
-    virtual NTSTATUS
-    SetFormat (
-        _In_  PKSMULTIPLE_ITEM    pMultipleItem
-    );
-
-    virtual NTSTATUS
-    GetPositions (
-        _Out_     LONGLONG *            pnFramePos,
-        _Out_     LONGLONG *            pnQPC
-    );
-
-    virtual NTSTATUS
-    GetClockRate (
-        _Out_     PULONG                pFreqHz
-    );
-
-    virtual NTSTATUS
-    SetNotification (
-        _In_      PVOID                pvCompletionContext,
-        _In_      PFN_WAVERT_PROCESS   Process
-    );
-
-    virtual NTSTATUS
-    SetBase (
-        _In_      ULONG                nStreamId,
-        _In_      ULONG                nBase
-    );
-
-    virtual NTSTATUS
-    GetFormat (
-        _In_      ULONG                nFormatIndex,
-        _Out_     PULONG               pnFormatSize,
-        _Out_writes_bytes_(*pnFormatSize) PVOID pFormat
-    );
-
-    virtual NTSTATUS
-    AllocateBufferAndSetFormatting (
-        _In_      PVOID                pPhysicalDeviceObject,
-        _In_      ULONG                nStreamId,
-        _In_      PMINIPORT_PROPERTY   pMinipProperty,
-        _In_      PKSMULTIPLE_ITEM     pMultipleItem,
-        _In_      ULONG                nBufferSize,
-        _In_      PMINIPORT_PROPERTY   pPinProperty,
-        _In_      PCMPARTIALRESOURCE_DESCRIPTOR pPartialResourceDescriptor,
-        _In_      ULONG                nHeaderSize,
-        _In_reads_bytes_opt_(nHeaderSize) PVOID  pHeader,
-        _In_      ULONG                nAudioHeaderSize,
-        _In_reads_bytes_opt_(nAudioHeaderSize) PVOID pAudioHeader
-    );
-
-    NTSTATUS
-    Init (
-        _In_  PCMiniportWaveRT        WaveRt,
-        _In_  PPIN_DESCRIPTOR         pPinDescriptor
-    );
+    // IMiniportWaveRTStreamNotification
+    virtual NTSTATUS AllocateBufferWithNotification(
+        _In_  ULONG NotificationCount,
+        _In_  ULONG RequestedSize,
+        _Out_ PMDL *AudioBufferMdl,
+        _Out_ ULONG *ActualSize,
+        _Out_ ULONG *OffsetFromFirstPage,
+        _Out_ MEMORY_CACHING_TYPE *CacheType);
+    virtual VOID FreeBufferWithNotification(_In_ PMDL AudioBufferMdl,
+                                            _In_ ULONG BufferSize);
+    virtual NTSTATUS RegisterNotificationEvent(_In_ PKEVENT NotificationEvent);
+    virtual NTSTATUS UnregisterNotificationEvent(_In_ PKEVENT NotificationEvent);
 
     VOID Process(_In_ BOOLEAN fFlushPending);
-
-    LONG GetProcessed() const;
+    LONG GetProcessed() const { return m_nProcessed; }
 
 protected:
     CMiniportWaveRTStream() :
         m_RefCount(1),
         m_nStreamID(0),
         m_pPhysicalDevice(NULL),
-        m_pPinDescriptor(NULL),
-        m_nSamplesPerFrame(0),
+        m_pPortStream(NULL),
+        m_pBufferMdl(NULL),
+        m_nBufferSize(0),
+        m_nSamplesPerFrame(480),
         m_nChannels(1),
         m_nMaxNumberOfFrames(0),
-        m_nBufferSize(0),
         m_pRing(NULL),
         m_pNotification(NULL),
-        m_pvCompletionContext(NULL),
         m_FirstProcessing(TRUE),
         m_nNextBufferTime(0),
         m_nProcessed(0)
@@ -125,20 +90,18 @@ protected:
     LONG                            m_RefCount;
     ULONG                           m_nStreamID;
     PVOID                           m_pPhysicalDevice;
-    PPIN_DESCRIPTOR                 m_pPinDescriptor;
+    PPORTWAVERTSTREAM               m_pPortStream;
+    PMDL                            m_pBufferMdl;
+    ULONG                           m_nBufferSize;          // bytes
     WORD                            m_nSamplesPerFrame;
     WORD                            m_nChannels;
     ULONG                           m_nMaxNumberOfFrames;
-    ULONG                           m_nBufferSize;          // bytes
     CPCMRing*                       m_pRing;
-    PFN_WAVERT_PROCESS              m_pNotification;
-    PVOID                           m_pvCompletionContext;
+    PKEVENT                         m_pNotification;
     BOOLEAN                         m_FirstProcessing;
     LONGLONG                        m_nNextBufferTime;      // 100 ns units
     volatile LONG                   m_nProcessed;           // frames delivered
-    // Int16 staging copy of the PCM block for the DPC.
-    INT16                           m_u64Samples;           // == 480*2
-    INT16                           m_Samples[480*2];
+    INT16                           m_Samples[480*2];       // DPC staging
 };
 
 typedef CMiniportWaveRTStream *PCMiniportWaveRTStream;

@@ -1130,6 +1130,7 @@ class OpenAICompatiblePage(QWizardPage):
         preset_label.setStyleSheet("font-size: 13px; font-weight: bold;")
         form.addWidget(preset_label)
         self._preset_combo = QComboBox()
+        self._preset_combo.setMinimumHeight(36)
         self._preset_combo.addItem("Select your app (optional)…")
         for label, _url in self._KNOWN_SERVERS:
             self._preset_combo.addItem(label)
@@ -1175,6 +1176,7 @@ class OpenAICompatiblePage(QWizardPage):
         self._fast_label.setStyleSheet("font-size: 13px; font-weight: bold;")
         form.addWidget(self._fast_label)
         self._fast_model_combo = QComboBox()
+        self._fast_model_combo.setMinimumHeight(36)
         self._fast_model_combo.setEditable(True)
         self._fast_model_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._fast_model_combo.lineEdit().setPlaceholderText(
@@ -1192,23 +1194,11 @@ class OpenAICompatiblePage(QWizardPage):
         self._use_ollama_embed.setVisible(False)
         # NPU retrieval auto-fill (native OpenVINO, :8010; infra/openvino-npu):
         # the embedding pair is already local — no downloads needed.
-        self._npu_info = self._probe_npu()
-        if self._npu_info:
-            self._embed_model_combo.setCurrentText(self._npu_info.get("model") or self._NPU_MODEL)
         self._use_ollama_embed.toggled.connect(lambda *_: self.completeChanged.emit())
         form.addWidget(self._use_ollama_embed)
-        npu = self._npu_info or {}
-        if npu:
-            model = npu.get("model") or self._NPU_MODEL
-            npu_label = QLabel(
-                f"✅ NPU retrieval detected — embeddings pre-filled: "
-                f"{model} @ {self._NPU_BASE_URL} (Qwen3 reranker on NPU)")
-            npu_label.setObjectName("subtitle")
-            npu_label.setWordWrap(True)
-            form.addWidget(npu_label)
         # NPU retrieval (OpenVINO native, port 8010): when up, pre-fill the
         # embedding pair in one click (installer auto-fill). See
-        # infra/openvino-npu + ops/services.
+        # infra/openvino-npu + ops/services. Probed once, one banner.
         npu = self._probe_npu()
         if npu:
             self._embed_base_url = self._NPU_BASE_URL
@@ -1246,6 +1236,9 @@ class OpenAICompatiblePage(QWizardPage):
         label.setStyleSheet("font-size: 13px; font-weight: bold;")
         form.addWidget(label)
         field = QLineEdit()
+        # Uniform, comfortable height: with only the shared QSS padding these
+        # fields render ~20 px tall, which clips the placeholder text.
+        field.setMinimumHeight(36)
         field.setPlaceholderText(placeholder)
         if password:
             field.setEchoMode(QLineEdit.EchoMode.Password)
@@ -1260,6 +1253,7 @@ class OpenAICompatiblePage(QWizardPage):
         label.setStyleSheet("font-size: 13px; font-weight: bold;")
         form.addWidget(label)
         combo = QComboBox()
+        combo.setMinimumHeight(36)
         combo.setEditable(True)  # power users can type a model the listing omits
         combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         combo.lineEdit().setPlaceholderText(placeholder)

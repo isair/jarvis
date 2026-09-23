@@ -139,10 +139,18 @@ def _run_loop(coro, device=None):
     try:
         return loop.run_until_complete(coro() if callable(coro) else coro)
     finally:
-        # The pump task outlives a single call, so cancel it before closing to
-        # keep the "Task was destroyed but it is pending" notes out of the log.
-        for task in asyncio.all_tasks(loop):
+        # The pump task outlives a single call. Cancelling alone is not enough:
+        # the loop closes while the task is still ``cancelling``, which prints
+        # "Task was destroyed but it is pending". Draining the cancelled tasks
+        # to a terminal state keeps those notes out of the log.
+        pending = [t for t in asyncio.all_tasks(loop)]
+        for task in pending:
             task.cancel()
+        if pending:
+            try:
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            except Exception:
+                pass
         loop.close()
 
 
@@ -431,6 +439,52 @@ class TestAudioIngress:
 
         size = asyncio.new_event_loop().run_until_complete(_pump_once())
         assert size == 1
+
+    def test_pump_accepts_numpy_frames_from_the_native_lane(self):
+        """The cleaned lane hands over float32 arrays, not bytes.
+
+        ``pump`` must size those frames without a truthiness test, which is
+        ambiguous for an array and otherwise kills the consumer task.
+        """
+        import numpy as np
+
+        from jarvis.integrations.voice_pe.models import LOCAL_STREAM, SatelliteAudioFrame
+
+        listener = FakeListener()
+        metrics = {}
+        ingress = AudioIngress(listener, _config(), metrics)
+        ingress._items.append(
+            SatelliteAudioFrame(
+                LOCAL_STREAM, "voice_pe", np.zeros(160, dtype=np.float32), 0
+            )
+        )
+
+        async def _pump_once():
+            task = asyncio.ensure_future(ingress.pump())
+            await asyncio.sleep(0.02)
+            delivered = listener._audio_q.qsize()
+            task.cancel()
+            return delivered, task
+
+        delivered, task = asyncio.new_event_loop().run_until_complete(_pump_once())
+        assert delivered == 1
+        assert task.cancelled()
+        assert metrics.get("audio_dropped_chunks", 0) == 0
+
+    def test_drain_accepts_numpy_frames(self):
+        import numpy as np
+
+        from jarvis.integrations.voice_pe.models import LOCAL_STREAM, SatelliteAudioFrame
+
+        listener = FakeListener()
+        ingress = AudioIngress(listener, _config(), {})
+        ingress._items.append(
+            SatelliteAudioFrame(
+                LOCAL_STREAM, "voice_pe", np.zeros(160, dtype=np.float32), 0
+            )
+        )
+        assert ingress.drain() == 1
+        assert listener._audio_q.qsize() == 1
 
     def test_channel_one_is_used_when_preferred(self):
         metrics = {}
@@ -965,10 +1019,13 @@ class TestDeviceSession:
         health = device.health_snapshot()
         for key in (
             "connected", "authenticated", "device", "api_version", "voice_features",
-            "audio_queue_ms", "session_state", "wake_words_disabled", "last_event_at",
+            "pcm_egress", "audio_queue_ms", "session_state", "wake_words_disabled",
+            "last_event_at",
         ):
             assert key in health
         assert health["wake_words_disabled"] is True
+        # The reported egress is the one the reply path actually takes.
+        assert health["pcm_egress"] == device.egress_mode()
 
     def test_auth_failure_keeps_the_stored_key(self):
         device = self._api_device()
@@ -1036,6 +1093,54 @@ class TestEgressBranches:
         # ``TTS_END`` is the single egress of this flag set: the satellite fetches
         # and plays the WAV itself, so no second media command may follow.
         assert client.media == []
+
+    def test_egress_mode_names_the_branch_in_force(self):
+        speaker = _device(
+            FakeClient(),
+            build_snapshot(
+                SimpleNamespace(
+                    voice_assistant_feature_flags=(
+                        FEATURE_VOICE_ASSISTANT | FEATURE_SPEAKER | FEATURE_API_AUDIO
+                    )
+                ),
+                [],
+            ),
+        )
+        wav_only = _no_speaker_device(FakeClient())
+        bare = _device(FakeClient())
+        # 1 = raw PCM over the Native API, 0 = the LAN WAV the satellite fetches.
+        assert speaker.egress_mode() == 1
+        assert wav_only.egress_mode() == 0
+        assert bare.egress_mode() == 0
+        # The health snapshot carries the same number the reply path used.
+        assert speaker.health_snapshot()["pcm_egress"] == 1
+        assert wav_only.health_snapshot()["pcm_egress"] == 0
+
+    def test_ui_view_carries_the_delivery_trail(self, monkeypatch):
+        client = FakeClient()
+        device = _no_speaker_device(client)
+        monkeypatch.setattr(
+            "jarvis.integrations.voice_pe.tts_stream.synthesize_pcm",
+            lambda engine, text: b"\x01\x02" * 8,
+        )
+
+        async def _run():
+            await device.handle_pipeline_start("", 0, SimpleNamespace(), None)
+            await device._on_reply_async("Four two one.")
+            for _ in range(3):
+                await asyncio.sleep(0.02)
+            view = device.ui_view()
+            if device._http is not None:
+                await device._http.stop()
+            return view
+
+        view = _run_loop(_run, device)
+        delivery = view["delivery"]
+        assert delivery["key"] == f"{device.connection_generation}-1"
+        assert delivery["stored_bytes"] > 44  # a WAV container, not bare PCM
+        assert delivery["port"] > 0
+        assert delivery["hits"] == 0  # nothing fetched inside this call
+        assert view["connection"]["pcm_egress"] == 0
 
     def test_url_served_by_the_transport_is_fetchable(self, monkeypatch):
         client = FakeClient()
@@ -1484,6 +1589,87 @@ class TestLeaseAndBridges:
         # Only the two start events of the run: neither untitled nor stale
         # terminal milestone was re-stamped with the lease in force.
         assert events == [1, 3]
+
+    def test_contextless_local_reply_mirrors_onto_idle_satellites(self, monkeypatch):
+        from jarvis.integrations.voice_pe.tts_stream import pcm_from_wav
+
+        owner = _no_speaker_device(_AnnounceClient())
+        idle = _no_speaker_device(_AnnounceClient())
+        fan = _Fanout([owner, idle])
+        monkeypatch.setattr(
+            "jarvis.integrations.voice_pe.tts_stream.synthesize_pcm",
+            lambda engine, text: b"\x01\x02" * 8,
+        )
+
+        async def _run():
+            loop = asyncio.get_running_loop()
+            owner.loop = loop
+            idle.loop = loop
+            await owner.handle_pipeline_start("c", 0, SimpleNamespace(), None)
+            # The owner's run is open: only the *other* idle satellite is a
+            # mirror target, and the mirror carries a fetchable WAV URL.
+            fan.on_reply("Four two one.", None)
+            for _ in range(4):
+                await asyncio.sleep(0.02)
+            url = idle._client.announcements[0]["media_id"] if idle._client.announcements else ""
+            hosts, rest = url.split("//")[1].split(":", 1)
+            port, path = rest.split("/", 1)
+            reader, writer = await asyncio.open_connection(hosts, int(port))
+            writer.write(f'GET /{path} HTTP/1.1\r\nHost: x\r\n\r\n'.encode())
+            await writer.drain()
+            body = await reader.read(512)
+            writer.close()
+            for device in (owner, idle):
+                if device._http is not None:
+                    await device._http.stop()
+            return url, body, idle._client.events, owner._client.events
+
+
+        url, body, idle_events, owner_events = _run_loop(_run, owner)
+        assert url.startswith("http://")
+        assert pcm_from_wav(body.split(b"\r\n\r\n", 1)[1]) == b"\x01\x02" * 8
+        # The mirror is an announcement, not a second TTS chain on the wire.
+        assert [event for event, _ in idle_events] == []
+        # The owner's own run keeps its two start events and nothing else.
+        assert [event for event, _ in owner_events] == [1, 3]
+        assert idle._client.announcements[0]["start_conversation"] is False
+
+    def test_listener_forwards_contextless_reply_to_the_fanout(self, monkeypatch):
+        from jarvis.integrations.voice_pe.tts_stream import pcm_from_wav
+
+        device = _no_speaker_device(_AnnounceClient())
+        fan = _Fanout([device])
+        listener = _bare_listener()
+        listener._voice_pe_sink = fan
+        listener._turn_context = None
+        monkeypatch.setattr(
+            "jarvis.integrations.voice_pe.tts_stream.synthesize_pcm",
+            lambda engine, text: b"\x03\x04" * 8,
+        )
+
+        async def _run():
+            device.loop = asyncio.get_running_loop()
+            # No pipeline start: this is the plain local-microphone turn.
+            listener._voice_pe_event("reply", "Four two one.")
+            for _ in range(4):
+                await asyncio.sleep(0.02)
+            url = device._client.announcements[0]["media_id"]
+            hosts, rest = url.split("//")[1].split(":", 1)
+            port, path = rest.split("/", 1)
+            reader, writer = await asyncio.open_connection(hosts, int(port))
+            writer.write(f"GET /{path} HTTP/1.1\r\nHost: x\r\n\r\n".encode())
+            await writer.drain()
+            body = await reader.read(512)
+            writer.close()
+            if device._http is not None:
+                await device._http.stop()
+            return url, body
+
+        url, body = _run_loop(_run, device)
+        assert url.startswith("http://")
+        assert pcm_from_wav(body.split(b"\r\n\r\n", 1)[1]) == b"\x03\x04" * 8
+        assert device._client.announcements[0]["text"] == "Four two one."
+        listener.state_manager.stop()
 
     def test_error_reaches_the_single_device(self):
         device = _no_speaker_device(FakeClient())
@@ -2421,6 +2607,7 @@ class TestClipLevelsAndPreprocessor:
 
     def test_kwargs_resolution_is_per_backend_and_drops_the_unsupported_one(self):
         from jarvis.listening.listener import (
+            FASTER_WHISPER_TRANSCRIBE_KWARGS,
             PREFERRED_TRANSCRIBE_KWARGS,
             _asr_backend_version,
             _resolve_transcribe_kwargs,
@@ -2445,6 +2632,14 @@ class TestClipLevelsAndPreprocessor:
         # A name the signature lacks is reported as rejected, not passed along.
         for key in rejected:
             assert key not in names
+        # The faster-whisper set is the one the listener actually sends, and it
+        # is complete for the installed backend: nothing is dropped.
+        fw_accepted, fw_rejected = _resolve_transcribe_kwargs(
+            _Model.transcribe, FASTER_WHISPER_TRANSCRIBE_KWARGS
+        )
+        assert fw_rejected == []
+        assert set(fw_accepted) == set(FASTER_WHISPER_TRANSCRIBE_KWARGS)
+        assert set(fw_accepted).issubset(names)
         assert _asr_backend_version("faster-whisper") != ""
 
 

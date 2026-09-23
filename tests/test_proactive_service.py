@@ -71,7 +71,7 @@ class TestPolicyCore:
     def test_min_gap_suppresses_second_remark(self):
         svc, calls, clock = make_service()
         assert svc.handle_event(ev("app.startup")) == "Toast je hotový."
-        clock["t"] = 2.0  # inside the 90 s authentic gap
+        clock["t"] = 2.0  # inside the 180 s authentic base gap
         assert svc.handle_event(ev("user.login", {}, "2026-09-09T06:00:00+00:00")) is None
         assert len(calls) == 1
         assert svc.stats()["suppressed"].get("gap") == 1
@@ -80,7 +80,8 @@ class TestPolicyCore:
     def test_gap_beyond_min_gap_allows_second(self):
         svc, calls, clock = make_service()
         svc.handle_event(ev("app.startup"))
-        clock["t"] = 100.0  # past the 90 s authentic gap
+        # Base gap 180 s doubled once (first remark unanswered) = 360 s.
+        clock["t"] = 361.0
         assert svc.handle_event(ev("microphone.available")) == "Toast je hotový."
         assert len(calls) == 2
 
@@ -88,16 +89,16 @@ class TestPolicyCore:
     def test_custom_min_gap_override(self):
         svc, calls, clock = make_service(min_gap_sec=5.0)
         svc.handle_event(ev("app.startup"))
-        clock["t"] = 6.0
+        clock["t"] = 11.0  # past the doubled 10 s gap (5 * 2^1)
         assert svc.handle_event(ev("microphone.available")) is not None
 
     @pytest.mark.unit
     def test_hour_limit_caps_remarks(self):
-        svc, calls, clock = make_service(hour_limit=2)
+        svc, calls, clock = make_service(hour_limit=2, min_gap_sec=1.0)
         svc.handle_event(ev("app.startup"))
-        clock["t"] = 91.0
+        clock["t"] = 2.0  # doubled gap 1*2^1 = 2 s
         svc.handle_event(ev("microphone.available"))
-        clock["t"] = 182.0
+        clock["t"] = 6.0  # doubled gap 1*2^2 = 4 s after t=2
         assert svc.handle_event(ev("user.login", {}, "2026-09-09T06:00:00+00:00")) is None
         assert len(calls) == 2  # third event skipped by ceiling, no LLM call
 
@@ -173,7 +174,7 @@ class TestPolicyCore:
     def test_network_pair_both_spoken(self):
         svc, calls, clock = make_service()
         assert svc.handle_event(ev("network.disconnected", {"seconds_down": 12})) == "Toast je hotový."
-        clock["t"] = 100.0
+        clock["t"] = 361.0  # past the doubled 360 s gap (180 * 2^1)
         assert svc.handle_event(ev("network.restored", {"seconds_down": 12})) == "Toast je hotový."
         assert len(calls) == 2
 
@@ -220,7 +221,7 @@ class TestPolicyCore:
     def test_previous_remarks_passed_for_variety(self):
         svc, calls, clock = make_service(reply="PrníRemark.")
         svc.handle_event(ev("app.startup"))
-        clock["t"] = 150.0
+        clock["t"] = 400.0  # past the doubled 360 s gap
         svc.handle_event(ev("microphone.available"))
         assert "PrníRemark." in calls[1][1]["content"]
 
@@ -398,6 +399,69 @@ class TestStructuredLogs:
         svc.apply_directive("Ticho")
         rec = svc.recent_records()[-1]
         assert "directive_remaining_sec" in rec["cooldown"]
+
+
+class TestBackoffAndQuietMode:
+    @pytest.mark.unit
+    def test_gap_doubles_per_unanswered_remark(self):
+        svc, calls, clock = make_service()
+        assert svc.handle_event(ev("app.startup")) == "Toast je hotový."
+        assert svc.stats()["backoff"]["effective_gap_sec"] == 360.0  # 180*2^1
+        clock["t"] = 361.0
+        assert svc.handle_event(ev("microphone.available")) == "Toast je hotový."
+        assert svc.stats()["backoff"]["effective_gap_sec"] == 720.0  # 180*2^2
+        assert len(calls) == 2
+
+    @pytest.mark.unit
+    def test_backoff_ladder_capped_and_quiet_mode(self):
+        svc, calls, clock = make_service(min_gap_sec=10.0)
+        # Effective gaps 10, 20, 40, 80, 160 (step cap 2^4). Distinct-note
+        # events at clock times beyond the 30 s dedup window keep dedup inert.
+        ladder = [
+            (0.0, ev("app.startup", {"model": "m"})),
+            (35.0, ev("microphone.available", {"sample_rate": 16000})),
+            (80.0, ev("day.morning", {"hour": 7})),
+            (165.0, ev("day.lunch", {"hour": 13})),
+            (330.0, ev("day.evening", {"hour": 19})),
+        ]
+        for t, event in ladder:
+            clock["t"] = t
+            assert svc.handle_event(event) == "Toast je hotový.", event
+        assert len(calls) == 5
+        assert svc.stats()["backoff"]["quiet_mode"] is True
+        # In quiet mode even a gap-clear non-critical event is suppressed,
+        # without paying an LLM round-trip.
+        clock["t"] = 10_330.0
+        assert svc.handle_event(ev("browser.food_page", {"title": "Pečivo"})) is None
+        assert svc.stats()["suppressed"].get("quiet-mode") == 1
+        assert len(calls) == 5
+
+    @pytest.mark.unit
+    def test_critical_event_speaks_in_quiet_mode(self):
+        svc, _calls, clock = make_service(min_gap_sec=1.0)
+        for _ in range(6):
+            svc.handle_event(ev("microphone.available"))
+            clock["t"] += 10_000.0
+        assert svc.stats()["backoff"]["quiet_mode"] is True
+        assert svc.handle_event(ev("app.error", {"message": "boom"})) == "Toast je hotový."
+
+    @pytest.mark.unit
+    def test_user_response_resets_backoff(self):
+        svc, _calls, clock = make_service(min_gap_sec=10.0)
+        svc.handle_event(ev("app.startup"))
+        assert svc.stats()["backoff"]["unanswered"] == 1
+        svc.mark_user_response()
+        stats = svc.stats()["backoff"]
+        assert stats["unanswered"] == 0
+        assert stats["quiet_mode"] is False
+        assert stats["effective_gap_sec"] == 10.0
+
+    @pytest.mark.unit
+    def test_directive_resets_backoff(self):
+        svc, _calls, _clock = make_service(min_gap_sec=10.0)
+        svc.handle_event(ev("app.startup"))
+        assert svc.apply_directive("Teď ne") is True
+        assert svc.stats()["backoff"]["unanswered"] == 0
 
 
 class TestPeriodicChecks:

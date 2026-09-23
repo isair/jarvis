@@ -97,7 +97,9 @@ def test_struct_layout_parity() -> None:
 
 def test_v1_parity_create_and_reads() -> None:
     st_a = _na.create()
-    assert st_a in (0, 2)          # 2 = shared mix without the RAW option
+    # 2 = shared mix without the RAW option, 3 = no loopback tap here; both
+    # are legitimate degraded-but-working create() outcomes on real hardware.
+    assert st_a in (0, 2, 3)
     st_b = _nb.create()
     assert st_b == st_a
     caps_a, caps_b = _na.capabilities(), _nb.capabilities()
@@ -157,31 +159,32 @@ def test_v2_create_engine_endpoint_lists_match() -> None:
     assert lst == 0 and lane is not None
     lst_b, lane_b = _nb.lane_create(engine_b, source_type=_nb.SOURCE_LOCAL_WASAPI)
     assert lst_b == 0 and lane_b is not None
-    block = [float(i % 16) / 16.0 for i in range(480)]
+    block = [float(i % 16) / 16.0 for i in range(4800)]
     assert _na.lane_push_capture(lane, block, 48000) == 0
     assert _nb.lane_push_capture(lane_b, block, 48000) == 0
 
     time.sleep(0.08)
 
-    def first_pop(mod, lane_handle):
-        rate, blk = mod.lane_pop_clean(lane_handle)
-        return (rate, None if blk is None else blk.size)
-
     def next_pop(mod, lane_handle):
-        for _ in range(8):
-            time.sleep(0.02)
+        # The pump is a live producer on its own thread: retry until a block
+        # shows up instead of trusting one fixed sleep.
+        for _ in range(150):
             rate, blk = mod.lane_pop_clean(lane_handle)
             if blk is not None:
                 return (rate, blk.size)
-        return first_pop(mod, lane_handle)
+            time.sleep(0.01)
+        return (None, None)
 
-    # the same 16k stream shape from both lanes: 16 kHz, 160-sample blocks
-    a_first, b_first = next_pop(_na, lane), next_pop(_nb, lane_b)
-    assert a_first[0] == b_first[0] == 16000
-    assert a_first[1] == b_first[1] == 160
-    # per-module readbacks agree on each lane (same handle, both bindings)
-    assert first_pop(_na, lane) == first_pop(_nb, lane)
-    assert first_pop(_na, lane_b) == first_pop(_nb, lane_b)
+    # One 100 ms push per engine is ten 160-sample blocks at 16 kHz, so four
+    # reads (both bindings, both lanes) all see the same stream shape: the two
+    # bindings share one engine state and each pop takes the next block.
+    reads = [
+        next_pop(_na, lane),
+        next_pop(_nb, lane),
+        next_pop(_nb, lane_b),
+        next_pop(_na, lane_b),
+    ]
+    assert reads == [(16000, 160)] * 4
 
     lt_a = _na.lane_telemetry(int(lane))
     lt_b = _nb.lane_telemetry(int(lane))

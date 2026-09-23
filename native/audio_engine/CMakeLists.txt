@@ -3,6 +3,11 @@ project(jarvis_audio_engine LANGUAGES C CXX)
 
 add_compile_definitions(NOMINMAX)
 
+# MSBuild (Visual Studio generator) runs several cl.exe instances in parallel
+# (--parallel 8) that all write the same per-target .pdb, producing C1041.
+# /FS serializes the PDB writes through a single locking process.
+add_compile_options(/FS)
+
 # --------------------------------------------------------------------------
 # Pinned source sets (no runtime downloads; configure-time fetch only when the
 # vendored copies are absent). See NOTICE.
