@@ -377,6 +377,33 @@ Get API key at [composio.dev](https://composio.dev)
 
 </details>
 
+<details>
+<summary><strong>You.com Web Search</strong> - Web search, news, and URL content extraction</summary>
+
+Add You.com MCP tools for web search alongside the built-in DuckDuckGo search. Works with or without an API key.
+
+```json
+{
+  "mcps": {
+    "youcom_search": {
+      "command": "mcp-proxy",
+      "args": ["https://api.you.com/mcp?profile=free"],
+      "env": { "YDC_API_KEY": "your-api-key" }
+    }
+  }
+}
+```
+
+Install the proxy first: `uv tool install mcp-proxy`
+
+- **Keyless mode**: omit `YDC_API_KEY` and use the `profile=free` endpoint — no API key, no credit card, no setup.
+- **Authenticated mode**: set `YDC_API_KEY` for higher rate limits. Get an API key at [you.com/platform/api-keys](https://you.com/platform/api-keys).
+- **Full MCP tools**: use `https://api.you.com/mcp` (auth) instead of the free profile for access to you-contents and you-research tools.
+
+When configured, Jarvis can route web search queries through You.com via its MCP tool selection alongside or instead of the built-in DuckDuckGo provider.
+
+</details>
+
 ## Troubleshooting
 
 **Warmup passes but intent detection times out?** Warmup checks model loading with a small request, not a full intent decision. Intent detection has its own `intent_judge_timeout_sec` (6 seconds by default), separate from chat. A timeout does not necessarily mean your server is offline; the log shows the configured limit.
