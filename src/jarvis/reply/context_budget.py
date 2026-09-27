@@ -58,18 +58,30 @@ def _parse_units(messages: list[dict]) -> list[list[dict]]:
         message = messages[index]
         role = message.get("role")
         calls = message.get("tool_calls") if role == "assistant" else None
+        if role == "assistant" and calls is not None and not isinstance(calls, list):
+            raise InvalidToolHistory("tool_calls must be a list")
         if calls:
-            if not isinstance(calls, list):
-                raise InvalidToolHistory("tool_calls must be a list")
             count = len(calls)
             results = messages[index + 1:index + 1 + count]
             if len(results) != count:
                 raise InvalidToolHistory("tool-call group has missing results")
+            if any(
+                not isinstance(call, dict)
+                or not isinstance(call.get("function"), dict)
+                or not isinstance(call["function"].get("name"), str)
+                or not call["function"]["name"]
+                for call in calls
+            ):
+                raise InvalidToolHistory("tool-call group has malformed requests")
             ids = [call.get("id") for call in calls]
-            names = [call.get("function", {}).get("name") for call in calls]
+            names = [call["function"]["name"] for call in calls]
             if all(item.get("role") == "tool" for item in results):
                 result_ids = [item.get("tool_call_id") for item in results]
-                if not all(ids) or not all(result_ids) or sorted(result_ids) != sorted(ids):
+                if (
+                    any(not isinstance(item, str) or not item for item in ids + result_ids)
+                    or len(set(ids)) != count
+                    or sorted(result_ids) != sorted(ids)
+                ):
                     raise InvalidToolHistory("native tool results do not match requests")
             elif all(item.get("role") == "user" and item.get("tool_name") for item in results):
                 result_names = [item.get("tool_name") for item in results]

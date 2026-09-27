@@ -106,6 +106,27 @@ def test_mismatched_native_result_is_rejected_without_type_error():
         bound_context_messages(messages, current_user_index=1, max_tokens=100)
 
 
+@pytest.mark.parametrize("calls, results", [
+    ({}, []),
+    ([None], [{"role": "tool", "tool_call_id": "one", "content": "data"}]),
+    ([{"id": "one", "function": None}], [{"role": "tool", "tool_call_id": "one", "content": "data"}]),
+    ([_call("one"), _call("one")], [
+        {"role": "tool", "tool_call_id": "one", "content": "first"},
+        {"role": "tool", "tool_call_id": "one", "content": "second"},
+    ]),
+])
+def test_malformed_or_duplicate_native_call_group_is_rejected(calls, results):
+    messages = [
+        {"role": "system", "content": "rules"},
+        {"role": "user", "content": "current"},
+        {"role": "assistant", "content": "", "tool_calls": calls},
+        *results,
+    ]
+
+    with pytest.raises(InvalidToolHistory):
+        bound_context_messages(messages, current_user_index=1, max_tokens=100)
+
+
 def test_text_tool_request_and_result_stay_together():
     messages = [
         {"role": "system", "content": "rules"},
