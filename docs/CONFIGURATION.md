@@ -94,6 +94,10 @@ is ready. The first LLM-backed request after startup or idle may be slower.
 
 Speed is relative to the original large model. [Source](https://github.com/openai/whisper)
 
+With the faster-whisper backend, `whisper_model` also accepts a Hugging Face
+model ID such as `deepdml/faster-whisper-large-v3-turbo-ct2`, or a local
+converted model directory.
+
 #### GPU Acceleration (Windows)
 If you have an NVIDIA GPU, Jarvis can use CUDA for much faster speech recognition. The Windows installer offers an optional CUDA download during setup. For development:
 ```bash
