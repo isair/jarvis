@@ -179,12 +179,13 @@ def test_live_preparation_cases_report_unavailable_when_model_is_absent(tmp_path
 
     assert run.returncode == 0, run.stdout + run.stderr
     payload = json.loads(report_path.read_text())
-    category = payload["summary"]["live_preparation"]
-    assert category["scenarios"] == len(payload["scenarios"]) > 0
-    assert category["availability"] == "unavailable"
-    assert category["eligible"] == 0
-    assert category["first_attempt_success"] == 0
-    assert category["recovered_success"] == 0
+    categories = payload["summary"].values()
+    assert sum(category["scenarios"] for category in categories) == len(payload["scenarios"]) > 0
+    for category in categories:
+        assert category["availability"] == "unavailable"
+        assert category["eligible"] == 0
+        assert category["first_attempt_success"] == 0
+        assert category["recovered_success"] == 0
 
 
 def test_live_preparation_case_records_observed_first_attempt(monkeypatch):
