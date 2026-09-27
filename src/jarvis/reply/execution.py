@@ -6,7 +6,7 @@ import queue
 import threading
 import time
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from ..debug import debug_log
 from ..tools.types import ToolExecutionResult
@@ -46,6 +46,35 @@ class ExecutionControl:
         self.check()
         remaining = self.deadline - self._clock()
         return min(remaining, float(cap)) if cap is not None else remaining
+
+    def call(self, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+        """Bound a blocking provider wait by this query's cancel/deadline.
+
+        The underlying request may finish later. Callers must not use this
+        to imply an already issued external side effect was rolled back.
+        """
+        self.check()
+        completed: queue.Queue[tuple[bool, Any]] = queue.Queue(maxsize=1)
+
+        def worker() -> None:
+            if self.cancel_event.is_set():
+                return
+            try:
+                completed.put((True, fn(*args, **kwargs)))
+            except BaseException as exc:
+                completed.put((False, exc))
+
+        threading.Thread(target=worker, daemon=True, name="jarvis-provider-call").start()
+        while True:
+            self.check()
+            try:
+                success, value = completed.get(timeout=min(0.05, self.remaining()))
+            except queue.Empty:
+                continue
+            self.check()
+            if success:
+                return value
+            raise value
 
 
 @dataclass(frozen=True)

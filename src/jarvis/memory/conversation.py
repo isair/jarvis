@@ -1116,13 +1116,18 @@ class DialogueMemory:
         their own ``time.time()`` snapshot, which can collide with ``_next_ts``
         on low-resolution clocks (Windows ~16ms tick).
         """
+        chunks, _, snapshot = self.get_pending_messages_with_snapshot()
+        return chunks, snapshot
+
+    def get_pending_messages_with_snapshot(self) -> Tuple[List[str], List[dict], float]:
+        """Atomically capture diary chunks and source-labelled fact evidence."""
         with self._lock:
-            unsaved_messages = [
-                (ts, role, content) for ts, role, content in self._messages
-                if ts > self._last_saved_timestamp
-            ]
-            chunks = [f"{role.title()}: {content}" for _, role, content in unsaved_messages]
-            return chunks, self._last_ts
+            unsaved = [(ts, role, content) for ts, role, content in self._messages
+                       if ts > self._last_saved_timestamp]
+            chunks = [f"{role.title()}: {content}" for _, role, content in unsaved]
+            messages = [{"ts": ts, "role": role, "channel": "addressed_dialogue", "content": content}
+                        for ts, role, content in unsaved]
+            return chunks, messages, self._last_ts
 
     def has_pending_chunks(self) -> bool:
         """Check if there are unsaved messages. Thread-safe."""
@@ -1763,8 +1768,8 @@ def update_diary_from_dialogue_memory(
         # land on the same tick, producing identical timestamps. The new
         # message then fails the ``ts > snapshot`` test in
         # ``get_pending_chunks`` and is wrongly treated as already saved.
-        pending_chunks, snapshot_timestamp = (
-            dialogue_memory.get_pending_chunks_with_snapshot()
+        pending_chunks, pending_messages, snapshot_timestamp = (
+            dialogue_memory.get_pending_messages_with_snapshot()
         )
         debug_log(f"diary update: got {len(pending_chunks)} pending chunks from dialogue_memory", "memory")
 
@@ -1791,81 +1796,35 @@ def update_diary_from_dialogue_memory(
         # Mark only the messages that existed at snapshot time as saved
         # New messages that arrived during summarization remain pending
         if summary_id is not None:
+            # Persist a bounded, redacted extraction batch before advancing
+            # the diary high-water mark. A cold LLM can retry it later.
+            from .facts import FactStore
+            fact_store = FactStore(db.db_path)
+            try:
+                fact_store.enqueue_batch(
+                    pending_messages, source_app=source_app,
+                    batch_ref=f"{source_app}:{snapshot_timestamp}",
+                )
+            except Exception as exc:
+                debug_log(f"fact batch persistence failed; keeping dialogue pending: {exc}", "memory")
+                fact_store.close()
+                return None
             dialogue_memory.mark_saved_up_to(snapshot_timestamp)
             debug_log(f"marked messages saved up to timestamp {snapshot_timestamp}", "memory")
-
-            # Graph memory (v2): extract facts and store in the node graph.
-            # Non-blocking — if this fails, the diary update still succeeded.
-            # Uses a dedicated timeout (30s) rather than the diary chat timeout,
-            # so graph updates don't inflate the diary flush wall time.
             try:
-                from .graph import GraphMemoryStore
-                from .graph_ops import update_graph_from_dialogue
-
-                graph_store = GraphMemoryStore(db.db_path)
-                # Retrieve the summary we just stored to use for extraction
-                today = datetime.now(timezone.utc).date().isoformat()
-                existing = db.get_conversation_summary(today, source_app)
-                summary_text = existing['summary'] if existing else None
-
-                if summary_text:
-                    # Use a shorter timeout for graph operations — extraction (30s),
-                    # placement (15s/fact), and split (45s) each have their own budgets
-                    # inside update_graph_from_dialogue.
-                    graph_timeout = min(timeout_sec, 30.0)
-                    result = update_graph_from_dialogue(
-                        store=graph_store,
-                        summary=summary_text,
-                        cfg=cfg,
-                        chat_model=cfg.llm_chat_model,
-                        timeout_sec=graph_timeout,
-                        thinking=thinking,
-                        date_utc=today,
-                        picker_model=graph_picker_model,
-                    )
-                    stored = result.stored
-                    skipped = result.skipped
-                    # Print whenever extraction produced anything — including
-                    # all-duplicate flushes. Without the skipped count this
-                    # line went silent after #282's dedupe (cumulative diary
-                    # re-extracts the same facts on every flush), making it
-                    # look like the memory pipeline had stopped working.
-                    if stored or skipped:
-                        dup_suffix = (
-                            f"{skipped} duplicate{'' if skipped == 1 else 's'} skipped"
-                        )
-                        if stored:
-                            fact_count = (
-                                f"{len(stored)} new fact"
-                                f"{'' if len(stored) == 1 else 's'}"
-                            )
-                            tail = f" ({dup_suffix})" if skipped else ""
-                            print(
-                                f"  🧠 Knowledge graph: learned {fact_count}{tail}",
-                                flush=True,
-                            )
-                            # Show each new fact with the node it landed in so
-                            # the user can eyeball extraction/placement. Cap
-                            # preview length per fact.
-                            for fact, node_name in stored[:6]:
-                                preview = fact.replace("\n", " ").strip()
-                                if len(preview) > 90:
-                                    preview = preview[:90].rstrip() + "…"
-                                print(f"     · {preview} → {node_name}", flush=True)
-                            if len(stored) > 6:
-                                print(f"     · …and {len(stored) - 6} more", flush=True)
-                        else:
-                            print(
-                                f"  🧠 Knowledge graph: nothing new ({dup_suffix})",
-                                flush=True,
-                            )
-                    debug_log(
-                        f"graph memory: stored {len(stored)} facts, "
-                        f"{skipped} duplicates skipped",
-                        "memory",
-                    )
-            except Exception as e:
-                debug_log(f"graph memory update failed (non-fatal): {e}", "memory")
+                from .fact_ops import process_pending_fact_batches
+                result = process_pending_fact_batches(
+                    fact_store, cfg, chat_model=cfg.llm_chat_model,
+                    timeout_sec=min(timeout_sec, 30.0),
+                )
+                if result.stored or result.skipped:
+                    print(f"  🧠 Facts: {result.stored} learned, {result.skipped} skipped", flush=True)
+                if result.failed:
+                    debug_log("fact extraction queued for retry", "memory")
+            except Exception as exc:
+                debug_log(f"fact extraction failed; batch remains queued: {exc}", "memory")
+            finally:
+                fact_store.close()
 
         return summary_id
 

@@ -146,6 +146,7 @@ FIXED_BRANCHES: tuple[tuple[str, str, str], ...] = (
 )
 
 FIXED_BRANCH_IDS: frozenset[str] = frozenset(bid for bid, _, _ in FIXED_BRANCHES)
+LEGACY_BRANCH_ID = "legacy"
 
 
 # ── SQL helpers ────────────────────────────────────────────────────────────
@@ -306,60 +307,38 @@ class GraphMemoryStore:
             self.conn.commit()
 
     def migrate_legacy_shape(self) -> bool:
-        """Wipe the graph if it has a non-conforming (pre-taxonomy) shape.
+        """Rehome uncategorised root knowledge beneath an unverified branch.
 
-        The purpose-driven taxonomy (root → User / Directives / World)
-        is a hard reorganisation: pre-existing nodes under root that
-        don't match this shape would sit invisible to the warm profile
-        forever.
-        Rather than carrying them as dead weight, we wipe on daemon
-        start-up and let the diary re-import repopulate with correctly
-        classified facts.
-
-        Called ONLY from the daemon start-up path — the memory viewer
-        instantiates ``GraphMemoryStore`` read-mostly and must not
-        trigger a wipe mid-session.
-
-        Non-conforming shape is defined as:
-          - root has a direct child whose id is not in ``FIXED_BRANCHES``
-          - OR root's own ``data`` column is non-empty (cold-start writes
-            that landed on root before the taxonomy existed).
-
-        Returns True if a wipe happened, False if the graph was already
-        in the expected shape.
+        Existing node IDs and text are retained. The legacy branch is editable
+        in the viewer, so deleting a node removes its only current copy.
         """
-        expected_ids = FIXED_BRANCH_IDS
+        expected_ids = FIXED_BRANCH_IDS | {LEGACY_BRANCH_ID}
         with self._lock:
-            root_row = self.conn.execute(
-                "SELECT data FROM memory_nodes WHERE id = 'root'"
-            ).fetchone()
+            root_row = self.conn.execute("SELECT * FROM memory_nodes WHERE id='root'").fetchone()
             root_has_data = bool(root_row and (root_row["data"] or "").strip())
-
-            rogue_child = self.conn.execute(
-                "SELECT id FROM memory_nodes "
-                "WHERE parent_id = 'root' AND id NOT IN ({}) LIMIT 1".format(
-                    ",".join("?" * len(expected_ids))
-                ),
-                tuple(expected_ids),
-            ).fetchone()
-
-            if not root_has_data and rogue_child is None:
+            rogue_children = self.conn.execute(
+                "SELECT id FROM memory_nodes WHERE parent_id='root' AND id NOT IN ({})".format(
+                    ",".join("?" * len(expected_ids))), tuple(expected_ids),
+            ).fetchall()
+            if not root_has_data and not rogue_children:
                 return False
-
-            reason = (
-                "root holds pre-taxonomy data"
-                if root_has_data
-                else f"found non-conforming root child: {rogue_child['id']!r}"
-            )
-            debug_log(
-                f"wiping knowledge graph ({reason}); will re-seed fixed branches",
-                "memory",
-            )
-            self.conn.execute("DELETE FROM memory_nodes")
-            self.conn.commit()
-
-        # Re-seed root + fixed branches from scratch.
-        self._ensure_root()
+            now = datetime.now(timezone.utc).isoformat()
+            with self.conn:
+                self.conn.execute(
+                    """INSERT OR IGNORE INTO memory_nodes
+                    (id,name,description,data,parent_id,access_count,last_accessed,created_at,updated_at,data_token_count)
+                    VALUES(?,?,?,'','root',0,?,?,?,0)""",
+                    (LEGACY_BRANCH_ID, "Unverified legacy", "Original graph knowledge with unverified provenance", now, now, now),
+                )
+                if root_has_data:
+                    legacy = self.conn.execute("SELECT data FROM memory_nodes WHERE id=?", (LEGACY_BRANCH_ID,)).fetchone()
+                    combined = (legacy["data"] + "\n" if legacy["data"] else "") + root_row["data"]
+                    self.conn.execute("UPDATE memory_nodes SET data=?,data_token_count=?,updated_at=? WHERE id=?",
+                                      (combined, _estimate_tokens(combined), now, LEGACY_BRANCH_ID))
+                    self.conn.execute("UPDATE memory_nodes SET data='',data_token_count=0,updated_at=? WHERE id='root'", (now,))
+                for child in rogue_children:
+                    self.conn.execute("UPDATE memory_nodes SET parent_id=? WHERE id=?", (LEGACY_BRANCH_ID, child["id"]))
+            debug_log(f"rehome legacy graph: root_data={root_has_data}, nodes={len(rogue_children)}", "memory")
         return True
 
     # ── CRUD ────────────────────────────────────────────────────────────
@@ -518,7 +497,7 @@ class GraphMemoryStore:
         non-deletable — the warm profile and extractor routing rely on
         their stable presence (graph.spec.md §"Fixed Top-Level Branches").
         """
-        if node_id == "root" or node_id in FIXED_BRANCH_IDS:
+        if node_id == "root" or node_id in FIXED_BRANCH_IDS or node_id == LEGACY_BRANCH_ID:
             return False
         # Resolve branch BEFORE the delete so listeners get a meaningful
         # branch attribution even though the row is about to vanish.

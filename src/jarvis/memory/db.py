@@ -143,6 +143,16 @@ class Database:
                 cur.executescript(_VSS_SCHEMA_SQL)
             self.conn.commit()
 
+    def memory_revision(self) -> tuple[int, int]:
+        """Fingerprint committed changes seen by this database connection.
+
+        SQLite data_version advances for commits from other connections;
+        total_changes covers writes through this connection itself.
+        """
+        with self._lock:
+            external = int(self.conn.execute("PRAGMA data_version").fetchone()[0])
+            return external, self.conn.total_changes
+
     
 
     def search_hybrid(self, fts_query: str, query_vec_json: Optional[str], top_k: int = 8) -> list[sqlite3.Row]:

@@ -32,9 +32,13 @@ class ReadTaskResultTool(Tool):
         if not isinstance(args, dict) or not isinstance(args.get("result_id"), str):
             return ToolExecutionResult(False, None, "result_id is required")
         try:
-            from ...reply.task_state import TaskStore
+            from ...reply.task_state import TaskStore, current_task_id
+            task_id = current_task_id()
+            if task_id is None:
+                return ToolExecutionResult(False, None, "No active task result scope")
             page = TaskStore(context.cfg.db_path).read_result(
                 args["result_id"],
+                task_id=task_id,
                 offset=int(args.get("offset", 0)),
                 limit=int(args.get("limit", 4000)),
             )

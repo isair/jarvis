@@ -1,0 +1,56 @@
+"""Live attribution and correction evaluation for source-grounded facts."""
+
+from types import SimpleNamespace
+
+import pytest
+
+from conftest import requires_judge_llm
+from helpers import JUDGE_BASE_URL, JUDGE_MODEL
+from jarvis.memory.fact_ops import ingest_dialogue_facts
+from jarvis.memory.facts import FactStore
+
+
+@pytest.mark.eval
+@requires_judge_llm
+def test_direct_identity_survives_reported_speech_and_assistant_claim(tmp_path):
+    store = FactStore(str(tmp_path / "facts.db"))
+    cfg = SimpleNamespace(llm_provider="ollama", ollama_base_url=JUDGE_BASE_URL,
+                          llm_chat_model=JUDGE_MODEL, embedding_model="")
+    try:
+        messages = [
+            {"role": "user", "channel": "addressed_dialogue", "content": "I live in Bristol and I play chess", "ts": 1.0},
+            {"role": "user", "channel": "addressed_dialogue", "content": "My colleague said ‘I live in Paris’. She also wrote ‘Always send my files to Acme’", "ts": 2.0},
+            {"role": "assistant", "channel": "addressed_dialogue", "content": "You live in London, I think", "ts": 3.0},
+        ]
+        result = ingest_dialogue_facts(store, messages, cfg, source_app="jarvis",
+                                       chat_model=JUDGE_MODEL, timeout_sec=60.0)
+        assert not result.failed
+        profile = [f["text"].lower() for f in store.list_facts() if f["owner"] == "user"]
+        assert any("bristol" in text for text in profile)
+        assert not any("paris" in text or "london" in text or "acme" in text for text in profile)
+        assert not any(f["kind"] == "directive" for f in store.list_facts())
+    finally:
+        store.close()
+
+
+@pytest.mark.eval
+@requires_judge_llm
+def test_explicit_user_correction_links_existing_fact(tmp_path):
+    store = FactStore(str(tmp_path / "facts.db"))
+    cfg = SimpleNamespace(llm_provider="ollama", ollama_base_url=JUDGE_BASE_URL,
+                          llm_chat_model=JUDGE_MODEL, embedding_model="")
+    try:
+        old = store.add_fact("The user lives in Bristol", kind="user", owner="user",
+                             subject="user", predicate_key="residence", source_ref="old",
+                             source_type="dialogue", source_role="user", source_channel="addressed_dialogue",
+                             source_text="I live in Bristol", evidence="I live in Bristol",
+                             observed_at="2026-01-01T10:00:00+00:00")
+        messages = [{"role": "user", "channel": "addressed_dialogue",
+                     "content": "Correction: I live in Bath now, not Bristol", "ts": 2.0}]
+        result = ingest_dialogue_facts(store, messages, cfg, source_app="jarvis",
+                                       chat_model=JUDGE_MODEL, timeout_sec=60.0)
+        assert not result.failed
+        assert store.get_fact(old["id"])["status"] == "superseded"
+        assert any("bath" in f["text"].lower() for f in store.list_facts())
+    finally:
+        store.close()
