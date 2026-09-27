@@ -1776,38 +1776,38 @@ def update_diary_from_dialogue_memory(
             debug_log("diary update skipped: no pending chunks in dialogue_memory", "memory")
             return None
 
-        # Update the daily conversation summary
-        # This is the slow operation (LLM call) during which new messages might arrive
-        debug_log("calling update_daily_conversation_summary...", "memory")
-        summary_id = update_daily_conversation_summary(
-            db=db,
-            new_chunks=pending_chunks,
-            cfg=cfg,
-            source_app=source_app,
-            voice_debug=voice_debug,
-            timeout_sec=timeout_sec,
-            on_token=on_token,
-            thinking=thinking,
-        )
+        # Persist the source snapshot before the diary's LLM call and commit.
+        # The unique batch reference makes retries for the same snapshot safe.
+        from .facts import FactStore
+        fact_store = FactStore(db.db_path)
+        try:
+            fact_store.enqueue_batch(
+                pending_messages, source_app=source_app,
+                batch_ref=f"{source_app}:{snapshot_timestamp}",
+            )
+        except Exception as exc:
+            debug_log(f"fact batch persistence failed; keeping dialogue pending: {exc}", "memory")
+            fact_store.close()
+            return None
 
-        debug_log(f"update_daily_conversation_summary returned: {summary_id}", "memory")
-
-        # Mark only the messages that existed at snapshot time as saved
-        # New messages that arrived during summarization remain pending
-        if summary_id is not None:
-            # Persist a bounded, redacted extraction batch before advancing
-            # the diary high-water mark. A cold LLM can retry it later.
-            from .facts import FactStore
-            fact_store = FactStore(db.db_path)
-            try:
-                fact_store.enqueue_batch(
-                    pending_messages, source_app=source_app,
-                    batch_ref=f"{source_app}:{snapshot_timestamp}",
-                )
-            except Exception as exc:
-                debug_log(f"fact batch persistence failed; keeping dialogue pending: {exc}", "memory")
-                fact_store.close()
+        try:
+            # New messages arriving during the slow summary remain pending.
+            debug_log("calling update_daily_conversation_summary...", "memory")
+            summary_id = update_daily_conversation_summary(
+                db=db,
+                new_chunks=pending_chunks,
+                cfg=cfg,
+                source_app=source_app,
+                voice_debug=voice_debug,
+                timeout_sec=timeout_sec,
+                on_token=on_token,
+                thinking=thinking,
+            )
+            debug_log(f"update_daily_conversation_summary returned: {summary_id}", "memory")
+            if summary_id is None:
                 return None
+
+            # Only messages present in the snapshot are marked as saved.
             dialogue_memory.mark_saved_up_to(snapshot_timestamp)
             debug_log(f"marked messages saved up to timestamp {snapshot_timestamp}", "memory")
             try:
@@ -1822,10 +1822,9 @@ def update_diary_from_dialogue_memory(
                     debug_log("fact extraction queued for retry", "memory")
             except Exception as exc:
                 debug_log(f"fact extraction failed; batch remains queued: {exc}", "memory")
-            finally:
-                fact_store.close()
-
-        return summary_id
+            return summary_id
+        finally:
+            fact_store.close()
 
     except Exception as e:
         debug_log(f"update_diary_from_dialogue_memory error: {e}", "memory")

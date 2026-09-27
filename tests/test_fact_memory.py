@@ -10,6 +10,7 @@ from jarvis.memory.facts import (FactStore, build_fact_warm_profile, recall_evid
                                  register_fact_mutation_listener, unregister_fact_mutation_listener)
 from jarvis.memory.fact_ops import ingest_dialogue_facts, process_pending_fact_batches
 from jarvis.memory.graph import GraphMemoryStore
+from jarvis.memory.conversation import DialogueMemory, update_diary_from_dialogue_memory
 
 
 pytestmark = pytest.mark.unit
@@ -196,6 +197,52 @@ def test_pending_batch_survives_extractor_failure_then_retries(store, monkeypatc
     result = process_pending_fact_batches(store, SimpleNamespace(embedding_model=""), chat_model="test")
     assert result.stored == 0
     assert len(store.list_facts()) == 1
+
+
+def test_source_snapshot_is_durable_before_diary_write(store, monkeypatch):
+    dialogue = DialogueMemory()
+    dialogue.add_message("user", "I enjoy chess")
+    seen_batches = []
+
+    def failing_summary(**kwargs):
+        seen_batches.append(store.pending_batches())
+        return None
+
+    monkeypatch.setattr("jarvis.memory.conversation.update_daily_conversation_summary", failing_summary)
+    cfg = SimpleNamespace(llm_chat_model="test", embedding_model="")
+    db = Database(store.db_path)
+    try:
+        assert update_diary_from_dialogue_memory(db, dialogue, cfg, force=True) is None
+        assert len(seen_batches) == 1 and len(seen_batches[0]) == 1
+        assert "I enjoy chess" in seen_batches[0][0]["messages_json"]
+        assert len(store.pending_batches()) == 1
+        assert dialogue.get_pending_chunks() == ["User: I enjoy chess"]
+
+        def successful_summary(**kwargs):
+            assert len(store.pending_batches()) == 1  # Same snapshot is idempotent.
+            return 7
+
+        monkeypatch.setattr("jarvis.memory.conversation.update_daily_conversation_summary", successful_summary)
+        monkeypatch.setattr("jarvis.memory.fact_ops._direct_llm", lambda *a, **kw: "[]")
+        assert update_diary_from_dialogue_memory(db, dialogue, cfg, force=True) == 7
+        assert not store.pending_batches()
+        assert not dialogue.get_pending_chunks()
+    finally:
+        db.close()
+
+
+def test_oversized_extractor_result_keeps_batch_pending(store, monkeypatch):
+    source = [{"role": "user", "channel": "text", "content": "I enjoy chess", "ts": 1.0}]
+    store.enqueue_batch(source, source_app="jarvis", batch_ref="dense-turn")
+    candidate = {"source_index": 0, "evidence": "I enjoy chess", "text": "The user enjoys chess",
+                 "kind": "user", "owner": "user", "statement_mode": "direct"}
+    monkeypatch.setattr("jarvis.memory.fact_ops._direct_llm",
+                        lambda *a, **kw: json.dumps([candidate] * 31))
+    result = process_pending_fact_batches(store, SimpleNamespace(embedding_model=""), chat_model="test")
+    assert result.failed
+    assert result.stored == 0
+    assert len(store.pending_batches()) == 1
+    assert not store.list_facts()
 
 
 def test_vector_and_lexical_retrieval_respect_source_and_time(store):

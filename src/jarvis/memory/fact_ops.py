@@ -58,6 +58,7 @@ def _parse_array(response: str) -> list[dict] | None:
 
 
 _QUOTE_PAIRS = (("“", "”"), ("‘", "’"), ('"', '"'), ("«", "»"), ("「", "」"), ("『", "』"), ("‹", "›"))
+_MAX_FACTS_PER_BATCH = 30
 
 
 def _evidence_is_quoted(source: str, evidence: str) -> bool:
@@ -109,8 +110,11 @@ def ingest_dialogue_facts(store: FactStore, messages: list[dict], cfg, *, source
     if parsed is None:
         debug_log("fact extraction returned no valid JSON array", "memory")
         return FactIngestResult(failed=True)
+    if len(parsed) > _MAX_FACTS_PER_BATCH:
+        debug_log(f"fact extraction returned {len(parsed)} candidates; batch retained for retry", "memory")
+        return FactIngestResult(failed=True)
     stored = skipped = 0
-    for item in parsed[:30]:
+    for item in parsed:
         if not isinstance(item, dict):
             skipped += 1
             continue

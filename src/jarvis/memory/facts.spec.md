@@ -14,16 +14,21 @@ pass through structural redaction at the storage boundary.
 ## Writes
 
 The diary flush captures formatted chunks and structured source messages in
-one locked snapshot. Once the diary summary succeeds, it persists a redacted,
-bounded batches in `fact_pending_batches` before advancing the dialogue saved
-marker. Every nonempty message is covered: long redacted text is segmented,
+one locked snapshot. It persists redacted, bounded batches in
+`fact_pending_batches` before the diary summary call and commit. If the diary
+fails, the source queue remains durable and the dialogue saved marker does not
+advance; retrying the same snapshot does not duplicate pending batches. Every
+nonempty message is covered: long redacted text is segmented,
 and segments are packed into durable batches within the extractor's context
 budget. The batches contain addressed dialogue text, role, channel and timestamp;
 it contains no audio or tool payload. A failed extractor leaves the batch for
 retry. Successful extraction deletes the batch and retains only source hashes
 and cited evidence excerpts. Duplicate batches and duplicate facts are
 idempotent. `process_pending_fact_batches()` processes batches in order within
-one total timeout and stops at a failed or unfinished batch.
+one total timeout and stops at a failed or unfinished batch. An extractor result
+above the per-batch candidate cap is treated as failed before any candidate is
+written, leaving the complete source batch for retry rather than dropping its
+tail.
 
 The extractor sees the numbered source messages and a bounded list of current
 facts. It returns independent facts with an exact evidence quote and source
