@@ -37,7 +37,13 @@ utterances are enqueued for a single FIFO Whisper worker. Transcription results
 return to the listener loop in order, where transcript storage and intent
 processing remain serialised. The bounded transcription backlog reports an
 explicit warning when full rather than blocking microphone-frame consumption
-or silently losing an utterance.
+or silently losing an utterance. A dictation pause clears captured audio and
+invalidates transcription work started before the pause, including a decode
+that finishes after dictation resumes. Listener shutdown discards pending
+transcriptions and results; an in-progress Whisper call is given a bounded
+grace period and cannot dispatch a late transcript. Transcript echo flags use
+the utterance capture interval against TTS timing, rather than the TTS state
+when Whisper finishes.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐

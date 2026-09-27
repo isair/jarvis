@@ -59,6 +59,7 @@ class _TranscriptionJob:
     start_time: float
     end_time: float
     energy: float
+    dictation_generation: int
 
 
 @dataclass(frozen=True)
@@ -68,6 +69,7 @@ class _TranscriptionResult:
     start_time: float
     end_time: float
     energy: float
+    dictation_generation: int
 
 # Audio processing imports (optional)
 try:
@@ -417,7 +419,8 @@ class VoiceListener(threading.Thread):
         self.tts = tts
         self.dialogue_memory = dialogue_memory
         self._should_stop = False
-        self._dictation_active = False  # Pause flag set by dictation engine
+        self._dictation_is_active = False
+        self._dictation_generation = 0
         self._first_utterance = True  # Suppress turn separator before the very first transcription
         # The listener loop applies each worker result's detected language
         # before processing its transcript, so dispatched queries keep their
@@ -498,6 +501,16 @@ class VoiceListener(threading.Thread):
         self._should_stop = True
         self.state_manager.stop()
         self._stop_thinking_tune()
+
+    @property
+    def _dictation_active(self) -> bool:
+        return self._dictation_is_active
+
+    @_dictation_active.setter
+    def _dictation_active(self, active: bool) -> None:
+        if active and not self._dictation_is_active:
+            self._dictation_generation += 1
+        self._dictation_is_active = active
 
     def _start_thinking_tune(self) -> None:
         """Start the thinking tune when processing a query."""
@@ -1569,11 +1582,15 @@ class VoiceListener(threading.Thread):
             job = self._transcription_jobs_q.get()
             if job is None:
                 return
+            if self._should_stop or self._dictation_active or job.dictation_generation != self._dictation_generation:
+                continue
             try:
                 text, language = self._transcribe_audio(job.audio)
             except Exception as exc:
                 debug_log(f"transcription worker error: {exc}", "voice")
                 text, language = "", None
+            if self._should_stop or self._dictation_active or job.dictation_generation != self._dictation_generation:
+                continue
             self._transcription_results_q.put(
                 _TranscriptionResult(
                     text=text,
@@ -1581,6 +1598,7 @@ class VoiceListener(threading.Thread):
                     start_time=job.start_time,
                     end_time=job.end_time,
                     energy=job.energy,
+                    dictation_generation=job.dictation_generation,
                 )
             )
 
@@ -1588,20 +1606,29 @@ class VoiceListener(threading.Thread):
         worker = self._transcription_worker_thread
         if worker is None:
             return
-        self._transcription_jobs_q.put(None)
-        worker.join()
+        self._should_stop = True
+        while True:
+            try:
+                self._transcription_jobs_q.get_nowait()
+            except queue.Empty:
+                break
+        self._transcription_jobs_q.put_nowait(None)
+        worker.join(timeout=0.5)
         self._transcription_worker_thread = None
         while True:
             try:
-                result = self._transcription_results_q.get_nowait()
+                self._transcription_results_q.get_nowait()
             except queue.Empty:
                 break
-            self._handle_transcription_result(result)
-        debug_log("finished queued Whisper transcription work", "voice")
+        if worker.is_alive():
+            debug_log("Whisper transcription still finishing after listener shutdown", "voice")
+        else:
+            debug_log("finished queued Whisper transcription work", "voice")
 
     def _handle_transcription_result(self, result: _TranscriptionResult) -> None:
-        if result.language:
-            self._last_detected_language = result.language
+        if self._should_stop or self._dictation_active or result.dictation_generation != self._dictation_generation:
+            return
+        self._last_detected_language = result.language
         text = result.text
         if not text or not text.strip():
             self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
@@ -1616,16 +1643,16 @@ class VoiceListener(threading.Thread):
             self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
             return
 
-        if self.tts is not None and self.tts.is_speaking():
-            is_during_tts = True
-        else:
-            tts_finish_time = self.echo_detector._last_tts_finish_time
-            echo_tolerance = self.echo_detector.echo_tolerance
-            is_during_tts = (
-                tts_finish_time > 0
-                and result.start_time > 0
-                and result.start_time < tts_finish_time + echo_tolerance
+        tts_start_time = self.echo_detector._tts_start_time
+        tts_finish_time = self.echo_detector._last_tts_finish_time
+        is_during_tts = (
+            tts_start_time > 0
+            and result.end_time >= tts_start_time
+            and (
+                (self.tts is not None and self.tts.is_speaking())
+                or result.start_time < tts_finish_time + self.echo_detector.echo_tolerance
             )
+        )
         self._transcript_buffer.add(
             text=text,
             start_time=result.start_time,
@@ -1873,6 +1900,14 @@ class VoiceListener(threading.Thread):
         return f"\"How's the weather in [your city], {wake_title}?\""
 
     def run(self) -> None:
+        """Run capture and release Whisper work on every exit path."""
+        try:
+            self._run()
+        finally:
+            if self._transcription_worker_thread is not None:
+                self._finish_transcription_worker()
+
+    def _run(self) -> None:
         """Main voice listening loop."""
         if sd is None:
             debug_log("sounddevice not available", "voice")
@@ -2428,13 +2463,30 @@ class VoiceListener(threading.Thread):
             except Exception:
                 pass
 
+            dictation_paused = False
             while not self._should_stop:
+                if self._dictation_active:
+                    if not dictation_paused:
+                        self._clear_audio_buffers()
+                        dictation_paused = True
+                    while True:
+                        try:
+                            self._transcription_results_q.get_nowait()
+                        except queue.Empty:
+                            break
+                    self._check_audio_health()
+                    time.sleep(0.05)
+                    continue
+                dictation_paused = False
                 try:
                     result = self._transcription_results_q.get_nowait()
                 except queue.Empty:
                     pass
                 else:
                     self._handle_transcription_result(result)
+
+                if self._should_stop or self._dictation_active:
+                    continue
 
                 self._check_audio_health()
 
@@ -2444,6 +2496,9 @@ class VoiceListener(threading.Thread):
                     # Critical: Check timeouts even when no audio is being received
                     # This ensures hot window expiry fires reliably
                     self._check_query_timeout()
+                    continue
+
+                if self._should_stop or self._dictation_active:
                     continue
 
                 if item is None:
@@ -2504,10 +2559,13 @@ class VoiceListener(threading.Thread):
                     # Check for query timeouts
                     self._check_query_timeout()
 
-        self._finish_transcription_worker()
-
     def _finalize_utterance(self) -> None:
         """Queue a completed utterance for serial transcription."""
+        if self._should_stop or self._dictation_active:
+            self.is_speech_active = False
+            self._silence_frames = 0
+            self._utterance_frames = []
+            return
         if np is None or not self._utterance_frames:
             self.is_speech_active = False
             self._silence_frames = 0
@@ -2559,6 +2617,7 @@ class VoiceListener(threading.Thread):
             start_time=utterance_start_time,
             end_time=utterance_end_time,
             energy=utterance_energy,
+            dictation_generation=self._dictation_generation,
         )
         try:
             self._transcription_jobs_q.put_nowait(job)
