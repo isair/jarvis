@@ -214,6 +214,8 @@ def test_resumed_task_journal_marks_completed_write_without_replaying_it(tmp_pat
 
     signature = 'localFiles:{"operation":"write"}'
     assert resumed.completed_write_signatures == {store.signature_digest(signature)}
+    assert resumed.steps == ["save"]
+    assert resumed.completed_step_indices == {0}
     assert signature not in store._task_path(task.task_id).read_text(encoding="utf-8")
 
 

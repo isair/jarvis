@@ -40,6 +40,8 @@ def current_task_id() -> Optional[str]:
 @dataclass(frozen=True)
 class TaskRecord:
     task_id: str
+    steps: list[str]
+    completed_step_indices: set[int]
     completed_write_signatures: set[str]
     uncertain_write_signatures: set[str]
 
@@ -95,6 +97,11 @@ class TaskStore:
     def _record(task: dict) -> TaskRecord:
         return TaskRecord(
             task_id=task["task_id"],
+            steps=[step["text"] for step in task["steps"]],
+            completed_step_indices={
+                index for index, step in enumerate(task["steps"])
+                if step["status"] == "done"
+            },
             completed_write_signatures={
                 result["signature"] for result in task["results"]
                 if result["success"] and result["mutating"]
