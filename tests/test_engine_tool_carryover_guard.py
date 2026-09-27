@@ -53,6 +53,8 @@ def _mock_cfg():
     cfg.agentic_query_timeout_sec = 180.0
     cfg.agentic_parallel_reads = 3
     cfg.agentic_tool_result_chars = 4000
+    cfg.agentic_context_tokens = 8192
+    cfg.agentic_preparation = "staged"
     cfg.planner_timeout_sec = 3.0
     cfg.tool_search_max_calls = 3
     cfg.tool_selection_strategy = "all"

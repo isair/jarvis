@@ -90,6 +90,7 @@ class MockConfig:
     agentic_tool_result_chars: int = 4000
     agentic_context_tokens: int = 8192
     agentic_preparation: str = "staged"
+    planner_timeout_sec: float = 3.0
     tool_selection_strategy: str = "embedding"
     fast_model: str = ""
     memory_enrichment_max_results: int = 5

@@ -370,7 +370,7 @@ def test_max_turns_produces_digest(mock_config, db, dialogue_memory):
 
     captured = {}
 
-    def fake_digest(user_query, loop_messages, cfg):
+    def fake_digest(user_query, loop_messages, cfg, *, timeout_sec):
         captured["user_query"] = user_query
         captured["loop_messages"] = loop_messages
         return "Couldn't finish: I was still working through the request."

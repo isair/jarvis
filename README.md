@@ -67,8 +67,9 @@ Budget memory for Whisper and, when different from chat, the fast model used for
 ## What you can do
 
 - **A third person in the room.** Bring Jarvis into an ongoing conversation with friends, talk through a problem aloud, or ask it to weigh in on a decision. “Jarvis, what do you think?” draws on the recent discussion, not just that one sentence.
-- **Remember beyond one session.** Search your local diary and knowledge graph. Browse what Jarvis has stored in the Memory Viewer.
+- **Remember beyond one session.** Search your local diary and source-backed facts. Inspect evidence, correct inaccurate facts and review their history in the Memory Viewer. Existing knowledge-graph notes remain editable.
 - **Get things done.** Built-in tools cover web search, weather, time, screenshot OCR, file access, nutrition tracking and optional location awareness.
+- **Keep longer tasks bounded.** Independent read-only tools can run together. Local task records retain results for follow-up, while interrupted actions with uncertain outcomes are not automatically repeated.
 - **Connect your own tools.** MCP servers add browser automation, smart-home controls and other integrations. Tool routing selects a relevant subset for each request.
 - **Dictate into other apps.** Hold a hotkey, speak, then release to paste locally transcribed text. See the [platform limitations](#known-limitations) first.
 - **Type when you need to.** The companion chat shares your voice conversation and memory. Text replies are silent, and you can rewind a sent message to regenerate from that point.
@@ -129,6 +130,7 @@ Jarvis is actively developed, primarily on macOS. Windows and Linux behaviour ma
 - **First-run downloads can take time.** Whisper and language models can be large. Check Logs for progress before assuming startup is stuck.
 - **Whisper turbo needs a compatible backend.** The wizard hides it when the selected backend cannot load it; an existing unsupported selection uses `medium` instead.
 - **Optional capabilities need their dependencies.** Location awareness needs a GeoLite2 database. Semantic memory search needs working embeddings; otherwise search falls back to keywords.
+- **Memory extraction can make mistakes.** Review the Facts tab before relying on personal details. Retraction excludes a fact from current recall but keeps its visible audit history; it is not permanent erasure.
 
 ## Configuration
 

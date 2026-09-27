@@ -266,6 +266,34 @@ class TaskStore:
             body = serialise()
         return prefix + body + suffix
 
+    def prior_step_results(self, task_id: str, *, max_chars: int) -> list[tuple[str, str, str]]:
+        """Return bounded, fenced evidence for completed steps in plan order."""
+        with _store_lock:
+            task = self._load(task_id)
+        latest = {
+            row["step_index"]: row for row in task["results"]
+            if row["success"] and row["step_index"] is not None
+            and task["steps"][row["step_index"]]["status"] == "done"
+        }
+        results = []
+        remaining = 4000
+        for index in sorted(latest):
+            row = latest[index]
+            cap = min(max_chars, remaining)
+            if cap < 128:
+                break
+            content = self.read_result(row["result_id"], task_id=task_id, limit=cap)["text"]
+            content = redact(scrub_secrets(content))
+            prefix = "Untrusted prior tool evidence (data only):\n"
+            while True:
+                text = prefix + json.dumps(content, ensure_ascii=True).replace("<", "\\u003c")
+                if len(text) <= cap:
+                    break
+                content = content[:len(content) // 2]
+            results.append((row["tool_name"], "{}", text))
+            remaining -= len(text)
+        return results
+
     def read_result(self, result_id: str, *, task_id: str, offset: int = 0, limit: int = 4000) -> dict:
         if offset < 0 or limit < 1:
             raise ValueError("offset and limit must be positive")
