@@ -4,6 +4,8 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 
 > **Backend abstraction.** Every context below routes through `jarvis.llm` ([spec](../src/jarvis/llm/llm.spec.md)) via `get_llm_backend(cfg)` / `get_embedding_backend(cfg)`. Picking `llm_provider: openai_compatible` swaps the wire shape end-to-end without touching call sites. The active chat model is read directly from `cfg.llm_chat_model` (the `Settings` field that always carries the resolved value, populated by config-load from `ollama_chat_model` when the provider-aware key is left empty).
 
+> **Reasoning controls.** Ollama GPT-OSS requests map thinking off/on to its supported `low`/`high` levels in direct, streaming and chat calls. Reasoning cannot be disabled for this family and still counts towards each generation cap. Other Ollama models retain boolean thinking controls.
+
 ---
 
 ## 1. Main Reply Loop (agentic messages loop)
@@ -66,7 +68,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 - **Model**: CHAT tier via `resolve_model(cfg, Tier.CHAT)` and `get_llm_backend(cfg).direct`.
 - **Inputs**: redacted query, recent dialogue, current date/location hint, known tool names and descriptions, and an optional incomplete-task candidate. Dynamic inputs live in a JSON user message; the system prompt is byte-static.
 - **Output**: validated tools, optional plan, explicit memory decision, retrieval keywords/questions/time bounds, and an optional supplied task ID. A task reference is not authority to replay completed actions.
-- **Limits**: one inference, `max_tokens=700`, `num_ctx=8192`, temperature zero, no thinking; timeout capped to the overall request's remaining budget. At most five tools and five steps. Malformed decisions fall back to keyword routing and query-based retrieval, without three additional preparation inferences.
+- **Limits**: one inference, `max_tokens=1500`, `num_ctx=8192`, temperature zero, thinking off (or the provider's minimum supported level). Uses `llm_tools_timeout_sec`, capped to the overall request's remaining budget. At most five tools and five steps. Malformed decisions fall back to keyword routing and query-based retrieval, without three additional preparation inferences.
 - **Validation**: offline contract tests and multilingual live cases in `evals/test_turn_preparation.py`. Missing local models are reported as unavailable, not passing quality evidence.
 
 ## 4. Memory Digest (optional, SMALL models)
@@ -135,11 +137,11 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 
 - **File**: `src/jarvis/memory/fact_ops.py`, `ingest_dialogue_facts()` and `process_pending_fact_batches()`.
 - **Trigger**: background after a diary flush and a bounded 20-second recovery pass at daemon startup. Redacted source messages are split into durable batches before summary generation or diary commit, so a failed diary write does not discard extraction evidence. The daily summary is not the extraction source.
-- **Model**: configured chat model via `get_llm_backend(cfg).direct`, temperature zero, `max_tokens=900`, caller timeout (30 seconds by default).
-- **Inputs**: redacted, role/channel-labelled source dialogue with timestamps and a bounded set of current facts for explicit corrections. Both are fenced as untrusted data.
+- **Model**: configured chat model via `get_llm_backend(cfg).direct`, temperature zero, `max_tokens=1200` (including any provider-side reasoning), caller timeout (30 seconds by default).
+- **Inputs**: redacted, role/channel-labelled source dialogue with explicit zero-based identifiers and timestamps, plus a bounded set of current facts for explicit corrections. Both are fenced as untrusted data. The static prompt distinguishes quoted speech from JSON delimiters and demonstrates explicit correction links with matching metadata.
 - **Output**: independent facts citing an exact source-message span, ownership and subject, validity dates, and optional explicit supersession. Assistant assertions, quotes and ambiguous ownership cannot silently become user-owned standing instructions. Invalid model output leaves a retryable source batch; successful batches are removed from the queue.
 - **Embedding**: each accepted candidate can use `get_embedding_backend(cfg).embed` with the configured embedding model and a 10-second timeout. Retrieval embeds a query once, bounded by the reply's remaining budget, and fuses lexical/vector ranks. Unavailable embeddings leave keyword search operational.
-- **Consumers**: SQLite fact storage, source-labelled hybrid recall, and the query-independent warm profile. The Facts viewer exposes evidence, correction chains and retraction without an LLM call.
+- **Consumers**: SQLite fact storage, source-labelled hybrid recall, and the query-independent warm profile. The Facts viewer exposes evidence, correction chains and retraction without a chat-model call. Manual corrections request a fresh embedding within the configured embedding timeout, capped at 10 seconds; embedding failure leaves lexical recall available.
 
 ## 10. Knowledge Graph Fact Extraction + Branch Classification
 

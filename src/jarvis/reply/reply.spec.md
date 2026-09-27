@@ -40,7 +40,7 @@ Design principles enforced by the engine:
 
 3. Pre-flight Preparation
    - Default `agentic_preparation=staged` routes tools first, then gives the task-list planner (`plan_query`) the query, compact dialogue and routed catalogue. Short tool-free queries can skip planning. The planner runs before conditional memory retrieval.
-   - Experimental `agentic_preparation=combined` with LLM routing uses one validated CHAT-tier request for selected tools, steps, memory search parameters and an optional explicit task continuation. It skips the separate router, planner and extractor calls. Invalid or timed-out output falls back to keyword routing and query-based recall. Staged mode remains the default until live accuracy evals justify a change.
+   - Experimental `agentic_preparation=combined` with LLM routing uses one validated CHAT-tier request for selected tools, steps, memory search parameters and an optional explicit task continuation. It skips the separate router, planner and extractor calls. It uses `llm_tools_timeout_sec`, capped by the remaining query budget; staged planning retains `planner_timeout_sec`. Invalid or timed-out output falls back to keyword routing and query-based recall. Staged mode remains the default until live accuracy evals justify a change.
    - The planner emits an ordered list of short sub-tasks (max 5). Two of the tokens are structural for the engine:
      - `searchMemory topic='...'` as a leading step means "answering requires information from prior conversations"; the engine runs memory enrichment. Omitting it means "no memory needed".
      - Concrete tool steps (e.g. `webSearch query='...'`) name specific tools; the engine uses those names as the allow-list directly.
