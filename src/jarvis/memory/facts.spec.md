@@ -69,7 +69,10 @@ and reference-only. It also searches editable legacy graph nodes, including
 World, and labels every match unverified. `memory_enrichment_source` selects
 `none`, `diary`, `graph` (facts plus legacy graph), or `all`. The optional
 embedding timeout is bounded by the caller. It chooses complete evidence lines
-within one `max_tokens` context budget. Older superseded or retracted facts do
+within one `max_tokens` context budget. Legacy node text contributes only lines
+with Unicode lexical overlap with the query; matching lines are ordered by
+overlap and capped per node so broad blobs cannot consume the budget with
+unrelated content. Older superseded or retracted facts do
 not enter ordinary recall. Historical `as_of` lookup can return assertions
 valid at the requested time. If local embeddings are unavailable, FTS retrieval
 continues.

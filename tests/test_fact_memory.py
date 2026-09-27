@@ -158,6 +158,28 @@ def test_recall_filters_superseded_and_merges_diary_under_budget(store):
     db.close()
 
 
+def test_legacy_recall_spends_budget_on_matching_lines(store):
+    graph = GraphMemoryStore(store.db_path)
+    try:
+        graph.create_node(
+            "General notes", "Broad historical notes",
+            "\n".join(["Unrelated entry about London"] * 40 + ["Sushi in Tokyo was discussed"]),
+            "world",
+        )
+    finally:
+        graph.close()
+    db = Database(store.db_path)
+    try:
+        block = recall_evidence(
+            db, SimpleNamespace(embedding_model="", memory_enrichment_source="graph"),
+            "do sushi", {"keywords": ["do", "sushi"]}, max_tokens=80,
+        )
+    finally:
+        db.close()
+    assert "Sushi in Tokyo was discussed" in block
+    assert "Unrelated entry about London" not in block
+
+
 def test_pending_batch_survives_extractor_failure_then_retries(store, monkeypatch):
     messages = [{"role": "user", "channel": "text", "content": "I live in Bristol", "ts": 1.0}]
     store.enqueue_batch(messages, source_app="jarvis", batch_ref="flush-1")

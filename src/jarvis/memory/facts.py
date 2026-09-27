@@ -543,11 +543,20 @@ def recall_evidence(db, cfg, query: str, search_params: dict, max_tokens: int,
         candidates.append((weight / (60 + rank), line))
     for rank, row in enumerate(diary, 1):
         candidates.append((1.0 / (60 + rank), f"[Diary summary; reference only] {row['text']}"))
+    legacy_terms = set(re.findall(r"\w+", search_text.casefold(), flags=re.UNICODE))
     for rank, (node, path) in enumerate(legacy, 1):
-        for line in node.data.splitlines():
-            if line.strip():
-                candidates.append((0.85 / (60 + rank),
-                                   f"[Unverified legacy graph; {path}; last edited {node.updated_at[:10]}] {line.strip()}"))
+        matching_lines = []
+        for index, line in enumerate(node.data.splitlines()):
+            folded = line.casefold()
+            line_terms = set(re.findall(r"\w+", folded, flags=re.UNICODE))
+            overlap = sum(term in line_terms or (not term.isascii() and term in folded)
+                          for term in legacy_terms)
+            if line.strip() and overlap:
+                matching_lines.append((overlap, index, line.strip()))
+        matching_lines.sort(key=lambda item: (-item[0], item[1]))
+        for _, _, line in matching_lines[:5]:
+            candidates.append((0.85 / (60 + rank),
+                               f"[Unverified legacy graph; {path}; last edited {node.updated_at[:10]}] {line}"))
     candidates.sort(key=lambda item: -item[0])
     limit = max(0, max_tokens) * 4
     lines = []
