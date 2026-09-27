@@ -47,7 +47,10 @@ SQLite accepts the fact. Content is redacted again at the storage boundary.
 An explicit `supersedes_id` is accepted only for an active fact with matching
 kind and owner. The extractor further requires the same subject and predicate
 key. `correct_fact()` creates a successor and closes the old fact's valid
-interval atomically. `retract_fact()` marks an active fact retracted and
+interval atomically. A manual correction can carry a fresh embedding of its
+redacted text; it never copies the predecessor's stale vector. When embedding
+is unavailable, the correction still commits and remains searchable lexically.
+`retract_fact()` marks an active fact retracted and
 records the reason. Both preserve source history; Retract is not erasure.
 Conditional status updates prevent competing clients from creating two active
 successors for the same predecessor.

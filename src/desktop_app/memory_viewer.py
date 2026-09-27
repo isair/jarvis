@@ -19,8 +19,10 @@ from flask import Flask, jsonify, request, Response
 
 from jarvis.config import load_settings
 from jarvis.debug import debug_log
+from jarvis.llm import get_embedding_backend
 from jarvis.memory.graph import FIXED_BRANCH_IDS, GraphMemoryStore
 from jarvis.memory.facts import FactStore
+from jarvis.utils.redact import redact
 
 
 app = Flask(__name__)
@@ -344,15 +346,28 @@ def facts_correct(fact_id: int) -> Response:
     text = body.get("text") if isinstance(body, dict) else None
     if not isinstance(text, str) or not text.strip() or len(text) > 4000:
         return jsonify({"error": "A correction must contain 1 to 4000 characters"}), 400
+    clean_text = redact(text.strip())
     with closing(FactStore(_get_db_path())) as store:
         old = store.get_fact(fact_id)
         if old is None:
             return jsonify({"error": "Fact not found"}), 404
         if old["status"] != "active":
             return jsonify({"error": "Only current facts can be corrected"}), 409
+        embedding = None
         try:
-            fact = store.correct_fact(fact_id, text=text.strip(), evidence=text.strip(),
-                                      source_text=text.strip(), source_ref=f"manual:{uuid4().hex}")
+            cfg = load_settings()
+            model = cfg.embedding_model
+            timeout = min(float(cfg.llm_embedding_timeout_sec), 10.0)
+            if model and timeout > 0:
+                candidate = get_embedding_backend(cfg).embed(clean_text, model, timeout_sec=timeout)
+                if isinstance(candidate, list) and candidate:
+                    embedding = candidate
+        except Exception as exc:
+            debug_log(f"manual fact embedding unavailable ({type(exc).__name__}); lexical recall remains available", "memory")
+        try:
+            fact = store.correct_fact(fact_id, text=clean_text, evidence=clean_text,
+                                      source_text=clean_text, source_ref=f"manual:{uuid4().hex}",
+                                      embedding=embedding)
         except ValueError:
             return jsonify({"error": "This fact cannot be corrected"}), 409
     debug_log(f"Fact {fact_id} corrected from memory viewer", "memory")

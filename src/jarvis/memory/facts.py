@@ -269,7 +269,8 @@ class FactStore:
 
     def correct_fact(self, fact_id: int, *, text: str, evidence: str, source_text: str,
                      source_ref: str, source_role: str = "user", source_channel: str = "text",
-                     observed_at: str | None = None, valid_from: str | None = None) -> dict:
+                     observed_at: str | None = None, valid_from: str | None = None,
+                     embedding: list[float] | None = None) -> dict:
         old = self.get_fact(fact_id)
         if old is None:
             raise ValueError("Unknown fact")
@@ -277,7 +278,7 @@ class FactStore:
                              predicate_key=old["predicate_key"], source_ref=source_ref,
                              source_type="manual", source_role=source_role, source_channel=source_channel,
                              source_text=source_text, evidence=evidence, observed_at=observed_at or _now(),
-                             valid_from=valid_from, supersedes_id=fact_id)
+                             valid_from=valid_from, supersedes_id=fact_id, embedding=embedding)
 
     def retract_fact(self, fact_id: int, *, evidence: str, observed_at: str | None = None) -> bool:
         if not evidence.strip():

@@ -1,4 +1,6 @@
 """Behavioural coverage for inspecting and correcting local facts."""
+from contextlib import closing
+from types import SimpleNamespace
 import pytest
 
 pytest.importorskip("flask")
@@ -16,9 +18,12 @@ def facts_client(tmp_path, monkeypatch):
         "I live in Paris", kind="user", owner="user", subject="user",
         source_ref="dialogue:test", source_type="dialogue", source_role="user",
         source_channel="text", source_text="I live in Paris", evidence="I live in Paris",
-        observed_at="2026-01-01T00:00:00+00:00",
+        observed_at="2026-01-01T00:00:00+00:00", embedding=[1.0, 0.0],
     )
     monkeypatch.setattr(memory_viewer, "_get_db_path", lambda: path)
+    monkeypatch.setattr(memory_viewer, "load_settings", lambda: SimpleNamespace(
+        embedding_model="", llm_embedding_timeout_sec=3.0,
+    ))
     with memory_viewer.app.test_client() as client:
         yield client, fact
     store.close()
@@ -45,6 +50,50 @@ def test_correction_supersedes_without_erasing_evidence(facts_client):
     assert client.get("/api/facts").json["facts"] == [corrected]
     history = client.get(f"/api/facts/{corrected['id']}").json["history"]
     assert [item["status"] for item in history] == ["superseded", "active"]
+
+
+def test_manual_correction_is_semantically_retrievable_without_exposing_secrets(
+        facts_client, monkeypatch):
+    client, fact = facts_client
+    seen = []
+
+    class LocalEmbedding:
+        def embed(self, text, model, timeout_sec):
+            seen.append(text)
+            return [0.0, 1.0]
+
+    monkeypatch.setattr(memory_viewer, "load_settings", lambda: SimpleNamespace(
+        embedding_model="local-embedding", llm_embedding_timeout_sec=3.0,
+    ))
+    monkeypatch.setattr(memory_viewer, "get_embedding_backend", lambda cfg: LocalEmbedding())
+    response = client.put(f"/api/facts/{fact['id']}",
+                          json={"text": "I live in London; email bob@example.com"})
+    assert response.status_code == 200
+    assert "bob@example.com" not in seen[0]
+    assert "bob@example.com" not in response.json["fact"]["text"]
+    with closing(FactStore(memory_viewer._get_db_path())) as store:
+        assert store.search_facts("residence dwelling") == []
+        matches = store.search_facts("residence dwelling", query_vector=[0.0, 1.0])
+    assert [item["id"] for item in matches] == [response.json["fact"]["id"]]
+
+
+def test_manual_correction_succeeds_when_embedding_fails_without_stale_vector(
+        facts_client, monkeypatch):
+    client, fact = facts_client
+
+    class FailedEmbedding:
+        def embed(self, text, model, timeout_sec):
+            raise RuntimeError("local model unavailable")
+
+    monkeypatch.setattr(memory_viewer, "load_settings", lambda: SimpleNamespace(
+        embedding_model="local-embedding", llm_embedding_timeout_sec=3.0,
+    ))
+    monkeypatch.setattr(memory_viewer, "get_embedding_backend", lambda cfg: FailedEmbedding())
+    response = client.put(f"/api/facts/{fact['id']}", json={"text": "I live in Bath"})
+    assert response.status_code == 200
+    with closing(FactStore(memory_viewer._get_db_path())) as store:
+        assert [item["id"] for item in store.search_facts("Bath")] == [response.json["fact"]["id"]]
+        assert store.search_facts("residence dwelling", query_vector=[1.0, 0.0]) == []
 
 
 def test_retraction_excludes_fact_but_preserves_visible_history(facts_client):
