@@ -67,8 +67,12 @@ def _evidence_is_quoted(source: str, evidence: str) -> bool:
         return False
     before = source[:start].rstrip()
     after = source[start + len(evidence):].lstrip()
-    return bool(before and after and any(before.endswith(left) and after.startswith(right)
-                                         for left, right in _QUOTE_PAIRS))
+    span = evidence.strip()
+    return any(
+        (before.endswith(left) or span.startswith(left))
+        and (after.startswith(right) or span.endswith(right))
+        for left, right in _QUOTE_PAIRS
+    )
 
 
 def ingest_dialogue_facts(store: FactStore, messages: list[dict], cfg, *, source_app: str,

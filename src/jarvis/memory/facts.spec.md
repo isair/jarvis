@@ -29,12 +29,14 @@ The extractor sees the numbered source messages and a bounded list of current
 facts. It returns independent facts with an exact evidence quote and source
 index. Invalid indices, absent quotes, empty text and invalid categories are
 rejected. User ownership and directives require a direct addressed user
-utterance. Quoted, reported, ambient or assistant assertions cannot create a
-user-owned fact or directive. Ambiguous ownership stays `unknown`. The model
-must classify a statement as direct; attribution is not guessed from a topic
-or an assistant claim. The source quote is verified against the source text
-before SQLite accepts the fact. Content is redacted again at the storage
-boundary.
+utterance. A visibly paired quotation is rejected deterministically, whether
+its delimiters sit inside or just outside the cited evidence span. Reported
+speech without quotation marks relies on the extractor's direct-versus-reported
+classification. Ambient or assistant assertions cannot create a user-owned
+fact or directive. Ambiguous ownership stays `unknown`. The model must
+classify a statement as direct; attribution is not guessed from a topic or an
+assistant claim. The source quote is verified against the source text before
+SQLite accepts the fact. Content is redacted again at the storage boundary.
 
 `add_fact()` stores a new assertion. It never infers supersession from recency.
 An explicit `supersedes_id` is accepted only for an active fact with matching
