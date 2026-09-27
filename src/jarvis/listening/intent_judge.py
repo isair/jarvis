@@ -17,6 +17,24 @@ from ..llm import get_llm_backend, resolve_model, Tier
 from .transcript_buffer import TranscriptSegment
 
 
+DEFAULT_OLLAMA_KEEP_ALIVE = "30m"
+LOW_POWER_OLLAMA_KEEP_ALIVE = "1m"
+
+
+def _is_low_power_mode_enabled(cfg: Any) -> bool:
+    """Return True only when Settings.low_power_mode is explicitly enabled."""
+    if cfg is None:
+        return False
+    return getattr(cfg, "low_power_mode", False) is True
+
+
+def _ollama_keep_alive_for_power_mode(cfg: Any) -> str:
+    """Return the Ollama residency duration for the active power mode."""
+    if _is_low_power_mode_enabled(cfg):
+        return LOW_POWER_OLLAMA_KEEP_ALIVE
+    return DEFAULT_OLLAMA_KEEP_ALIVE
+
+
 def warm_up_chat_model(cfg, model: str, timeout: float) -> bool:
     """Page ``model`` into the active backend's resident memory.
 
@@ -30,7 +48,11 @@ def warm_up_chat_model(cfg, model: str, timeout: float) -> bool:
     if not model:
         return False
     try:
-        ok = get_llm_backend(cfg).warm_up(model, timeout_sec=timeout)
+        ok = get_llm_backend(cfg).warm_up(
+            model,
+            timeout_sec=timeout,
+            keep_alive=_ollama_keep_alive_for_power_mode(cfg),
+        )
     except Exception as e:
         debug_log(f"warmup error (model={model}): {e}", "voice")
         return False
@@ -415,7 +437,7 @@ Examples:
             debug_log(f"🧠 Intent judge [{mode}]: \"{transcript_preview}...\"", "voice")
 
             # Voice sessions can have long quiet stretches; the Ollama
-            # ``keep_alive: "30m"`` keeps the judge model resident between
+            # ``keep_alive`` keeps the judge model resident between
             # engagements so we don't pay the cold-reload tax on each one.
             # ``num_ctx: 8192`` covers a ~2k-token system prompt plus up to
             # ~2 minutes of multi-speaker transcript without truncating the
@@ -444,7 +466,9 @@ Examples:
                         # model normally stops long before the cap.
                         "max_tokens": 1500,
                         "num_ctx": 8192,
-                        "keep_alive": "30m",
+                        "keep_alive": _ollama_keep_alive_for_power_mode(
+                            self.config.cfg
+                        ),
                     },
                     thinking=self.config.thinking,
                 )

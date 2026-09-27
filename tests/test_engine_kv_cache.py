@@ -180,3 +180,53 @@ def test_context_restored_after_native_to_text_fallback(
         "in text-tools mode the context block must sit before the tool-call "
         "syntax guidance so the instruction block stays final"
     )
+
+
+@pytest.mark.unit
+def test_text_query_sees_voice_turns_from_the_shared_memory(
+    mock_config, db, dialogue_memory
+):
+    """A typed chat query must carry the same conversation context as a
+    voice follow-up. Voice and text share one DialogueMemory, and the
+    engine injects the memory's recent turns into the model prompt. Here
+    the turns were written by the audio path; the text query must see
+    them verbatim, ahead of the current user message."""
+    from jarvis.reply import engine as engine_mod
+
+    mock_config.llm_chat_model = "gpt-oss:20b"  # LARGE -> native tools
+    mock_config.evaluator_enabled = False
+
+    # Prior audio conversation recorded in the shared memory.
+    dialogue_memory.add_message("user", "remind me to buy oat milk")
+    dialogue_memory.add_message(
+        "assistant", "Noted - I will remind you to buy oat milk."
+    )
+
+    captured: list[list[dict]] = []
+
+    def fake_chat(*args, **kwargs):
+        msgs = kwargs.get("messages") or (args[2] if len(args) > 2 else [])
+        captured.append(list(msgs))
+        return {"message": {"content": "Oat milk is already on the list."}}
+
+    with _patched_reply(engine_mod, fake_chat, return_value="Monday, test-ville"):
+        engine_mod.run_reply_engine(
+            db=db, cfg=mock_config, tts=None,
+            text="what was I asking about?",
+            dialogue_memory=dialogue_memory,
+        )
+
+    assert captured, "chat model should have been called"
+    msgs = captured[-1]
+    contents = [m.get("content", "") for m in msgs]
+    assert any(
+        "remind me to buy oat milk" in c for c in contents
+    ), "the voice turn must be injected into the model prompt for the text query"
+    query_idx = next(
+        i for i, c in enumerate(contents) if "what was I asking about?" in c
+    )
+    voice_idx = contents.index("remind me to buy oat milk")
+    assert voice_idx < query_idx, (
+        "the audio conversation must precede the typed query in the prompt"
+    )
+    assert msgs[query_idx]["role"] == "user"

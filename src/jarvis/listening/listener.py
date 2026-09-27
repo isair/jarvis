@@ -22,9 +22,15 @@ from contextlib import contextmanager
 from .echo_detection import EchoDetector
 from .state_manager import StateManager, ListeningState
 from ..utils.audio_lock import portaudio_lock
+from ..utils.audio_capture import mono_capture, open_input_stream, resolve_input_device
 from .wake_detection import is_wake_word_detected, extract_query_after_wake, is_stop_command
 from .transcript_buffer import TranscriptBuffer
-from .intent_judge import IntentJudge, create_intent_judge, warm_up_chat_model
+from .intent_judge import (
+    IntentJudge,
+    _is_low_power_mode_enabled,
+    create_intent_judge,
+    warm_up_chat_model,
+)
 from ..debug import debug_log
 from ..llm import get_embedding_backend
 from ..utils.location import is_location_available
@@ -48,7 +54,11 @@ def is_whisper_hallucination(no_speech_prob: float, threshold: float) -> bool:
 # Audio processing imports (optional)
 try:
     import sounddevice as sd
-    import webrtcvad
+    import warnings
+    with warnings.catch_warnings():
+        warnings.filterwarnings('ignore', message='pkg_resources is deprecated',
+                                category=UserWarning, module='webrtcvad')
+        import webrtcvad
     import numpy as np
 except ImportError as e:
     sd = None
@@ -412,6 +422,9 @@ class VoiceListener(threading.Thread):
         # Audio callback monitoring (for debugging)
         self._callback_count = 0
         self._last_callback_log_time = 0
+        self._pending_audio = None
+        self._vad_error_logged = False
+        self._reset_audio_health()
 
         # Voice activity detection
         self.is_speech_active = False
@@ -1228,13 +1241,19 @@ class VoiceListener(threading.Thread):
 
         # Import reply engine
         from ..reply.engine import run_reply_engine
+        from ..daemon import query_lock
 
-        # Process the query (keep thinking tune playing during processing)
+        # Process the query (keep thinking tune playing during processing).
+        # Hold the shared voice+text query lock so a voice query and a text
+        # chat query cannot run the reply engine concurrently against the
+        # same dialogue memory. Voice blocks while a text query finishes
+        # rather than being dropped (see daemon.query_lock).
         try:
-            reply = run_reply_engine(
-                self.db, self.cfg, None, query, self.dialogue_memory,
-                language=self._last_detected_language,
-            )
+            with query_lock():
+                reply = run_reply_engine(
+                    self.db, self.cfg, None, query, self.dialogue_memory,
+                    language=self._last_detected_language,
+                )
         except Exception as e:
             # Log the error visibly - this should never happen silently
             print(f"\n  ❌ Reply engine error: {e}", flush=True)
@@ -1292,6 +1311,7 @@ class VoiceListener(threading.Thread):
         """
         self._utterance_frames = []
         self._pre_roll.clear()
+        self._pending_audio = None
         self.is_speech_active = False
         self._silence_frames = 0
 
@@ -1321,10 +1341,15 @@ class VoiceListener(threading.Thread):
 
         # Use WebRTC VAD
         try:
-            pcm16 = np.clip(frame.flatten() * 32768.0, -32768, 32767).astype(np.int16).tobytes()
-            return bool(self._vad.is_speech(pcm16, getattr(self, "_stream_samplerate", self._samplerate)))
-        except Exception:
-            return False
+            vad_audio = _resample(frame.flatten(), getattr(self, "_stream_samplerate", self._samplerate), 16000)
+            pcm16 = np.clip(vad_audio * 32768.0, -32768, 32767).astype(np.int16).tobytes()
+            return bool(self._vad.is_speech(pcm16, 16000))
+        except Exception as exc:
+            if not self._vad_error_logged:
+                self._vad_error_logged = True
+                debug_log(f"VAD rejected audio frame: {exc}", "voice")
+                print("  ⚠️  Speech detection failed; using audio-level detection. Enable voice_debug for details.", flush=True)
+            return rms >= float(getattr(self.cfg, "voice_min_energy", 0.0045))
 
     def _filter_noisy_segments(self, segments):
         """Filter out low-confidence Whisper segments."""
@@ -1465,19 +1490,81 @@ class VoiceListener(threading.Thread):
         # even when there's no audio being processed
         self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
 
+    def _reset_audio_health(self, now=None):
+        now = time.monotonic() if now is None else now
+        self._audio_started = now
+        self._last_audio_callback = now
+        self._last_health_check = now
+        self._audio_peak = 0.0
+        self._audio_frames_seen = 0
+        self._speech_frames_seen = 0
+        self._audio_dropped = 0
+        self._callback_status = ''
+        self._audio_callback_error = ''
+        self._audio_health_warning = None
+
+    def _check_audio_health(self, now=None):
+        """Report capture failures outside the real-time callback, without recording audio."""
+        now = time.monotonic() if now is None else now
+        if self._dictation_active:
+            self._reset_audio_health(now)
+            return
+        if now - self._last_health_check < 5:
+            return
+        self._last_health_check = now
+        warning = None
+        if now - self._last_audio_callback >= 5:
+            warning = 'No microphone callbacks in the last 5 seconds'
+        elif self._audio_peak <= 1e-7 and now - self._audio_started >= 10:
+            warning = 'Microphone is delivering silent samples'
+        if warning and warning != self._audio_health_warning:
+            print(f"  ⚠️  {warning}. Check the selected input, mute and recording permissions.", flush=True)
+            if sys.platform.startswith('linux'):
+                print("     🎤 Check PipeWire/PulseAudio recording-source routing (pavucontrol or wpctl status); avoid monitor/output sources.", flush=True)
+        elif not warning and self._audio_health_warning:
+            print("  ✅ Microphone audio is arriving again.", flush=True)
+        self._audio_health_warning = warning
+        if self._callback_status or self._audio_callback_error or self._audio_dropped:
+            print(f"  ⚠️  Audio capture: {self._callback_status or self._audio_callback_error or 'queue full'}; {self._audio_dropped} blocks dropped.", flush=True)
+            self._callback_status = self._audio_callback_error = ''
+            self._audio_dropped = 0
+        if self.cfg.voice_debug:
+            debug_log(
+                f"Audio capture: callbacks={self._callback_count}, frames={self._audio_frames_seen}, "
+                f"speech_frames={self._speech_frames_seen}, peak={self._audio_peak:.6f}, "
+                f"rate={self._stream_samplerate} Hz", "voice",
+            )
+        self._audio_peak = 0.0
+
+    def _audio_frames(self, buf):
+        """Keep native-rate frame boundaries across arbitrary callback block sizes."""
+        mono = mono_capture(buf)
+        if mono.size:
+            self._audio_peak = max(self._audio_peak, float(np.max(np.abs(mono))))
+        if self._pending_audio is not None:
+            mono = np.concatenate((self._pending_audio, mono))
+        count = len(mono) // self._frame_samples
+        end = count * self._frame_samples
+        self._pending_audio = mono[end:].copy()
+        self._audio_frames_seen += count
+        return [mono[start:start + self._frame_samples] for start in range(0, end, self._frame_samples)]
+
     def _on_audio(self, indata, frames, time_info, status):
         """Audio callback from sounddevice."""
         try:
+            self._last_audio_callback = time.monotonic()
+            self._callback_count += 1
+            if status:
+                self._callback_status = str(status)
             if self._should_stop or self._dictation_active:
                 return
-            self._callback_count += 1
             chunk = (indata.copy() if hasattr(indata, "copy") else indata)
             try:
                 self._audio_q.put_nowait(chunk)
-            except Exception:
-                pass
-        except Exception:
-            return
+            except queue.Full:
+                self._audio_dropped += 1
+        except Exception as exc:
+            self._audio_callback_error = str(exc)
 
     def _determine_whisper_backend(self) -> str:
         """Determine which Whisper backend to use based on config and availability."""
@@ -1529,21 +1616,50 @@ class VoiceListener(threading.Thread):
         print(f"     🎤 Whisper '{model_name}' loaded on {resolved_device}{suffix}", flush=True)
         return resolved_device
 
+    def _report_llm_warmup(self) -> None:
+        """Describe model probes without claiming full role requests were tested."""
+        results = self._llm_warmup_results
+        groups = {}
+        for key, label in (('chat', 'chat'), ('judge', 'intent judge'), ('router', 'tool router')):
+            if key in results:
+                groups.setdefault(results[key], []).append(label)
+        for (name, ok), roles in groups.items():
+            status = 'passed' if ok else 'failed'
+            icon = '🔥' if ok else '⚠️'
+            print(f"     {icon} Model '{name}': warmup probe {status} (used by {', '.join(roles)})", flush=True)
+        if groups:
+            print("     ℹ️ Warmup checks model loading, not full requests or their timeouts.", flush=True)
+        if 'judge' in results:
+            timeout = float(getattr(self.cfg, 'intent_judge_timeout_sec', 6.0))
+            print(f"     🧠 Intent detection: {timeout:g}s timeout (full intent request not tested)", flush=True)
+        if 'embed' in results:
+            name, ok = results['embed']
+            if ok:
+                print(f"     📐 Embedding probe passed: '{name}'", flush=True)
+            else:
+                print(f"     ⚠️ Embedding probe failed: '{name}'. Check model availability and embedding settings.", flush=True)
+
     def _start_llm_warmup(self) -> list[threading.Thread]:
         """Pre-load chat and intent judge models via the active backend.
 
         Warmup goes through ``warm_up_chat_model`` → ``LLMBackend.warm_up``,
         so it pages models into Ollama's resident memory on the Ollama path
         and sends a minimal inference to load the model on an OpenAI-
-        compatible server. Starts up to two daemon threads concurrently so
+        compatible server. Starts daemon threads concurrently so
         warmup overlaps with Whisper initialisation. When both models point
         at the same model, a single warmup covers both.
 
         Results land in ``self._llm_warmup_results`` keyed by role. The
         caller joins the returned threads with a shared deadline before
-        announcing "Listening!" so the ready state actually means ready.
+        reporting the probe outcomes and announcing "Listening!". Full
+        role-specific requests and their deadlines are not exercised.
         """
         self._llm_warmup_results: dict[str, tuple[str, bool]] = {}
+
+        if _is_low_power_mode_enabled(self.cfg):
+            print("     🌱 Low power mode: LLM warmup skipped", flush=True)
+            debug_log("low power mode enabled: skipping LLM warmup", "voice")
+            return []
 
         chat_model = str(getattr(self.cfg, "llm_chat_model", "") or "").strip()
         # Cap warmup at 60s total: the join budget is hardcoded at 60s (see
@@ -1570,9 +1686,6 @@ class VoiceListener(threading.Thread):
         shared_router = bool(router_model) and router_model in {chat_model, judge_model}
 
         embed_model = str(getattr(self.cfg, "embedding_model", "") or "").strip()
-        shared_embed = bool(embed_model) and embed_model in {
-            m for m in (chat_model, judge_model, router_model) if m
-        }
 
         threads: list[threading.Thread] = []
 
@@ -1586,10 +1699,6 @@ class VoiceListener(threading.Thread):
                 # Router reusing chat_model is already covered.
                 if router_model and router_model == chat_model:
                     self._llm_warmup_results["router"] = (chat_model, ok)
-                # When the embed model matches chat, the chat warmup already
-                # loaded the model into memory; no separate embed thread runs.
-                if shared_embed and embed_model == chat_model:
-                    self._llm_warmup_results["embed"] = (chat_model, ok)
 
             threads.append(threading.Thread(target=_warm_chat, daemon=True, name="warmup-chat"))
 
@@ -1599,8 +1708,6 @@ class VoiceListener(threading.Thread):
                 self._llm_warmup_results["judge"] = (judge_model, ok)
                 if router_model and router_model == judge_model:
                     self._llm_warmup_results["router"] = (judge_model, ok)
-                if shared_embed and embed_model == judge_model:
-                    self._llm_warmup_results["embed"] = (judge_model, ok)
 
             threads.append(threading.Thread(target=_warm_judge, daemon=True, name="warmup-judge"))
 
@@ -1608,12 +1715,12 @@ class VoiceListener(threading.Thread):
             def _warm_router() -> None:
                 ok = warm_up_chat_model(self.cfg, router_model, timeout=chat_timeout)
                 self._llm_warmup_results["router"] = (router_model, ok)
-                if shared_embed and embed_model == router_model:
-                    self._llm_warmup_results["embed"] = (router_model, ok)
 
             threads.append(threading.Thread(target=_warm_router, daemon=True, name="warmup-router"))
 
-        if embed_model and not shared_embed:
+        # Chat success cannot establish support for the embeddings endpoint,
+        # even when both settings happen to name the same model.
+        if embed_model:
             def _warm_embed() -> None:
                 try:
                     backend = get_embedding_backend(self.cfg)
@@ -1687,6 +1794,14 @@ class VoiceListener(threading.Thread):
                 print("     On Linux, ensure PortAudio is installed: sudo apt install libportaudio2", flush=True)
             return
 
+        # Resolve the same input for the permission probe and continuous capture.
+        try:
+            stream_kwargs = resolve_input_device(sd, self.cfg.voice_device, devices)
+        except ValueError as exc:
+            print(f'  ❌ {exc}', flush=True)
+            debug_log('configured input device did not match an available microphone', 'voice')
+            return
+
         # Windows 11: Test microphone permission by attempting a brief recording
         # This catches privacy settings that silently block audio access.
         # A 5-second timeout prevents indefinite hangs when Windows blocks
@@ -1711,9 +1826,8 @@ class VoiceListener(threading.Thread):
                     # stop/close after a successful start stays guarded.
                     stream = None
                     try:
-                        stream = sd.InputStream(
-                            samplerate=self._samplerate, channels=1,
-                            dtype="float32", blocksize=int(self._samplerate * 0.1),
+                        stream, _, _ = open_input_stream(
+                            sd, self._samplerate, 100, stream_kwargs, serialise=False,
                         )
                         stream.start()
                         time.sleep(0.15)
@@ -1807,11 +1921,15 @@ class VoiceListener(threading.Thread):
                 return
 
             self._mlx_model_repo = _get_mlx_model_repo(model_name)
-            print(f"     🎤 Loading MLX Whisper '{model_name}' (Apple Silicon GPU)...", flush=True)
+            print(f"🎤 Preparing Whisper '{model_name}' (Apple Silicon GPU)...", flush=True)
 
             max_retries = 4
             for attempt in range(max_retries + 1):
                 try:
+                    from .model_download import prepare_mlx_model
+                    # Use the same local path for warmup and subsequent transcriptions
+                    # so mlx-whisper reuses its in-memory model cache.
+                    self._mlx_model_repo = prepare_mlx_model(_get_mlx_model_repo(model_name))
                     # Pre-load the model by doing a warmup transcription.
                     # Use low-amplitude noise (not silence) so the decoder actually runs —
                     # silent audio trips the no-speech short-circuit and leaves the decode
@@ -2033,8 +2151,8 @@ class VoiceListener(threading.Thread):
                 except Exception as e:
                     debug_log(f"faster-whisper warmup failed: {e}", "voice")
 
-        # Wait for LLM warmups before announcing "Listening!" so the first
-        # engagement is responsive. A single 60s budget is shared across
+        # Wait for LLM probes before announcing "Listening!". A single
+        # 60s budget is shared across
         # all warmup threads so a slow/down Ollama can't block us from
         # listening — we'll just pay the cold-load cost on demand.
         warmup_threads = getattr(self, "_llm_warmup_threads", [])
@@ -2046,30 +2164,17 @@ class VoiceListener(threading.Thread):
                 t.join(timeout=remaining)
 
             still_warming = any(t.is_alive() for t in warmup_threads)
-            results = getattr(self, "_llm_warmup_results", {})
-
-            # Trailing space after ⚠️ intentional: the warning glyph renders
-            # narrower than 🧠/💬, so the pad keeps columns aligned.
-            def _print_status(role_key: str, label: str, ok_icon: str) -> None:
-                entry = results.get(role_key)
-                if entry is None:
-                    return
-                name, ok = entry
-                icon = ok_icon if ok else "⚠️ "
-                status = "ready" if ok else "warmup failed — will load on first use"
-                print(f"     {icon} {label} '{name}' {status}", flush=True)
-
-            _print_status("chat", "Chat model", "💬")
-            _print_status("judge", "Intent judge", "🧠")
-            _print_status("router", "Tool router", "🔧")
-            _print_status("embed", "Embed model", "📐")
+            self._report_llm_warmup()
 
             if still_warming:
                 debug_log("LLM warmup still running after 60s — continuing without", "voice")
-                print("     ⏳ Some models still warming — continuing anyway", flush=True)
+                print("     ⏳ Some model probes are still running; continuing startup.", flush=True)
 
         # Audio parameters
         frame_ms = int(getattr(self.cfg, "vad_frame_ms", 20))
+        if frame_ms not in (10, 20, 30):
+            debug_log(f"Unsupported VAD frame duration {frame_ms}; using 20 ms", "voice")
+            frame_ms = 20
         self._frame_samples = max(1, int(self._samplerate * frame_ms / 1000))
         pre_roll_ms = int(getattr(self.cfg, "vad_pre_roll_ms", 240))
         endpoint_silence_ms = int(getattr(self.cfg, "endpoint_silence_ms", 800))
@@ -2086,9 +2191,6 @@ class VoiceListener(threading.Thread):
         debug_log(f"VAD: enabled={bool(self._vad is not None)}, aggressiveness={getattr(self.cfg, 'vad_aggressiveness', 2)}", "voice")
 
         # Audio device setup
-        stream_kwargs = {}
-        device_env = (self.cfg.voice_device or '').strip().lower()
-
         if self.cfg.voice_debug:
             debug_log("available input devices:", "voice")
             try:
@@ -2103,22 +2205,6 @@ class VoiceListener(threading.Thread):
                         debug_log(f"  [{idx}] {name} (channels={max_in}, default_sr={rate})", "voice")
             except Exception:
                 pass
-
-        # Configure audio device
-        if device_env and device_env not in ("default", "system"):
-            try:
-                device_index = int(self.cfg.voice_device)
-            except ValueError:
-                device_index = None
-                try:
-                    for idx, dev in enumerate(sd.query_devices()):
-                        if isinstance(dev.get("name"), str) and (self.cfg.voice_device or '').lower() in dev.get("name").lower():
-                            device_index = idx
-                            break
-                except Exception:
-                    device_index = None
-            if device_index is not None:
-                stream_kwargs["device"] = device_index
 
         # Log which device will be used
         try:
@@ -2137,51 +2223,18 @@ class VoiceListener(threading.Thread):
         except Exception:
             pass
 
-        # Open audio stream — try configured rate first, fall back to device
-        # native rate when the hardware rejects 16 kHz (common on Linux ALSA).
         self._stream_samplerate = self._samplerate
         open_error = None
         try:
-            with portaudio_lock:
-                stream = sd.InputStream(
-                    samplerate=self._samplerate,
-                    channels=1,
-                    dtype="float32",
-                    blocksize=self._frame_samples,
-                    callback=self._on_audio,
-                    **stream_kwargs,
-                )
+            stream, self._stream_samplerate, channels = open_input_stream(
+                sd, self._samplerate, frame_ms, stream_kwargs, callback=self._on_audio,
+            )
+            self._frame_samples = max(1, int(self._stream_samplerate * frame_ms / 1000))
+            if self._stream_samplerate != self._samplerate or channels != 1:
+                print(f"  🎤 Using {self._stream_samplerate} Hz, {channels} input channel(s); "
+                      "converting to mono and resampling for speech recognition", flush=True)
         except Exception as e:
-            error_msg = str(e).lower()
-            is_rate_error = "sample rate" in error_msg or "9987" in error_msg
-            if is_rate_error:
-                debug_log(f"device rejected {self._samplerate} Hz, querying native rate", "voice")
-                try:
-                    if "device" in stream_kwargs:
-                        dev_info = sd.query_devices(stream_kwargs["device"])
-                    else:
-                        dev_info = sd.query_devices(kind="input")
-                    native_rate = int(dev_info.get("default_samplerate", self._samplerate))
-                    if native_rate != self._samplerate:
-                        self._stream_samplerate = native_rate
-                        native_frame_samples = max(1, int(native_rate * 30 / 1000))
-                        print(f"  ⚠️  Device doesn't support {self._samplerate} Hz — using {native_rate} Hz with resampling", flush=True)
-                        debug_log(f"retrying stream at native {native_rate} Hz", "voice")
-                        with portaudio_lock:
-                            stream = sd.InputStream(
-                                samplerate=native_rate,
-                                channels=1,
-                                dtype="float32",
-                                blocksize=native_frame_samples,
-                                callback=self._on_audio,
-                                **stream_kwargs,
-                            )
-                    else:
-                        open_error = e
-                except Exception:
-                    open_error = e
-            else:
-                open_error = e
+            open_error = e
 
         if open_error is not None:
             error_msg = str(open_error).lower()
@@ -2199,6 +2252,10 @@ class VoiceListener(threading.Thread):
                 print(f"  ❌ Failed to start audio recording: {open_error}", flush=True)
             return
 
+        self._pending_audio = None
+        self._callback_count = 0
+        self._reset_audio_health()
+        debug_log(f"Capture stream: {self._stream_samplerate} Hz, {self._frame_samples} samples per {frame_ms} ms frame", "voice")
         # Main audio processing loop
         with _serialised_stream(stream):
             # Verify stream is actually recording (helps catch permission issues)
@@ -2269,18 +2326,8 @@ class VoiceListener(threading.Thread):
             except Exception:
                 pass
 
-            # Track start time for audio health monitoring
-            _audio_start_time = time.time()
-            _audio_health_logged = False
-
             while not self._should_stop:
-                # One-time audio health check after 5 seconds
-                if not _audio_health_logged and time.time() - _audio_start_time > 5:
-                    _audio_health_logged = True
-                    if self._callback_count == 0:
-                        print("  ⚠️  No audio received after 5 seconds!", flush=True)
-                        print(f"     Check: {_get_mic_permission_hint()}", flush=True)
-                        print("     Also check that your microphone is not muted", flush=True)
+                self._check_audio_health()
 
                 try:
                     item = self._audio_q.get(timeout=0.2)
@@ -2292,6 +2339,7 @@ class VoiceListener(threading.Thread):
 
                 if item is None:
                     # Reset marker
+                    self._pending_audio = None
                     self.is_speech_active = False
                     self._silence_frames = 0
                     self._utterance_frames = []
@@ -2301,24 +2349,11 @@ class VoiceListener(threading.Thread):
                 if np is None:
                     continue
 
-                # Process audio buffer
-                buf = item
-                try:
-                    mono = buf.reshape(-1, buf.shape[-1])[:, 0] if buf.ndim > 1 else buf.flatten()
-                except Exception:
-                    mono = buf.flatten()
-
-                # Process frames
-                offset = 0
-                total = mono.shape[0]
                 frame_timestamp = time.time()  # Timestamp for this batch of frames
-
-                while offset + self._frame_samples <= total:
-                    frame = mono[offset: offset + self._frame_samples]
-                    offset += self._frame_samples
-
+                for frame in self._audio_frames(item):
                     # VAD decision
                     is_voice = self._is_speech_frame(frame)
+                    self._speech_frames_seen += int(is_voice)
 
                     if not self.is_speech_active:
                         if is_voice:
@@ -2359,17 +2394,6 @@ class VoiceListener(threading.Thread):
 
                     # Check for query timeouts
                     self._check_query_timeout()
-
-                # Handle remaining audio
-                if offset < total:
-                    tail = mono[offset:]
-                    if tail.size > 0:
-                        self._pre_roll.append(tail.copy())
-                        while len(self._pre_roll) > pre_roll_max_frames:
-                            try:
-                                self._pre_roll.popleft()
-                            except Exception:
-                                break
 
     def _finalize_utterance(self) -> None:
         """Process completed utterance through speech recognition."""

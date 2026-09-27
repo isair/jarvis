@@ -27,10 +27,10 @@ SUPPORTED_CHAT_MODELS: Dict[str, Dict[str, str]] = {
         "size": "~9.6GB",
         "vram": "16GB+",
     },
-    "gpt-oss:20b": {
-        "name": "GPT-OSS 20B (High-end)",
-        "description": "Best performance, ~12GB download",
-        "size": "~12GB",
+    "qwen3.8:27b": {
+        "name": "Qwen 3.8 27B (High-end)",
+        "description": "Best performance, ~18GB download",
+        "size": "~18GB",
         "vram": "24GB+",
     },
     "qwen3.5:0.8b": {
@@ -178,6 +178,7 @@ class Settings:
     tune_enabled: bool
     hot_window_enabled: bool
     hot_window_seconds: float
+    low_power_mode: bool
 
     # Echo Detection
     echo_energy_threshold: float
@@ -569,6 +570,7 @@ def get_default_config() -> Dict[str, Any]:
         "tune_enabled": True,
         "hot_window_enabled": True,
         "hot_window_seconds": 3.0,
+        "low_power_mode": False,
         "echo_energy_threshold": 2.0,
         "echo_tolerance": 0.3,  # Time tolerance for echo detection timing
 
@@ -789,6 +791,7 @@ def load_settings() -> Settings:
     tune_enabled = bool(merged.get("tune_enabled", True))
     hot_window_enabled = bool(merged.get("hot_window_enabled", True))
     hot_window_seconds = float(merged.get("hot_window_seconds", 3.0))
+    low_power_mode = bool(merged.get("low_power_mode", False))
     echo_energy_threshold = float(merged.get("echo_energy_threshold", 2.0))
     echo_tolerance = float(merged.get("echo_tolerance", 0.3))
 
@@ -969,6 +972,7 @@ def load_settings() -> Settings:
         tune_enabled=tune_enabled,
         hot_window_enabled=hot_window_enabled,
         hot_window_seconds=hot_window_seconds,
+        low_power_mode=low_power_mode,
         echo_energy_threshold=echo_energy_threshold,
         echo_tolerance=echo_tolerance,
         # Fast tier (voice intent, tool routing, quick classifications)

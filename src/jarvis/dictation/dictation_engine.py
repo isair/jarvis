@@ -20,6 +20,7 @@ from typing import Any, Callable, Optional
 
 from ..debug import debug_log
 from ..utils.audio_lock import portaudio_lock
+from ..utils.audio_capture import mono_capture, open_input_stream, resolve_input_device
 from .history import DictationHistory
 
 # Optional imports — graceful degradation when dependencies are missing.
@@ -921,16 +922,16 @@ class DictationEngine:
         # Play start beep
         _play_beep(_get_start_beep())
 
-        # Open dedicated audio stream.
-        # Always use the device's native sample rate to avoid PortAudio errors
-        # (e.g. -50 on macOS when requesting 16 kHz on a 48 kHz device).
-        # Audio is resampled to the Whisper target rate after recording.
-        stream_kwargs: dict[str, Any] = {}
-        if self._voice_device:
-            try:
-                stream_kwargs["device"] = int(self._voice_device)
-            except (ValueError, TypeError):
-                pass
+        # Prefer the device's native rate for dictation. The capture helper
+        # negotiates channel counts and other supported rates on that input.
+        try:
+            stream_kwargs = resolve_input_device(sd, self._voice_device)
+        except Exception as exc:
+            print(f'  ❌ Dictation microphone unavailable: {exc}', flush=True)
+            debug_log(f'failed to select dictation microphone: {exc}', 'dictation')
+            if self._abandon_session(token) and self._on_dictation_end:
+                self._on_dictation_end()
+            return
 
         # Query native sample rate
         try:
@@ -943,19 +944,16 @@ class DictationEngine:
             native_rate = self._target_sample_rate
 
         try:
-            with portaudio_lock:
-                with _suppress_stderr():
-                    stream = sd.InputStream(
-                        samplerate=native_rate,
-                        channels=1,
-                        dtype="float32",
-                        blocksize=int(native_rate * 0.1),
-                        callback=self._audio_callback,
-                        **stream_kwargs,
-                    )
-            self._stream_sample_rate = native_rate
-            if native_rate != self._target_sample_rate:
-                debug_log(f"dictation stream at native {native_rate} Hz (will resample to {self._target_sample_rate})", "dictation")
+            with _suppress_stderr():
+                stream, self._stream_sample_rate, channels = open_input_stream(
+                    sd, native_rate, 100, stream_kwargs,
+                    callback=self._audio_callback, log_category='dictation',
+                    fallback_rate=self._target_sample_rate,
+                )
+            debug_log(
+                f'dictation stream at {self._stream_sample_rate} Hz, {channels} channel(s) '
+                f'(resamples to {self._target_sample_rate} Hz)', 'dictation',
+            )
         except Exception as exc:
             debug_log(f"failed to open dictation audio stream: {exc}", "dictation")
             if self._abandon_session(token) and self._on_dictation_end:
@@ -995,7 +993,7 @@ class DictationEngine:
             return
         # No max duration cap — the user controls when to stop (release hotkey).
         # A cap would paste prematurely mid-dictation and restart recording.
-        self._audio_frames.append(indata[:, 0].copy())
+        self._audio_frames.append(mono_capture(indata).copy())
 
     def _stop_recording(self, discard: bool = False) -> None:
         # Flip state and snapshot the work queue atomically, under minimal

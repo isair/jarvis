@@ -61,7 +61,7 @@ The settings window uses a sidebar navigation pattern: a fixed-width `QListWidge
 10. Timing & Windows
 11. Memory & Dialogue
 12. Location
-13. Features (includes Dictation Mode toggle and hotkey)
+13. Features (includes web search, Wikipedia fallback, low-power mode, startup tune, and dictation toggles)
 14. MCP Servers
 15. Advanced
 
@@ -87,6 +87,26 @@ clear would wipe the supported "Ollama chat + remote embeddings" split
 values are harmless because the backend resolves per-provider: the Ollama path
 uses `ollama_base_url` / `ollama_chat_model` and `OllamaBackend` ignores any
 API key. To drop a leftover value, clear that field and save.
+
+### Features
+
+The Features category exposes user-facing runtime toggles that do not need a
+dedicated page:
+
+- `web_search_enabled`
+- `brave_search_api_key`
+- `wikipedia_fallback_enabled`
+- `low_power_mode`
+- `tune_enabled`
+- `dictation_enabled`
+- `dictation_hotkey`
+- `dictation_filler_removal`
+- `dictation_custom_dictionary`
+
+`low_power_mode` is a boolean toggle. When enabled, the voice listener skips
+LLM startup warmup and the Ollama keep-alive windows used by warmup and the
+intent judge are short. The setting is saved only when it differs from the
+default, like every other metadata-managed field.
 
 ## Hardware Device Selection
 

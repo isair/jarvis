@@ -19,6 +19,25 @@ An OpenAI-compatible user has opted out of the local Ollama stack, so `should_sh
 3. **Platform-aware**: Apple Silicon gets MLX Whisper options. Windows gets hidden-console Ollama serve. macOS opens the Ollama app.
 4. **Safe re-entry**: Running the wizard again never destroys existing config — it only fills in missing values.
 
+## Layout and overflow
+
+The wizard uses a shared dark visual theme in `themes.py`, with neutral cards,
+amber selections and primary actions, and a four-stage header: Voice,
+Intelligence, Capabilities, Ready. The standard window is 960 × 780, bounded
+by the available screen. Normal page content fits without scrolling at this
+size. Provider choices, connection/model settings, and chat/fast selectors use
+paired columns at page widths of at least 820 pixels and stack below that.
+Cards use layout margins rather than additional stylesheet padding. Editable
+dropdowns apply their padding once, on the outer control. Exit sits apart
+from Back and the primary action in the footer.
+
+Every page provides a scroll viewport for content that exceeds the window.
+`ScrollableWizardPage` wraps ordinary page layouts; pages with a dedicated
+scroll area retain it. Content keeps its minimum usable size, including
+after status text or optional controls appear. Navigation stays outside the
+scrolling content. The initial window size is bounded by the available screen;
+page transitions and model installation do not force a larger window.
+
 ## Page Flow
 
 ```
@@ -98,7 +117,8 @@ Fields suffixed `?` are written only when non-empty (minimal-config invariant).
 
 ## Threading
 
-- All wizard worker threads inherit `_KeepAliveWorker(QThread)`, which keeps
+- All wizard worker threads inherit `KeepAliveWorker(QThread)` (shared with
+  the desktop app via `desktop_app/qt_worker.py`), which keeps
   each started worker referenced in a class-level registry until its OS
   thread has fully finished (released via the built-in `finished` signal).
   Pages rebind their worker attribute inside completion slots (install

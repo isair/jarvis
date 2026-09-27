@@ -534,6 +534,7 @@ _HINT_MESSAGE_CHAR_LIMIT = 200
 # than a fact note.
 _DIGEST_SKIP_TOOLS = frozenset({
     "getWeather",
+    "getTime",
 })
 
 
@@ -778,7 +779,8 @@ def _build_enrichment_context_hint(cfg, recent_messages: list) -> Optional[str]:
 
 def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     text: str, dialogue_memory: "DialogueMemory",
-                    language: Optional[str] = None) -> Optional[str]:
+                    language: Optional[str] = None,
+                    quiet: bool = False) -> Optional[str]:
     """
     Main entry point for reply generation.
 
@@ -793,6 +795,11 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             web_search can pick locale-appropriate resources (e.g. the
             right Wikipedia host). None when invoked outside the voice
             path — tools then fall back to their own default.
+        quiet: When True, the reply is not printed to stdout. The text-chat
+            path sets this so chat replies never land in the daemon's
+            stdout, which subprocess mode forwards to the desktop app's
+            general log viewer (a surface outside the chat redaction
+            invariant). Voice replies keep printing for terminal UX.
 
     Returns:
         Generated reply text or None
@@ -2492,7 +2499,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
         # Print error message
         try:
-            print(f"\n⚠️ Jarvis\n  {_indent_text(reply)}\n", flush=True)
+            if not quiet:
+                print(f"\n⚠️ Jarvis\n  {_indent_text(reply)}\n", flush=True)
         except Exception as e:
             debug_log(f"error reply formatting failed: {e}", "planning")
 
@@ -2514,11 +2522,13 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         safe_reply = "Sorry, I had trouble processing that. Could you try again?"
         reply = safe_reply
     if safe_reply:
-        # Print reply with appropriate header
+        # Print reply with appropriate header. Quiet mode (text chat) skips
+        # this entirely so the reply never reaches the daemon stdout that
+        # the desktop app forwards to the general log viewer.
         try:
-            if not getattr(cfg, "voice_debug", False):
+            if not quiet and not getattr(cfg, "voice_debug", False):
                 print(f"\n🤖 Jarvis\n  {_indent_text(safe_reply)}\n", flush=True)
-            else:
+            elif not quiet:
                 print(f"\n[jarvis]\n  {_indent_text(safe_reply)}\n", flush=True)
         except Exception as e:
             debug_log(f"reply formatting failed: {e}", "planning")

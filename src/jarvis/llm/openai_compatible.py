@@ -30,6 +30,7 @@ import json
 import requests
 
 from ..debug import debug_log
+from .errors import is_timeout_error
 from .backend import LLMBackend, ToolsNotSupportedError, strip_nonstandard_message_fields
 
 
@@ -316,9 +317,13 @@ class OpenAICompatibleBackend(LLMBackend):
             if isinstance(data, dict):
                 return _normalise_response(data)
         except requests.exceptions.Timeout:
-            print("  ⏱️ LLM request timed out", flush=True)
+            print(f"  ⏱️ LLM request timed out (configured timeout: {timeout_sec:g}s)", flush=True)
             return None
-        except requests.exceptions.ConnectionError:
+        except requests.exceptions.ConnectionError as exc:
+            if is_timeout_error(exc):
+                debug_log("chat response read timed out (wrapped transport timeout)", "llm")
+                print(f"  ⏱️ LLM request timed out (configured timeout: {timeout_sec:g}s)", flush=True)
+                return None
             # ConnectionError messages embed the configured URL via the
             # underlying urllib3 exception, which can leak account-bearing
             # query strings to stdout. Print only the failure mode and
@@ -391,7 +396,12 @@ class OpenAICompatibleBackend(LLMBackend):
         except Exception:
             return []
 
-    def warm_up(self, model: str, timeout_sec: float = 60.0) -> bool:
+    def warm_up(
+        self,
+        model: str,
+        timeout_sec: float = 60.0,
+        keep_alive: str = "30m",
+    ) -> bool:
         """Warm up the model by sending a minimal inference request.
 
         Phase 1 (reachability check): calls ``GET /models`` to confirm
@@ -403,7 +413,12 @@ class OpenAICompatibleBackend(LLMBackend):
         memory. Without this, an OpenAI-compatible server may leave the
         model cold until the first real request, incurring latency on the
         user's first query. This mirrors what ``OllamaBackend.warm_up()``
-        does with ``POST /api/generate``.
+        does.
+
+        ``keep_alive`` is accepted for signature parity with
+        ``OllamaBackend.warm_up`` but ignored: OpenAI-compatible servers
+        manage model residency at server load time and have no per-call
+        keep-alive knob.
 
         Best-effort: errors are swallowed; ``False`` is returned when the
         server is unreachable, the model name is missing, or the inference

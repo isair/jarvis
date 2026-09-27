@@ -326,6 +326,37 @@ class TestOllamaBackendPromptCaching:
 
 
 # ---------------------------------------------------------------------------
+# OllamaBackend — warmup
+# ---------------------------------------------------------------------------
+
+
+class TestOllamaBackendWarmUp:
+    @patch("jarvis.llm.requests.post")
+    def test_warmup_uses_default_keep_alive(self, mock_post):
+        from jarvis.llm import OllamaBackend
+
+        mock_post.return_value = MagicMock(status_code=200)
+        backend = OllamaBackend("http://localhost:11434")
+
+        assert backend.warm_up("gemma4:e2b") is True
+
+        sent = mock_post.call_args.kwargs["json"]
+        assert sent["keep_alive"] == "30m"
+
+    @patch("jarvis.llm.requests.post")
+    def test_warmup_uses_caller_keep_alive(self, mock_post):
+        from jarvis.llm import OllamaBackend
+
+        mock_post.return_value = MagicMock(status_code=200)
+        backend = OllamaBackend("http://localhost:11434")
+
+        assert backend.warm_up("gemma4:e2b", keep_alive="1m") is True
+
+        sent = mock_post.call_args.kwargs["json"]
+        assert sent["keep_alive"] == "1m"
+
+
+# ---------------------------------------------------------------------------
 # OllamaBackend — direct edge cases
 # ---------------------------------------------------------------------------
 
