@@ -201,6 +201,7 @@ def test_pipeline_timings_by_context(tmp_path):
     from jarvis.memory.conversation import DialogueMemory
     from jarvis.reply.engine import run_reply_engine
     from jarvis.llm.factory import get_llm_backend
+    from jarvis.tools.builtin.stop import STOP_SIGNAL
     from jarvis.tools.types import ToolExecutionResult
 
     warm_cfg = _make_cfg()
@@ -222,6 +223,8 @@ def test_pipeline_timings_by_context(tmp_path):
         tool_name = kwargs.get("tool_name") or (args[2] if len(args) > 2 else "")
         if current_query == "hello" and tool_name != "stop":
             unnecessary_tools += 1
+        if tool_name == "stop":
+            return ToolExecutionResult(True, STOP_SIGNAL)
         if tool_name == "getTime":
             return ToolExecutionResult(True, "Benchmark fixture: Tokyo time is 12:00 JST.")
         return ToolExecutionResult(False, None, "Tool disabled in isolated performance benchmark")

@@ -4,6 +4,7 @@ import json
 from types import SimpleNamespace
 
 from jarvis.reply import engine as reply_engine
+from jarvis.tools.builtin.stop import STOP_SIGNAL
 
 from tests.performance import test_pipeline_timings as harness
 from tests.performance.timing_recorder import TimingRecorder
@@ -78,6 +79,11 @@ def test_pipeline_uses_disposable_fresh_state_and_never_dispatches_real_tools(tm
             db, cfg, "webSearch", {}, "system", query, query,
         )
         assert not result.success
+        if query == "hello":
+            stop_result = reply_engine.run_tool_with_retries(
+                db, cfg, "stop", {}, "system", query, query,
+            )
+            assert stop_result.success and stop_result.reply_text == STOP_SIGNAL
         observed.append((db.db_path, cfg.db_path, dialogue, query))
         return "fixture reply"
 
