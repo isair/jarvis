@@ -238,27 +238,27 @@ class TestFormatPlanBlock:
 
 class TestProgressNudge:
     def test_empty_plan_returns_empty(self):
-        assert progress_nudge([], 0) == ""
+        assert progress_nudge([], 0, ["webSearch"]) == ""
 
     def test_single_reply_step_returns_empty(self):
         """A 1-step reply-only plan has no tool steps, so there is
         nothing to nudge. The empty string tells the engine to skip
         injecting a progress reminder after the (non-existent) tool
         result."""
-        assert progress_nudge(["Reply to user"], 0) == ""
+        assert progress_nudge(["Reply to user"], 0, ["webSearch"]) == ""
 
     def test_points_at_next_step(self):
         steps = ["webSearch query='foo'", "webSearch query='bar'", "Reply to user"]
-        msg = progress_nudge(steps, 0)
+        msg = progress_nudge(steps, 0, ["webSearch"])
         assert "foo" in msg
         assert "0/2" in msg
-        msg2 = progress_nudge(steps, 1)
+        msg2 = progress_nudge(steps, 1, ["webSearch"])
         assert "bar" in msg2
         assert "1/2" in msg2
 
     def test_all_steps_done_prompts_synthesis(self):
         steps = ["webSearch query='foo'", "webSearch query='bar'", "Reply to user"]
-        msg = progress_nudge(steps, 2)
+        msg = progress_nudge(steps, 2, ["webSearch"])
         assert "all tool steps executed" in msg.lower() or "synthes" in msg.lower()
 
 
@@ -639,17 +639,24 @@ class TestUrlArgNormalisation:
 
 class TestToolStepsOf:
     def test_multi_step_drops_final_synthesis_step(self):
-        assert tool_steps_of(["a", "b", "reply"]) == ["a", "b"]
+        assert tool_steps_of(["webSearch query='a'", "getWeather", "responder ao utilizador"],
+                             ["webSearch", "getWeather"]) == ["webSearch query='a'", "getWeather"]
+
+    def test_final_step_can_be_a_tool_without_synthesis(self):
+        assert tool_steps_of(["webSearch query='a'", "getWeather location='Paris'"],
+                             ["webSearch", "getWeather"]) == [
+                                 "webSearch query='a'", "getWeather location='Paris'",
+                             ]
 
     def test_single_reply_step_has_no_tool_steps(self):
         """A 1-step 'Reply to the user.' plan has no tool steps.
         A 1-step tool plan like 'webSearch query='foo'' IS a tool step."""
-        assert tool_steps_of(["Reply to the user."]) == []
-        assert tool_steps_of(["Synthesis complete."]) == []
-        assert tool_steps_of(["webSearch query='foo'"]) == ["webSearch query='foo'"]
+        assert tool_steps_of(["Reply to the user."], ["webSearch"]) == []
+        assert tool_steps_of(["回答してください"], ["webSearch"]) == []
+        assert tool_steps_of(["webSearch query='foo'"], ["webSearch"]) == ["webSearch query='foo'"]
 
     def test_empty_plan(self):
-        assert tool_steps_of([]) == []
+        assert tool_steps_of([], ["webSearch"]) == []
 
     def test_strips_search_memory_directive(self):
         plan = [
@@ -657,7 +664,7 @@ class TestToolStepsOf:
             "webSearch query='foo'",
             "Reply to the user.",
         ]
-        assert tool_steps_of(plan) == ["webSearch query='foo'"]
+        assert tool_steps_of(plan, ["webSearch"]) == ["webSearch query='foo'"]
 
 
 class TestIsSearchMemoryStep:
@@ -736,6 +743,12 @@ class TestToolNamesInPlan:
     def test_empty_plan(self):
         assert tool_names_in_plan([], ["webSearch"]) == []
 
+    def test_includes_final_known_tool_without_synthesis(self):
+        assert tool_names_in_plan(
+            ["webSearch query='a'", "getWeather location='Paris'"],
+            ["webSearch", "getWeather"],
+        ) == ["webSearch", "getWeather"]
+
     def test_extracts_hyphenated_mcp_tool_name(self):
         """MCP tool names embed the server in the prefix and use hyphens
         (e.g. ``chrome-devtools__navigate_page``). The head regex must accept
@@ -765,6 +778,10 @@ class TestPlanHasUnresolvedToolSteps:
     def test_false_when_step_names_tool(self):
         plan = ["getWeather", "Reply to the user."]
         assert plan_has_unresolved_tool_steps(plan, ["getWeather"]) is False
+
+    def test_unknown_non_final_step_remains_unresolved_with_known_sibling(self):
+        plan = ["getWeather location='London'", "look up Paris weather", "répondre à l'utilisateur"]
+        assert plan_has_unresolved_tool_steps(plan, ["getWeather"]) is True
 
     def test_false_for_reply_only_plan(self):
         # No tool steps at all — the planner explicitly decided no tools.

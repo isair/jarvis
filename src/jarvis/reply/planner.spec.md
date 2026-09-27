@@ -122,12 +122,12 @@ The planner prompt instructs the model to emit:
   and markdown fences are stripped.
 - Overlong steps (>200 chars) are truncated with an ellipsis.
 - The list is capped at `MAX_STEPS`.
-- The planner no longer filters out 1-step plans. A single
+- The planner preserves 1-step plans. A single
   `["Reply to the user."]` plan is the planner's *positive* decision
   that no memory or tools are needed — the engine uses that to skip
   the memory extractor, the tool router, and the direct-exec path
   entirely. A single-step tool plan like `["getWeather query='tomorrow'"]`
-  is also preserved: `tool_steps_of` returns it as a tool step, the
+  is also preserved: `tool_steps_of(plan, known_names)` returns it as a tool step, the
   engine injects the ACTION PLAN block, and direct-exec runs the tool
   without waiting for the chat model. Only an **empty** list means
   "planner failed / disabled; fall open to legacy safe defaults"
@@ -148,23 +148,27 @@ The engine consumes the plan in two phases.
   anchors on what the planner wanted to look up rather than
   re-deriving from the raw utterance.
 - `tool_names_in_plan(plan, known_names)` — ordered de-duped list of
-  tool names the planner referenced. The engine unions this into the
+  exact tool names the planner referenced in any step, including the final
+  step of a plan without synthesis. The engine unions this into the
   router-selected allow-list (never replaces it). `stop` and
   `toolSearchTool` are always added regardless.
 - `plan_has_unresolved_tool_steps(plan, known_names)` — true when the
-  plan has non-synthesis steps but names no known tool (e.g. the
+  plan has a non-final step that does not name a known tool (e.g. the
   model wrote `get the weather` instead of `getWeather ...`). In
   this state the direct-exec path is skipped — vague step text
   would otherwise force the resolver LLM to guess arguments (e.g.
   emitting `location='Nowhere'` for a bare weather request). The
   chat model takes the turn instead, using the router-selected
   allow-list.
+- `tool_steps_of(plan, known_names)` includes exactly the steps headed by
+  known catalogue tool names. A tool in the final position remains executable;
+  a synthesis step in any language does not become a tool call.
 - `strip_memory_directives(plan)` — the engine strips the
   `searchMemory` step from the plan once memory has been fetched, so
   downstream consumers (system-message injection, direct-exec,
   progress nudge) see a plan of pure tool + synthesis steps.
 
-**Phase 2 — loop integration (existing behaviour):**
+**Phase 2 — loop integration:**
 
 - `format_plan_block(steps)` renders an `ACTION PLAN:` block that is
   appended to the initial system message. Empty plan renders nothing.
@@ -172,7 +176,7 @@ The engine consumes the plan in two phases.
   noise to the chat model since the plan just says "reply".
   Single-step tool plans ARE rendered so the model sees the planned
   tool call in its context.
-- `progress_nudge(steps, tool_results_so_far)` produces a remainder
+- `progress_nudge(steps, tool_results_so_far, known_names)` produces a remainder
   hint injected after each tool result, naming the next planned step
   and reminding the model to substitute discovered entities and avoid
   duplicate arguments.
