@@ -1,6 +1,7 @@
 """Live attribution and correction evaluation for source-grounded facts."""
 
 import time
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -9,6 +10,21 @@ from evals.benchmark_report import Attempt, Scenario
 from evals.helpers import JUDGE_MODEL, MockConfig
 from jarvis.memory.fact_ops import ingest_dialogue_facts
 from jarvis.memory.facts import FactStore
+
+
+def _correction_fixture():
+    old_observed_at = datetime(2026, 1, 1, 10, tzinfo=timezone.utc)
+    correction = {
+        "role": "user", "channel": "addressed_dialogue",
+        "content": "Correction: I live in Bath now, not Bristol",
+        "ts": (old_observed_at + timedelta(days=1)).timestamp(),
+    }
+    return old_observed_at.isoformat(), correction
+
+
+def test_correction_fixture_observes_new_fact_after_old_fact():
+    observed_at, message = _correction_fixture()
+    assert datetime.fromtimestamp(message["ts"], timezone.utc) > datetime.fromisoformat(observed_at)
 
 
 @pytest.mark.eval
@@ -65,13 +81,13 @@ def test_explicit_user_correction_links_existing_fact(tmp_path, scenario_recorde
     extraction_sec = None
     passed = False
     try:
+        old_observed_at, correction = _correction_fixture()
         old = store.add_fact("The user lives in Bristol", kind="user", owner="user",
                              subject="user", predicate_key="residence", source_ref="old",
                              source_type="dialogue", source_role="user", source_channel="addressed_dialogue",
                              source_text="I live in Bristol", evidence="I live in Bristol",
-                             observed_at="2026-01-01T10:00:00+00:00")
-        messages = [{"role": "user", "channel": "addressed_dialogue",
-                     "content": "Correction: I live in Bath now, not Bristol", "ts": 2.0}]
+                             observed_at=old_observed_at)
+        messages = [correction]
         extraction_started = time.perf_counter()
         result = ingest_dialogue_facts(store, messages, cfg, source_app="jarvis",
                                        chat_model=JUDGE_MODEL, timeout_sec=60.0)
