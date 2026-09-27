@@ -381,7 +381,7 @@ class GraphMemoryStore:
         """
         if not node_id or node_id == "root":
             return None
-        if node_id in FIXED_BRANCH_IDS:
+        if node_id in FIXED_BRANCH_IDS or node_id == LEGACY_BRANCH_ID:
             return node_id
         current = node_id
         for _ in range(MAX_TRAVERSAL_DEPTH):
@@ -393,7 +393,7 @@ class GraphMemoryStore:
             parent = row["parent_id"]
             if parent is None or parent == "root":
                 return None
-            if parent in FIXED_BRANCH_IDS:
+            if parent in FIXED_BRANCH_IDS or parent == LEGACY_BRANCH_ID:
                 return parent
             current = parent
         return None

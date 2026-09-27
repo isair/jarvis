@@ -342,3 +342,33 @@ def test_embedding_receives_redacted_fact_text(store, monkeypatch):
     )
     assert result.stored == 1
     assert embedded == ["The user email is [REDACTED_EMAIL]"]
+
+
+def test_web_claim_cannot_own_user_and_manual_directive_is_not_cut(store):
+    with pytest.raises(ValueError):
+        store.add_fact(
+            "The user likes chess", kind="user", owner="user", source_ref="web-1",
+            source_type="web", source_role="user", source_channel="text",
+            source_text="The user likes chess", evidence="The user likes chess",
+            observed_at="2026-01-01T10:00:00Z",
+        )
+    rule = "Always answer in British English and preserve every clause " + "precisely " * 1500
+    fact = store.add_fact(rule, kind="directive", owner="user", source_ref="manual-1",
+                          source_type="manual", source_role="user", source_channel="text",
+                          source_text=rule, evidence=rule, observed_at="2026-01-01T10:00:00Z")
+    assert fact["text"] == rule.strip()
+
+
+def test_daemon_boot_retries_pending_fact_batch(store, monkeypatch):
+    from jarvis.daemon import _retry_pending_facts_at_boot
+
+    store.enqueue_batch(
+        [{"role": "user", "channel": "addressed_dialogue", "content": "I live in Bristol", "ts": 1.0}],
+        source_app="jarvis", batch_ref="flush-1",
+    )
+    response = '[{"source_index":0,"evidence":"I live in Bristol","text":"The user lives in Bristol","kind":"user","owner":"user","statement_mode":"direct"}]'
+    monkeypatch.setattr("jarvis.memory.fact_ops._direct_llm", lambda *a, **kw: response)
+    cfg = SimpleNamespace(db_path=store.db_path, llm_chat_model="test", embedding_model="")
+    _retry_pending_facts_at_boot(cfg, timeout_sec=5.0)
+    assert not store.pending_batches()
+    assert [fact["text"] for fact in store.list_facts()] == ["The user lives in Bristol"]

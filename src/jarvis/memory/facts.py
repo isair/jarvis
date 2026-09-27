@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from ..debug import debug_log
-from ..utils.redact import redact, scrub_secrets
+from ..utils.redact import scrub_secrets
 
 
 _FACT_LISTENERS: list[Callable[..., None]] = []
@@ -101,6 +101,10 @@ INSERT OR IGNORE INTO fact_meta(key,value) VALUES('revision',0);
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _scrub(value: str) -> str:
+    return re.sub(r"\s+", " ", scrub_secrets(value)).strip()
 
 
 def _utc(value: str, *, end_of_day: bool = False) -> str:
@@ -198,8 +202,8 @@ class FactStore:
                  source_app: str = "jarvis", subject: str = "",
                  predicate_key: str = "", valid_from: str | None = None,
                  supersedes_id: int | None = None, embedding: list[float] | None = None) -> dict:
-        text, evidence, source_text = redact(text.strip()), redact(evidence.strip()), redact(source_text)
-        subject, predicate_key = redact(subject.strip()), redact(predicate_key.strip())
+        text, evidence, source_text = _scrub(text), _scrub(evidence), _scrub(source_text)
+        subject, predicate_key = _scrub(subject), _scrub(predicate_key)
         observed_at = _utc(observed_at)
         if not text or not evidence or evidence not in source_text:
             raise ValueError("A fact requires exact source evidence")
@@ -215,6 +219,8 @@ class FactStore:
             raise ValueError("A directive requires confirmed user ownership")
         if kind == "directive" and source_type not in {"dialogue", "manual"}:
             raise ValueError("A directive requires a direct user source")
+        if owner == "user" and source_type not in {"dialogue", "manual"}:
+            raise ValueError("A user-owned fact requires a direct user source")
         valid_from = _utc(valid_from) if valid_from else observed_at
         if supersedes_id is not None:
             old = self.get_fact(supersedes_id)
@@ -276,7 +282,7 @@ class FactStore:
     def retract_fact(self, fact_id: int, *, evidence: str, observed_at: str | None = None) -> bool:
         if not evidence.strip():
             raise ValueError("Retraction requires a reason")
-        evidence = redact(evidence.strip())
+        evidence = _scrub(evidence)
         observed_at = _utc(observed_at) if observed_at else _now()
         with self._lock:
             row = self.conn.execute("SELECT kind,owner,status FROM memory_facts WHERE id=?", (fact_id,)).fetchone()

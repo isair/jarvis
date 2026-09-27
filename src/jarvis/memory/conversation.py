@@ -1737,7 +1737,6 @@ def update_diary_from_dialogue_memory(
     force: bool = False,
     on_token: Optional[Callable[[str], None]] = None,
     thinking: bool = False,
-    graph_picker_model: Optional[str] = None,
 ) -> Optional[int]:
     """
     Update the diary with pending interactions from dialogue memory.
