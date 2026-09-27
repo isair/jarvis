@@ -40,6 +40,10 @@ def _mock_cfg():
     cfg.location_auto_detect = False
     cfg.location_enabled = False
     cfg.agentic_max_turns = 8
+    cfg.agentic_query_timeout_sec = 180.0
+    cfg.agentic_parallel_reads = 3
+    cfg.agentic_tool_result_chars = 4000
+    cfg.planner_timeout_sec = 3.0
     cfg.tool_search_max_calls = 3
     cfg.tool_selection_strategy = "all"
     cfg.tool_carryover_max_turns = 2

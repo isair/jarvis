@@ -241,3 +241,7 @@ The engine consumes the plan in two phases.
   resolver's schema-level guard to reject unknown tools.
 - Plans are not cached across turns. Each user utterance gets its own
   plan because the dialogue state and entity references change.
+
+# Execution contract
+
+The direct-exec step resolver uses the query's remaining deadline as its timeout cap. Each resolved call is checked against the task journal before execution, so an explicitly resumed task does not repeat a completed write. Tool results are stored in full locally, while only bounded excerpts and plan-progress guidance enter the chat context. Failed steps carry a failure flag and guide the model towards another source or an explanation of missing information.

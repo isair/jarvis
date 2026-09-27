@@ -21,6 +21,7 @@ from .builtin.weather import WeatherTool
 from .builtin.time_tool import TimeTool
 from .builtin.stop import StopTool
 from .builtin.tool_search import ToolSearchTool
+from .builtin.read_task_result import ReadTaskResultTool
 from .types import ToolExecutionResult
 from ..config import Settings
 from .external.mcp_client import MCPClient
@@ -41,6 +42,7 @@ BUILTIN_TOOLS = {
     "getTime": TimeTool(),
     "stop": StopTool(),
     "toolSearchTool": ToolSearchTool(),
+    "readTaskResult": ReadTaskResultTool(),
 }
 
 # Global MCP tools cache
@@ -117,6 +119,7 @@ class ToolSpec:
     name: str  # canonical tool identifier (camelCase)
     description: str  # Human-readable description (matches MCP format)
     inputSchema: Optional[Dict[str, Any]] = None  # JSON Schema for arguments (matches MCP format)
+    read_only: bool = False  # Explicit MCP readOnlyHint; unknown tools stay serial.
 
 
 def discover_mcp_tools(mcps_config: Dict[str, Any]) -> Tuple[Dict[str, ToolSpec], Dict[str, str]]:
@@ -150,7 +153,8 @@ def discover_mcp_tools(mcps_config: Dict[str, Any]) -> Tuple[Dict[str, ToolSpec]
                     discovered_tools[full_tool_name] = ToolSpec(
                         name=full_tool_name,
                         description=description,
-                        inputSchema=input_schema
+                        inputSchema=input_schema,
+                        read_only=bool(tool_info.get("readOnlyHint", False)),
                     )
 
             except BaseException as e:
@@ -368,5 +372,3 @@ def run_tool_with_retries(
     # Unknown tool
     debug_log(f"unknown tool requested: {tool_name}", "tools")
     return ToolExecutionResult(success=False, reply_text=None, error_message=f"Unknown tool: {tool_name}")
-
-

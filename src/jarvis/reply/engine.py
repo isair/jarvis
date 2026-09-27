@@ -6,6 +6,7 @@ Handles memory enrichment, tool planning and execution.
 
 from __future__ import annotations
 from typing import Optional, TYPE_CHECKING
+import threading
 
 from ..utils.redact import redact
 from ..system_prompt import build_system_prompt
@@ -61,6 +62,11 @@ from .planner import (
     is_search_memory_step,
     resolve_next_tool_call as _resolve_plan_step,
 )
+from .execution import (
+    ExecutionCancelled, ExecutionControl, ExecutionDeadlineExceeded,
+    ToolCall, execute_tool_batch, is_read_only_call, tool_affinity,
+)
+from .task_state import TaskStore
 from ..tools.selection import select_tools, ToolSelectionStrategy
 import json
 import re
@@ -780,7 +786,36 @@ def _build_enrichment_context_hint(cfg, recent_messages: list) -> Optional[str]:
 def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     text: str, dialogue_memory: "DialogueMemory",
                     language: Optional[str] = None,
-                    quiet: bool = False) -> Optional[str]:
+                    quiet: bool = False,
+                    cancel_event: Optional[threading.Event] = None,
+                    resume_task_id: Optional[str] = None) -> Optional[str]:
+    """Run one reply within its wall-clock budget and cancellation scope."""
+    control = ExecutionControl(
+        cancel_event or threading.Event(),
+        timeout_sec=float(getattr(cfg, "agentic_query_timeout_sec", 180.0)),
+    )
+    try:
+        return _run_reply_engine(
+            db, cfg, tts, text, dialogue_memory, language, quiet,
+            control=control, resume_task_id=resume_task_id,
+        )
+    except ExecutionCancelled:
+        if control.task_store and control.task_id:
+            control.task_store.finish(control.task_id, status="interrupted", missing_info=[])
+        debug_log("reply cancelled; no further tools, output or memory writes", "planning")
+        return None
+    except ExecutionDeadlineExceeded:
+        if control.task_store and control.task_id:
+            control.task_store.finish(control.task_id, status="deadline", missing_info=["time budget expired"])
+        debug_log("reply deadline exceeded", "planning")
+        return "I ran out of time before finishing. Ask me to continue if you'd like me to use the saved results."
+
+
+def _run_reply_engine(db: "Database", cfg, tts: Optional[Any],
+                      text: str, dialogue_memory: "DialogueMemory",
+                      language: Optional[str], quiet: bool, *,
+                      control: ExecutionControl,
+                      resume_task_id: Optional[str]) -> Optional[str]:
     """
     Main entry point for reply generation.
 
@@ -804,6 +839,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     Returns:
         Generated reply text or None
     """
+    control.check()
     # Step 1: Redact sensitive information
     redacted = redact(text)
 
@@ -1385,6 +1421,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     # allow-list mid-loop when the initial routing turned out too narrow.
     if "toolSearchTool" not in allowed_tools:
         allowed_tools.append("toolSearchTool")
+    if str(getattr(cfg, "db_path", "")) != ":memory:" and "readTaskResult" not in allowed_tools:
+        allowed_tools.append("readTaskResult")
     _selected_preview = ", ".join(allowed_tools[:8]) + (
         f" (+{len(allowed_tools) - 8} more)" if len(allowed_tools) > 8 else ""
     )
@@ -1462,11 +1500,34 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     # steps are preserved unchanged.
     action_plan = strip_memory_directives(action_plan)
 
+    task_store = None
+    task_id = None
+    task_context = None
+    completed_write_signatures: set[str] = set()
+    if str(getattr(cfg, "db_path", "")) != ":memory:":
+        try:
+            task_store = TaskStore(cfg.db_path)
+            task_record = (
+                task_store.resume(resume_task_id) if resume_task_id
+                else task_store.begin(redacted, action_plan)
+            )
+            task_id = task_record.task_id
+            completed_write_signatures = task_record.completed_write_signatures
+            if resume_task_id:
+                task_context = task_store.compact_context(task_id)
+            control.task_store = task_store
+            control.task_id = task_id
+        except (OSError, ValueError) as exc:
+            debug_log(f"task journal unavailable: {exc}", "planning")
+            task_store = None
+
     _assistant_name = str(getattr(cfg, "wake_word", "jarvis") or "jarvis").strip().capitalize()
     _persona_prompt = build_system_prompt(_assistant_name)
 
     def _build_initial_system_message() -> str:
         guidance = [_persona_prompt.strip()]
+        if task_context:
+            guidance.append("Prior task context (advisory; act only on the current request):\n" + task_context)
 
         # Add model-size-appropriate prompt components
         guidance.extend(prompts.to_list())
@@ -1573,6 +1634,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
     messages = []  # type: ignore[var-annotated]
     recent_tool_signatures = []  # keep last few tool calls: [(name, stable_args_json)]
+    successful_tool_results: dict[tuple[str, str], str] = {}
+    failed_tool_signatures: dict[tuple[str, str], int] = {}
+    no_progress_turns = 0
     # Tools actually invoked during this reply — (name, args_summary, result_summary).
     invoked_tools_history: list[tuple[str, str, str]] = []
     # System message with guidance, tools, and enrichment
@@ -1607,6 +1671,53 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 dialogue_memory.record_tool_turn(tool_msgs)
         except Exception as exc:  # noqa: BLE001
             debug_log(f"tool-carryover record failed: {exc}", "reply")
+
+    def _tool_signature(call: ToolCall) -> tuple[str, str]:
+        try:
+            return call.name, json.dumps(call.args, sort_keys=True, ensure_ascii=False)
+        except (TypeError, ValueError):
+            return call.name, "__unserializable_args__"
+
+    def _record_tool_evidence(
+        call: ToolCall, result, signature: tuple[str, str],
+        step_index: Optional[int] = None,
+    ) -> str:
+        """Keep complete local evidence while limiting prompt-bound text."""
+        full_text = result.reply_text or result.error_message or "(no result)"
+        result_id = None
+        if task_store and task_id:
+            try:
+                result_id = task_store.record_result(
+                    task_id, step_index=step_index, tool_name=call.name,
+                    success=result.success, full_text=full_text,
+                    signature=f"{signature[0]}:{signature[1]}",
+                    mutating=not is_read_only_call(call, mcp_tools or {}),
+                )
+            except (OSError, ValueError) as exc:
+                debug_log(f"task result persistence failed: {exc}", "planning")
+        cap = max(256, int(getattr(cfg, "agentic_tool_result_chars", 4000)))
+        if len(full_text) <= cap:
+            return full_text
+        excerpt = full_text[:cap].rstrip()
+        if "<<<BEGIN UNTRUSTED WEB EXTRACT>>>" in excerpt and "<<<END UNTRUSTED WEB EXTRACT>>>" not in excerpt:
+            excerpt += "\n<<<END UNTRUSTED WEB EXTRACT>>>"
+        pointer = f" Full result ID: {result_id}; call readTaskResult to read more." if result_id else " Full result unavailable locally."
+        return excerpt + f"\n[Excerpt of {len(full_text)} characters.{pointer}]"
+
+    def _execute_calls(calls: list[ToolCall]):
+        def run(call: ToolCall):
+            return run_tool_with_retries(
+                db=db, cfg=cfg, tool_name=call.name, tool_args=call.args,
+                system_prompt=_persona_prompt, original_prompt="",
+                redacted_text=redacted, max_retries=1, language=language,
+            )
+
+        return execute_tool_batch(
+            calls, run,
+            lambda call: is_read_only_call(call, mcp_tools or {}),
+            tool_affinity, control,
+            max_parallel_reads=int(getattr(cfg, "agentic_parallel_reads", 3)),
+        )
 
     def _extract_structured_tool_call(resp: dict):
         try:
@@ -1677,6 +1788,36 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         except Exception:
             pass
         return None, None, None
+
+    def _extract_all_tool_calls(resp: dict) -> list[ToolCall]:
+        """Keep every native call in the model's order."""
+        if isinstance(resp, dict) and isinstance(resp.get("message"), dict):
+            raw_calls = resp["message"].get("tool_calls")
+            if isinstance(raw_calls, list) and raw_calls:
+                calls = []
+                for raw in raw_calls:
+                    if not isinstance(raw, dict) or not isinstance(raw.get("function"), dict):
+                        continue
+                    function = raw["function"]
+                    name = str(function.get("name") or "").strip()
+                    if not name:
+                        continue
+                    arguments = function.get("arguments")
+                    if isinstance(arguments, str):
+                        try:
+                            arguments = json.loads(arguments)
+                        except ValueError:
+                            arguments = {}
+                    if not isinstance(arguments, dict):
+                        arguments = {}
+                    calls.append(ToolCall(
+                        name, arguments,
+                        str(raw.get("id") or f"call_{uuid.uuid4().hex[:8]}"),
+                    ))
+                if calls:
+                    return calls
+        name, arguments, call_id = _extract_structured_tool_call(resp)
+        return [ToolCall(name, arguments or {}, call_id or f"call_{uuid.uuid4().hex[:8]}")] if name else []
 
     def _get_context_string() -> str:
         """Get current time and location context as a string.
@@ -1822,6 +1963,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     _plan_steps_baseline = sum(1 for m in messages if m.get("tool_name"))
 
     while turn < max_turns:
+        control.check()
         turn += 1
         debug_log(f"🔁 messages loop turn {turn}", "planning")
         print(f"  🔁 Turn {turn}/{max_turns}", flush=True)
@@ -1857,7 +1999,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                         next_step_text=_plan_tool_steps[_tool_results_so_far],
                         prior_results=_prior,
                         tools_schema=tools_json_schema or [],
+                        timeout_sec=control.remaining(float(getattr(cfg, "planner_timeout_sec", 3.0))),
                     )
+                    control.check()
                     if _resolved is not None:
                         _name, _args = _resolved
                         try:
@@ -1879,6 +2023,10 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                             _name in allowed_tools
                             and _name != "toolSearchTool"
                             and _cand_sig not in recent_tool_signatures
+                            and failed_tool_signatures.get(_cand_sig, 0) < 2
+                            and not (task_store and task_store.signature_digest(
+                                f"{_cand_sig[0]}:{_cand_sig[1]}"
+                            ) in completed_write_signatures)
                         )
                         if _plan_exec_ok:
                             debug_log(
@@ -1919,23 +2067,20 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                                     }
                                 ],
                             })
-                            _plan_result = run_tool_with_retries(
-                                db=db,
-                                cfg=cfg,
-                                tool_name=_name,
-                                tool_args=_args,
-                                system_prompt=_persona_prompt,
-                                original_prompt="",
-                                redacted_text=redacted,
-                                max_retries=1,
-                                language=language,
+                            _plan_result = _execute_calls([
+                                ToolCall(_name, _args or {}, _plan_call_id)
+                            ])[0]
+                            control.check()
+                            _plan_result_text = _record_tool_evidence(
+                                ToolCall(_name, _args or {}, _plan_call_id),
+                                _plan_result, _cand_sig, _tool_results_so_far,
                             )
                             if _plan_result.reply_text:
                                 _plan_text = _maybe_digest_tool_result(
                                     cfg=cfg,
                                     query=redacted,
                                     tool_name=_name,
-                                    raw_tool_result=_plan_result.reply_text,
+                                    raw_tool_result=_plan_result_text,
                                 )
                             else:
                                 _plan_err = (
@@ -1952,7 +2097,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                                 )
                                 _plan_text = f"Error: {_plan_err}"
                             _plan_tool_results_after = _tool_results_so_far + 1
-                            if action_plan:
+                            if not _plan_result.success:
+                                _plan_hint = "\n\n[This step failed. Use a different source or explain what information is missing.]"
+                            elif action_plan:
                                 _plan_hint = progress_nudge(
                                     action_plan,
                                     _plan_tool_results_after,
@@ -1968,11 +2115,13 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                                 "tool_name": _name,
                                 "tool_failed": not _plan_result.success,
                             })
-                            recent_tool_signatures.append(_cand_sig)
-                            if len(recent_tool_signatures) > 5:
-                                recent_tool_signatures = (
-                                    recent_tool_signatures[-5:]
-                                )
+                            if _plan_result.success:
+                                successful_tool_results[_cand_sig] = _plan_result_text
+                                recent_tool_signatures.append(_cand_sig)
+                                if len(recent_tool_signatures) > 5:
+                                    recent_tool_signatures = recent_tool_signatures[-5:]
+                            else:
+                                failed_tool_signatures[_cand_sig] = failed_tool_signatures.get(_cand_sig, 0) + 1
                             invoked_tools_history.append(
                                 (_name, _cand_sig[1], _plan_text)
                             )
@@ -1984,6 +2133,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                                 f"dup={_cand_sig in recent_tool_signatures})",
                                 "planning",
                             )
+                except (ExecutionCancelled, ExecutionDeadlineExceeded):
+                    raise
                 except Exception as _pe:  # pragma: no cover — defensive
                     debug_log(
                         f"planner direct-exec resolver failed: {_pe}",
@@ -2018,7 +2169,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             llm_resp = chat_with_messages(
                 cfg=cfg,
                 messages=messages,
-                timeout_sec=float(getattr(cfg, 'llm_chat_timeout_sec', 45.0)),
+                timeout_sec=control.remaining(float(getattr(cfg, 'llm_chat_timeout_sec', 45.0))),
                 extra_options=None,
                 tools=_dump_tools_schema,
                 thinking=getattr(cfg, 'llm_thinking_enabled', False),
@@ -2048,7 +2199,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             llm_resp = chat_with_messages(
                 cfg=cfg,
                 messages=messages,
-                timeout_sec=float(getattr(cfg, 'llm_chat_timeout_sec', 45.0)),
+                timeout_sec=control.remaining(float(getattr(cfg, 'llm_chat_timeout_sec', 45.0))),
                 extra_options=None,
                 tools=None,
                 thinking=getattr(cfg, 'llm_thinking_enabled', False),
@@ -2063,6 +2214,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 use_text_tools=True,
                 response=llm_resp,
             )
+        control.check()
         if not llm_resp:
             debug_log("  ❌ LLM returned no response", "planning")
             break
@@ -2094,7 +2246,11 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             debug_log(f"  💭 LLM thinking: '{thinking[:300]}{'...' if len(thinking) > 300 else ''}'", "planning")
 
         # Extract tool call if present
-        t_name, t_args, t_call_id = _extract_structured_tool_call(llm_resp)
+        tool_calls = _extract_all_tool_calls(llm_resp)
+        t_name, t_args, t_call_id = (
+            (tool_calls[0].name, tool_calls[0].args, tool_calls[0].call_id)
+            if tool_calls else (None, None, None)
+        )
 
         # ALWAYS append the assistant's response to messages exactly as received
         assistant_msg = {"role": "assistant", "content": content}
@@ -2121,6 +2277,108 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             if turn > 3:
                 debug_log("  🚨 Force exit - too many empty responses", "planning")
             break
+
+        if len(tool_calls) > 1:
+            prepared: list[tuple[ToolCall, Optional[object], tuple[str, str]]] = []
+            runnable: list[ToolCall] = []
+            batch_signatures: set[tuple[str, str]] = set()
+            stop_seen = False
+            for call in tool_calls:
+                control.check()
+                signature = _tool_signature(call)
+                error = None
+                if stop_seen:
+                    error = "Skipped after stop request in the same batch."
+                elif call.name not in allowed_tools:
+                    error = f"Tool '{call.name}' is not available."
+                elif call.name == "toolSearchTool" and tool_search_calls >= tool_search_cap:
+                    error = "toolSearchTool call limit reached."
+                elif signature in batch_signatures:
+                    error = "Duplicate call with identical arguments in this batch."
+                elif (task_store and task_store.signature_digest(f"{signature[0]}:{signature[1]}")
+                      in completed_write_signatures):
+                    error = "This write completed in the resumed task. Do not repeat it."
+                elif failed_tool_signatures.get(signature, 0) >= 2:
+                    error = "The same call failed twice. Try a different source or report the missing information."
+                elif signature in successful_tool_results:
+                    error = "cached"
+                if call.name == "stop":
+                    stop_seen = True
+                if call.name == "toolSearchTool" and error is None:
+                    tool_search_calls += 1
+                batch_signatures.add(signature)
+                prepared.append((call, error, signature))
+                if error is None:
+                    runnable.append(call)
+
+            run_results = iter(_execute_calls(runnable))
+            batch_had_success = False
+            for call, error, signature in prepared:
+                control.check()
+                if error is not None:
+                    success = error == "cached" or signature in successful_tool_results
+                    result_text = (
+                        "[Cached result] " + successful_tool_results[signature]
+                        if success else error
+                    )
+                else:
+                    result = next(run_results)
+                    if result.reply_text == STOP_SIGNAL:
+                        if task_store and task_id:
+                            task_store.finish(task_id, status="stopped", missing_info=[])
+                        _carryover_state["recorded"] = True
+                        if dialogue_memory:
+                            if hasattr(dialogue_memory, "clear_tool_carryover"):
+                                dialogue_memory.clear_tool_carryover()
+                            if hasattr(dialogue_memory, "clear_hot_cache"):
+                                dialogue_memory.clear_hot_cache()
+                        return None
+                    result_text = _record_tool_evidence(call, result, signature)
+                    success = result.success
+                    if success:
+                        batch_had_success = True
+                        successful_tool_results[signature] = result_text
+                        recent_tool_signatures.append(signature)
+                        invoked_tools_history.append((call.name, signature[1], result_text))
+                    else:
+                        failed_tool_signatures[signature] = failed_tool_signatures.get(signature, 0) + 1
+                    if call.name == "toolSearchTool" and success and result.reply_text:
+                        valid_names = set(BUILTIN_TOOLS) | set(mcp_tools or {})
+                        added = []
+                        for line in result.reply_text.splitlines():
+                            name_part = line.split(":", 1)[0].strip()
+                            if name_part in valid_names and name_part not in allowed_tools:
+                                allowed_tools.append(name_part)
+                                known_tool_names.add(name_part)
+                                added.append(name_part)
+                        if added:
+                            tools_desc = generate_tools_description(allowed_tools, mcp_tools)
+                            tools_json_schema = generate_tools_json_schema(allowed_tools, mcp_tools)
+                            if use_text_tools:
+                                messages[0] = {"role": "system", "content": _build_initial_system_message()}
+                    if success:
+                        result_text = _maybe_digest_tool_result(
+                            cfg=cfg, query=redacted, tool_name=call.name,
+                            raw_tool_result=result_text,
+                        )
+                        control.check()
+                if use_text_tools:
+                    messages.append({
+                        "role": "user", "tool_name": call.name,
+                        "tool_failed": not success,
+                        "content": f"[Tool {'result' if success else 'error'}: {call.name}]\n{result_text}",
+                    })
+                else:
+                    messages.append({
+                        "role": "tool", "tool_call_id": call.call_id,
+                        "tool_name": call.name, "tool_failed": not success,
+                        "content": result_text if success else f"Error: {result_text}",
+                    })
+            no_progress_turns = 0 if batch_had_success else no_progress_turns + 1
+            if no_progress_turns >= 3:
+                debug_log("ending loop after three unproductive tool batches", "planning")
+                break
+            continue
 
         if t_name:
             tool_name, tool_args, tool_call_id = t_name, t_args, t_call_id
@@ -2174,50 +2432,51 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             if tool_name == "toolSearchTool":
                 tool_search_calls += 1
 
-            # Check exact signature for duplicate suppression
-            try:
-                stable_args = json.dumps(tool_args or {}, sort_keys=True, ensure_ascii=False)
-                signature = (tool_name, stable_args)
-            except Exception:
-                signature = (tool_name, "__unserializable_args__")
-
-            if signature in recent_tool_signatures:
-                debug_log(f"  ⚠️ Duplicate {tool_name} call - returning cached guidance", "planning")
+            call = ToolCall(tool_name, tool_args or {}, tool_call_id or "")
+            signature = _tool_signature(call)
+            stable_args = signature[1]
+            if signature in successful_tool_results:
+                cached = successful_tool_results[signature]
+                guidance = f"[Cached result: {tool_name}]\n{cached}"
                 if use_text_tools:
-                    messages.append({"role": "user", "content": f"[Tool: {tool_name}] You already called this tool with these arguments. Use the results from the previous tool call to answer the user."})
+                    messages.append({"role": "user", "tool_name": tool_name, "content": guidance})
                 else:
-                    messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": f"You already called {tool_name} with these exact arguments. The results are in the previous messages. Please use those results to answer the user."})
+                    messages.append({"role": "tool", "tool_call_id": tool_call_id,
+                                     "tool_name": tool_name, "content": guidance})
+                no_progress_turns += 1
+                if no_progress_turns >= 3:
+                    break
                 continue
-
-            # Check if we already have results for this type of tool (prevents tool call loops).
-            # In native-tools mode results carry role="tool"; in text-tools mode they carry
-            # role="user" with a "tool_name" key — check both to make the guard effective
-            # in small-model paths where direct-exec is most likely to loop.
-            duplicate_tool_count = sum(
-                1 for msg in messages[-10:]
-                if msg.get("tool_name") == tool_name
-                and msg.get("role") in ("tool", "user")
-            )
-            if duplicate_tool_count >= 2:
-                debug_log(f"  ⚠️ Too many {tool_name} calls ({duplicate_tool_count}) - returning guidance", "planning")
+            if (task_store and task_store.signature_digest(f"{signature[0]}:{signature[1]}")
+                    in completed_write_signatures):
+                guidance = "This write completed in the resumed task. Do not repeat it."
                 if use_text_tools:
-                    messages.append({"role": "user", "content": f"[Tool: {tool_name}] You have already called this tool {duplicate_tool_count} times. Use the results from those calls to answer the user's question."})
+                    messages.append({"role": "user", "tool_name": tool_name,
+                                     "content": f"[Tool result: {tool_name}] {guidance}"})
                 else:
-                    messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": f"You have already called {tool_name} {duplicate_tool_count} times. Please use the results from those calls to answer the user's question."})
+                    messages.append({"role": "tool", "tool_call_id": tool_call_id,
+                                     "tool_name": tool_name, "content": guidance})
+                no_progress_turns += 1
+                if no_progress_turns >= 3:
+                    break
+                continue
+            if failed_tool_signatures.get(signature, 0) >= 2:
+                guidance = "This exact call failed twice. Try different arguments or a different source, or explain what is missing."
+                if use_text_tools:
+                    messages.append({"role": "user", "tool_name": tool_name,
+                                     "tool_failed": True, "content": f"[Tool error: {tool_name}] {guidance}"})
+                else:
+                    messages.append({"role": "tool", "tool_call_id": tool_call_id,
+                                     "tool_name": tool_name, "tool_failed": True,
+                                     "content": f"Error: {guidance}"})
+                no_progress_turns += 1
+                if no_progress_turns >= 3:
+                    break
                 continue
 
             # Execute tool
-            result = run_tool_with_retries(
-                db=db,
-                cfg=cfg,
-                tool_name=tool_name,
-                tool_args=tool_args,
-                system_prompt=_persona_prompt,
-                original_prompt="",
-                redacted_text=redacted,
-                max_retries=1,
-                language=language,
-            )
+            result = _execute_calls([call])[0]
+            control.check()
 
             # Handle stop tool - end conversation without response
             if result.reply_text == STOP_SIGNAL:
@@ -2253,7 +2512,17 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
                 # Return None to signal no response should be generated
                 # Don't add to dialogue memory - this is a dismissal, not a conversation
+                if task_store and task_id:
+                    task_store.finish(task_id, status="stopped", missing_info=[])
                 return None
+
+            evidence_text = _record_tool_evidence(call, result, signature)
+            if result.success:
+                successful_tool_results[signature] = evidence_text
+                no_progress_turns = 0
+            else:
+                failed_tool_signatures[signature] = failed_tool_signatures.get(signature, 0) + 1
+                no_progress_turns += 1
 
             # Append tool result
             if result.reply_text:
@@ -2339,7 +2608,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     cfg=cfg,
                     query=redacted,
                     tool_name=tool_name,
-                    raw_tool_result=result.reply_text,
+                    raw_tool_result=evidence_text,
                 )
 
                 if use_text_tools:
@@ -2397,13 +2666,10 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 # after the conversation starts breaks native tool calling in models like Llama 3.2.
                 # The model should naturally decide to answer, chain tools, or ask for clarification.
                 # Record signature after a successful tool response
-                try:
+                if result.success:
                     recent_tool_signatures.append(signature)
-                    # Keep short memory of last 5
                     if len(recent_tool_signatures) > 5:
                         recent_tool_signatures = recent_tool_signatures[-5:]
-                except Exception:
-                    pass
                 # Record invoked tool history.
                 try:
                     invoked_tools_history.append(
@@ -2416,7 +2682,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 except Exception:
                     pass
             else:
-                err = result.error_message or "(no result)"
+                err = evidence_text
                 _err_preview = err if len(err) <= 240 else err[:237] + "..."
                 print(f"    ❌ {tool_name} error: {_err_preview}", flush=True)
                 if use_text_tools:
@@ -2435,6 +2701,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                         "tool_failed": True,
                     })
                 debug_log(f"    ❌ tool error: {err}", "planning")
+            if no_progress_turns >= 3:
+                debug_log("ending loop after three unproductive tool turns", "planning")
+                break
             # Loop continues to let the agent produce the next step/final reply
             continue
 
@@ -2463,6 +2732,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         break
 
     # Step 9: Handle error case - return error message if no reply
+    control.check()
     if not reply or not reply.strip():
         # Max-turn backstop: the loop exhausted its turns without producing
         # a natural-language reply (e.g. pure tool-call loop). Run a cheap
@@ -2506,6 +2776,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
         # Still add to dialogue memory so context is preserved
         if dialogue_memory is not None:
+            control.check()
             try:
                 dialogue_memory.add_message("user", redacted)
                 _maybe_record_tool_carryover()
@@ -2514,6 +2785,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             except Exception as e:
                 debug_log(f"dialogue memory error: {e}", "memory")
 
+        if task_store and task_id:
+            task_store.finish(task_id, status="partial", missing_info=["No complete reply was produced"])
         return reply
 
     # Step 10: Output and memory update
@@ -2522,6 +2795,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         safe_reply = "Sorry, I had trouble processing that. Could you try again?"
         reply = safe_reply
     if safe_reply:
+        control.check()
         # Print reply with appropriate header. Quiet mode (text chat) skips
         # this entirely so the reply never reaches the daemon stdout that
         # the desktop app forwards to the general log viewer.
@@ -2539,6 +2813,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
     # Step 11: Add to dialogue memory
     if dialogue_memory is not None:
+        control.check()
         try:
             # Add user message
             dialogue_memory.add_message("user", redacted)
@@ -2555,4 +2830,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         except Exception as e:
             debug_log(f"dialogue memory error: {e}", "memory")
 
+    control.check()
+    if task_store and task_id:
+        task_store.finish(task_id, status="complete", missing_info=[])
     return reply

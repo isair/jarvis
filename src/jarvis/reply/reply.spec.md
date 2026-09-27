@@ -141,7 +141,10 @@ Design principles enforced by the engine:
    - Fallback is detected once per session (first HTTP 400 response) and persists for the rest of the conversation
    - Internal reasoning uses the `thinking` field (not shown to user)
    - Allowed tools: all builtin tools plus MCP (if configured)
-   - Duplicate suppression: the engine returns a tool error response for repeated calls with identical args, guiding the model to use prior results
+   - Native responses execute every valid `tool_calls` entry and append matching tool results in model order. Consecutive independent read-only calls may overlap up to `agentic_parallel_reads`; mutations remain ordered and calls sharing one persistent MCP server session remain serial. MCP `readOnlyHint` and a conservative builtin operation list determine read-only status.
+   - Distinct arguments to the same tool remain callable throughout the turn. Identical successful calls reuse their prior result; two failures of the same call trigger guidance to change source or explain missing information. Three unproductive tool turns terminate the loop for a partial answer.
+   - One `ExecutionControl` covers the query with `agentic_query_timeout_sec`. Tool waits and chat/resolver calls use its remaining budget. Cancellation or deadline abandonment prevents later tools, dialogue-memory writes, TTS and reply delivery; an already issued external side effect cannot be undone.
+   - Each query has a private local task record with objective, plan steps, compact outcomes and missing information. Full tool results remain in local files; prompt-bound excerpts are limited by `agentic_tool_result_chars`. `readTaskResult` pages a full result by opaque ID. Explicit task resumption injects compact context and suppresses completed writes by hashed call signature; ordinary new queries do not resume or replay prior actions.
    - Tool results: native path appends `{role: "tool", tool_call_id: "<id>", content: "<text>"}` messages; text-based fallback appends `{role: "user", content: "[Tool result: name]\n<text>"}` messages
    - No system message injection: The engine does NOT add system messages during the loop as this breaks native tool calling; instead, guidance is provided via tool error responses when needed
 
@@ -378,5 +381,4 @@ Behaviour:
 ### Logging and Privacy
 - Use `debug_log` for key steps: `memory`, `planning`, and `voice` categories.
 - Avoid excessive logging; logs must remain readable and privacy-preserving.
-
 
