@@ -32,6 +32,21 @@ Warnings are transition-based; dictation pauses suspend health checks. With
 peak level and capture rate, without saving microphone audio. Linux warnings
 point users to PipeWire/PulseAudio recording-source routing.
 
+Audio-frame processing is limited to VAD and utterance assembly. Completed
+utterances are enqueued for a single FIFO Whisper worker. Transcription results
+return to the listener loop in order, where transcript storage and intent
+processing remain serialised. The bounded transcription backlog reports an
+explicit warning when full rather than blocking microphone-frame consumption
+or silently losing an utterance. A dictation pause clears captured audio and
+invalidates transcription work started before the pause, including a decode
+that finishes after dictation resumes. Listener shutdown discards pending
+transcriptions and results; an in-progress Whisper call is given a bounded
+grace period and cannot dispatch a late transcript. Transcript echo flags use
+the utterance capture interval against TTS timing. The job carries that
+capture-time context through Whisper to echo rejection, stop-command handling
+and intent processing, so later TTS playback cannot reclassify an older
+utterance.
+
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                         Audio Stream                            │
@@ -385,7 +400,11 @@ Main Loop: Get Frames → VAD Check
     ↓
 Speech Detected → Accumulate Frames
     ↓
-Silence Timeout → Whisper Transcription
+Silence Timeout → Bounded FIFO Transcription Jobs
+    ↓
+Serial Whisper Worker → Transcription Results
+    ↓
+Main Loop: Transcript and Intent Processing
     ↓
 Add to Transcript Buffer (with timestamps)
     ↓

@@ -133,9 +133,11 @@ def test_unknown_size_is_indeterminate(qapp):
 
 def test_slow_download_does_not_fake_progress(qapp, monkeypatch):
     from desktop_app.app import LogViewerWindow
+    clock = [1000.0]
+    monkeypatch.setattr("desktop_app.app.time.monotonic", lambda: clock[0])
     window = LogViewerWindow()
     window.append_log("weights.npz: 20%|xx| 2M/10M [00:02<00:08, 1MB/s]\n")
-    monkeypatch.setattr("desktop_app.app.time.monotonic", lambda: window._last_progress_at + 30)
+    clock[0] += 30
     window._refresh_download_status()
     assert "No new progress for 30s" in window.download_detail.text()
     assert window.download_bar.value() == 20

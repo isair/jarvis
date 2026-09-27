@@ -656,6 +656,8 @@ class TestCpuOptimisations:
         mock_whisper_model = MagicMock()
         mock_segment = MagicMock()
         mock_segment.text = "hello"
+        mock_segment.avg_logprob = 0.0
+        mock_segment.no_speech_prob = 0.0
         mock_info = MagicMock()
         mock_whisper_model.transcribe.return_value = (iter([mock_segment]), mock_info)
 
@@ -683,17 +685,14 @@ class TestCpuOptimisations:
                     listener._whisper_device = whisper_device
                     listener._samplerate = 16000
 
-                    # Set up state so _finalize_utterance reaches transcription
-                    listener._utterance_frames = [np.zeros(16000, dtype=np.float32)]
-                    listener.echo_detector._utterance_start_time = time.time() - 1.0
-                    listener.is_speech_active = True
-
                     return listener, mock_whisper_model
 
     def test_cpu_optimisations_in_transcribe(self):
         """CPU mode passes without_timestamps and disables condition_on_previous_text."""
+        import numpy as np
+
         listener, mock_model = self._create_listener_for_transcribe_test("cpu")
-        listener._finalize_utterance()
+        listener._transcribe_audio(np.zeros(16000, dtype=np.float32))
 
         mock_model.transcribe.assert_called_once()
         call_kwargs = mock_model.transcribe.call_args[1]
@@ -702,8 +701,10 @@ class TestCpuOptimisations:
 
     def test_gpu_does_not_get_cpu_optimisations(self):
         """CUDA mode does not apply CPU-specific transcribe optimisations."""
+        import numpy as np
+
         listener, mock_model = self._create_listener_for_transcribe_test("cuda")
-        listener._finalize_utterance()
+        listener._transcribe_audio(np.zeros(16000, dtype=np.float32))
 
         mock_model.transcribe.assert_called_once()
         call_kwargs = mock_model.transcribe.call_args[1]
