@@ -134,7 +134,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 ## 9b. Source-grounded Fact Extraction
 
 - **File**: `src/jarvis/memory/fact_ops.py`, `ingest_dialogue_facts()` and `process_pending_fact_batches()`.
-- **Trigger**: background after a diary flush and a bounded 20-second recovery pass at daemon startup. Redacted source messages are split into bounded durable batches before the corresponding diary snapshot is marked saved. The daily summary is not the extraction source.
+- **Trigger**: background after a diary flush and a bounded 20-second recovery pass at daemon startup. Redacted source messages are split into durable batches before summary generation or diary commit, so a failed diary write does not discard extraction evidence. The daily summary is not the extraction source.
 - **Model**: configured chat model via `get_llm_backend(cfg).direct`, temperature zero, `max_tokens=900`, caller timeout (30 seconds by default).
 - **Inputs**: redacted, role/channel-labelled source dialogue with timestamps and a bounded set of current facts for explicit corrections. Both are fenced as untrusted data.
 - **Output**: independent facts citing an exact source-message span, ownership and subject, validity dates, and optional explicit supersession. Assistant assertions, quotes and ambiguous ownership cannot silently become user-owned standing instructions. Invalid model output leaves a retryable source batch; successful batches are removed from the queue.
