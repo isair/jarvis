@@ -51,11 +51,11 @@ def parse_report(report_path: str, model_name: str) -> Optional[ModelReport]:
 
     # Parse summary stats
     for line in content.split("\n"):
-        if "| ✅ Passed |" in line:
+        if "| ✅ Passed |" in line or "| ✅ Fully Passed" in line:
             match = re.search(r"\|\s*(\d+)\s*\|", line.split("Passed")[1])
             if match:
                 report.passed = int(match.group(1))
-        elif "| ❌ Failed |" in line:
+        elif "| ❌ Failed |" in line or "| ❌ Fully Failed" in line:
             match = re.search(r"\|\s*(\d+)\s*\|", line.split("Failed")[1])
             if match:
                 report.failed = int(match.group(1))
@@ -63,7 +63,7 @@ def parse_report(report_path: str, model_name: str) -> Optional[ModelReport]:
             match = re.search(r"\|\s*(\d+)\s*\|", line.split("Skipped")[1])
             if match:
                 report.skipped = int(match.group(1))
-        elif "| **Total** |" in line:
+        elif "| **Total** |" in line or "| **Unique Tests** |" in line:
             match = re.search(r"\|\s*\*\*(\d+)\*\*\s*\|", line)
             if match:
                 report.total = int(match.group(1))

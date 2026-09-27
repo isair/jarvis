@@ -7,9 +7,10 @@ Evals test end-to-end quality of the reply engine with real or mock LLM response
 import sys
 import os
 import re
+import json
 from pathlib import Path
 from datetime import datetime
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Dict, List, Optional
 import pytest
 
@@ -33,6 +34,7 @@ if str(EVALS) not in sys.path:
     sys.path.insert(0, str(EVALS))
 
 from helpers import MockConfig, JUDGE_MODEL, is_judge_llm_available
+from evals.benchmark_report import Scenario, format_markdown, summarise_scenarios
 
 
 # =============================================================================
@@ -380,6 +382,7 @@ class EvalReport:
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
     judge_model: str = ""
+    model_availability: str = "unknown"
 
     def add_result(self, result: TestResult):
         self.results.append(result)
@@ -457,6 +460,9 @@ class EvalReport:
         lines.append("")
         lines.append(f"**Generated:** {self.end_time.strftime('%Y-%m-%d %H:%M:%S') if self.end_time else 'N/A'}")
         lines.append(f"**Judge Model:** `{self.judge_model}`")
+        lines.append(f"**Live model availability:** {self.model_availability}")
+        if self.model_availability != "available":
+            lines.append("**Live model accuracy:** unavailable")
         lines.append(f"**Duration:** {self.duration:.2f}s")
         lines.append(f"**Runs per test:** {self.total_runs // total_tests if total_tests > 0 else 0}")
         lines.append("")
@@ -481,7 +487,7 @@ class EvalReport:
         bar_empty = 20 - bar_filled
         bar = "█" * bar_filled + "░" * bar_empty
         emoji = "🟢" if pass_rate >= 80 else "🟡" if pass_rate >= 50 else "🔴"
-        lines.append(f"**Overall Pass Rate:** {emoji} `{bar}` **{pass_rate:.1f}%** ({self.passed}/{self.passed + self.failed} runs)")
+        lines.append(f"**Executed test pass rate (offline and live):** {emoji} `{bar}` **{pass_rate:.1f}%** ({self.passed}/{self.passed + self.failed} runs)")
         lines.append("")
 
         # Group aggregated results by class
@@ -574,15 +580,18 @@ class EvalReport:
 
 # Global report instance
 _eval_report: Optional[EvalReport] = None
+_scenario_observations: List[Scenario] = []
 
 
 def pytest_configure(config):
     """Initialize the eval report at test session start."""
-    global _eval_report
+    global _eval_report, _scenario_observations
+    _scenario_observations = []
     if os.environ.get("EVAL_GENERATE_REPORT") == "1":
         _eval_report = EvalReport(
             start_time=datetime.now(),
-            judge_model=JUDGE_MODEL
+            judge_model=JUDGE_MODEL,
+            model_availability=os.environ.get("EVAL_MODEL_AVAILABILITY", "unknown"),
         )
 
 
@@ -592,8 +601,11 @@ def pytest_runtest_logreport(report):
     if _eval_report is None:
         return
 
-    # Only capture the final result (call phase for passed/failed, setup/teardown for errors)
-    if report.when != "call" and not (report.when in ("setup", "teardown") and report.outcome == "failed"):
+    # A setup skip has no call phase and must remain visible in the report.
+    if report.when != "call" and not (
+        report.when in ("setup", "teardown")
+        and report.outcome in ("failed", "skipped")
+    ):
         return
 
     # Parse the node ID to extract class and test name
@@ -652,6 +664,16 @@ def pytest_runtest_logreport(report):
 def pytest_sessionfinish(session, exitstatus):
     """Generate the markdown report at session end."""
     global _eval_report
+    scenario_path = os.environ.get("EVAL_SCENARIO_REPORT_PATH")
+    scenario_summary = summarise_scenarios(_scenario_observations)
+    if scenario_path:
+        Path(scenario_path).write_text(
+            json.dumps({
+                "summary": scenario_summary,
+                "scenarios": [asdict(item) for item in _scenario_observations],
+            }, indent=2),
+            encoding="utf-8",
+        )
     if _eval_report is None:
         return
 
@@ -666,6 +688,8 @@ def pytest_sessionfinish(session, exitstatus):
         report_path = ROOT / "EVALS.md"
 
     markdown = _eval_report.generate_markdown()
+    if scenario_summary:
+        markdown += "\n\n" + format_markdown(scenario_summary)
     report_path.write_text(markdown, encoding="utf-8")
     try:
         print(f"\n📄 Eval report saved to: {report_path}")
@@ -676,6 +700,13 @@ def pytest_sessionfinish(session, exitstatus):
 # =============================================================================
 # Fixtures
 # =============================================================================
+
+@pytest.fixture
+def scenario_recorder():
+    """Capture explicit request outcomes from controlled eval scenarios."""
+    def record(scenario: Scenario) -> None:
+        _scenario_observations.append(scenario)
+    return record
 
 @pytest.fixture
 def mock_config():
@@ -713,4 +744,3 @@ def graph_store(tmp_path):
         yield store
     finally:
         store.close()
-

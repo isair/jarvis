@@ -51,6 +51,7 @@ from .utils.location import get_location_context, is_location_available
 _global_dialogue_memory: Optional[DialogueMemory] = None
 _global_stop_requested: bool = False
 _warm_profile_graph_listener = None  # registered callback, kept for shutdown unregister
+_warm_profile_fact_listener = None
 _global_tts_engine = None  # TTS engine reference for face animation polling
 _global_dictation_engine = None  # Dictation engine reference for history UI
 # Config + DB booted by main(). Shared by the voice listener and the text-chat
@@ -77,11 +78,10 @@ _chat_query_lock = threading.Lock()
 
 # Per-query cancellation flag for the text-chat path. Set by
 # ``cancel_active_chat_query`` (the chat window's Stop button), checked by the
-# chat worker after ``run_reply_engine`` returns so the reply is dropped
-# instead of displayed. This is distinct from ``request_stop`` (daemon
-# lifecycle shutdown) — cancelling a chat query must not tear down the voice
-# assistant.
+# reply engine between model and tool calls. Cancelling a chat query does not
+# tear down the voice assistant; daemon shutdown cancels both active paths.
 _chat_cancel_event: Optional[threading.Event] = None
+_voice_cancel_event: Optional[threading.Event] = None
 
 # Chat IPC protocol prefixes - desktop app intercepts lines starting with these.
 # __CHAT__:        daemon -> desktop (event stream, mirrors DIARY_IPC_PREFIX)
@@ -105,6 +105,10 @@ def request_stop() -> None:
     """Request the daemon to stop gracefully."""
     global _global_stop_requested
     _global_stop_requested = True
+    if _chat_cancel_event is not None:
+        _chat_cancel_event.set()
+    if _voice_cancel_event is not None:
+        _voice_cancel_event.set()
 
 
 def set_diary_update_callbacks(
@@ -421,6 +425,7 @@ def submit_text_query(
                 dialogue_memory=dm,
                 language=None,
                 quiet=True,
+                cancel_event=cancel_event,
             )
             if cancel_event.is_set():
                 debug_log("chat query cancelled, dropping reply", "chat")
@@ -691,12 +696,6 @@ def _check_and_update_diary(
             # Only use token handler if we have callbacks or IPC enabled
             on_token = on_token_handler if (use_callbacks or use_ipc) else None
 
-            # Graph best-child picker is a one-digit classification — a fast-tier
-            # job, so placement runs on the small model instead of paging in the
-            # big chat model for every fact.
-            from .llm import resolve_model, Tier
-            graph_picker_model = resolve_model(cfg, Tier.FAST)
-
             summary_id = update_diary_from_dialogue_memory(
                 db=db,
                 dialogue_memory=_global_dialogue_memory,
@@ -707,7 +706,6 @@ def _check_and_update_diary(
                 force=force,
                 on_token=on_token,
                 thinking=getattr(cfg, 'llm_thinking_enabled', False),
-                graph_picker_model=graph_picker_model,
             )
 
             # Flush any remaining tokens in IPC mode
@@ -738,6 +736,28 @@ def _check_and_update_diary(
         _notify("complete", False)
 
 
+def _retry_pending_facts_at_boot(cfg, *, timeout_sec: float = 20.0) -> None:
+    """Process durable dialogue evidence after daemon restart within a budget."""
+    from .memory.facts import FactStore
+    from .memory.fact_ops import process_pending_fact_batches
+
+    store = FactStore(cfg.db_path)
+    try:
+        if not store.pending_batches():
+            return
+        result = process_pending_fact_batches(
+            store, cfg, chat_model=cfg.llm_chat_model, timeout_sec=timeout_sec,
+        )
+        if result.failed:
+            debug_log("boot fact recovery paused; pending batches retained", "memory")
+        else:
+            debug_log(f"boot fact recovery stored {result.stored} facts", "memory")
+    except Exception as exc:
+        debug_log(f"boot fact recovery failed; pending batches retained: {exc}", "memory")
+    finally:
+        store.close()
+
+
 def main(smoke_test: bool = False) -> None:
     """Main daemon entry point.
 
@@ -747,7 +767,7 @@ def main(smoke_test: bool = False) -> None:
             Used by CI smoke tests to verify the build is not broken.
     """
     global _global_dialogue_memory, _global_stop_requested, _global_tts_engine, _global_dictation_engine
-    global _warm_profile_graph_listener
+    global _warm_profile_graph_listener, _warm_profile_fact_listener
 
     # Reset stop flag at start (in case of restart)
     _global_stop_requested = False
@@ -758,7 +778,8 @@ def main(smoke_test: bool = False) -> None:
     db = Database(cfg.db_path, cfg.sqlite_vss_path)
     # Expose cfg + db so the text-chat submission path shares the same store
     # and config as the voice listener (one conversation, one config).
-    global _global_cfg, _global_db
+    global _global_cfg, _global_db, _voice_cancel_event
+    _voice_cancel_event = None
     _global_cfg = cfg
     _global_db = db
 
@@ -816,10 +837,11 @@ def main(smoke_test: bool = False) -> None:
         from .memory.graph import (
             BRANCH_DIRECTIVES,
             BRANCH_USER,
+            LEGACY_BRANCH_ID,
             register_graph_mutation_listener,
         )
 
-        _wp_relevant_branches = {BRANCH_USER, BRANCH_DIRECTIVES}
+        _wp_relevant_branches = {BRANCH_USER, BRANCH_DIRECTIVES, LEGACY_BRANCH_ID}
 
         # Read the DialogueMemory ref through the module global at fire
         # time, not via closure capture, so a future singleton swap (tests
@@ -861,18 +883,42 @@ def main(smoke_test: bool = False) -> None:
             "memory",
         )
 
-    # Knowledge graph: wipe + re-seed if the on-disk shape predates the
-    # User/Directives/World taxonomy. Non-destructive to the diary —
-    # users can re-import via the memory viewer.
+    try:
+        from .memory.facts import register_fact_mutation_listener, unregister_fact_mutation_listener
+
+        def _invalidate_wp_on_fact_mutation(*, action, fact_id, kind, ownership):
+            del action, fact_id
+            if ownership != "user" or kind not in {"user", "directive"}:
+                return
+            dm = _global_dialogue_memory
+            if dm is not None:
+                dm.invalidate_warm_profile()
+                debug_log("warm profile invalidated by fact mutation", "memory")
+
+        if _warm_profile_fact_listener is not None:
+            unregister_fact_mutation_listener(_warm_profile_fact_listener)
+        register_fact_mutation_listener(_invalidate_wp_on_fact_mutation)
+        _warm_profile_fact_listener = _invalidate_wp_on_fact_mutation
+    except Exception as exc:
+        debug_log(f"fact mutation listener wiring failed: {exc}", "memory")
+
+    # Keep uncategorised graph content accessible under the editable legacy branch.
     try:
         from .memory.graph import GraphMemoryStore
         _graph_store_boot = GraphMemoryStore(cfg.db_path)
         if _graph_store_boot.migrate_legacy_shape():
-            print("🧹 Wiped legacy knowledge graph; re-seeded User / Directives / World branches", flush=True)
-            print("   📥 Open the memory viewer and use 'Import from Diary' to repopulate.", flush=True)
+            print("🧠 Rehomed uncategorised knowledge under Unverified legacy", flush=True)
         _graph_store_boot.close()
     except Exception as e:
         debug_log(f"graph legacy-shape migration failed (non-fatal): {e}", "memory")
+
+    if not smoke_test:
+        threading.Thread(
+            target=_retry_pending_facts_at_boot,
+            args=(cfg,),
+            name="jarvis-fact-recovery",
+            daemon=True,
+        ).start()
 
     # Check location detection status
     if cfg.location_enabled and not is_location_available():
@@ -929,6 +975,7 @@ def main(smoke_test: bool = False) -> None:
     print("🎤 Preparing speech recognition in the background...", flush=True)
     voice_thread: Optional[threading.Thread] = None
     voice_thread = VoiceListener(db, cfg, tts, _global_dialogue_memory)
+    _voice_cancel_event = voice_thread._reply_cancel_event
     voice_thread.start()
 
     # Initialize dictation engine (hold-to-dictate)
@@ -1008,6 +1055,7 @@ def main(smoke_test: bool = False) -> None:
             try:
                 voice_thread.stop()
                 voice_thread.join(timeout=2.0)
+                _voice_cancel_event = None
             except Exception:
                 pass
 
@@ -1032,6 +1080,13 @@ def main(smoke_test: bool = False) -> None:
             except Exception:
                 pass
             _warm_profile_graph_listener = None
+        if _warm_profile_fact_listener is not None:
+            try:
+                from .memory.facts import unregister_fact_mutation_listener
+                unregister_fact_mutation_listener(_warm_profile_fact_listener)
+            except Exception:
+                pass
+            _warm_profile_fact_listener = None
 
         # Reset module-level globals so in-process re-entry is clean.
         _global_dialogue_memory = None
@@ -1131,6 +1186,7 @@ def main(smoke_test: bool = False) -> None:
         if voice_thread is not None:
             debug_log("stopping voice thread...", "jarvis")
             voice_thread.stop()
+            _voice_cancel_event = None
             try:
                 voice_thread.join(timeout=2.0)
             except Exception:
@@ -1188,6 +1244,13 @@ def main(smoke_test: bool = False) -> None:
             except Exception:
                 pass
             _warm_profile_graph_listener = None
+        if _warm_profile_fact_listener is not None:
+            try:
+                from .memory.facts import unregister_fact_mutation_listener
+                unregister_fact_mutation_listener(_warm_profile_fact_listener)
+            except Exception:
+                pass
+            _warm_profile_fact_listener = None
 
         debug_log("daemon stopped", "jarvis")
         print("👋 Daemon stopped", flush=True)

@@ -847,10 +847,14 @@ class TestIntentJudgeFallback:
     """Tests for intent judge fallback behaviour."""
 
     def test_returns_none_when_ollama_unavailable(self):
+        from types import SimpleNamespace
         from jarvis.listening.intent_judge import IntentJudge, IntentJudgeConfig
 
         judge = IntentJudge(IntentJudgeConfig(
-            ollama_base_url="http://127.0.0.1:99999",
+            cfg=SimpleNamespace(
+                llm_provider="ollama",
+                ollama_base_url="http://127.0.0.1:1",
+            ),
             timeout_sec=1.0,
         ))
 

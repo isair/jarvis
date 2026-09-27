@@ -147,6 +147,7 @@ class TestDiaryRecencyOrder:
         results = search_conversation_memory_by_keywords(
             db=db,
             keywords=case.search_keywords,
+            cfg=MockConfig(embedding_model=""),
             max_results=10,
         )
 

@@ -200,7 +200,7 @@ class TestContextUtilization:
         mock_tool_run = create_mock_tool_run(capture, {"webSearch": MOCK_WEATHER_SEARCH})
 
         call_count = 0
-        def mock_chat(base_url, chat_model, messages, timeout_sec, extra_options=None, tools=None, **kwargs):
+        def mock_chat(cfg, messages, timeout_sec, extra_options=None, tools=None, **kwargs):
             nonlocal call_count
             call_count += 1
 
@@ -254,7 +254,7 @@ class TestToolUsage:
         })
 
         call_count = 0
-        def mock_chat(base_url, chat_model, messages, timeout_sec, extra_options=None, tools=None, **kwargs):
+        def mock_chat(cfg, messages, timeout_sec, extra_options=None, tools=None, **kwargs):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
@@ -291,7 +291,7 @@ class TestToolUsage:
         })
 
         call_count = 0
-        def mock_chat(base_url, chat_model, messages, timeout_sec, extra_options=None, tools=None, **kwargs):
+        def mock_chat(cfg, messages, timeout_sec, extra_options=None, tools=None, **kwargs):
             nonlocal call_count
             call_count += 1
 
@@ -355,7 +355,7 @@ class TestMultiStepReasoning:
         })
 
         call_count = 0
-        def mock_chat(base_url, chat_model, messages, timeout_sec, extra_options=None, tools=None, **kwargs):
+        def mock_chat(cfg, messages, timeout_sec, extra_options=None, tools=None, **kwargs):
             nonlocal call_count
             call_count += 1
 
@@ -519,7 +519,7 @@ class TestMemoryEnrichment:
 
         captured_messages = []
 
-        def mock_chat(base_url, chat_model, messages, timeout_sec, extra_options=None, tools=None, **kwargs):
+        def mock_chat(cfg, messages, timeout_sec, extra_options=None, tools=None, **kwargs):
             captured_messages.extend(messages)
             return create_mock_llm_response(
                 "Based on your love for Italian food and goal to eat more veggies, "
@@ -528,7 +528,7 @@ class TestMemoryEnrichment:
 
         with patch('jarvis.reply.engine.chat_with_messages', side_effect=mock_chat), \
              patch('jarvis.reply.engine.extract_search_params_for_memory', return_value={"keywords": ["dinner", "food", "preferences"]}), \
-             patch('jarvis.memory.conversation.search_conversation_memory_by_keywords', return_value=mock_memory_results):
+             patch('jarvis.memory.facts.recall_evidence', return_value='\n'.join(mock_memory_results)):
 
             run_reply_engine(db=eval_db, cfg=mock_config, tts=None, text=query, dialogue_memory=eval_dialogue_memory)
 
@@ -567,7 +567,7 @@ class TestMemoryEnrichment:
         })
 
         call_count = 0
-        def mock_chat(base_url, chat_model, messages, timeout_sec, extra_options=None, tools=None, **kwargs):
+        def mock_chat(cfg, messages, timeout_sec, extra_options=None, tools=None, **kwargs):
             nonlocal call_count
             call_count += 1
 
@@ -587,7 +587,7 @@ class TestMemoryEnrichment:
         with patch('jarvis.reply.engine.run_tool_with_retries', side_effect=mock_tool_run), \
              patch('jarvis.reply.engine.chat_with_messages', side_effect=mock_chat), \
              patch('jarvis.reply.engine.extract_search_params_for_memory', return_value={"keywords": ["interests", "hobbies", "preferences"]}), \
-             patch('jarvis.memory.conversation.search_conversation_memory_by_keywords', return_value=mock_enrichment_context):
+             patch('jarvis.memory.facts.recall_evidence', return_value='\n'.join(mock_enrichment_context)):
 
             response = run_reply_engine(db=eval_db, cfg=mock_config, tts=None, text=query, dialogue_memory=eval_dialogue_memory)
 
@@ -686,7 +686,7 @@ class TestLiveEndToEnd:
 
         with patch('jarvis.reply.engine.run_tool_with_retries', side_effect=mock_tool_run), \
              patch('jarvis.reply.engine.get_location_context_with_timezone', return_value=("Location: London, UK", None)), \
-             patch('jarvis.memory.conversation.search_conversation_memory_by_keywords', return_value=mock_enrichment_context):
+             patch('jarvis.memory.facts.recall_evidence', return_value='\n'.join(mock_enrichment_context)):
 
             response = run_reply_engine(
                 db=eval_db, cfg=mock_config, tts=None,
@@ -786,7 +786,7 @@ class TestLiveEndToEnd:
 
         with patch('jarvis.reply.engine.run_tool_with_retries', side_effect=mock_tool_run), \
              patch('jarvis.reply.engine.get_location_context_with_timezone', return_value=("Location: London, UK", None)), \
-             patch('jarvis.memory.conversation.search_conversation_memory_by_keywords', return_value=mock_enrichment_context):
+             patch('jarvis.memory.facts.recall_evidence', return_value='\n'.join(mock_enrichment_context)):
 
             response = run_reply_engine(
                 db=eval_db, cfg=mock_config, tts=None,
@@ -1181,7 +1181,7 @@ class TestHelpfulness:
 
         with patch("jarvis.reply.engine.extract_search_params_for_memory", return_value=fake_extract), \
              patch("jarvis.memory.graph.GraphMemoryStore", _FakeStore), \
-             patch("jarvis.memory.conversation.search_conversation_memory_by_keywords", return_value=[]), \
+             patch("jarvis.memory.facts.recall_evidence", return_value=""), \
              patch("jarvis.reply.engine.get_location_context_with_timezone",
                    return_value=("Location: Hackney, London, UK", "Europe/London")):
             response = run_reply_engine(
@@ -1262,7 +1262,7 @@ class TestHelpfulness:
 
         with patch("jarvis.reply.engine.extract_search_params_for_memory",
                    return_value={"keywords": ["vegetarian", "diet"], "questions": []}), \
-             patch("jarvis.memory.conversation.search_conversation_memory_by_keywords", return_value=[]), \
+             patch("jarvis.memory.facts.recall_evidence", return_value=""), \
              patch("jarvis.reply.engine.get_location_context_with_timezone",
                    return_value=("Location: Hackney, London, UK", "Europe/London")):
             response = run_reply_engine(
@@ -1366,7 +1366,7 @@ class TestHelpfulness:
 
         with patch("jarvis.reply.engine.extract_search_params_for_memory", return_value=fake_extract), \
              patch("jarvis.memory.graph.GraphMemoryStore", _FakeStore), \
-             patch("jarvis.memory.conversation.search_conversation_memory_by_keywords", return_value=[]), \
+             patch("jarvis.memory.facts.recall_evidence", return_value=""), \
              patch("jarvis.reply.engine.get_location_context_with_timezone",
                    return_value=("Location: Hackney, London, UK", "Europe/London")):
             response = run_reply_engine(
@@ -1448,7 +1448,7 @@ class TestMalformedResponseAfterTools:
 
         call_count = 0
 
-        def mock_chat(base_url, chat_model, messages, timeout_sec, extra_options=None, tools=None, **kwargs):
+        def mock_chat(cfg, messages, timeout_sec, extra_options=None, tools=None, **kwargs):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
@@ -1489,4 +1489,3 @@ class TestMalformedResponseAfterTools:
         # The judge should not give a high score to a malformed or empty-sounding reply
         # (if the engine correctly falls back to an error message, the score will be low
         # but the key assertion is that the literal wasn't surfaced)
-

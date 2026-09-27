@@ -1149,14 +1149,37 @@ class TestLanguagePlumbingEndToEnd:
         assert mock_wiki.call_args.kwargs.get("lang") == "tr"
 
     def test_listener_stores_detected_language_attribute(self):
-        """The listener exposes `_last_detected_language` so `_dispatch_query`
-        can read it — this is the single attribute the reply engine bridge
-        depends on. Guard against it being renamed or removed silently."""
-        from src.jarvis.listening import listener as listener_module
-        import inspect
-        src = inspect.getsource(listener_module)
-        # One init, at least two assignment sites (MLX + faster-whisper),
-        # and the dispatch call must read it.
-        assert "self._last_detected_language: Optional[str] = None" in src
-        assert src.count("self._last_detected_language = detected") >= 2
-        assert "language=self._last_detected_language" in src
+        """Whisper's language reaches the listener's reply metadata."""
+        import queue
+        from types import SimpleNamespace
+
+        from jarvis.listening.listener import VoiceListener
+
+        listener = VoiceListener.__new__(VoiceListener)
+        listener.cfg = SimpleNamespace(voice_debug=False)
+        listener._should_stop = False
+        listener._dictation_is_active = False
+        listener._dictation_generation = 0
+        listener._last_detected_language = None
+        listener._first_utterance = True
+        listener._transcription_jobs_q = queue.Queue()
+        listener._transcription_results_q = queue.Queue()
+        listener._transcript_buffer = Mock()
+        listener._process_transcript = Mock()
+        listener._is_repetitive_hallucination = lambda text: False
+        listener._transcribe_audio = lambda audio: ("Jarvis, search Istanbul", "tr")
+        listener._transcription_jobs_q.put(SimpleNamespace(
+            audio="utterance", start_time=10.0, end_time=11.0, energy=0.2,
+            dictation_generation=0, captured_during_tts=False,
+            captured_tts_start_time=0.0,
+        ))
+        listener._transcription_jobs_q.put(None)
+
+        listener._run_transcription_worker()
+        listener._handle_transcription_result(listener._transcription_results_q.get_nowait())
+
+        assert listener._last_detected_language == "tr"
+        listener._transcript_buffer.add.assert_called_once_with(
+            text="Jarvis, search Istanbul", start_time=10.0, end_time=11.0,
+            energy=0.2, is_during_tts=False,
+        )

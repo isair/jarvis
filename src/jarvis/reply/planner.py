@@ -349,31 +349,20 @@ def strip_memory_directives(plan: Sequence[str]) -> List[str]:
     return [s for s in plan if not is_search_memory_step(s)]
 
 
-def tool_steps_of(plan: Sequence[str]) -> List[str]:
-    """Non-synthesis, non-directive tool steps of a plan.
+def tool_steps_of(plan: Sequence[str], known_names: Sequence[str]) -> List[str]:
+    """Return steps headed by a known tool name, regardless of position.
 
-    Drops any `searchMemory` directives (engine-internal) and the final
-    synthesis step. A 1-step plan that is a tool step (starts with a
-    known tool-like identifier — already validated by the engine's
-    allow-list guard at injection time) is returned as a tool step;
-    a 1-step "Reply to the user." plan has no tool steps (empty list).
+    A synthesis step can be written in any language, and a plan may end in
+    a tool call without a synthesis step. Exact catalogue names distinguish
+    executable steps from prose without language-specific keywords.
     """
-    steps = strip_memory_directives(plan)
-    if not steps:
-        return []
-    if len(steps) == 1:
-        # Could be "Reply to the user." (no tool) or "webSearch ..." (tool).
-        # The engine's allow-list guard handles validation at plan-injection
-        # time; here we just strip the synthesis step if present. A single
-        # step that looks like a reply is not a tool step.
-        first = steps[0].strip()
-        if first.lower().startswith("reply") or first.lower().startswith(
-            "synthes"
-        ):
-            return []
-        return list(steps)
-    # 2+ steps: everything except the final synthesis step.
-    return list(steps[:-1])
+    known = set(known_names)
+    steps: List[str] = []
+    for step in strip_memory_directives(plan):
+        match = _TOOL_NAME_HEAD_RE.match(step)
+        if match and match.group(1) in known:
+            steps.append(step)
+    return steps
 
 
 _TOOL_NAME_HEAD_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_-]*)")
@@ -382,18 +371,17 @@ _TOOL_NAME_HEAD_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_-]*)")
 def tool_names_in_plan(
     plan: Sequence[str], known_names: Sequence[str],
 ) -> List[str]:
-    """Extract tool names referenced in non-synthesis plan steps.
+    """Extract exact tool names referenced anywhere in a plan.
 
     Preserves order of first appearance so the downstream allow-list
-    presentation stays stable. Ignores the synthesis step and any
-    searchMemory directives. Only names present in ``known_names`` are
+    presentation stays stable. Ignores any `searchMemory` directive. Only names present in ``known_names`` are
     returned — this is the allow-list guard that prevents the chat
     model from seeing hallucinated tool names.
     """
     known = set(known_names)
     seen: set[str] = set()
     out: List[str] = []
-    for step in tool_steps_of(plan):
+    for step in strip_memory_directives(plan):
         m = _TOOL_NAME_HEAD_RE.match(step)
         if not m:
             continue
@@ -417,10 +405,20 @@ def plan_has_unresolved_tool_steps(
     name out of training priors. Treat this as planner under-specification
     and let the engine fall back to the tool router.
     """
-    steps = tool_steps_of(plan)
-    if not steps:
+    steps = strip_memory_directives(plan)
+    if len(steps) < 2:
+        # A sole prose step is a direct reply or a chat-model problem to
+        # resolve; it cannot be safely classified as a tool request.
         return False
-    return not tool_names_in_plan(plan, known_names)
+    known = set(known_names)
+    # The planner convention places synthesis last. Unknown non-final
+    # steps need the chat model to resolve them, even when another step
+    # names a known tool.
+    for step in steps[:-1]:
+        match = _TOOL_NAME_HEAD_RE.match(step)
+        if not match or match.group(1) not in known:
+            return True
+    return False
 
 
 def plan_query(
@@ -526,19 +524,16 @@ def format_plan_block(steps: Sequence[str]) -> str:
     )
 
 
-def progress_nudge(steps: Sequence[str], tool_results_so_far: int) -> str:
+def progress_nudge(steps: Sequence[str], tool_results_so_far: int,
+                   known_names: Sequence[str]) -> str:
     """Build a per-tool-result remainder hint based on plan progress.
 
-    ``tool_results_so_far`` is the count of tool results already in the
-    messages list — the engine increments it naturally as the loop
-    progresses. Steps that are explicitly synthesis/reply (the last
-    step in a well-formed plan) are NOT counted against the tool-result
-    total; the planner's convention is that non-final steps correspond
-    to tool calls.
+    ``tool_results_so_far`` is the number of completed tool steps. Only
+    steps headed by exact catalogue names count, irrespective of position.
     """
     if not steps:
         return ""
-    tool_steps = tool_steps_of(steps)
+    tool_steps = tool_steps_of(steps, known_names)
     total_tool_steps = len(tool_steps)
     if total_tool_steps == 0:
         return ""

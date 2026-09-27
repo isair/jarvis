@@ -1,5 +1,14 @@
 # Diary retrieval
 
+Individual source-grounded facts, their correction history and merged
+fact/diary recall are specified in `facts.spec.md`. This file describes
+the diary-summary index only.
+
+`Database.memory_revision()` returns `(PRAGMA data_version, conn.total_changes)`
+under the database lock. The first component changes after commits from other
+connections; the second covers writes through this connection. The reply
+engine uses the pair to detect stale cached warm-profile content.
+
 `Database.search_hybrid` searches conversation summaries with FTS5 and optional
 vector candidates. Both Python/FAISS and sqlite-vss use the same fusion routine.
 

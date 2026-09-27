@@ -40,6 +40,12 @@ def _mock_cfg():
     cfg.location_auto_detect = False
     cfg.location_enabled = False
     cfg.agentic_max_turns = 8
+    cfg.agentic_query_timeout_sec = 180.0
+    cfg.agentic_parallel_reads = 3
+    cfg.agentic_tool_result_chars = 4000
+    cfg.agentic_context_tokens = 8192
+    cfg.agentic_preparation = "staged"
+    cfg.planner_timeout_sec = 3.0
     cfg.tool_search_max_calls = 3
     cfg.tool_selection_strategy = "all"
     cfg.tool_carryover_max_turns = 2
@@ -146,12 +152,11 @@ def test_router_fallback_to_all_tools_is_not_cached(
 @patch("src.jarvis.memory.conversation.search_conversation_memory_by_keywords", return_value=[])
 @patch("src.jarvis.reply.engine.extract_text_from_response")
 @patch("src.jarvis.reply.engine.chat_with_messages")
-def test_memory_extractor_cached_across_turns(
+def test_memory_extractor_refreshes_after_dialogue_changes(
     mock_chat, mock_extract, _mock_search, mock_extractor,
     _mock_plan, _mock_select, _mock_graph, _mock_warm, _mock_fmt,
 ):
-    """Empty plan → fail-open path runs the extractor. The second identical
-    follow-up must skip the extractor LLM call.
+    """The same words can refer to different facts after a dialogue turn.
 
     The recall gate would also fire on a tool-grounded follow-up, so we
     keep the dialogue free of tool messages here to exercise the extractor
@@ -172,14 +177,14 @@ def test_memory_extractor_cached_across_turns(
     run_reply_engine(db=db, cfg=cfg, tts=None,
                      text="tell me about pushkin", dialogue_memory=dm)
 
-    assert mock_extractor.call_count == 1, (
-        f"extractor should be cached; called {mock_extractor.call_count} times"
+    assert mock_extractor.call_count == 2, (
+        f"new dialogue must refresh extraction; called {mock_extractor.call_count} times"
     )
 
 
 @pytest.mark.unit
-@patch("src.jarvis.memory.graph_ops.format_warm_profile_block", return_value="warm-block")
-@patch("src.jarvis.memory.graph_ops.build_warm_profile", return_value={"user": "u", "directives": "d"})
+@patch("src.jarvis.memory.facts.format_fact_warm_profile_block", return_value="warm-block")
+@patch("src.jarvis.memory.facts.build_fact_warm_profile", return_value={"user": "u", "directives": "d"})
 @patch("src.jarvis.memory.graph.GraphMemoryStore")
 @patch("src.jarvis.reply.engine.select_tools", return_value=[])
 @patch("src.jarvis.reply.engine.plan_query", return_value=[])

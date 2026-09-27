@@ -2,7 +2,7 @@
 
 ## Overview
 
-The diary summariser (`conversation.py::generate_conversation_summary`) condenses raw conversation chunks into a daily `conversation_summaries` row. That row feeds every downstream memory consumer — direct diary retrieval for enrichment, vector search, FTS, and knowledge-graph extraction. A corrupted summary therefore poisons every consumer, often silently: downstream code has no way to tell that a summary misrepresents what actually happened.
+The diary summariser (`conversation.py::generate_conversation_summary`) condenses raw conversation chunks into a daily `conversation_summaries` row. That row feeds diary retrieval, vector search, FTS and user-triggered knowledge-graph import. The source-grounded fact ledger extracts from the original dialogue snapshot alongside the summary, so a summary is not treated as evidence for an individual fact.
 
 The summariser prompt enforces a fixed set of hygiene rules. Each rule exists because a specific field incident produced corrupted diary entries that misled later sessions. Rules are cumulative — none supersedes another.
 
@@ -114,4 +114,4 @@ Live evals target the smallest supported model (gemma4:e2b) and `xfail` softly o
 ## Relationship to Other Systems
 
 - **Diary retrieval** (`engine.py`): injects retrieved summaries under a "reference only" framing, not as authoritative instructions. This partially mitigates corrupted summaries, but the primary defence is the summariser itself — see `reply.spec.md`.
-- **Knowledge graph** (`graph.spec.md`): ingests summaries via `update_graph_from_dialogue()`. Graph extraction inherits whatever corruption the summary contains; hygiene at the summariser is the only place to fix this at source.
+- **Knowledge graph** (`graph.spec.md`): user-triggered diary import can ingest summaries via `update_graph_from_dialogue()`. Imported graph text is labelled unverified. Automatic fact extraction uses cited dialogue evidence as described in `facts.spec.md`.

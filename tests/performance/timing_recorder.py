@@ -1,10 +1,7 @@
-"""⏱️ LLM call timing recorder.
+"""⏱️ LLM call timing recorder for local backend calls.
 
-Monkey-patches the three entry points in ``jarvis.llm`` (``call_llm_direct``,
-``call_llm_streaming``, ``chat_with_messages``) to record per-call timings
-grouped by the context that issued the call (evaluator, intent judge, tool
-router, etc.). The context is inferred from the caller's ``__qualname__`` on
-the Python call stack, so no instrumentation is needed at the call site.
+The recorder wraps Ollama and OpenAI-compatible backend methods and groups
+elapsed time by the calling LLM context.
 
 Usage:
     with TimingRecorder() as rec:
@@ -16,17 +13,19 @@ Usage:
 from __future__ import annotations
 
 import sys
+import threading
 import time
 import statistics
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
-from jarvis import llm as _llm_module
+from jarvis.llm.ollama import OllamaBackend
+from jarvis.llm.openai_compatible import OpenAICompatibleBackend
 
 
-# Map caller __qualname__ → graph context name. Matches the 13 contexts in
-# docs/llm_contexts.md. Anything not listed gets lumped into "other" so we
+# Map caller __qualname__ → graph context name in docs/llm_contexts.md.
+# Anything not listed gets lumped into "other" so we
 # notice new call sites drift in without us updating the doc.
 #
 # ⚠️  This mapping mirrors docs/llm_contexts.md. When you add, remove, or
@@ -34,8 +33,8 @@ from jarvis import llm as _llm_module
 # — the perf harness silently buckets unknown callers into "other:<qualname>"
 # so drift here is visible but not loud.
 _CALLER_TO_CONTEXT: dict[str, str] = {
-    # Context 1 — main chat loop uses chat_with_messages
-    "run_reply_engine": "main_chat_turn",
+    # Main chat runs inside ExecutionControl.call's worker thread.
+    "chat_with_messages": "main_chat_turn",
     # Context 2 — intent judge (calls via internal helper)
     "IntentJudge.evaluate": "intent_judge",
     "IntentJudge._call_llm": "intent_judge",
@@ -46,6 +45,7 @@ _CALLER_TO_CONTEXT: dict[str, str] = {
     # Context 5 — memory digest (per batch)
     "_distil_batch": "memory_digest",
     "digest_memory_for_query": "memory_digest",
+    "prepare_turn": "turn_preparation",
     # Context 6 — tool-result digest (per batch)
     "_distil_tool_batch": "tool_result_digest",
     "digest_tool_result_for_query": "tool_result_digest",
@@ -56,12 +56,17 @@ _CALLER_TO_CONTEXT: dict[str, str] = {
     # (Context 9 — tool searcher — reuses select_tools_with_llm so it falls
     # under the same bucket; that's intentional per docs/llm_contexts.md.)
     "select_tools_with_llm": "tool_router",
+    "_select_llm": "tool_router",
     # Context 10 — conversation summariser
     "generate_conversation_summary": "summariser",
+    "ingest_dialogue_facts": "fact_extraction",
     # Context 11 — graph fact extraction
     "extract_graph_memories": "graph_extract",
     # Context 12 — graph best-child picker
     "_llm_pick_best_child": "graph_best_child",
+    "merge_node_data": "graph_node_merge",
+    "plan_query": "planner",
+    "resolve_next_tool_call": "plan_step_resolver",
     # Context 13 — tool-specific LLM calls
     "_extract_place_from_user_text": "tool_weather",
     "extract_and_log_meal": "tool_nutrition",
@@ -76,12 +81,15 @@ class _Call:
     model: str
     prompt_chars: int
     response_chars: int
+    provider: str = ""
+    outcome: str = "success"
 
 
 @dataclass
 class TimingRecorder:
     calls: list[_Call] = field(default_factory=list)
     _originals: dict = field(default_factory=dict)
+    _active: threading.local = field(default_factory=threading.local, repr=False)
 
     def __enter__(self) -> "TimingRecorder":
         self._patch()
@@ -116,77 +124,66 @@ class TimingRecorder:
     # ── patching ─────────────────────────────────────────────────────────
     def _wrap(self, name: str, original: Callable) -> Callable:
         def wrapped(*args, **kwargs):
+            if getattr(self._active, "depth", 0):
+                return original(*args, **kwargs)
+            self._active.depth = 1
             ctx = self._infer_context(skip_frames=2)
-            # Extract model + prompt sizes from args heuristically — all three
-            # entry points take (base_url, chat_model, ...). chat_with_messages
-            # takes a messages list.
-            model = ""
+            backend = args[0]
+            model = kwargs.get("chat_model") or (args[1] if len(args) > 1 else "")
             prompt_chars = 0
-            if name == "chat_with_messages":
-                model = kwargs.get("chat_model") or (args[1] if len(args) > 1 else "")
+            if name == "chat":
                 msgs = kwargs.get("messages") or (args[2] if len(args) > 2 else [])
                 if isinstance(msgs, list):
                     prompt_chars = sum(len(str(m.get("content", ""))) for m in msgs)
             else:
-                model = kwargs.get("chat_model") or (args[1] if len(args) > 1 else "")
                 sys_p = kwargs.get("system_prompt") or (args[2] if len(args) > 2 else "")
                 user_c = kwargs.get("user_content") or (args[3] if len(args) > 3 else "")
                 prompt_chars = len(str(sys_p)) + len(str(user_c))
 
             t0 = time.perf_counter()
-            result = original(*args, **kwargs)
-            elapsed = time.perf_counter() - t0
-
-            # response size: str for direct/streaming, dict for chat_with_messages
-            if isinstance(result, str):
-                response_chars = len(result)
-            elif isinstance(result, dict):
-                response_chars = len(str(result.get("content", "")))
-            else:
-                response_chars = 0
-
-            self.calls.append(_Call(
-                context=ctx,
-                duration_sec=elapsed,
-                model=str(model),
-                prompt_chars=prompt_chars,
-                response_chars=response_chars,
-            ))
-            return result
+            result = None
+            outcome = "error"
+            try:
+                result = original(*args, **kwargs)
+                if isinstance(result, dict):
+                    message = result.get("message", result)
+                    usable = isinstance(message, dict) and (
+                        str(message.get("content") or "").strip() or message.get("tool_calls")
+                    )
+                else:
+                    usable = isinstance(result, str) and result.strip()
+                outcome = "success" if usable else "empty"
+                return result
+            finally:
+                self._active.depth = 0
+                if isinstance(result, str):
+                    response_chars = len(result)
+                elif isinstance(result, dict):
+                    message = result.get("message")
+                    content = message.get("content") if isinstance(message, dict) else result.get("content")
+                    response_chars = len(str(content)) if content is not None else 0
+                else:
+                    response_chars = 0
+                self.calls.append(_Call(
+                    context=ctx,
+                    duration_sec=time.perf_counter() - t0,
+                    model=str(model),
+                    prompt_chars=prompt_chars,
+                    response_chars=response_chars,
+                    provider=type(backend).__name__,
+                    outcome=outcome,
+                ))
 
         return wrapped
 
     def _patch(self) -> None:
-        """Patch every module that has already imported one of the LLM entry
-        points via ``from ..llm import X``. Those bindings were resolved at
-        import time and do NOT see a setattr on ``jarvis.llm`` itself, so we
-        have to replace the attribute on each importer.
-        """
-        import sys as _sys
-        names = ("call_llm_direct", "call_llm_streaming", "chat_with_messages")
-        # Capture the originals from the llm module once.
-        originals = {n: getattr(_llm_module, n) for n in names}
-        # self._originals stores [(module, name, original_fn)] so _unpatch
-        # can put each binding back exactly where it came from.
+        """Patch backend classes so factory-created instances are captured."""
         self._originals["_sites"] = []
-        for mod in list(_sys.modules.values()):
-            if mod is None or mod is _llm_module:
-                continue
-            mod_name = getattr(mod, "__name__", "")
-            if not mod_name.startswith(("jarvis", "tests", "evals")):
-                continue
-            for name in names:
-                current = getattr(mod, name, None)
-                if current is originals[name]:
-                    wrapped = self._wrap(name, originals[name])
-                    setattr(mod, name, wrapped)
-                    self._originals["_sites"].append((mod, name, originals[name]))
-        # Also patch the canonical module so any late `from jarvis.llm import X`
-        # after we enter the context sees the wrapper.
-        for name in names:
-            wrapped = self._wrap(name, originals[name])
-            setattr(_llm_module, name, wrapped)
-            self._originals["_sites"].append((_llm_module, name, originals[name]))
+        for backend in (OllamaBackend, OpenAICompatibleBackend):
+            for name in ("direct", "streaming", "chat"):
+                original = getattr(backend, name)
+                setattr(backend, name, self._wrap(name, original))
+                self._originals["_sites"].append((backend, name, original))
 
     def _unpatch(self) -> None:
         for mod, name, original in self._originals.get("_sites", []):

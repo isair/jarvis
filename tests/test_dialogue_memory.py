@@ -87,7 +87,7 @@ class TestReplyEngineDialogueMemory:
     
     @patch('src.jarvis.reply.engine.chat_with_messages')
     @patch('src.jarvis.reply.engine.extract_text_from_response')
-    def test_dialogue_memory_preserves_message_order(self, mock_extract, mock_chat):
+    def test_dialogue_memory_preserves_message_order(self, mock_extract, mock_chat, tmp_path):
         """Test that reply engine stores conversation in correct order."""
         # Mock dependencies
         mock_extract.return_value = "Final response"
@@ -107,6 +107,11 @@ class TestReplyEngineDialogueMemory:
         mock_cfg.location_ip_address = None
         mock_cfg.location_auto_detect = False
         mock_cfg.agentic_max_turns = 8
+        mock_cfg.agentic_query_timeout_sec = 180.0
+        mock_cfg.agentic_context_tokens = 8192
+        mock_cfg.agentic_preparation = "staged"
+        mock_cfg.planner_timeout_sec = 3.0
+        mock_cfg.db_path = str(tmp_path / "test.db")
         
         # Create dialogue memory
         dialogue_memory = DialogueMemory()
@@ -131,7 +136,7 @@ class TestReplyEngineDialogueMemory:
     @patch('src.jarvis.reply.engine.chat_with_messages')
     @patch('src.jarvis.reply.engine.extract_text_from_response')
     @patch('src.jarvis.reply.engine.run_tool_with_retries')
-    def test_dialogue_memory_filters_tool_calls(self, mock_tool, mock_extract, mock_chat):
+    def test_dialogue_memory_filters_tool_calls(self, mock_tool, mock_extract, mock_chat, tmp_path):
         """Test that JSON tool calls are filtered from dialogue memory."""
         # Mock dependencies
         mock_tool.return_value = Mock(reply_text="Weather data", error_message=None)
@@ -171,6 +176,11 @@ class TestReplyEngineDialogueMemory:
         mock_cfg.location_ip_address = None
         mock_cfg.location_auto_detect = False
         mock_cfg.agentic_max_turns = 8
+        mock_cfg.agentic_query_timeout_sec = 180.0
+        mock_cfg.agentic_context_tokens = 8192
+        mock_cfg.agentic_preparation = "staged"
+        mock_cfg.planner_timeout_sec = 3.0
+        mock_cfg.db_path = str(tmp_path / "test.db")
 
         # Create dialogue memory
         dialogue_memory = DialogueMemory()
@@ -574,10 +584,11 @@ class TestDialogueMemoryEdgeCases:
         assert chunks_simple == chunks_snapshot
 
     @patch('src.jarvis.memory.conversation.update_daily_conversation_summary')
-    def test_update_diary_preserves_new_messages_during_slow_llm(self, mock_summary):
+    def test_update_diary_preserves_new_messages_during_slow_llm(self, mock_summary, tmp_path):
         """Integration test: messages arriving during slow LLM call are preserved."""
         dm = DialogueMemory(inactivity_timeout=0.1)
-        mock_db = Mock()
+        from jarvis.memory.db import Database
+        mock_db = Database(str(tmp_path / "memory.db"))
 
         # Add initial messages
         dm.add_message("user", "Initial message")

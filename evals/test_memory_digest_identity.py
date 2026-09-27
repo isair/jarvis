@@ -24,7 +24,23 @@ Run: EVAL_JUDGE_MODEL=gemma4:e2b pytest evals/test_memory_digest_identity.py -v
 import pytest
 
 from conftest import requires_judge_llm
-from helpers import JUDGE_BASE_URL, JUDGE_MODEL
+from helpers import JUDGE_MODEL, MockConfig
+
+
+def test_identity_digest_fixture_uses_current_backend_contract(monkeypatch):
+    from jarvis.reply import enrichment
+
+    def fake_digest(*, query, diary_entries, graph_parts, cfg, chat_model, timeout_sec):
+        assert query == "who am I?"
+        assert diary_entries == ["user fact"]
+        assert graph_parts == []
+        assert chat_model == JUDGE_MODEL
+        assert timeout_sec == 60.0
+        assert cfg is not None
+        return "user fact"
+
+    monkeypatch.setattr(enrichment, "digest_memory_for_query", fake_digest)
+    assert TestMemoryDigestSurfacesIdentityFacts()._digest("who am I?", ["user fact"]) == "user fact"
 
 
 @pytest.mark.eval
@@ -38,8 +54,8 @@ class TestMemoryDigestSurfacesIdentityFacts:
             query=query,
             diary_entries=diary_entries,
             graph_parts=[],
-            ollama_base_url=JUDGE_BASE_URL,
-            ollama_chat_model=JUDGE_MODEL,
+            cfg=MockConfig(),
+            chat_model=JUDGE_MODEL,
             timeout_sec=60.0,
         )
 

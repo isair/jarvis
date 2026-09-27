@@ -57,13 +57,13 @@ is sufficient.
 **In the window.** Pressing Stop marks the exchange abandoned and resets the
 thinking indicator at once. `_on_complete` then declines the reply for that
 exchange and clears the mark, so the next send is unaffected. This is the
-part that actually keeps the answer out of the transcript: cancellation
-cannot unwind a request already inside the engine, so the reply arrives
-regardless.
+part that keeps an already completed answer out of the transcript when Stop
+and completion race.
 
 **In the daemon.** `cancel_active_chat_query` sets a per-query
-`threading.Event`; the chat worker checks it after `run_reply_engine` returns
-and drops the reply, delivering `complete(None)`.
+`threading.Event` passed into the reply engine. The engine checks it between
+preparation, model and tool steps and before memory or reply output. The chat
+worker checks it again after the engine returns and delivers `complete(None)`.
 
 **Across the process boundary.** In subprocess mode the query runs in the
 daemon, whose module globals are a different instance from the desktop app's,
@@ -73,8 +73,9 @@ and `handle_chat_cancel_stdin_line` applies it there. A broken pipe is not
 surfaced: the window has already refused the reply, and a dead daemon has no
 query to cancel.
 
-Cancellation does not abort the in-flight LLM compute — `run_reply_engine`
-has no mid-loop abort hook — it discards the result so it is never shown.
+Cancellation may abandon an in-flight model or tool wait, but cannot undo an
+external side effect already issued. It prevents later tool calls, memory
+writes and reply delivery.
 
 ### Callbacks (bundled mode, same process)
 

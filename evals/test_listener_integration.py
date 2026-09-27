@@ -624,11 +624,16 @@ class TestStopCommandBypassesJudge:
     def test_stop_during_tts_interrupts_immediately(self, _print):
         """'stop' during TTS interrupts without calling the judge."""
         # Use unit-test style creation — judge not needed for stop commands
-        from tests.test_hot_window_input import _create_listener as _create_unit_listener
+        from tests.test_hot_window_input import (
+            _create_listener as _create_unit_listener,
+            _process_transcript,
+        )
         listener, mock_tts = _create_unit_listener(tts_speaking=True)
         mock_tts.is_speaking.return_value = True
+        listener.echo_detector.track_tts_start("Speaking")
 
-        listener._process_transcript(
+        _process_transcript(
+            listener,
             "stop",
             utterance_energy=0.01,
         )

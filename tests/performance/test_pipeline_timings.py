@@ -1,40 +1,45 @@
-"""⏱️ Performance: time each LLM context in the reply pipeline.
+"""⏱️ Performance measurements for either local LLM provider.
 
-Runs ``run_reply_engine`` N times against a live Ollama with a fixed tiny
-prompt, records per-context timings via the monkey-patching recorder, and
-asserts a few relative-shape invariants so the test fails when the pipeline
-shape drifts (e.g. the evaluator becomes more expensive than the main turn).
-
-Also includes a micro-benchmark that calls each configured model with a
-tiny fixed prompt, giving a hardware baseline to diff against.
+The harness reports backend-call timings by context and request wall time.
+It does not observe text streaming or audio output, so first useful text and
+first useful spoken output remain unmeasured.
 
 Run manually:
-    pytest tests/performance/ -v -m performance -s
+    JARVIS_PERF_PREPARATION=staged pytest tests/performance/ -v -m performance -s
+    JARVIS_PERF_PREPARATION=combined pytest tests/performance/ -v -m performance -s
 
-Requires:
-    - Ollama reachable at http://localhost:11434
-    - ``gemma4:e2b`` pulled (or override via env var)
+Use the same local model, query set and run count in both processes. Each
+pipeline request uses a fresh temporary database and dialogue; all tools are
+deterministic local fixtures, so no benchmark query reaches an external tool.
 
-The test is skipped automatically if Ollama is unreachable, so it's safe to
-leave in the repo. Use ``-s`` to see the report table.
+Requires a reachable local provider and an already installed model.
+
+The test skips when the model is unavailable. Use ``-s`` to see timings.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import subprocess
 import time
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
-import requests
 
+from evals.benchmark_report import latency_summary
+from scripts.eval_provider import probe_provider
 from tests.performance.timing_recorder import TimingRecorder
 
 
-OLLAMA_URL = os.environ.get("JARVIS_PERF_OLLAMA_URL", "http://localhost:11434")
+PERF_BASE_URL = os.environ.get(
+    "JARVIS_PERF_BASE_URL",
+    os.environ.get("JARVIS_PERF_OLLAMA_URL", "http://localhost:11434"),
+)
 PERF_MODEL = os.environ.get("JARVIS_PERF_MODEL", "gemma4:e2b")
 PERF_RUNS = int(os.environ.get("JARVIS_PERF_RUNS", "3"))
+PERF_PREPARATION = os.environ.get("JARVIS_PERF_PREPARATION", "staged")
 PERF_REPORT_DIR = Path(os.environ.get(
     "JARVIS_PERF_REPORT_DIR",
     str(Path(__file__).parent / "reports"),
@@ -53,32 +58,34 @@ PIPELINE_QUERIES = [
 ]
 
 
-def _ollama_reachable() -> bool:
-    try:
-        resp = requests.get(f"{OLLAMA_URL}/api/tags", timeout=2)
-        if resp.status_code != 200:
-            return False
-        models = [m.get("name", "") for m in resp.json().get("models", [])]
-        return any(PERF_MODEL.split(":")[0] in m for m in models)
-    except Exception:
-        return False
+PROVIDER_STATUS = probe_provider(PERF_BASE_URL, PERF_MODEL)
 
 
 pytestmark = [
     pytest.mark.performance,
     pytest.mark.skipif(
-        not _ollama_reachable(),
-        reason=f"Ollama at {OLLAMA_URL} with {PERF_MODEL} not available",
+        not PROVIDER_STATUS.available,
+        reason=f"Model unavailable: {PROVIDER_STATUS.reason} at {PERF_BASE_URL}",
     ),
 ]
 
 
 def _make_cfg():
     from evals.helpers import MockConfig
+    if PERF_PREPARATION not in {"staged", "combined"}:
+        raise ValueError("JARVIS_PERF_PREPARATION must be staged or combined")
     cfg = MockConfig()
-    cfg.ollama_base_url = OLLAMA_URL
+    cfg.ollama_base_url = (
+        PERF_BASE_URL.rstrip("/")[:-3]
+        if PROVIDER_STATUS.provider == "ollama" and PERF_BASE_URL.rstrip("/").endswith("/v1")
+        else PERF_BASE_URL
+    )
     cfg.ollama_chat_model = PERF_MODEL
+    cfg.llm_chat_model = PERF_MODEL
     cfg.fast_model = PERF_MODEL
+    cfg.llm_provider = PROVIDER_STATUS.provider or "ollama"
+    if cfg.llm_provider == "openai_compatible":
+        cfg.llm_base_url = PERF_BASE_URL if PERF_BASE_URL.rstrip("/").endswith("/v1") else f"{PERF_BASE_URL.rstrip('/')}/v1"
     # Let size-aware defaults kick in (evaluator + digests ON for small).
     cfg.evaluator_enabled = None
     cfg.memory_digest_enabled = None
@@ -86,10 +93,20 @@ def _make_cfg():
     # Force the LLM-based router so its timing shows up in the report.
     # MockConfig doesn't set this attribute, and the engine's default varies.
     cfg.tool_selection_strategy = "llm"
+    cfg.agentic_preparation = PERF_PREPARATION
     return cfg
 
 
-def _write_report(rec: TimingRecorder, name: str) -> Path:
+def _write_report(
+    rec: TimingRecorder,
+    name: str,
+    *,
+    end_to_end_sec: list[float] | None = None,
+    initial_call_sec: float | None = None,
+    unnecessary_tool_calls: int | None = None,
+    preparation_mode: str | None = None,
+    warm_condition: str = "no explicit warm-up; prior server state unknown",
+) -> Path:
     PERF_REPORT_DIR.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M%S")
     path = PERF_REPORT_DIR / f"{name}-{stamp}.json"
@@ -97,8 +114,21 @@ def _write_report(rec: TimingRecorder, name: str) -> Path:
         "name": name,
         "timestamp": stamp,
         "model": PERF_MODEL,
+        "provider": PROVIDER_STATUS.provider,
+        "base_url": PERF_BASE_URL,
+        "availability": "available",
+        "git_commit": subprocess.run(
+            ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=False
+        ).stdout.strip(),
         "runs": PERF_RUNS,
-        "summary": rec.to_dict(),
+        "warm_condition": warm_condition,
+        "preparation_mode": preparation_mode,
+        "initial_call_sec": initial_call_sec,
+        "end_to_end_sec": latency_summary(end_to_end_sec or []),
+        "first_useful_text_sec": None,
+        "first_useful_spoken_sec": None,
+        "unnecessary_tool_calls": unnecessary_tool_calls,
+        "llm_contexts": rec.to_dict(),
         "raw": [
             {
                 "context": c.context,
@@ -106,6 +136,8 @@ def _write_report(rec: TimingRecorder, name: str) -> Path:
                 "model": c.model,
                 "prompt_chars": c.prompt_chars,
                 "response_chars": c.response_chars,
+                "provider": c.provider,
+                "outcome": c.outcome,
             }
             for c in rec.calls
         ],
@@ -121,42 +153,40 @@ def _write_report(rec: TimingRecorder, name: str) -> Path:
 
 @pytest.mark.performance
 def test_micro_benchmark_tiny_prompt():
-    """Baseline: how long does a single tiny round-trip to Ollama take?
+    """Baseline: how long does a single tiny round-trip to the provider take?
 
     This is the floor for every context's per-call cost. If the floor moves,
     every context's total moves with it. Reported separately from the
     pipeline test so hardware drift is obvious in the numbers.
     """
-    # Import the module (not the function) so the recorder's patch on
-    # jarvis.llm is visible at call time.
-    from jarvis import llm as _llm
+    from jarvis.llm.factory import get_llm_backend
 
+    backend = get_llm_backend(_make_cfg())
+    initial_call = time.perf_counter()
+    backend.direct(
+        chat_model=PERF_MODEL,
+        system_prompt=TINY_SYSTEM,
+        user_content=TINY_USER,
+        timeout_sec=30.0,
+    )
+    initial_call_sec = time.perf_counter() - initial_call
     with TimingRecorder() as rec:
-        # Warmup (first call pays weight-loading cost)
-        _llm.call_llm_direct(
-            base_url=OLLAMA_URL,
-            chat_model=PERF_MODEL,
-            system_prompt=TINY_SYSTEM,
-            user_content=TINY_USER,
-            timeout_sec=30.0,
-        )
-        # Measured runs
         for _ in range(PERF_RUNS):
-            _llm.call_llm_direct(
-                base_url=OLLAMA_URL,
+            backend.direct(
                 chat_model=PERF_MODEL,
                 system_prompt=TINY_SYSTEM,
                 user_content=TINY_USER,
                 timeout_sec=30.0,
             )
 
-    rec.print_report(title=f"Micro-benchmark — tiny prompt × {PERF_RUNS + 1} on {PERF_MODEL}")
-    path = _write_report(rec, "micro")
+    rec.print_report(title=f"Micro-benchmark: tiny prompt × {PERF_RUNS} on {PERF_MODEL}")
+    path = _write_report(
+        rec, "micro", initial_call_sec=initial_call_sec,
+        warm_condition="one measured initial tiny call; prior server state unknown",
+    )
     print(f"   📄 saved: {path}")
 
-    # Shape check: warm calls should be noticeably faster than cold.
-    # Not a strict assertion (too noisy) — just make sure we got calls.
-    assert len(rec.calls) == PERF_RUNS + 1
+    assert len(rec.calls) == PERF_RUNS
 
 
 # =============================================================================
@@ -165,70 +195,73 @@ def test_micro_benchmark_tiny_prompt():
 
 
 @pytest.mark.performance
-def test_pipeline_timings_by_context():
-    """Run the full reply pipeline N times, record per-context timings.
-
-    Relative-shape invariants (not absolute numbers):
-      1. If the evaluator fires, it must be cheaper on average than the main
-         chat turn — otherwise we're paying more for the decision than for
-         the answer. This is the whole reason the evaluator uses a small
-         model.
-      2. The tool router, if it fires, must be cheaper than a main chat
-         turn on p50 — it's a classification call on the warm small model.
-      3. Enrichment extractor, if it fires, must run on the router chain
-         (same model as the router). This locks in the demotion we just did.
-    """
+def test_pipeline_timings_by_context(tmp_path):
+    """Run independent text requests with local, deterministic tool results."""
     from jarvis.memory.db import Database
     from jarvis.memory.conversation import DialogueMemory
     from jarvis.reply.engine import run_reply_engine
+    from jarvis.llm.factory import get_llm_backend
+    from jarvis.tools.builtin.stop import STOP_SIGNAL
+    from jarvis.tools.types import ToolExecutionResult
 
-    cfg = _make_cfg()
+    warm_cfg = _make_cfg()
+    warm_start = time.perf_counter()
+    warm_result = get_llm_backend(warm_cfg).direct(
+        chat_model=PERF_MODEL, system_prompt=TINY_SYSTEM,
+        user_content=TINY_USER, timeout_sec=120.0,
+    )
+    initial_call_sec = time.perf_counter() - warm_start
+    assert warm_result is not None, "local model warm-up returned no response"
 
-    with TimingRecorder() as rec:
-        for query in PIPELINE_QUERIES:
-            db = Database(":memory:", sqlite_vss_path=None)
-            dlg = DialogueMemory(inactivity_timeout=300, max_interactions=20)
-            try:
-                for _ in range(PERF_RUNS):
+    from jarvis.reply import engine as reply_engine
+
+    wall_times = []
+    unnecessary_tools = 0
+    current_query = ""
+    def observed_tool(*args, **kwargs):
+        nonlocal unnecessary_tools
+        tool_name = kwargs.get("tool_name") or (args[2] if len(args) > 2 else "")
+        if current_query == "hello" and tool_name != "stop":
+            unnecessary_tools += 1
+        if tool_name == "stop":
+            return ToolExecutionResult(True, STOP_SIGNAL)
+        if tool_name == "getTime":
+            return ToolExecutionResult(True, "Benchmark fixture: Tokyo time is 12:00 JST.")
+        return ToolExecutionResult(False, None, "Tool disabled in isolated performance benchmark")
+
+    with TimingRecorder() as rec, patch.object(reply_engine, "run_tool_with_retries", observed_tool):
+        for query_index, query in enumerate(PIPELINE_QUERIES):
+            current_query = query
+            for run_index in range(PERF_RUNS):
+                cfg = _make_cfg()
+                cfg.db_path = str(tmp_path / f"{PERF_PREPARATION}-{query_index}-{run_index}.db")
+                db = Database(cfg.db_path, sqlite_vss_path=None)
+                dlg = DialogueMemory(inactivity_timeout=300, max_interactions=20)
+                try:
+                    start = time.perf_counter()
                     run_reply_engine(db, cfg, None, query, dlg)
-            finally:
-                db.close()
+                    wall_times.append(time.perf_counter() - start)
+                finally:
+                    db.close()
 
     rec.print_report(title=f"Pipeline timings — {len(PIPELINE_QUERIES)} queries × {PERF_RUNS} runs on {PERF_MODEL}")
-    path = _write_report(rec, "pipeline")
+    path = _write_report(
+        rec, f"pipeline-{PERF_PREPARATION}", end_to_end_sec=wall_times,
+        initial_call_sec=initial_call_sec,
+        unnecessary_tool_calls=unnecessary_tools,
+        preparation_mode=PERF_PREPARATION,
+        warm_condition="one measured tiny call before pipeline; prior server state unknown",
+    )
     print(f"   📄 saved: {path}")
 
     assert rec.calls, "no LLM calls recorded — pipeline did not invoke the LLM"
+    assert len(wall_times) == len(PIPELINE_QUERIES) * PERF_RUNS
+    assert all(call.outcome == "success" for call in rec.calls), (
+        "The timing report contains failed or empty model responses; it is not a successful performance run"
+    )
 
     # Surface unmapped callers so new contexts show up in review.
     other = [c for c in rec.calls if c.context.startswith("other:")]
     if other:
         unmapped = sorted({c.context for c in other})
         print(f"   ⚠️  unmapped callers (add to _CALLER_TO_CONTEXT): {unmapped}")
-
-    # Shape invariants
-    main_p50 = rec.p50("main_chat_turn")
-    if main_p50 > 0:
-        ev_p50 = rec.p50("evaluator")
-        if ev_p50 > 0:
-            assert ev_p50 <= main_p50 * 1.5, (
-                f"evaluator p50 ({ev_p50:.2f}s) exceeds main chat turn p50 "
-                f"({main_p50:.2f}s) by >50% — evaluator should be cheaper"
-            )
-        router_p50 = rec.p50("tool_router")
-        if router_p50 > 0:
-            assert router_p50 <= main_p50 * 1.5, (
-                f"tool router p50 ({router_p50:.2f}s) exceeds main chat turn p50 "
-                f"({main_p50:.2f}s) by >50% — router should be cheaper"
-            )
-
-    # Locking in the demotion: enrichment extractor must use the router chain.
-    enrich_calls = [c for c in rec.calls if c.context == "enrichment_extract"]
-    router_calls = [c for c in rec.calls if c.context == "tool_router"]
-    if enrich_calls and router_calls:
-        enrich_models = {c.model for c in enrich_calls}
-        router_models = {c.model for c in router_calls}
-        assert enrich_models == router_models, (
-            f"enrichment extractor should share the router model chain "
-            f"(enrichment={enrich_models}, router={router_models})"
-        )

@@ -222,6 +222,7 @@ class MCPClient:
                     "name": getattr(t, "name", None),
                     "description": getattr(t, "description", None),
                     "inputSchema": getattr(t, "inputSchema", None),
+                    "readOnlyHint": bool(getattr(getattr(t, "annotations", None), "readOnlyHint", False)),
                 }
                 result.append(tool_info)
             return result
@@ -256,6 +257,7 @@ class MCPClient:
                     "name": getattr(t, "name", None),
                     "description": getattr(t, "description", None),
                     "inputSchema": getattr(t, "inputSchema", None),
+                    "readOnlyHint": bool(getattr(getattr(t, "annotations", None), "readOnlyHint", False)),
                 }
             )
         return result
@@ -340,5 +342,4 @@ def _flatten_content(content: Any) -> str:
         return str(content)
     except Exception:
         return ""
-
 

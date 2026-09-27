@@ -326,6 +326,21 @@ def _build_field_metadata() -> List[FieldMeta]:
     f("agentic_max_turns", "Agentic Max Turns",
       "Maximum turns in agentic tool-use loops",
       "memory", "int", min_val=1, max_val=30)
+    f("agentic_query_timeout_sec", "Task Time Budget",
+      "Maximum time for one request, including preparation and tool use",
+      "memory", "float", min_val=1, max_val=3600, step=10, suffix="s")
+    f("agentic_parallel_reads", "Concurrent Lookups",
+      "Maximum independent read-only lookups running together",
+      "memory", "int", min_val=1, max_val=8)
+    f("agentic_tool_result_chars", "Tool Result Excerpt",
+      "Maximum characters shown from each result; full results remain available locally",
+      "memory", "int", min_val=256, max_val=64000, step=256)
+    f("agentic_context_tokens", "Conversation Context Budget",
+      "Estimated token budget for the working conversation",
+      "memory", "int", min_val=1024, max_val=131072, step=1024)
+    f("agentic_preparation", "Request Preparation",
+      "Combined prepares tools, steps and memory in one model call; evaluate it with your model before relying on it",
+      "memory", "choice", choices=[("staged", "Staged"), ("combined", "Combined (experimental)")])
 
     # --- Location ---
     f("location_enabled", "Enable Location",

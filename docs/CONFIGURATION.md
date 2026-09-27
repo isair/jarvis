@@ -162,6 +162,25 @@ Field logs show `🧩 Memory digest: …` and `🧩 Tool digest: …` lines when
 
 </details>
 
+<details>
+<summary><strong>Task Budgets and Request Preparation (Advanced)</strong></summary>
+
+Tasks have an overall time budget in addition to each model's request timeout. Cancelling a task stops further dispatch and suppresses late replies; an action already sent to an external tool cannot be undone automatically.
+
+| Setting | Default | Purpose |
+|---------|---------|---------|
+| `agentic_query_timeout_sec` | `180` | Overall time budget per request, in seconds |
+| `agentic_parallel_reads` | `3` | Maximum concurrent explicitly read-only lookups; writes stay serial |
+| `agentic_tool_result_chars` | `4000` | Tool-result excerpt size; full results stay in local task storage |
+| `agentic_context_tokens` | `8192` | Approximate message-context budget |
+| `agentic_preparation` | `"staged"` | Separate routing and planning, or experimental `"combined"` preparation |
+
+Combined preparation asks the chat model for tools, a plan and memory queries in one call. It applies only with LLM tool routing. Compare quality and latency on your own model before enabling it; fewer calls do not guarantee better answers.
+
+The Memory Viewer's **Facts** tab shows source evidence, validity dates and correction history. Correcting a fact supersedes it. Retracting a fact excludes it from current recall while retaining the record and audit history locally.
+
+</details>
+
 ## Dictation Mode
 
 Hold a hotkey to record speech, release to paste the transcription into your editor, browser or other app. Transcription runs locally.
