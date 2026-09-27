@@ -56,6 +56,7 @@ _CALLER_TO_CONTEXT: dict[str, str] = {
     # (Context 9 — tool searcher — reuses select_tools_with_llm so it falls
     # under the same bucket; that's intentional per docs/llm_contexts.md.)
     "select_tools_with_llm": "tool_router",
+    "_select_llm": "tool_router",
     # Context 10 — conversation summariser
     "generate_conversation_summary": "summariser",
     "ingest_dialogue_facts": "fact_extraction",

@@ -83,12 +83,15 @@ def test_new_llm_contexts_are_reported_by_name(monkeypatch):
     def merge_node_data():
         return backend.direct("model", "system", "user")
 
+    def _select_llm():
+        return backend.direct("model", "system", "user")
+
     with TimingRecorder() as recorder:
-        for call in (prepare_turn, plan_query, resolve_next_tool_call, ingest_dialogue_facts, merge_node_data):
+        for call in (prepare_turn, plan_query, resolve_next_tool_call, ingest_dialogue_facts, merge_node_data, _select_llm):
             assert call() == "ok"
 
     assert [call.context for call in recorder.calls] == [
-        "turn_preparation", "planner", "plan_step_resolver", "fact_extraction", "graph_node_merge",
+        "turn_preparation", "planner", "plan_step_resolver", "fact_extraction", "graph_node_merge", "tool_router",
     ]
 
 
