@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import closing
+from uuid import uuid4
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -18,6 +20,7 @@ from flask import Flask, jsonify, request, Response
 from jarvis.config import load_settings
 from jarvis.debug import debug_log
 from jarvis.memory.graph import FIXED_BRANCH_IDS, GraphMemoryStore
+from jarvis.memory.facts import FactStore
 
 
 app = Flask(__name__)
@@ -307,6 +310,68 @@ def delete_meal(meal_id: int) -> Response:
 # ─────────────────────────────────────────────────────────────────────────────
 # Graph Memory (v2) API
 # ─────────────────────────────────────────────────────────────────────────────
+
+@app.route("/api/facts")
+def facts_list() -> Response:
+    """Browse evidence-backed facts, including explicitly selected history."""
+    status = request.args.get("status", "active")
+    if status not in {"active", "superseded", "retracted", "all"}:
+        return jsonify({"error": "Invalid fact status"}), 400
+    try:
+        limit = int(request.args.get("limit", 50))
+        offset = int(request.args.get("offset", 0))
+        if not 1 <= limit <= 200 or offset < 0:
+            raise ValueError()
+    except ValueError:
+        return jsonify({"error": "Invalid page bounds"}), 400
+    with closing(FactStore(_get_db_path())) as store:
+        facts = store.list_facts(status=None if status == "all" else status, limit=limit + 1, offset=offset)
+    return jsonify({"facts": facts[:limit], "has_more": len(facts) > limit})
+
+
+@app.route("/api/facts/<int:fact_id>")
+def facts_detail(fact_id: int) -> Response:
+    with closing(FactStore(_get_db_path())) as store:
+        fact = store.get_fact(fact_id)
+        if fact is None:
+            return jsonify({"error": "Fact not found"}), 404
+        return jsonify({"fact": fact, "history": store.get_fact_history(fact_id)})
+
+
+@app.route("/api/facts/<int:fact_id>", methods=["PUT"])
+def facts_correct(fact_id: int) -> Response:
+    body = request.get_json(silent=True)
+    text = body.get("text") if isinstance(body, dict) else None
+    if not isinstance(text, str) or not text.strip() or len(text) > 4000:
+        return jsonify({"error": "A correction must contain 1 to 4000 characters"}), 400
+    with closing(FactStore(_get_db_path())) as store:
+        old = store.get_fact(fact_id)
+        if old is None:
+            return jsonify({"error": "Fact not found"}), 404
+        if old["status"] != "active":
+            return jsonify({"error": "Only current facts can be corrected"}), 409
+        try:
+            fact = store.correct_fact(fact_id, text=text.strip(), evidence=text.strip(),
+                                      source_text=text.strip(), source_ref=f"manual:{uuid4().hex}")
+        except ValueError:
+            return jsonify({"error": "This fact cannot be corrected"}), 409
+    debug_log(f"Fact {fact_id} corrected from memory viewer", "memory")
+    return jsonify({"fact": fact})
+
+
+@app.route("/api/facts/<int:fact_id>/retract", methods=["POST"])
+def facts_retract(fact_id: int) -> Response:
+    # JSON prevents an unrelated website from submitting a plain HTML form.
+    if not isinstance(request.get_json(silent=True), dict):
+        return jsonify({"error": "A JSON request is required"}), 400
+    with closing(FactStore(_get_db_path())) as store:
+        if store.get_fact(fact_id) is None:
+            return jsonify({"error": "Fact not found"}), 404
+        if not store.retract_fact(fact_id, evidence="Retracted by the user in Memory Viewer"):
+            return jsonify({"error": "Only current facts can be retracted"}), 409
+    debug_log(f"Fact {fact_id} retracted from memory viewer", "memory")
+    return jsonify({"success": True})
+
 
 def get_graph_store() -> GraphMemoryStore:
     """Get or create the graph memory store (shares the same DB)."""
@@ -2034,6 +2099,15 @@ def index() -> str:
         ::-webkit-scrollbar-thumb:hover {
             background: var(--text-muted);
         }
+        .facts-toolbar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 18px 0; }
+        .fact-card { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 16px; padding: 22px; margin-bottom: 14px; overflow-wrap: anywhere; }
+        .fact-card p { white-space: pre-wrap; margin: 12px 0; }
+        .fact-meta { color: var(--text-muted); font-size: 13px; line-height: 1.8; }
+        .fact-evidence { border-left: 3px solid var(--border-color); padding-left: 14px; }
+        .fact-edit { width: 100%; min-height: 90px; padding: 12px; margin-top: 12px; border-radius: 8px; background: var(--bg-primary); color: var(--text-primary); border: 1px solid var(--border-color); }
+        .fact-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+        .fact-actions button, .facts-toolbar button { padding: 9px 15px; width: auto; height: auto; min-height: 38px; white-space: nowrap; line-height: 1.4; }
+        .facts-notice { color: var(--text-muted); line-height: 1.6; margin: 14px 0; }
     </style>
 </head>
 <body>
@@ -2079,6 +2153,9 @@ def index() -> str:
             <button class="tab" data-tab="graph">
                 <span>🧠</span> Knowledge
             </button>
+            <button class="tab" data-tab="facts">
+                <span>🔎</span> Facts
+            </button>
             <button class="tab" data-tab="meals">
                 <span>🍽️</span> Meals
             </button>
@@ -2122,13 +2199,12 @@ def index() -> str:
                     <span class="alpha-badge">Beta</span>
                     <div class="alpha-body">
                         <p>
-                            🧪 The knowledge graph is on by default: a compact <strong>warm profile</strong>
-                            (User + Directives branches) is injected into every reply, and query-driven graph
-                            recall runs alongside the diary via <code>Enrichment Source = all</code>.
+                            🧪 This editable knowledge graph contains legacy and manually organised notes.
+                            These notes remain available as <strong>unverified context</strong>.
                         </p>
                         <p>
-                            👉 Structure and classification are stable; extractor quality is still being tuned.
-                            Please share feedback so we can keep refining it.
+                            👉 Open <strong>Facts</strong> for source-backed memories, corrections and history.
+                            Keep private information on your device and review anything that looks inaccurate.
                         </p>
                     </div>
                 </div>
@@ -2164,6 +2240,22 @@ def index() -> str:
                         </div>
                     </div>
                 </div>
+            </div>
+
+            <div id="facts-content" class="tab-pane" style="display: none;">
+                <p class="facts-notice">🔎 Facts keep their source evidence and dates. Correct an inaccurate fact or retract it to exclude it from current recall. Retraction keeps a visible audit history; it does not erase the record.</p>
+                <div class="facts-toolbar">
+                    <label for="facts-status">Show</label>
+                    <select id="facts-status" class="date-input">
+                        <option value="active">Current facts</option>
+                        <option value="superseded">Superseded facts</option>
+                        <option value="retracted">Retracted facts</option>
+                        <option value="all">All history</option>
+                    </select>
+                    <button id="facts-previous" class="graph-btn" disabled>← Previous</button>
+                    <button id="facts-next" class="graph-btn" disabled>Next →</button>
+                </div>
+                <div id="facts-list" aria-live="polite"></div>
             </div>
 
             <div id="meals-content" class="tab-pane" style="display: none;">
@@ -2206,6 +2298,7 @@ def index() -> str:
         const memoriesPane = document.getElementById('memories-content');
         const mealsPane = document.getElementById('meals-content');
         const graphContent = document.getElementById('graph-content');
+        const factsPane = document.getElementById('facts-content');
         const memoriesContent = memoriesPane.querySelector('.memory-list');
         const mealsContent = mealsPane.querySelector('.memory-list');
         const tabs = document.querySelectorAll('.tab');
@@ -2536,6 +2629,7 @@ def index() -> str:
             memoriesPane.style.display = 'none';
             graphContent.style.display = 'none';
             mealsPane.style.display = 'none';
+            factsPane.style.display = 'none';
 
             if (currentTab === 'memories') {
                 memoriesPane.style.display = '';
@@ -2543,6 +2637,9 @@ def index() -> str:
             } else if (currentTab === 'graph') {
                 graphContent.style.display = '';
                 initGraph();
+            } else if (currentTab === 'facts') {
+                factsPane.style.display = '';
+                loadFacts();
             } else {
                 mealsPane.style.display = '';
                 loadMeals();
@@ -2552,6 +2649,110 @@ def index() -> str:
         tabs.forEach(tab => {
             tab.addEventListener('click', () => switchTab(tab.dataset.tab));
         });
+
+        let factsOffset = 0;
+        let factsRequest = 0;
+        const factsStatus = document.getElementById('facts-status');
+        async function factsApi(url, options) {
+            const response = await fetch(url, options);
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error || 'Memory request failed');
+            return data;
+        }
+        function factCard(fact) {
+            const card = document.createElement('article');
+            card.className = 'fact-card';
+            const text = document.createElement('p');
+            text.textContent = fact.text;
+            const meta = document.createElement('div');
+            meta.className = 'fact-meta';
+            meta.textContent = `${fact.kind} · ${fact.owner} · ${fact.status} · observed ${fact.observed_at}`;
+            const validity = document.createElement('div');
+            validity.className = 'fact-meta';
+            validity.textContent = `Valid from ${fact.valid_from}${fact.valid_to ? ' until ' + fact.valid_to : ''}`;
+            const source = document.createElement('div');
+            source.className = 'fact-meta';
+            source.textContent = `${fact.source.source_type} · ${fact.source.source_app} · ${fact.source.source_role} · ${fact.source.source_ref}`;
+            const evidence = document.createElement('p');
+            evidence.className = 'fact-evidence';
+            evidence.textContent = fact.source.evidence;
+            card.append(meta, text, validity, source, evidence);
+            return card;
+        }
+        async function loadFacts() {
+            const requestId = ++factsRequest;
+            const list = document.getElementById('facts-list');
+            list.textContent = '🔎 Loading facts…';
+            try {
+                const data = await factsApi(`/api/facts?status=${factsStatus.value}&offset=${factsOffset}&limit=50`);
+                if (requestId !== factsRequest) return;
+                list.replaceChildren();
+                document.getElementById('facts-previous').disabled = factsOffset === 0;
+                document.getElementById('facts-next').disabled = !data.has_more;
+                if (!data.facts.length) list.textContent = '🔎 No facts in this view yet.';
+                data.facts.forEach(fact => {
+                    const card = factCard(fact);
+                    const actions = document.createElement('div');
+                    actions.className = 'fact-actions';
+                    const history = document.createElement('details');
+                    const summary = document.createElement('summary');
+                    summary.textContent = 'Source and correction history';
+                    const historyBody = document.createElement('div');
+                    history.append(summary, historyBody);
+                    history.addEventListener('toggle', async () => {
+                        if (!history.open) return;
+                        try {
+                            const detail = await factsApi(`/api/facts/${fact.id}`);
+                            historyBody.replaceChildren(...detail.history.map(factCard));
+                        } catch (error) { historyBody.textContent = error.message; }
+                    });
+                    card.append(history);
+                    if (fact.status === 'active') {
+                        const correction = document.createElement('textarea');
+                        correction.className = 'fact-edit';
+                        correction.maxLength = 4000;
+                        correction.value = fact.text;
+                        correction.setAttribute('aria-label', 'Corrected fact');
+                        correction.hidden = true;
+                        const edit = document.createElement('button');
+                        edit.className = 'graph-btn';
+                        edit.textContent = '✏️ Correct';
+                        const retract = document.createElement('button');
+                        retract.className = 'graph-btn';
+                        retract.textContent = 'Retract';
+                        edit.addEventListener('click', async () => {
+                            if (correction.hidden) {
+                                correction.hidden = false;
+                                edit.textContent = 'Save correction';
+                                correction.focus();
+                                return;
+                            }
+                            edit.disabled = true;
+                            try {
+                                await factsApi(`/api/facts/${fact.id}`, {method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text: correction.value})});
+                                await loadFacts();
+                            } catch (error) { alert(error.message); edit.disabled = false; }
+                        });
+                        retract.addEventListener('click', async () => {
+                            if (!confirm('Exclude this fact from current recall? Its source and history will remain visible.')) return;
+                            retract.disabled = true;
+                            try {
+                                await factsApi(`/api/facts/${fact.id}/retract`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'});
+                                await loadFacts();
+                            } catch (error) { alert(error.message); retract.disabled = false; }
+                        });
+                        actions.append(edit, retract);
+                        card.append(correction, actions);
+                    }
+                    list.append(card);
+                });
+            } catch (error) {
+                if (requestId === factsRequest) list.textContent = '⚠️ ' + error.message;
+            }
+        }
+        factsStatus.addEventListener('change', () => { factsOffset = 0; loadFacts(); });
+        document.getElementById('facts-previous').addEventListener('click', () => { factsOffset = Math.max(0, factsOffset - 50); loadFacts(); });
+        document.getElementById('facts-next').addEventListener('click', () => { factsOffset += 50; loadFacts(); });
 
         // Diary maintenance button lives in the diary tab's sidebar, which
         // renders on page load (diary is the default tab). Wire its handler
@@ -3812,4 +4013,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

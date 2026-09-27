@@ -298,6 +298,9 @@ sequenceDiagram
 
 A Flask-based web interface for browsing conversation history:
 
+- **Facts tab**: paginated current, superseded and retracted facts with ownership, source evidence, observed dates and validity intervals. A correction supersedes the current fact and preserves its source history. Retraction excludes a fact from current recall but retains its visible audit history; the interface does not describe it as erasure. Only current facts can be corrected or retracted. Fact text and evidence render as text, never HTML.
+- **Knowledge tab**: editable legacy graph notes, labelled as unverified context rather than source-backed facts. Manual organisation and diary import remain available.
+
 - Runs on `localhost:5050`
 - **Bundled mode**: Flask runs in a daemon thread
 - **Development mode**: Flask runs as subprocess
