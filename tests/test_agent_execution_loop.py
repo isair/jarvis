@@ -16,6 +16,12 @@ from jarvis.tools.types import ToolExecutionResult
 pytestmark = pytest.mark.unit
 
 
+@pytest.fixture(autouse=True)
+def _isolate_planner(monkeypatch):
+    """Execution tests supply model decisions without consulting a local server."""
+    monkeypatch.setattr(engine_mod, "plan_query", lambda *args, **kwargs: [])
+
+
 def _tool_reply(*calls):
     return {
         "message": {
@@ -290,7 +296,9 @@ def test_late_cancelled_write_is_uncertain_and_not_repeated_on_resume(
             work.join(timeout=1)
             assert not work.is_alive()
         finally:
+            cancelled.set()
             release.set()
+            work.join(timeout=2)
 
     assert first_outcome == [None]
     store = TaskStore(mock_config.db_path)
