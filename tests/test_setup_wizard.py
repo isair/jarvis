@@ -1236,6 +1236,139 @@ class TestOpenAICompatiblePageDefaults:
         assert page._fast_model_combo.isHidden() is True
 
 
+class TestWizardMemoryBudget:
+    """Model-memory guidance stays useful on both provider paths."""
+
+    def test_ollama_still_shows_its_memory_budget(self, qapp):
+        from desktop_app.setup_wizard import ModelsPage
+
+        with patch("desktop_app.setup_wizard.detect_total_vram_mb", return_value=None):
+            page = ModelsPage()
+        assert "Total VRAM Required" in page._vram_label.text()
+        assert "Whisper" in page._vram_detail.text() or "whisper" in page._vram_detail.text()
+
+    def test_openai_known_models_prefill_editable_estimates(self, qapp):
+        from PyQt6.QtWidgets import QDoubleSpinBox, QLabel
+        from jarvis.config import SUPPORTED_CHAT_MODELS
+        from jarvis.utils.vram import required_vram_mb
+
+        known_model = next(iter(SUPPORTED_CHAT_MODELS))
+        page = OpenAICompatiblePage()
+        page._chat_model_combo.setCurrentText(known_model)
+        page._embed_model_combo.setCurrentText("nomic-embed-text")
+
+        chat = page.findChild(QDoubleSpinBox, "memory_chat")
+        embed = page.findChild(QDoubleSpinBox, "memory_embed")
+        summary = page.findChild(QLabel, "memory_summary")
+        assert chat.value() == required_vram_mb(known_model) / 1024
+        assert embed.value() == 1
+        assert "estimate" in summary.text().lower()
+
+        before = summary.text()
+        chat.setValue(chat.value() + 2)
+        assert summary.text() != before
+        assert f"{chat.value() + embed.value():.1f} GB" in summary.text()
+
+    def test_openai_unknown_model_needs_an_estimate_before_a_total(self, qapp):
+        from PyQt6.QtWidgets import QDoubleSpinBox, QLabel
+
+        page = OpenAICompatiblePage()
+        page._chat_model_combo.setCurrentText("custom-model")
+        chat = page.findChild(QDoubleSpinBox, "memory_chat")
+        summary = page.findChild(QLabel, "memory_summary")
+        assert chat.value() == 0
+        assert "add" in summary.text().lower()
+
+        chat.setValue(6.5)
+        assert "6.5 GB" in summary.text()
+
+    def test_openai_linked_model_is_not_counted_twice(self, qapp):
+        from PyQt6.QtWidgets import QDoubleSpinBox, QLabel
+
+        page = OpenAICompatiblePage()
+        page._chat_model_combo.setCurrentText("custom-model")
+        page.findChild(QDoubleSpinBox, "memory_chat").setValue(4)
+        page._fast_model_combo.setCurrentText("custom-model")
+        page.findChild(QDoubleSpinBox, "memory_fast").setValue(4)
+        summary = page.findChild(QLabel, "memory_summary")
+        assert "4.0 GB" in summary.text()
+        assert "8.0 GB" not in summary.text()
+
+    def test_remote_server_budget_does_not_compare_with_local_gpu(self, qapp):
+        from PyQt6.QtWidgets import QDoubleSpinBox, QLabel
+
+        with patch("desktop_app.setup_wizard.detect_total_vram_mb", return_value=1024):
+            page = OpenAICompatiblePage()
+        page._base_url_input.setText("http://model-host:8000/v1")
+        page._chat_model_combo.setCurrentText("custom-model")
+        page.findChild(QDoubleSpinBox, "memory_chat").setValue(8)
+        summary = page.findChild(QLabel, "memory_summary").text().lower()
+        assert "server" in summary
+        assert "locally" in summary
+        assert "over" not in summary
+
+    def test_local_server_warns_when_shared_gpu_budget_is_exceeded(self, qapp):
+        from PyQt6.QtWidgets import QDoubleSpinBox, QLabel
+
+        with patch("desktop_app.setup_wizard.detect_total_vram_mb", return_value=1024):
+            page = OpenAICompatiblePage()
+        page._base_url_input.setText("http://127.0.0.1:8000/v1")
+        page._chat_model_combo.setCurrentText("custom-model")
+        page.findChild(QDoubleSpinBox, "memory_chat").setValue(8)
+        summary = page.findChild(QLabel, "memory_summary").text().lower()
+        assert "share a gpu" in summary
+        assert "over" in summary
+
+    def test_fetched_models_refresh_known_estimates(self, qapp):
+        from PyQt6.QtWidgets import QDoubleSpinBox
+        from jarvis.config import SUPPORTED_CHAT_MODELS
+        from jarvis.utils.vram import required_vram_mb
+
+        model_id = next(iter(SUPPORTED_CHAT_MODELS))
+        page = OpenAICompatiblePage()
+        page._populate_models([model_id])
+        assert page.findChild(QDoubleSpinBox, "memory_chat").value() == (
+            required_vram_mb(model_id) / 1024
+        )
+
+    def test_remote_ollama_embedding_uses_local_budget(self, qapp):
+        from PyQt6.QtWidgets import QDoubleSpinBox, QLabel
+
+        page = OpenAICompatiblePage()
+        page._base_url_input.setText("http://model-host:8000/v1")
+        page._chat_model_combo.setCurrentText("custom-model")
+        page.findChild(QDoubleSpinBox, "memory_chat").setValue(4)
+        page._embed_model_combo.setCurrentText("custom-embed")
+        page.findChild(QDoubleSpinBox, "memory_embed").setValue(3)
+        page._use_ollama_embed.setChecked(True)
+        assert page.findChild(QDoubleSpinBox, "memory_embed").value() == 1
+        summary = page.findChild(QLabel, "memory_summary").text()
+        assert "Server model estimate: 4.0 GB" in summary
+        assert "locally" in summary
+
+    def test_whisper_budget_refreshes_after_returning_from_voice_step(self, qapp):
+        from PyQt6.QtWidgets import QDoubleSpinBox, QLabel
+
+        with patch("desktop_app.setup_wizard.load_settings",
+                   return_value=SimpleNamespace(whisper_model="small")):
+            page = OpenAICompatiblePage()
+        page._base_url_input.setText("http://localhost:8000/v1")
+        page._chat_model_combo.setCurrentText("custom-model")
+        page.findChild(QDoubleSpinBox, "memory_chat").setValue(4)
+        summary = page.findChild(QLabel, "memory_summary")
+        assert "Whisper ~2.0 GB" in summary.text()
+
+        saved = {
+            "llm_base_url": "http://localhost:8000/v1",
+            "llm_chat_model": "custom-model",
+        }
+        with patch("desktop_app.setup_wizard.load_settings",
+                   return_value=SimpleNamespace(whisper_model="medium")):
+            with patch("jarvis.config._load_json", return_value=saved):
+                page.initializePage()
+        assert "Whisper ~5.0 GB" in summary.text()
+
+
 class TestDefaultModelDetection:
     """Regression tests: the default small model must be detected as missing when not
     installed, triggering the setup wizard install prompt.

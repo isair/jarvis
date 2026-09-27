@@ -51,7 +51,7 @@ Open **Chat** from the tray menu when you would rather type. Text replies are si
 <details>
 <summary><strong>Hardware and model choices</strong></summary>
 
-Memory needs depend on model size, quantisation, context length and speech recognition. The setup wizard helps you choose; smaller models trade capability for lower resource use.
+Memory needs depend on model size, quantisation, context length and speech recognition. Both Ollama and OpenAI-compatible setup show a memory budget; you can edit estimates for models served through an OpenAI-compatible endpoint. Smaller models trade capability for lower resource use.
 
 | Starting point | Chat model |
 | :--- | :--- |
