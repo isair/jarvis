@@ -949,7 +949,7 @@ def _run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                      for item in full_schema]
         prepared = control.call(prepare_turn, cfg=cfg, query=redacted, dialogue_context=_dialogue_ctx,
                                 tools=catalogue, context_hint=context_hint,
-                                timeout_sec=control.remaining(cfg.planner_timeout_sec),
+                                timeout_sec=control.remaining(cfg.llm_tools_timeout_sec),
                                 pending_task=pending_task)
         control.check()
         if prepared and prepared.resume_task_id:
