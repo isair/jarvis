@@ -99,6 +99,10 @@ faster-whisper 1.1.0 or newer is installed. If the selected faster-whisper
 cannot load turbo, the wizard hides that option and an existing turbo setting
 loads `medium` instead. Choose a different model in Settings → Whisper.
 
+With the faster-whisper backend, `whisper_model` also accepts a Hugging Face
+model ID such as `deepdml/faster-whisper-large-v3-turbo-ct2`, or a local
+converted model directory.
+
 #### GPU Acceleration (Windows)
 If you have an NVIDIA GPU, Jarvis can use CUDA for much faster speech recognition. The Windows installer offers an optional CUDA download during setup. For development:
 ```bash

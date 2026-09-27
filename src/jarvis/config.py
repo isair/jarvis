@@ -449,6 +449,25 @@ def _expand_path(value: Any) -> Optional[str]:
         return str(value)
 
 
+def _expand_model_reference(value: Any) -> Optional[str]:
+    """Normalise a model setting that may name a model rather than a file.
+
+    A Whisper model is given as a size ("medium"), a Hugging Face repo ID
+    ("owner/model"), or a directory on disk. Only the last is a path, and
+    path normalisation would rewrite the repo ID's separator to a backslash
+    on Windows, leaving an identifier the loader cannot resolve. Expansion
+    therefore applies to what is recognisably a path and nothing else.
+    """
+    if value in (None, "", "null"):
+        return None
+    raw = str(value)
+    try:
+        is_a_path = raw.startswith("~") or Path(raw).is_absolute() or Path(raw).exists()
+    except Exception:
+        is_a_path = False
+    return _expand_path(raw) if is_a_path else raw
+
+
 def _ensure_dict(value: Any) -> Dict[str, Any]:
     if isinstance(value, dict):
         return value
@@ -768,9 +787,7 @@ def load_settings() -> Settings:
     wake_word = str(merged.get("wake_word", "jarvis")).strip().lower()
     wake_aliases = [a.strip().lower() for a in _ensure_list(merged.get("wake_aliases")) if a.strip()]
     wake_fuzzy_ratio = float(merged.get("wake_fuzzy_ratio", 0.78))
-    # whisper_model accepts a size name ("medium") or a local model
-    # directory; _expand_path is a no-op for plain names.
-    whisper_model = _expand_path(merged.get("whisper_model")) or "medium"
+    whisper_model = _expand_model_reference(merged.get("whisper_model")) or "medium"
     whisper_backend = os.environ.get("JARVIS_WHISPER_BACKEND", "").lower() or str(merged.get("whisper_backend", "auto")).lower()
     if whisper_backend not in ("auto", "mlx", "faster-whisper"):
         whisper_backend = "auto"
