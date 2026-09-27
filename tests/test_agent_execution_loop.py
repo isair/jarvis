@@ -1,6 +1,7 @@
 """Observable multi-call and cancellation behaviour in the reply loop."""
 
 import threading
+from contextlib import nullcontext
 from unittest.mock import patch
 
 import pytest
@@ -175,3 +176,34 @@ def test_explicit_resume_does_not_repeat_completed_write(
     assert reply == "Already saved."
     run_tool.assert_not_called()
     assert "Prior task context" in seen_messages[0][0]["content"]
+
+
+def test_voice_listener_stop_cancels_in_flight_reply(
+    mock_config, db, dialogue_memory,
+):
+    from jarvis.listening.listener import VoiceListener
+
+    listener = VoiceListener(db, mock_config, None, dialogue_memory)
+    entered = threading.Event()
+    finished = threading.Event()
+    observed = []
+
+    def engine(*args, **kwargs):
+        cancel_event = kwargs["cancel_event"]
+        observed.append(cancel_event)
+        entered.set()
+        cancel_event.wait(timeout=2)
+        finished.set()
+        return None
+
+    with patch.object(listener, "_clear_audio_buffers"), \
+         patch("jarvis.daemon.query_lock", return_value=nullcontext()), \
+         patch.object(engine_mod, "run_reply_engine", side_effect=engine):
+        work = threading.Thread(target=listener._dispatch_query, args=("hello",))
+        work.start()
+        assert entered.wait(timeout=2)
+        listener.stop()
+        assert finished.wait(timeout=2)
+        work.join(timeout=2)
+
+    assert observed[0].is_set()

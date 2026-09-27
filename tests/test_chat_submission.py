@@ -39,6 +39,8 @@ def _reset_daemon_globals():
     daemon._global_db = None
     daemon._global_stop_requested = False
     daemon._chat_query_lock = threading.Lock()
+    daemon._chat_cancel_event = None
+    daemon._voice_cancel_event = None
 
 
 def _install_dialogue_memory(cfg=None, db=None):
@@ -111,6 +113,7 @@ class TestSubmitTextQueryContract:
             captured["text"] = text
             captured["language"] = language
             captured["quiet"] = kwargs.get("quiet")
+            captured["cancel_event"] = kwargs.get("cancel_event")
             return "hello from the engine"
 
         monkeypatch.setattr("jarvis.reply.engine.run_reply_engine", fake_engine)
@@ -127,6 +130,7 @@ class TestSubmitTextQueryContract:
         assert captured["dialogue_memory"] is dm
         assert captured["language"] is None
         assert captured["text"] == "hi there"
+        assert isinstance(captured["cancel_event"], threading.Event)
 
     def test_engine_called_with_quiet_so_reply_stays_out_of_logs(self, monkeypatch):
         """Chat queries must run the engine in quiet mode: the engine prints
@@ -573,9 +577,13 @@ class TestDaemonShutdownMode:
         _reset_daemon_globals()
 
     def test_request_stop_requests_graceful_stop(self):
+        daemon._chat_cancel_event = threading.Event()
+        daemon._voice_cancel_event = threading.Event()
         daemon.request_stop()
 
         assert daemon.is_stop_requested() is True
+        assert daemon._chat_cancel_event.is_set()
+        assert daemon._voice_cancel_event.is_set()
 
 
 @pytest.mark.unit

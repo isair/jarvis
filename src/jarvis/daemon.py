@@ -77,11 +77,10 @@ _chat_query_lock = threading.Lock()
 
 # Per-query cancellation flag for the text-chat path. Set by
 # ``cancel_active_chat_query`` (the chat window's Stop button), checked by the
-# chat worker after ``run_reply_engine`` returns so the reply is dropped
-# instead of displayed. This is distinct from ``request_stop`` (daemon
-# lifecycle shutdown) — cancelling a chat query must not tear down the voice
-# assistant.
+# reply engine between model and tool calls. Cancelling a chat query does not
+# tear down the voice assistant; daemon shutdown cancels both active paths.
 _chat_cancel_event: Optional[threading.Event] = None
+_voice_cancel_event: Optional[threading.Event] = None
 
 # Chat IPC protocol prefixes - desktop app intercepts lines starting with these.
 # __CHAT__:        daemon -> desktop (event stream, mirrors DIARY_IPC_PREFIX)
@@ -105,6 +104,10 @@ def request_stop() -> None:
     """Request the daemon to stop gracefully."""
     global _global_stop_requested
     _global_stop_requested = True
+    if _chat_cancel_event is not None:
+        _chat_cancel_event.set()
+    if _voice_cancel_event is not None:
+        _voice_cancel_event.set()
 
 
 def set_diary_update_callbacks(
@@ -421,6 +424,7 @@ def submit_text_query(
                 dialogue_memory=dm,
                 language=None,
                 quiet=True,
+                cancel_event=cancel_event,
             )
             if cancel_event.is_set():
                 debug_log("chat query cancelled, dropping reply", "chat")
@@ -758,7 +762,8 @@ def main(smoke_test: bool = False) -> None:
     db = Database(cfg.db_path, cfg.sqlite_vss_path)
     # Expose cfg + db so the text-chat submission path shares the same store
     # and config as the voice listener (one conversation, one config).
-    global _global_cfg, _global_db
+    global _global_cfg, _global_db, _voice_cancel_event
+    _voice_cancel_event = None
     _global_cfg = cfg
     _global_db = db
 
@@ -929,6 +934,7 @@ def main(smoke_test: bool = False) -> None:
     print("🎤 Preparing speech recognition in the background...", flush=True)
     voice_thread: Optional[threading.Thread] = None
     voice_thread = VoiceListener(db, cfg, tts, _global_dialogue_memory)
+    _voice_cancel_event = voice_thread._reply_cancel_event
     voice_thread.start()
 
     # Initialize dictation engine (hold-to-dictate)
@@ -1008,6 +1014,7 @@ def main(smoke_test: bool = False) -> None:
             try:
                 voice_thread.stop()
                 voice_thread.join(timeout=2.0)
+                _voice_cancel_event = None
             except Exception:
                 pass
 
@@ -1131,6 +1138,7 @@ def main(smoke_test: bool = False) -> None:
         if voice_thread is not None:
             debug_log("stopping voice thread...", "jarvis")
             voice_thread.stop()
+            _voice_cancel_event = None
             try:
                 voice_thread.join(timeout=2.0)
             except Exception:

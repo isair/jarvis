@@ -47,6 +47,11 @@ capture-time context through Whisper to echo rejection, stop-command handling
 and intent processing, so later TTS playback cannot reclassify an older
 utterance.
 
+The voice listener owns a reply cancellation event. `stop()` sets it before
+closing listener state, and daemon shutdown sets the same event immediately.
+The event reaches the reply engine, so shutdown prevents later tool calls,
+memory writes and voice replies even when a model or tool request is in flight.
+
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                         Audio Stream                            │

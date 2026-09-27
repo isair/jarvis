@@ -423,6 +423,7 @@ class VoiceListener(threading.Thread):
         self.tts = tts
         self.dialogue_memory = dialogue_memory
         self._should_stop = False
+        self._reply_cancel_event = threading.Event()
         self._dictation_is_active = False
         self._dictation_generation = 0
         self._first_utterance = True  # Suppress turn separator before the very first transcription
@@ -503,6 +504,7 @@ class VoiceListener(threading.Thread):
     def stop(self) -> None:
         """Stop the voice listener."""
         self._should_stop = True
+        self._reply_cancel_event.set()
         self.state_manager.stop()
         self._stop_thinking_tune()
 
@@ -1290,9 +1292,13 @@ class VoiceListener(threading.Thread):
         # rather than being dropped (see daemon.query_lock).
         try:
             with query_lock():
+                if self._reply_cancel_event.is_set():
+                    self._stop_thinking_tune()
+                    return
                 reply = run_reply_engine(
                     self.db, self.cfg, None, query, self.dialogue_memory,
                     language=self._last_detected_language,
+                    cancel_event=self._reply_cancel_event,
                 )
         except Exception as e:
             # Log the error visibly - this should never happen silently
