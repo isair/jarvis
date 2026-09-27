@@ -85,6 +85,11 @@ class MockConfig:
     llm_embedding_timeout_sec: float = 10.0
     llm_chat_timeout_sec: float = 45.0
     agentic_max_turns: int = 8
+    agentic_query_timeout_sec: float = 180.0
+    agentic_parallel_reads: int = 3
+    agentic_tool_result_chars: int = 4000
+    agentic_context_tokens: int = 8192
+    agentic_preparation: str = "staged"
     tool_selection_strategy: str = "embedding"
     fast_model: str = ""
     memory_enrichment_max_results: int = 5

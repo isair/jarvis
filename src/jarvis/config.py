@@ -223,6 +223,11 @@ class Settings:
 
     # Agentic Loop
     agentic_max_turns: int
+    agentic_query_timeout_sec: float
+    agentic_parallel_reads: int
+    agentic_tool_result_chars: int
+    agentic_context_tokens: int
+    agentic_preparation: str  # "staged" or "combined"
     tool_selection_strategy: str  # "all", "keyword", "embedding", or "llm"
     # None = auto (on for SMALL models, off for LARGE). Explicit true/false forces.
     evaluator_enabled: Optional[bool]
@@ -630,6 +635,11 @@ def get_default_config() -> Dict[str, Any]:
 
         # Agentic Loop
         "agentic_max_turns": 8,
+        "agentic_query_timeout_sec": 180.0,
+        "agentic_parallel_reads": 3,
+        "agentic_tool_result_chars": 4000,
+        "agentic_context_tokens": 8192,
+        "agentic_preparation": "staged",
         "tool_selection_strategy": "llm",
         # None = auto (on for small models, off for large). Set true/false to force.
         "evaluator_enabled": None,
@@ -850,6 +860,25 @@ def load_settings() -> Settings:
     else:
         tool_result_digest_enabled = bool(_tool_digest_raw)
     agentic_max_turns = int(merged.get("agentic_max_turns", 8))
+    def execution_budget(key, minimum, maximum, number_type):
+        import math
+        default = get_default_config()[key]
+        try:
+            raw = merged.get(key, default)
+            value = float(raw)
+            if isinstance(raw, bool) or not math.isfinite(value) or value < minimum:
+                return default
+            return number_type(min(value, maximum))
+        except (TypeError, ValueError, OverflowError):
+            return default
+
+    agentic_query_timeout_sec = execution_budget("agentic_query_timeout_sec", 1, 3600, float)
+    agentic_parallel_reads = execution_budget("agentic_parallel_reads", 1, 8, int)
+    agentic_tool_result_chars = execution_budget("agentic_tool_result_chars", 256, 64000, int)
+    agentic_context_tokens = execution_budget("agentic_context_tokens", 1024, 131072, int)
+    agentic_preparation = str(merged.get("agentic_preparation", "staged")).lower()
+    if agentic_preparation not in ("staged", "combined"):
+        agentic_preparation = "staged"
     tool_selection_strategy = str(merged.get("tool_selection_strategy", "llm")).lower()
     if tool_selection_strategy not in ("all", "keyword", "embedding", "llm"):
         tool_selection_strategy = "llm"
@@ -1008,6 +1037,11 @@ def load_settings() -> Settings:
         memory_digest_enabled=memory_digest_enabled,
         tool_result_digest_enabled=tool_result_digest_enabled,
         agentic_max_turns=agentic_max_turns,
+        agentic_query_timeout_sec=agentic_query_timeout_sec,
+        agentic_parallel_reads=agentic_parallel_reads,
+        agentic_tool_result_chars=agentic_tool_result_chars,
+        agentic_context_tokens=agentic_context_tokens,
+        agentic_preparation=agentic_preparation,
         tool_selection_strategy=tool_selection_strategy,
         evaluator_enabled=evaluator_enabled,
         tool_search_max_calls=tool_search_max_calls,
