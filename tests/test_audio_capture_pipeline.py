@@ -266,3 +266,151 @@ def test_named_input_skips_devices_with_missing_names(monkeypatch):
 
 def test_numeric_input_index_zero_is_selected():
     assert audio_capture.resolve_input_device(capture.sd, 0) == {'device': 0}
+
+
+def test_utterance_finalisation_queues_transcription_without_blocking():
+    from types import SimpleNamespace
+
+    obj = listener()
+    obj._utterance_frames = [np.ones(8000, dtype=np.float32)]
+    obj._samplerate = obj._stream_samplerate = 16000
+    obj._transcription_jobs_q = queue.Queue(maxsize=8)
+    obj._transcription_results_q = queue.Queue()
+    obj.is_speech_active = True
+    obj._silence_frames = 0
+    obj.echo_detector = SimpleNamespace(_utterance_start_time=1.0)
+    obj.cfg = SimpleNamespace(voice_debug=False, whisper_min_audio_duration=0.3)
+    obj._calculate_audio_energy = lambda frames: 0.1
+
+    obj._finalize_utterance()
+
+    assert not obj.is_speech_active
+    assert obj._utterance_frames == []
+    assert obj._transcription_jobs_q.qsize() == 1
+    assert obj._transcription_results_q.empty()
+    job = obj._transcription_jobs_q.get_nowait()
+    assert job.audio.shape == (8000,)
+    assert job.start_time == 1.0
+    assert job.energy == 0.1
+
+
+def test_transcription_worker_preserves_utterance_order():
+    import threading
+
+    obj = listener()
+    obj._transcription_jobs_q = queue.Queue()
+    obj._transcription_results_q = queue.Queue()
+    first_started = threading.Event()
+    release_first = threading.Event()
+    second_started = threading.Event()
+    started = []
+
+    def transcribe(audio):
+        started.append(audio)
+        if audio == "first":
+            first_started.set()
+            release_first.wait(timeout=2)
+        else:
+            second_started.set()
+        return str(audio), "en"
+
+    obj._transcribe_audio = transcribe
+    obj._transcription_jobs_q.put(SimpleNamespace(audio="first", start_time=1.0, end_time=2.0, energy=0.1))
+    obj._transcription_jobs_q.put(SimpleNamespace(audio="second", start_time=2.0, end_time=3.0, energy=0.2))
+    obj._transcription_jobs_q.put(None)
+
+    worker = threading.Thread(target=obj._run_transcription_worker)
+    worker.start()
+    try:
+        assert first_started.wait(timeout=1)
+        assert not second_started.wait(timeout=0.05)
+    finally:
+        release_first.set()
+    worker.join(timeout=2)
+
+    assert not worker.is_alive()
+    assert started == ["first", "second"]
+    results = [obj._transcription_results_q.get_nowait() for _ in range(2)]
+    assert [result.text for result in results] == ["first", "second"]
+
+
+def test_utterance_finalisation_continues_while_whisper_is_busy():
+    import threading
+    from types import SimpleNamespace
+
+    obj = listener()
+    obj._transcription_jobs_q = queue.Queue(maxsize=8)
+    obj._transcription_results_q = queue.Queue()
+    whisper_started = threading.Event()
+    release_whisper = threading.Event()
+
+    def transcribe(audio):
+        if isinstance(audio, str):
+            whisper_started.set()
+            release_whisper.wait(timeout=2)
+        return "recognised", "en"
+
+    obj._transcribe_audio = transcribe
+    obj._transcription_jobs_q.put(
+        SimpleNamespace(audio="slow", start_time=1.0, end_time=2.0, energy=0.1)
+    )
+    worker = threading.Thread(target=obj._run_transcription_worker)
+    worker.start()
+
+    try:
+        assert whisper_started.wait(timeout=1)
+        obj._utterance_frames = [np.ones(8000, dtype=np.float32)]
+        obj._samplerate = obj._stream_samplerate = 16000
+        obj.is_speech_active = True
+        obj._silence_frames = 0
+        obj.echo_detector = SimpleNamespace(_utterance_start_time=1.0)
+        obj.cfg = SimpleNamespace(voice_debug=False, whisper_min_audio_duration=0.3)
+        obj._calculate_audio_energy = lambda frames: 0.1
+
+        obj._finalize_utterance()
+
+        assert obj._transcription_jobs_q.qsize() == 1
+        assert worker.is_alive()
+    finally:
+        release_whisper.set()
+        obj._transcription_jobs_q.put(None)
+    worker.join(timeout=2)
+
+    assert not worker.is_alive()
+    assert [obj._transcription_results_q.get_nowait().text for _ in range(2)] == [
+        "recognised",
+        "recognised",
+    ]
+
+
+def test_transcription_result_keeps_language_and_utterance_context():
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    obj = listener()
+    obj._last_detected_language = None
+    obj._first_utterance = True
+    obj.tts = None
+    obj.echo_detector = SimpleNamespace(_last_tts_finish_time=0, echo_tolerance=0.3)
+    obj._transcript_buffer = Mock()
+    obj._process_transcript = Mock()
+    obj._is_repetitive_hallucination = lambda text: False
+    result = SimpleNamespace(
+        text="hello there",
+        language="en",
+        start_time=10.0,
+        end_time=11.0,
+        energy=0.2,
+    )
+
+    obj._handle_transcription_result(result)
+
+    assert obj._last_detected_language == "en"
+    obj._transcript_buffer.add.assert_called_once_with(
+        text="hello there",
+        start_time=10.0,
+        end_time=11.0,
+        energy=0.2,
+        is_during_tts=False,
+    )
+    obj._process_transcript.assert_called_once_with("hello there", 0.2, 10.0, 11.0)

@@ -13,6 +13,7 @@ import queue
 import sys
 import platform
 from collections import deque
+from dataclasses import dataclass
 from typing import Optional, TYPE_CHECKING, Any
 from datetime import datetime
 
@@ -50,6 +51,23 @@ def is_whisper_hallucination(no_speech_prob: float, threshold: float) -> bool:
     both backends apply identical policy.
     """
     return no_speech_prob >= threshold
+
+
+@dataclass(frozen=True)
+class _TranscriptionJob:
+    audio: Any
+    start_time: float
+    end_time: float
+    energy: float
+
+
+@dataclass(frozen=True)
+class _TranscriptionResult:
+    text: str
+    language: Optional[str]
+    start_time: float
+    end_time: float
+    energy: float
 
 # Audio processing imports (optional)
 try:
@@ -401,13 +419,9 @@ class VoiceListener(threading.Thread):
         self._should_stop = False
         self._dictation_active = False  # Pause flag set by dictation engine
         self._first_utterance = True  # Suppress turn separator before the very first transcription
-        # ISO-639-1 code Whisper detected for the most recent utterance.
-        # Updated at every successful transcription site (MLX + faster-
-        # whisper) and consumed by `_dispatch_query` so downstream tools
-        # can pick locale-appropriate resources (e.g. tr.wikipedia.org).
-        # One-utterance-at-a-time voice flow means the read in
-        # `_dispatch_query` always matches the write from the Whisper
-        # call that produced the transcript.
+        # The listener loop applies each worker result's detected language
+        # before processing its transcript, so dispatched queries keep their
+        # own locale even while later utterances are being transcribed.
         self._last_detected_language: Optional[str] = None
 
         # Audio processing components
@@ -417,6 +431,9 @@ class VoiceListener(threading.Thread):
         self.model: Optional[Any] = None  # WhisperModel for faster-whisper, None for MLX
         self.transcribe_lock = threading.Lock()  # Shared lock for Whisper model access
         self._audio_q: queue.Queue = queue.Queue(maxsize=64)
+        self._transcription_jobs_q: queue.Queue = queue.Queue(maxsize=8)
+        self._transcription_results_q: queue.Queue = queue.Queue()
+        self._transcription_worker_thread: Optional[threading.Thread] = None
         self._pre_roll: deque = deque()
 
         # Audio callback monitoring (for debugging)
@@ -1536,6 +1553,90 @@ class VoiceListener(threading.Thread):
             )
         self._audio_peak = 0.0
 
+    def _start_transcription_worker(self) -> None:
+        if self._should_stop or self._transcription_worker_thread is not None:
+            return
+        self._transcription_worker_thread = threading.Thread(
+            target=self._run_transcription_worker,
+            daemon=True,
+            name="jarvis-whisper-transcription",
+        )
+        self._transcription_worker_thread.start()
+        debug_log("started serial Whisper transcription worker", "voice")
+
+    def _run_transcription_worker(self) -> None:
+        while True:
+            job = self._transcription_jobs_q.get()
+            if job is None:
+                return
+            try:
+                text, language = self._transcribe_audio(job.audio)
+            except Exception as exc:
+                debug_log(f"transcription worker error: {exc}", "voice")
+                text, language = "", None
+            self._transcription_results_q.put(
+                _TranscriptionResult(
+                    text=text,
+                    language=language,
+                    start_time=job.start_time,
+                    end_time=job.end_time,
+                    energy=job.energy,
+                )
+            )
+
+    def _finish_transcription_worker(self) -> None:
+        worker = self._transcription_worker_thread
+        if worker is None:
+            return
+        self._transcription_jobs_q.put(None)
+        worker.join()
+        self._transcription_worker_thread = None
+        while True:
+            try:
+                result = self._transcription_results_q.get_nowait()
+            except queue.Empty:
+                break
+            self._handle_transcription_result(result)
+        debug_log("finished queued Whisper transcription work", "voice")
+
+    def _handle_transcription_result(self, result: _TranscriptionResult) -> None:
+        if result.language:
+            self._last_detected_language = result.language
+        text = result.text
+        if not text or not text.strip():
+            self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
+            return
+
+        separator = "" if self._first_utterance else f"\n{'─' * 50}"
+        self._first_utterance = False
+        print(f"{separator}\n📝 Heard: \"{text}\"", flush=True)
+
+        if self._is_repetitive_hallucination(text):
+            debug_log(f"rejected repetitive hallucination: '{text[:80]}...'", "voice")
+            self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
+            return
+
+        if self.tts is not None and self.tts.is_speaking():
+            is_during_tts = True
+        else:
+            tts_finish_time = self.echo_detector._last_tts_finish_time
+            echo_tolerance = self.echo_detector.echo_tolerance
+            is_during_tts = (
+                tts_finish_time > 0
+                and result.start_time > 0
+                and result.start_time < tts_finish_time + echo_tolerance
+            )
+        self._transcript_buffer.add(
+            text=text,
+            start_time=result.start_time,
+            end_time=result.end_time,
+            energy=result.energy,
+            is_during_tts=is_during_tts,
+        )
+        self._process_transcript(
+            text, result.energy, result.start_time, result.end_time
+        )
+
     def _audio_frames(self, buf):
         """Keep native-rate frame boundaries across arbitrary callback block sizes."""
         mono = mono_capture(buf)
@@ -2271,6 +2372,8 @@ class VoiceListener(threading.Thread):
                         print(f"  ❌ Failed to start recording: {e}", flush=True)
                     return
 
+            self._start_transcription_worker()
+
             # Show ready message only after stream is confirmed active
             wake_word = getattr(self.cfg, "wake_word", "jarvis").lower()
             wake_title = wake_word.title()
@@ -2326,6 +2429,13 @@ class VoiceListener(threading.Thread):
                 pass
 
             while not self._should_stop:
+                try:
+                    result = self._transcription_results_q.get_nowait()
+                except queue.Empty:
+                    pass
+                else:
+                    self._handle_transcription_result(result)
+
                 self._check_audio_health()
 
                 try:
@@ -2394,8 +2504,10 @@ class VoiceListener(threading.Thread):
                     # Check for query timeouts
                     self._check_query_timeout()
 
+        self._finish_transcription_worker()
+
     def _finalize_utterance(self) -> None:
-        """Process completed utterance through speech recognition."""
+        """Queue a completed utterance for serial transcription."""
         if np is None or not self._utterance_frames:
             self.is_speech_active = False
             self._silence_frames = 0
@@ -2412,7 +2524,7 @@ class VoiceListener(threading.Thread):
             end_time_str = datetime.fromtimestamp(utterance_end_time).strftime('%H:%M:%S.%f')[:-3]
             debug_log(f"utterance captured: duration={utterance_duration:.2f}s (started: {start_time_str}, ended: {end_time_str})", "voice")
 
-        # Transcribe full audio - the intent judge will extract the relevant query
+        # The intent judge extracts the relevant query from the full utterance.
         try:
             audio = np.concatenate(self._utterance_frames, axis=0).flatten()
         except Exception:
@@ -2442,7 +2554,22 @@ class VoiceListener(threading.Thread):
             self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
             return
 
-        # Speech recognition with appropriate backend
+        job = _TranscriptionJob(
+            audio=audio,
+            start_time=utterance_start_time,
+            end_time=utterance_end_time,
+            energy=utterance_energy,
+        )
+        try:
+            self._transcription_jobs_q.put_nowait(job)
+        except queue.Full:
+            debug_log("transcription backlog full; utterance discarded", "voice")
+            print("  ⚠️  Whisper is behind; this utterance was not transcribed.", flush=True)
+            self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
+
+    def _transcribe_audio(self, audio) -> tuple[str, Optional[str]]:
+        """Run Whisper and return filtered text with its detected language."""
+        detected = None
         try:
             if self._whisper_backend == "mlx":
                 # MLX Whisper transcription
@@ -2456,8 +2583,6 @@ class VoiceListener(threading.Thread):
                 # Capture Whisper's auto-detected language (ISO-639-1) so
                 # downstream tools can pick locale-appropriate resources.
                 detected = result.get("language")
-                if isinstance(detected, str) and detected:
-                    self._last_detected_language = detected
 
                 # Filter segments by confidence (MLX Whisper returns segments with avg_logprob)
                 min_confidence = getattr(self.cfg, "whisper_min_confidence", 0.3)
@@ -2513,48 +2638,11 @@ class VoiceListener(threading.Thread):
                 # on the info object). Guard against older API variants
                 # where the attribute may be absent.
                 detected = getattr(_info, "language", None)
-                if isinstance(detected, str) and detected:
-                    self._last_detected_language = detected
                 filtered_segments = self._filter_noisy_segments(segments_list)
                 text = " ".join(seg.text for seg in filtered_segments).strip()
         except Exception as e:
             debug_log(f"transcription error: {e}", "voice")
             if sys.platform == 'win32':
                 print(f"  ❌ Whisper error: {e}", flush=True)
-            text = ""
-
-        if not text or not text.strip():
-            self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
-            return
-
-        # Log successful transcription — separator omitted on the first utterance since
-        # there is no prior turn to visually separate from.
-        separator = "" if self._first_utterance else f"\n{'─' * 50}"
-        self._first_utterance = False
-        print(f"{separator}\n📝 Heard: \"{text}\"", flush=True)
-
-        # Filter out repetitive hallucinations (e.g., "don't don't don't...")
-        if self._is_repetitive_hallucination(text):
-            debug_log(f"rejected repetitive hallucination: '{text[:80]}...'", "voice")
-            self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
-            return
-
-        # Add to transcript buffer for context-aware processing
-        # Mark as "during TTS" if utterance STARTED during TTS (not just if TTS is still speaking now)
-        # This ensures mixed echo+user speech gets properly marked for intent judge
-        if self.tts is not None and self.tts.is_speaking():
-            is_during_tts = True
-        else:
-            tts_finish_time = self.echo_detector._last_tts_finish_time
-            echo_tolerance = self.echo_detector.echo_tolerance
-            is_during_tts = (tts_finish_time > 0 and utterance_start_time > 0 and utterance_start_time < tts_finish_time + echo_tolerance)
-        self._transcript_buffer.add(
-            text=text,
-            start_time=utterance_start_time,
-            end_time=utterance_end_time,
-            energy=utterance_energy,
-            is_during_tts=is_during_tts,
-        )
-
-        # Process the transcript with pre-calculated energy and utterance timing
-        self._process_transcript(text, utterance_energy, utterance_start_time, utterance_end_time)
+            return "", None
+        return text, detected if isinstance(detected, str) and detected else None
