@@ -13,6 +13,7 @@ Usage:
 from __future__ import annotations
 
 import sys
+import threading
 import time
 import statistics
 from contextlib import contextmanager
@@ -23,8 +24,8 @@ from jarvis.llm.ollama import OllamaBackend
 from jarvis.llm.openai_compatible import OpenAICompatibleBackend
 
 
-# Map caller __qualname__ → graph context name. Matches the 13 contexts in
-# docs/llm_contexts.md. Anything not listed gets lumped into "other" so we
+# Map caller __qualname__ → graph context name in docs/llm_contexts.md.
+# Anything not listed gets lumped into "other" so we
 # notice new call sites drift in without us updating the doc.
 #
 # ⚠️  This mapping mirrors docs/llm_contexts.md. When you add, remove, or
@@ -32,8 +33,8 @@ from jarvis.llm.openai_compatible import OpenAICompatibleBackend
 # — the perf harness silently buckets unknown callers into "other:<qualname>"
 # so drift here is visible but not loud.
 _CALLER_TO_CONTEXT: dict[str, str] = {
-    # Context 1 — main chat loop uses chat_with_messages
-    "run_reply_engine": "main_chat_turn",
+    # Main chat runs inside ExecutionControl.call's worker thread.
+    "chat_with_messages": "main_chat_turn",
     # Context 2 — intent judge (calls via internal helper)
     "IntentJudge.evaluate": "intent_judge",
     "IntentJudge._call_llm": "intent_judge",
@@ -44,6 +45,7 @@ _CALLER_TO_CONTEXT: dict[str, str] = {
     # Context 5 — memory digest (per batch)
     "_distil_batch": "memory_digest",
     "digest_memory_for_query": "memory_digest",
+    "prepare_turn": "turn_preparation",
     # Context 6 — tool-result digest (per batch)
     "_distil_tool_batch": "tool_result_digest",
     "digest_tool_result_for_query": "tool_result_digest",
@@ -56,10 +58,14 @@ _CALLER_TO_CONTEXT: dict[str, str] = {
     "select_tools_with_llm": "tool_router",
     # Context 10 — conversation summariser
     "generate_conversation_summary": "summariser",
+    "ingest_dialogue_facts": "fact_extraction",
     # Context 11 — graph fact extraction
     "extract_graph_memories": "graph_extract",
     # Context 12 — graph best-child picker
     "_llm_pick_best_child": "graph_best_child",
+    "merge_node_data": "graph_node_merge",
+    "plan_query": "planner",
+    "resolve_next_tool_call": "plan_step_resolver",
     # Context 13 — tool-specific LLM calls
     "_extract_place_from_user_text": "tool_weather",
     "extract_and_log_meal": "tool_nutrition",
@@ -82,6 +88,7 @@ class _Call:
 class TimingRecorder:
     calls: list[_Call] = field(default_factory=list)
     _originals: dict = field(default_factory=dict)
+    _active: threading.local = field(default_factory=threading.local, repr=False)
 
     def __enter__(self) -> "TimingRecorder":
         self._patch()
@@ -116,6 +123,9 @@ class TimingRecorder:
     # ── patching ─────────────────────────────────────────────────────────
     def _wrap(self, name: str, original: Callable) -> Callable:
         def wrapped(*args, **kwargs):
+            if getattr(self._active, "depth", 0):
+                return original(*args, **kwargs)
+            self._active.depth = 1
             ctx = self._infer_context(skip_frames=2)
             backend = args[0]
             model = kwargs.get("chat_model") or (args[1] if len(args) > 1 else "")
@@ -137,10 +147,13 @@ class TimingRecorder:
                 outcome = "success" if result is not None else "empty"
                 return result
             finally:
+                self._active.depth = 0
                 if isinstance(result, str):
                     response_chars = len(result)
                 elif isinstance(result, dict):
-                    response_chars = len(str(result.get("content", "")))
+                    message = result.get("message")
+                    content = message.get("content") if isinstance(message, dict) else result.get("content")
+                    response_chars = len(str(content)) if content is not None else 0
                 else:
                     response_chars = 0
                 self.calls.append(_Call(
