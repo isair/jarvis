@@ -7,7 +7,9 @@ from unittest.mock import patch
 import pytest
 
 from jarvis.reply import engine as engine_mod
+from jarvis.reply.execution import ExecutionControl, ToolCall, execute_tool_batch
 from jarvis.reply.task_state import TaskStore
+from jarvis.tools.builtin.stop import STOP_SIGNAL
 from jarvis.tools.types import ToolExecutionResult
 
 
@@ -64,6 +66,54 @@ def test_native_batch_executes_every_call_and_returns_ordered_results(
     assert sorted(called) == ["getTime", "getWeather"]
     tool_rows = [row for row in seen_messages[-1] if row.get("role") == "tool"]
     assert [row["tool_call_id"] for row in tool_rows[-2:]] == ["call_0", "call_1"]
+
+
+def test_native_stop_before_write_does_not_dispatch_write_or_reply(
+    mock_config, db, dialogue_memory, tmp_path,
+):
+    mock_config.llm_chat_model = "gpt-oss:20b"
+    mock_config.db_path = str(tmp_path / "jarvis.db")
+    called = []
+    writes = {"operation": "write", "path": "answer.txt", "content": "late"}
+
+    def tool(**kwargs):
+        called.append(kwargs["tool_name"])
+        if kwargs["tool_name"] == "stop":
+            return ToolExecutionResult(True, STOP_SIGNAL)
+        return ToolExecutionResult(True, "written")
+
+    with patch.object(engine_mod, "chat_with_messages", return_value=_tool_reply(
+            ("stop", {}), ("localFiles", writes))) as chat, \
+         patch.object(engine_mod, "run_tool_with_retries", side_effect=tool), \
+         patch.object(engine_mod, "select_tools", return_value=["localFiles"]), \
+         patch.object(engine_mod, "extract_search_params_for_memory", return_value={"keywords": []}):
+        reply = engine_mod.run_reply_engine(
+            db, mock_config, None, "stop", dialogue_memory,
+        )
+
+    assert reply is None
+    assert called == ["stop"]
+    assert chat.call_count == 1
+    assert dialogue_memory.get_recent_messages() == []
+
+
+@pytest.mark.parametrize("first_name", ["stop", "getTime"])
+def test_batch_stop_result_prevents_following_mutation(first_name):
+    called = []
+
+    def run(call):
+        called.append(call.name)
+        return ToolExecutionResult(True, STOP_SIGNAL if call.name == first_name else "written")
+
+    results = execute_tool_batch(
+        [ToolCall(first_name, {}, "first-id"),
+         ToolCall("localFiles", {"operation": "write"}, "write-id")],
+        run, lambda call: call.name == "getTime", lambda call: None,
+        ExecutionControl(threading.Event(), timeout_sec=2), max_parallel_reads=3,
+    )
+
+    assert called == [first_name]
+    assert [result.reply_text for result in results] == [STOP_SIGNAL]
 
 
 def test_cancel_between_native_calls_prevents_later_write_and_reply(

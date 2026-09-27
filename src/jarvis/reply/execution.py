@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
 from ..debug import debug_log
+from ..tools.builtin.stop import STOP_SIGNAL
 from ..tools.types import ToolExecutionResult
 
 
@@ -181,7 +182,7 @@ def execute_tool_batch(
     *,
     max_parallel_reads: int,
 ) -> list[ToolExecutionResult]:
-    """Execute every model call, preserving order and write dependencies.
+    """Execute model calls in order until cancellation or a stop result.
 
     Only consecutive independent reads overlap. A write is a barrier. Reads
     sharing a backend affinity (one MCP server session) also run serially.
@@ -193,25 +194,31 @@ def execute_tool_batch(
     affinities: set[str] = set()
     limit = max(1, int(max_parallel_reads))
 
-    def flush() -> None:
+    def flush() -> bool:
         if not group:
-            return
+            return False
         if len(group) == 1:
             results.append(_invoke_one(group[0], run, control))
         else:
             results.extend(_run_parallel_reads(group, run, control))
         group.clear()
         affinities.clear()
+        return any(result.reply_text == STOP_SIGNAL for result in results)
 
     for call in calls:
         control.check()
         if not is_read_only(call):
-            flush()
-            results.append(_invoke_one(call, run, control))
+            if flush():
+                return results
+            result = _invoke_one(call, run, control)
+            results.append(result)
+            if result.reply_text == STOP_SIGNAL:
+                return results
             continue
         key = affinity(call)
         if len(group) >= limit or (key is not None and key in affinities):
-            flush()
+            if flush():
+                return results
         group.append(call)
         if key is not None:
             affinities.add(key)
