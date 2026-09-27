@@ -199,186 +199,81 @@ class TestExtractorPromptRendering:
         assert "{{notathing}}" in captured["user_content"]
 
 
-class TestGraphEnrichmentGating:
-    """Graph enrichment is question-driven: no questions → no graph crawl."""
+class TestUnifiedMemoryEnrichment:
+    """The selected source mode controls the evidence in the reply prompt."""
 
-    def _run(self, extract_return: dict, enrichment_source: str = "all"):
-        from jarvis.reply.engine import run_reply_engine
+    @staticmethod
+    def _seed_memory(db):
+        from jarvis.memory.facts import FactStore
+        from jarvis.memory.graph import GraphMemoryStore
 
-        class _DM:
-            def has_recent_messages(self):
-                return False
+        facts = FactStore(db.db_path)
+        try:
+            facts.add_fact(
+                "The user enjoys sushi", kind="user", owner="user",
+                source_ref="turn-food", source_type="dialogue", source_role="user",
+                source_channel="text", source_text="I enjoy sushi",
+                evidence="I enjoy sushi", observed_at="2026-01-01T10:00:00Z",
+            )
+        finally:
+            facts.close()
+        db.upsert_conversation_summary("2026-01-02", "We discussed sushi in Tokyo")
+        graph = GraphMemoryStore(db.db_path)
+        try:
+            graph.create_node("Food notes", "Unverified food notes", "Sushi restaurant shortlist", "world")
+        finally:
+            graph.close()
 
-            def get_recent_messages(self):
-                return []
+    @staticmethod
+    def _prompt(db, cfg, dialogue_memory):
+        from jarvis.reply import engine
 
-            def add_message(self, role, content):
-                pass
-
-        class _TTS:
-            enabled = False
-
-        cfg = SimpleNamespace(
-            llm_chat_model="m",
-            ollama_base_url="http://x",
-            ollama_chat_model="m",
-            embedding_model="e",
-            ollama_embed_model="e",
-            llm_tools_timeout_sec=0.1,
-            llm_embedding_timeout_sec=0.1,
-            llm_chat_timeout_sec=0.1,
-            agentic_max_turns=0,
-            active_profiles=["developer"],
-            voice_debug=False,
-            memory_enrichment_source=enrichment_source,
-            memory_enrichment_max_results=0,
-            mcps={},
-            location_enabled=False,
-            location_auto_detect=False,
-            location_ip_address=None,
-            location_cgnat_resolve_public_ip=True,
-            db_path=":memory:",
-        )
-
-        store_calls: list[str] = []
-
-        class _FakeStore:
-            def __init__(self, *a, **kw):
-                pass
-
-            def search_nodes(self, query, limit=5):
-                store_calls.append(query)
-                return []
-
-            def get_recent_nodes(self, limit=3):
-                store_calls.append("get_recent_nodes")
-                return []
-
-            def get_ancestors(self, node_id):
-                return []
-
-        with patch("jarvis.reply.engine.extract_search_params_for_memory", return_value=extract_return), \
-             patch("jarvis.memory.graph.GraphMemoryStore", _FakeStore):
-            run_reply_engine(db=None, cfg=cfg, tts=None, text="q", dialogue_memory=_DM())
-
-        return store_calls
-
-    def test_skips_graph_when_no_questions(self):
-        calls = self._run({"keywords": ["time"], "questions": []})
-        assert calls == [], f"Graph should not be touched without questions, got {calls}"
-
-    def test_crawls_graph_when_questions_present(self):
-        calls = self._run({
-            "keywords": ["food"],
-            "questions": ["what cuisine does the user enjoy?"],
-        })
-        # search_nodes should have been called (with question-derived terms).
-        assert any("cuisine" in c for c in calls), \
-            f"Expected graph search using question words, got {calls}"
-        # The removed recent-nodes fallback must stay removed.
-        assert "get_recent_nodes" not in calls
-
-    def test_skips_graph_when_source_is_diary_only(self):
-        calls = self._run(
-            {"keywords": ["food"], "questions": ["what cuisine?"]},
-            enrichment_source="diary",
-        )
-        assert calls == []
-
-    def test_skips_graph_when_questions_are_all_stopwords(self):
-        # "what is the?" strips down to nothing meaningful — should not hit store.
-        calls = self._run({
-            "keywords": ["x"],
-            "questions": ["what is the?"],
-        })
-        assert calls == []
-
-
-class TestGraphContextReachesSystemMessage:
-    """Regression: graph enrichment must reach the LLM system prompt.
-
-    An earlier bug built a `context` list containing graph results but never
-    threaded it into the system message, so the model was told "I know nothing
-    about you" even though 🧠 Knowledge logs showed nodes surfaced.
-    """
-
-    def test_graph_context_appears_in_system_prompt(self):
-        from jarvis.reply.engine import run_reply_engine
-
-        class _Node:
-            def __init__(self):
-                self.id = "n1"
-                self.name = "Food Preferences"
-                self.data = "User loves sushi and spicy ramen."
-                self.data_token_count = 10
-
-        class _Ancestor:
-            name = "Root"
-
-        class _FakeStore:
-            def __init__(self, *a, **kw):
-                pass
-
-            def search_nodes(self, query, limit=5):
-                return [_Node()]
-
-            def get_ancestors(self, node_id):
-                return [_Ancestor()]
-
-        class _DM:
-            def has_recent_messages(self):
-                return False
-
-            def get_recent_messages(self):
-                return []
-
-            def add_message(self, role, content):
-                pass
-
-        cfg = SimpleNamespace(
-            llm_chat_model="m",
-            ollama_base_url="http://x",
-            ollama_chat_model="m",
-            embedding_model="e",
-            ollama_embed_model="e",
-            llm_tools_timeout_sec=0.1,
-            llm_embedding_timeout_sec=0.1,
-            llm_chat_timeout_sec=0.1,
-            agentic_max_turns=1,
-            active_profiles=["developer"],
-            voice_debug=False,
-            memory_enrichment_source="all",
-            memory_enrichment_max_results=0,
-            mcps={},
-            location_enabled=False,
-            location_auto_detect=False,
-            location_ip_address=None,
-            location_cgnat_resolve_public_ip=True,
-            db_path=":memory:",
-            tts_engine="piper",
-        )
-
-        captured_messages: list = []
+        prompts = []
 
         def fake_chat(**kwargs):
-            captured_messages.extend(kwargs.get("messages", []))
+            prompts.append(kwargs["messages"][0]["content"])
             return {"message": {"content": "ok", "role": "assistant"}}
 
-        with patch(
-            "jarvis.reply.engine.extract_search_params_for_memory",
-            return_value={"keywords": ["food"], "questions": ["what cuisine does the user enjoy?"]},
-        ), patch("jarvis.memory.graph.GraphMemoryStore", _FakeStore), \
-             patch("jarvis.reply.engine.chat_with_messages", side_effect=fake_chat), \
-             patch("jarvis.tools.selection.select_tools", return_value=[]):
-            run_reply_engine(db=None, cfg=cfg, tts=None, text="what do you know about me?", dialogue_memory=_DM())
+        with patch.object(engine, "select_tools", return_value=["webSearch"]), \
+             patch.object(engine, "plan_query", return_value=["searchMemory topic='sushi'", "Reply to the user."]), \
+             patch.object(engine, "extract_search_params_for_memory", return_value={"keywords": ["sushi"], "questions": []}), \
+             patch.object(engine, "chat_with_messages", side_effect=fake_chat):
+            assert engine.run_reply_engine(db, cfg, None, "What did I say about sushi?", dialogue_memory) == "ok"
+        assert prompts
+        return prompts[0]
 
-        system_msgs = [m for m in captured_messages if m.get("role") == "system"]
-        assert system_msgs, "Expected a system message to be sent to the LLM"
-        joined = "\n".join(m.get("content", "") for m in system_msgs)
-        assert "Information the user has shared with you in prior conversations" in joined, \
-            f"Graph context missing from system prompt. Got:\n{joined[:500]}"
-        assert "sushi" in joined, \
-            f"Graph node data missing from system prompt. Got:\n{joined[:500]}"
+    @pytest.mark.parametrize(
+        ("mode", "present", "absent"),
+        [
+            ("all", ("User statement", "Diary summary", "Unverified legacy graph", "Sushi restaurant shortlist"), ()),
+            ("diary", ("Diary summary",), ("User statement", "Unverified legacy graph", "Sushi restaurant shortlist")),
+            ("graph", ("User statement", "Unverified legacy graph", "Sushi restaurant shortlist"), ("Diary summary",)),
+            ("none", (), ("User statement", "Diary summary", "Unverified legacy graph", "Sushi restaurant shortlist")),
+        ],
+    )
+    def test_source_modes_reach_system_prompt(self, mode, present, absent,
+                                              tmp_path, mock_config, dialogue_memory):
+        from jarvis.memory.db import Database
+
+        db = Database(str(tmp_path / "memory.db"))
+        try:
+            self._seed_memory(db)
+            mock_config.db_path = db.db_path
+            mock_config.memory_enrichment_source = mode
+            mock_config.embedding_model = ""
+            mock_config.llm_chat_model = "test-large"
+            mock_config.agentic_preparation = "separate"
+            mock_config.memory_digest_enabled = False
+            prompt = self._prompt(db, mock_config, dialogue_memory)
+            assert "The user enjoys sushi" in prompt  # Warm profile is independent of enrichment mode.
+            for marker in present:
+                assert marker in prompt
+            for marker in absent:
+                assert marker not in prompt
+            if mode in {"all", "graph"}:
+                assert "Unverified legacy graph" in prompt
+        finally:
+            db.close()
 
 
 # ── Memory digest ──────────────────────────────────────────────────────
