@@ -10,8 +10,9 @@ All user-supplied path-like settings must be tilde-expanded on load.
 """
 
 import json
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
+import jarvis.config as config_module
 from jarvis.config import load_settings
 
 
@@ -80,6 +81,21 @@ def test_hugging_face_model_id_survives_config_loading(tmp_path, monkeypatch):
     })
 
     assert load_settings().whisper_model == "deepdml/faster-whisper-large-v3-turbo-ct2"
+
+
+def test_hugging_face_model_id_survives_windows_path_semantics(tmp_path, monkeypatch):
+    """A repo ID keeps its forward slash when path expansion uses Windows rules."""
+    model_id = "deepdml/faster-whisper-large-v3-turbo-ct2"
+    _write_config(tmp_path, monkeypatch, {"whisper_model": model_id})
+
+    def windows_path_expansion(value):
+        if value in (None, "", "null"):
+            return None
+        return str(PureWindowsPath(str(value)))
+
+    monkeypatch.setattr(config_module, "_expand_path", windows_path_expansion)
+
+    assert load_settings().whisper_model == model_id
 
 
 def test_a_local_whisper_model_directory_is_still_a_path(tmp_path, monkeypatch):
