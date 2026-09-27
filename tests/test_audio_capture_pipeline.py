@@ -281,7 +281,10 @@ def test_utterance_finalisation_queues_transcription_without_blocking():
     obj._transcription_results_q = queue.Queue()
     obj.is_speech_active = True
     obj._silence_frames = 0
-    obj.echo_detector = SimpleNamespace(_utterance_start_time=1.0)
+    obj.echo_detector = SimpleNamespace(_utterance_start_time=1.0, _tts_start_time=0,
+                                        _last_tts_finish_time=0, echo_tolerance=0.3)
+    obj.tts = None
+    obj._dictation_generation = 0
     obj.cfg = SimpleNamespace(voice_debug=False, whisper_min_audio_duration=0.3)
     obj._calculate_audio_energy = lambda frames: 0.1
 
@@ -318,8 +321,8 @@ def test_transcription_worker_preserves_utterance_order():
         return str(audio), "en"
 
     obj._transcribe_audio = transcribe
-    obj._transcription_jobs_q.put(SimpleNamespace(audio="first", start_time=1.0, end_time=2.0, energy=0.1, dictation_generation=0))
-    obj._transcription_jobs_q.put(SimpleNamespace(audio="second", start_time=2.0, end_time=3.0, energy=0.2, dictation_generation=0))
+    obj._transcription_jobs_q.put(SimpleNamespace(audio="first", start_time=1.0, end_time=2.0, energy=0.1, dictation_generation=0, captured_during_tts=False, captured_tts_start_time=0))
+    obj._transcription_jobs_q.put(SimpleNamespace(audio="second", start_time=2.0, end_time=3.0, energy=0.2, dictation_generation=0, captured_during_tts=False, captured_tts_start_time=0))
     obj._transcription_jobs_q.put(None)
 
     worker = threading.Thread(target=obj._run_transcription_worker)
@@ -355,7 +358,7 @@ def test_utterance_finalisation_continues_while_whisper_is_busy():
 
     obj._transcribe_audio = transcribe
     obj._transcription_jobs_q.put(
-        SimpleNamespace(audio="slow", start_time=1.0, end_time=2.0, energy=0.1, dictation_generation=0)
+        SimpleNamespace(audio="slow", start_time=1.0, end_time=2.0, energy=0.1, dictation_generation=0, captured_during_tts=False, captured_tts_start_time=0)
     )
     worker = threading.Thread(target=obj._run_transcription_worker)
     worker.start()
@@ -366,8 +369,10 @@ def test_utterance_finalisation_continues_while_whisper_is_busy():
         obj._samplerate = obj._stream_samplerate = 16000
         obj.is_speech_active = True
         obj._silence_frames = 0
-        obj.echo_detector = SimpleNamespace(_utterance_start_time=1.0)
+        obj.echo_detector = SimpleNamespace(_utterance_start_time=1.0, _tts_start_time=0,
+                                            _last_tts_finish_time=0, echo_tolerance=0.3)
         obj.cfg = SimpleNamespace(voice_debug=False, whisper_min_audio_duration=0.3)
+        obj.tts = None
         obj._calculate_audio_energy = lambda frames: 0.1
 
         obj._finalize_utterance()
@@ -405,6 +410,8 @@ def test_transcription_result_keeps_language_and_utterance_context():
         end_time=11.0,
         energy=0.2,
         dictation_generation=0,
+        captured_during_tts=False,
+        captured_tts_start_time=0,
     )
 
     obj._handle_transcription_result(result)
@@ -417,7 +424,10 @@ def test_transcription_result_keeps_language_and_utterance_context():
         energy=0.2,
         is_during_tts=False,
     )
-    obj._process_transcript.assert_called_once_with("hello there", 0.2, 10.0, 11.0)
+    obj._process_transcript.assert_called_once_with(
+        "hello there", 0.2, 10.0, 11.0,
+        captured_during_tts=False, captured_tts_start_time=0,
+    )
 
 
 def test_shutdown_discards_full_backlog_without_waiting_for_whisper():
@@ -437,11 +447,11 @@ def test_shutdown_discards_full_backlog_without_waiting_for_whisper():
         return "late answer", "en"
 
     obj._transcribe_audio = transcribe
-    job = SimpleNamespace(audio="active", start_time=1.0, end_time=2.0, energy=0.1, dictation_generation=0)
+    job = SimpleNamespace(audio="active", start_time=1.0, end_time=2.0, energy=0.1, dictation_generation=0, captured_during_tts=False, captured_tts_start_time=0)
     obj._transcription_jobs_q.put(job)
     obj._start_transcription_worker()
     assert started.wait(timeout=1)
-    obj._transcription_jobs_q.put(SimpleNamespace(audio="queued", start_time=2.0, end_time=3.0, energy=0.1, dictation_generation=0))
+    obj._transcription_jobs_q.put(SimpleNamespace(audio="queued", start_time=2.0, end_time=3.0, energy=0.1, dictation_generation=0, captured_during_tts=False, captured_tts_start_time=0))
     obj._should_stop = True
     finished = threading.Event()
 
@@ -472,7 +482,7 @@ def test_transcription_result_during_dictation_is_not_dispatched():
     obj._transcript_buffer = Mock()
     obj._process_transcript = Mock()
     obj._is_repetitive_hallucination = lambda text: False
-    result = SimpleNamespace(text="jarvis do this", language="en", start_time=10.0, end_time=11.0, energy=0.2, dictation_generation=0)
+    result = SimpleNamespace(text="jarvis do this", language="en", start_time=10.0, end_time=11.0, energy=0.2, dictation_generation=0, captured_during_tts=False, captured_tts_start_time=0)
 
     obj._handle_transcription_result(result)
 
@@ -493,7 +503,7 @@ def test_transcription_result_without_detected_language_clears_previous_locale()
     obj._process_transcript = Mock()
     obj._is_repetitive_hallucination = lambda text: False
 
-    obj._handle_transcription_result(SimpleNamespace(text="hello", language=None, start_time=10.0, end_time=11.0, energy=0.2, dictation_generation=0))
+    obj._handle_transcription_result(SimpleNamespace(text="hello", language=None, start_time=10.0, end_time=11.0, energy=0.2, dictation_generation=0, captured_during_tts=False, captured_tts_start_time=0))
 
     assert obj._last_detected_language is None
 
@@ -510,9 +520,39 @@ def test_echo_flag_uses_capture_interval_when_tts_starts_during_whisper():
     obj._process_transcript = Mock()
     obj._is_repetitive_hallucination = lambda text: False
 
-    obj._handle_transcription_result(SimpleNamespace(text="jarvis hello", language="en", start_time=10.0, end_time=11.0, energy=0.2, dictation_generation=0))
+    obj._handle_transcription_result(SimpleNamespace(text="jarvis hello", language="en", start_time=10.0, end_time=11.0, energy=0.2, dictation_generation=0, captured_during_tts=False, captured_tts_start_time=0))
 
     assert obj._transcript_buffer.add.call_args.kwargs["is_during_tts"] is False
+
+
+def test_queued_job_keeps_tts_context_from_audio_capture():
+    from unittest.mock import Mock
+
+    obj = listener()
+    obj._utterance_frames = [np.ones(8000, dtype=np.float32)]
+    obj._samplerate = obj._stream_samplerate = 16000
+    obj._transcription_jobs_q = queue.Queue(maxsize=8)
+    obj._transcription_results_q = queue.Queue()
+    obj.is_speech_active = True
+    obj._silence_frames = 0
+    obj.echo_detector = SimpleNamespace(_utterance_start_time=10.0, _tts_start_time=0,
+                                        _last_tts_finish_time=0, echo_tolerance=0.3)
+    obj.tts = SimpleNamespace(is_speaking=Mock(return_value=False))
+    obj.cfg = SimpleNamespace(voice_debug=False, whisper_min_audio_duration=0.3)
+    obj._calculate_audio_energy = lambda frames: 0.1
+
+    obj._finalize_utterance()
+    job = obj._transcription_jobs_q.get_nowait()
+    obj.echo_detector._tts_start_time = 12.0
+    obj.tts.is_speaking.return_value = True
+    obj._transcribe_audio = lambda audio: ("stop", "en")
+    obj._transcription_jobs_q.put(job)
+    obj._transcription_jobs_q.put(None)
+    obj._run_transcription_worker()
+    result = obj._transcription_results_q.get_nowait()
+
+    assert result.captured_during_tts is False
+    assert result.captured_tts_start_time == 0
 
 
 def test_run_cleans_up_worker_after_listener_exception():
@@ -555,7 +595,7 @@ def test_dictation_session_invalidates_decode_even_after_listener_resumes():
     obj._transcribe_audio = transcribe
     obj._start_transcription_worker()
     worker = obj._transcription_worker_thread
-    obj._transcription_jobs_q.put(SimpleNamespace(audio="before pause", start_time=1.0, end_time=2.0, energy=0.1, dictation_generation=0))
+    obj._transcription_jobs_q.put(SimpleNamespace(audio="before pause", start_time=1.0, end_time=2.0, energy=0.1, dictation_generation=0, captured_during_tts=False, captured_tts_start_time=0))
     assert started.wait(timeout=1)
     obj._dictation_active = True
     obj._dictation_active = False
@@ -565,3 +605,71 @@ def test_dictation_session_invalidates_decode_even_after_listener_resumes():
 
     assert not worker.is_alive()
     assert obj._transcription_results_q.empty()
+
+
+@pytest.mark.parametrize(
+    "captured_during_tts,captured_tts_start_time,should_interrupt",
+    [(False, 0.0, False), (True, 12.0, True), (True, 9.0, False)],
+)
+def test_delayed_stop_only_interrupts_tts_that_overlapped_capture(
+    captured_during_tts, captured_tts_start_time, should_interrupt,
+):
+    from unittest.mock import Mock
+
+    obj = listener()
+    obj.cfg.wake_word = "jarvis"
+    obj.cfg.wake_aliases = []
+    obj.cfg.tune_enabled = False
+    obj.tts = SimpleNamespace(enabled=True, is_speaking=lambda: True, interrupt=Mock())
+    obj.echo_detector = SimpleNamespace(_tts_start_time=12.0, _last_tts_finish_time=0,
+                                        _last_tts_text="", echo_tolerance=0.3)
+    obj.state_manager = Mock()
+    obj.state_manager.was_speech_during_hot_window.return_value = False
+    obj.state_manager.is_collecting.return_value = False
+    obj._intent_judge = None
+    obj._transcript_buffer = Mock()
+    obj._stop_thinking_tune = Mock()
+    obj._is_thinking_tune_active = lambda: False
+    obj._start_thinking_tune = Mock()
+    obj._set_face_state_listening = Mock()
+    obj._clear_audio_buffers = Mock()
+    obj._wake_timestamp = None
+
+    start_time, end_time = ((12.1, 12.5) if captured_tts_start_time == 12.0 and captured_during_tts
+                            else (10.0, 11.0))
+    obj._process_transcript("stop", 0.2, start_time, end_time,
+                            captured_during_tts=captured_during_tts,
+                            captured_tts_start_time=captured_tts_start_time)
+
+    assert obj.tts.interrupt.called is should_interrupt
+
+
+def test_delayed_utterance_does_not_inherit_later_tts_text_for_intent():
+    from unittest.mock import Mock
+
+    obj = listener()
+    obj.cfg.wake_word = "jarvis"
+    obj.cfg.wake_aliases = []
+    obj.cfg.tune_enabled = False
+    obj.tts = SimpleNamespace(enabled=True, is_speaking=lambda: False)
+    obj.echo_detector = SimpleNamespace(_tts_start_time=12.0, _last_tts_finish_time=13.0,
+                                        _last_tts_text="future reply", echo_tolerance=0.3)
+    obj.state_manager = Mock()
+    obj.state_manager.was_speech_during_hot_window.return_value = False
+    obj.state_manager.is_collecting.return_value = False
+    obj._intent_judge = Mock(available=True)
+    obj._intent_judge.judge.return_value = None
+    obj._intent_judge.last_failure_reason = "unavailable"
+    obj._transcript_buffer = Mock()
+    obj._buffer_duration = 120
+    obj._stop_thinking_tune = Mock()
+    obj._is_thinking_tune_active = lambda: False
+    obj._start_thinking_tune = Mock()
+    obj._set_face_state_listening = Mock()
+    obj._clear_audio_buffers = Mock()
+    obj._wake_timestamp = None
+
+    obj._process_transcript("jarvis weather", 0.2, 10.0, 11.0,
+                            captured_during_tts=False, captured_tts_start_time=0)
+
+    assert obj._intent_judge.judge.call_args.kwargs["last_tts_text"] == ""

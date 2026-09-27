@@ -42,8 +42,10 @@ invalidates transcription work started before the pause, including a decode
 that finishes after dictation resumes. Listener shutdown discards pending
 transcriptions and results; an in-progress Whisper call is given a bounded
 grace period and cannot dispatch a late transcript. Transcript echo flags use
-the utterance capture interval against TTS timing, rather than the TTS state
-when Whisper finishes.
+the utterance capture interval against TTS timing. The job carries that
+capture-time context through Whisper to echo rejection, stop-command handling
+and intent processing, so later TTS playback cannot reclassify an older
+utterance.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐

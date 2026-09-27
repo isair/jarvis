@@ -60,6 +60,8 @@ class _TranscriptionJob:
     end_time: float
     energy: float
     dictation_generation: int
+    captured_during_tts: bool
+    captured_tts_start_time: float
 
 
 @dataclass(frozen=True)
@@ -70,6 +72,8 @@ class _TranscriptionResult:
     end_time: float
     energy: float
     dictation_generation: int
+    captured_during_tts: bool
+    captured_tts_start_time: float
 
 # Audio processing imports (optional)
 try:
@@ -573,7 +577,7 @@ class VoiceListener(threading.Thread):
         debug_log(f"scheduling hot window activation (echo_tolerance={self.state_manager.echo_tolerance}s, hot_window={self.state_manager.hot_window_seconds}s)", "voice")
         self.state_manager.schedule_hot_window_activation(self.cfg.voice_debug)
 
-    def _process_transcript(self, text: str, utterance_energy: float = 0.0, utterance_start_time: float = 0.0, utterance_end_time: float = 0.0) -> None:
+    def _process_transcript(self, text: str, utterance_energy: float = 0.0, utterance_start_time: float = 0.0, utterance_end_time: float = 0.0, *, captured_during_tts: bool, captured_tts_start_time: float) -> None:
         """
         Process a transcript from speech recognition.
 
@@ -605,8 +609,14 @@ class VoiceListener(threading.Thread):
         end_time_str = datetime.fromtimestamp(utterance_end_time).strftime('%H:%M:%S.%f')[:-3] if utterance_end_time > 0 else "N/A"
         debug_log(f"heard: '{text}' (utterance from {start_time_str} to {end_time_str})", "voice")
 
-        # Track if this input was received during TTS (for logging purposes)
-        received_during_tts = self.tts and self.tts.is_speaking()
+        # A queued transcript keeps the TTS context from audio capture.
+        received_during_tts = captured_during_tts
+        same_tts_context = self.echo_detector._tts_start_time == captured_tts_start_time
+        active_tts_overlapped = (
+            received_during_tts
+            and bool(self.tts and self.tts.is_speaking())
+            and same_tts_context
+        )
 
         # --- Early echo check + early beep ---
         # Check for echo BEFORE starting beep and BEFORE intent judge.
@@ -621,7 +631,7 @@ class VoiceListener(threading.Thread):
                 # Only catches pure echo (transcript ≈ TTS text). Mixed
                 # echo+speech chunks (user spoke over echo) go to the
                 # intent judge which can extract the user's speech.
-                last_tts_text = self.echo_detector._last_tts_text or ""
+                last_tts_text = self.echo_detector._last_tts_text if same_tts_context else ""
                 if last_tts_text:
                     echo_score = fuzz.partial_ratio(
                         text_lower, last_tts_text.lower()
@@ -691,7 +701,7 @@ class VoiceListener(threading.Thread):
         # Echo rejection & stop commands — only while TTS is actively playing.
         # After TTS finishes, the intent judge handles everything (echo detection,
         # hot window follow-ups, etc.) using full transcript context + last TTS text.
-        if self.tts and self.tts.enabled and self.tts.is_speaking():
+        if self.tts and self.tts.enabled and active_tts_overlapped:
             # Stop command detection (fast, text-based)
             stop_commands = getattr(self.cfg, "stop_commands", ["stop", "quiet", "shush", "silence", "enough", "shut up"])
             if is_stop_command(text_lower, stop_commands):
@@ -733,8 +743,8 @@ class VoiceListener(threading.Thread):
         # echo portion was captured during TTS but the transcript arrives after TTS
         # finishes. Try to strip the leading echo and use just the user's speech.
         # Skip entirely if there's no prior TTS — nothing to match against.
-        last_tts_text_for_salvage = self.echo_detector._last_tts_text or ""
-        last_tts_finish = self.echo_detector._last_tts_finish_time or 0.0
+        last_tts_text_for_salvage = self.echo_detector._last_tts_text if same_tts_context else ""
+        last_tts_finish = self.echo_detector._last_tts_finish_time if same_tts_context else 0.0
         # Use echo_tolerance as buffer — speaker/mic latency means the utterance
         # may start slightly after TTS finish yet still contain the echo.
         echo_tol = self.echo_detector.echo_tolerance
@@ -771,7 +781,7 @@ class VoiceListener(threading.Thread):
         # Handles: echo detection, wake word queries, hot window follow-ups.
         # During active TTS, skip short utterances (<=3 words) as those are
         # handled by stop command detection above.
-        is_speaking_now = self.tts and self.tts.is_speaking()
+        is_speaking_now = active_tts_overlapped
         intent_judgment = None
 
         # Determine if this could be a hot window follow-up.
@@ -821,8 +831,8 @@ class VoiceListener(threading.Thread):
             context_segments = self._transcript_buffer.get_last_seconds(self._buffer_duration)
 
             # Get TTS context for echo detection
-            last_tts_text = self.echo_detector._last_tts_text or ""
-            last_tts_finish_time = self.echo_detector._last_tts_finish_time or 0.0
+            last_tts_text = (self.echo_detector._last_tts_text or "") if same_tts_context else ""
+            last_tts_finish_time = (self.echo_detector._last_tts_finish_time or 0.0) if same_tts_context else 0.0
 
             intent_judgment = self._intent_judge.judge(
                 segments=context_segments,
@@ -847,7 +857,7 @@ class VoiceListener(threading.Thread):
                 # Hot window fallback: if the early echo check already cleared
                 # this text, accept it even without the judge's verdict.
                 if could_be_hot_window:
-                    last_tts_text_fb = self.echo_detector._last_tts_text or ""
+                    last_tts_text_fb = (self.echo_detector._last_tts_text or "") if same_tts_context else ""
                     is_pure_echo = False
                     if last_tts_text_fb:
                         echo_score = fuzz.partial_ratio(
@@ -875,7 +885,7 @@ class VoiceListener(threading.Thread):
 
             if intent_judgment is not None:
                 # If judge says stop command, interrupt TTS
-                if intent_judgment.stop and self.tts and self.tts.is_speaking():
+                if intent_judgment.stop and active_tts_overlapped:
                     debug_log(f"🛑 Intent judge detected stop command", "voice")
                     self.tts.interrupt()
                     return
@@ -1056,7 +1066,7 @@ class VoiceListener(threading.Thread):
                         # This catches cases where user started speaking just as hot window expired
                         # Use a 2-second grace period after the 3-second hot window
                         hot_window_grace = 2.0
-                        last_tts_finish = self.echo_detector._last_tts_finish_time or 0.0
+                        last_tts_finish = (self.echo_detector._last_tts_finish_time or 0.0) if same_tts_context else 0.0
                         hot_window_end = last_tts_finish + self.state_manager.hot_window_seconds
                         time_after_hot_window = utterance_start_time - hot_window_end if utterance_start_time > 0 and hot_window_end > 0 else float('inf')
 
@@ -1599,6 +1609,8 @@ class VoiceListener(threading.Thread):
                     end_time=job.end_time,
                     energy=job.energy,
                     dictation_generation=job.dictation_generation,
+                    captured_during_tts=job.captured_during_tts,
+                    captured_tts_start_time=job.captured_tts_start_time,
                 )
             )
 
@@ -1643,25 +1655,17 @@ class VoiceListener(threading.Thread):
             self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
             return
 
-        tts_start_time = self.echo_detector._tts_start_time
-        tts_finish_time = self.echo_detector._last_tts_finish_time
-        is_during_tts = (
-            tts_start_time > 0
-            and result.end_time >= tts_start_time
-            and (
-                (self.tts is not None and self.tts.is_speaking())
-                or result.start_time < tts_finish_time + self.echo_detector.echo_tolerance
-            )
-        )
         self._transcript_buffer.add(
             text=text,
             start_time=result.start_time,
             end_time=result.end_time,
             energy=result.energy,
-            is_during_tts=is_during_tts,
+            is_during_tts=result.captured_during_tts,
         )
         self._process_transcript(
-            text, result.energy, result.start_time, result.end_time
+            text, result.energy, result.start_time, result.end_time,
+            captured_during_tts=result.captured_during_tts,
+            captured_tts_start_time=result.captured_tts_start_time,
         )
 
     def _audio_frames(self, buf):
@@ -2618,6 +2622,18 @@ class VoiceListener(threading.Thread):
             end_time=utterance_end_time,
             energy=utterance_energy,
             dictation_generation=self._dictation_generation,
+            captured_during_tts=(
+                self.echo_detector._tts_start_time > 0
+                and utterance_end_time >= self.echo_detector._tts_start_time
+                and (
+                    (self.tts is not None and self.tts.is_speaking())
+                    or utterance_start_time < (
+                        self.echo_detector._last_tts_finish_time
+                        + self.echo_detector.echo_tolerance
+                    )
+                )
+            ),
+            captured_tts_start_time=self.echo_detector._tts_start_time,
         )
         try:
             self._transcription_jobs_q.put_nowait(job)
