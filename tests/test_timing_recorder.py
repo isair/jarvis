@@ -43,6 +43,20 @@ def test_p95_uses_observed_upper_tail():
     assert recorder.p95("main_chat_turn") == 4.0
 
 
+@pytest.mark.parametrize("message,outcome", [
+    ({"content": ""}, "empty"),
+    ({"content": "   "}, "empty"),
+    ({"content": "answer"}, "success"),
+    ({"content": "", "tool_calls": [{"function": {"name": "getTime", "arguments": {}}}]}, "success"),
+])
+def test_empty_chat_is_not_a_successful_latency_sample(monkeypatch, message, outcome):
+    monkeypatch.setattr(OllamaBackend, "chat", lambda self, *args, **kwargs: {"message": message})
+    with TimingRecorder() as recorder:
+        result = OllamaBackend("http://127.0.0.1:1").chat("model", [])
+    assert result == {"message": message}
+    assert recorder.calls[0].outcome == outcome
+
+
 def test_worker_thread_main_chat_is_named_and_counts_message_content(monkeypatch):
     def fake_chat(self, chat_model, messages, **kwargs):
         return {"message": {"role": "assistant", "content": "Hello."}}

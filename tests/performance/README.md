@@ -35,6 +35,9 @@ run count. Each request has a fresh temporary database and dialogue. Tool replie
 are deterministic local fixtures, including the normal stop signal; no external
 tool runs. One measured tiny warm-up precedes each pipeline run. Earlier server
 cache state is unknown. Timings do not establish answer accuracy.
+Reports retain failed and empty model responses as such. The pipeline smoke
+fails if any call produces neither text nor tool calls; fast failure is not a
+successful latency result.
 
 The harness does not observe streaming text or audio playback. First useful
 text and first useful spoken output are `null` in its JSON reports. An

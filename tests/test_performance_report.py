@@ -60,7 +60,7 @@ def test_pipeline_uses_disposable_fresh_state_and_never_dispatches_real_tools(tm
 
     class Recorder:
         def __init__(self):
-            self.calls = [SimpleNamespace(context="main_chat_turn")]
+            self.calls = [SimpleNamespace(context="main_chat_turn", outcome="success")]
 
         def __enter__(self):
             return self

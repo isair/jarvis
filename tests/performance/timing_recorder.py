@@ -145,7 +145,14 @@ class TimingRecorder:
             outcome = "error"
             try:
                 result = original(*args, **kwargs)
-                outcome = "success" if result is not None else "empty"
+                if isinstance(result, dict):
+                    message = result.get("message", result)
+                    usable = isinstance(message, dict) and (
+                        str(message.get("content") or "").strip() or message.get("tool_calls")
+                    )
+                else:
+                    usable = isinstance(result, str) and result.strip()
+                outcome = "success" if usable else "empty"
                 return result
             finally:
                 self._active.depth = 0

@@ -256,6 +256,9 @@ def test_pipeline_timings_by_context(tmp_path):
 
     assert rec.calls, "no LLM calls recorded — pipeline did not invoke the LLM"
     assert len(wall_times) == len(PIPELINE_QUERIES) * PERF_RUNS
+    assert all(call.outcome == "success" for call in rec.calls), (
+        "The timing report contains failed or empty model responses; it is not a successful performance run"
+    )
 
     # Surface unmapped callers so new contexts show up in review.
     other = [c for c in rec.calls if c.context.startswith("other:")]
