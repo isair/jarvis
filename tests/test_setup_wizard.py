@@ -1457,6 +1457,22 @@ class TestWhisperModelOptions:
         model_ids = [m[0] for m in options]
         assert "large-v3-turbo" not in model_ids
 
+    def test_unavailable_turbo_selection_displays_medium(self, qapp):
+        """An existing turbo choice displays the runtime fallback in the wizard."""
+        from desktop_app.setup_wizard import WhisperSetupPage
+
+        with patch("desktop_app.setup_wizard._is_faster_whisper_turbo_supported", return_value=False):
+            page = WhisperSetupPage()
+            page._is_apple_silicon = False
+            page._is_english_only = False
+            page._selected_whisper_model = "large-v3-turbo"
+
+            page._rebuild_slider_ui()
+
+        model_ids = [model[0] for model in page._get_current_model_options()]
+        assert page._selected_whisper_model == "medium"
+        assert page._model_slider.value() == model_ids.index("medium")
+
     def test_mlx_install_refreshes_model_options(self):
         """Installing MLX rebuilds the slider so its turbo option is current."""
         from desktop_app.setup_wizard import WhisperSetupPage
