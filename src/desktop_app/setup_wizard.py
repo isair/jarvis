@@ -1299,6 +1299,7 @@ class OpenAICompatiblePage(ScrollableWizardPage):
         detail_layout.addWidget(memory_hint)
         self._memory_estimates = {}
         self._memory_model_ids = {}
+        self._manual_memory_estimates = {}
         for role, label_text in (
             ("chat", "Chat model"),
             ("fast", "Fast model"),
@@ -1318,7 +1319,8 @@ class OpenAICompatiblePage(ScrollableWizardPage):
             estimate.setSpecialValueText("Unknown")
             estimate.setKeyboardTracking(False)
             estimate.setMinimumWidth(116)
-            estimate.valueChanged.connect(self._refresh_memory_display)
+            estimate.valueChanged.connect(
+                lambda value, role=role: self._on_memory_estimate_changed(role, value))
             row.addWidget(estimate)
             self._memory_estimates[role] = estimate
             detail_layout.addLayout(row)
@@ -1326,7 +1328,7 @@ class OpenAICompatiblePage(ScrollableWizardPage):
         self._memory_details.setVisible(False)
         layout.addWidget(memory_card)
         self._detected_vram_mb = detect_total_vram_mb()
-        self._whisper_memory_mb = self._selected_whisper_memory_mb()
+        self._refresh_memory_runtime()
 
         self._chat_model_combo.currentTextChanged.connect(self._refresh_memory_display)
         self._fast_model_combo.currentTextChanged.connect(self._refresh_memory_display)
@@ -1374,11 +1376,28 @@ class OpenAICompatiblePage(ScrollableWizardPage):
             return 1024
         return required_vram_mb(model_id)
 
-    def _selected_whisper_memory_mb(self) -> int:
+    def _refresh_memory_runtime(self):
+        """Read the local Whisper and Ollama setup for the current wizard visit."""
         try:
-            return WhisperSetupPage.get_whisper_vram_mb(load_settings().whisper_model)
+            settings = load_settings()
         except Exception:
-            return 2048
+            settings = None
+        whisper_id = getattr(settings, "whisper_model", "small") or "small"
+        self._whisper_memory_mb = WhisperSetupPage.get_whisper_vram_mb(whisper_id)
+        self._ollama_embed_model_id = (
+            getattr(settings, "ollama_embed_model", "nomic-embed-text")
+            or "nomic-embed-text"
+        )
+        self._ollama_embed_base_url = (
+            getattr(settings, "ollama_base_url", "http://localhost:11434")
+            or "http://localhost:11434"
+        )
+
+    def _on_memory_estimate_changed(self, role: str, value: float):
+        model_id = self._memory_model_ids.get(role)
+        if model_id:
+            self._manual_memory_estimates[model_id] = value
+        self._refresh_memory_display()
 
     def _refresh_memory_display(self, *_):
         if not hasattr(self, "_memory_estimates"):
@@ -1387,16 +1406,19 @@ class OpenAICompatiblePage(ScrollableWizardPage):
         fast_id = self._fast_model_combo.currentText().strip()
         embed_on_ollama = self._use_ollama_embed.isChecked()
         embed_id = (
-            "nomic-embed-text" if embed_on_ollama
+            self._ollama_embed_model_id if embed_on_ollama
             else self._embed_model_combo.currentText().strip()
         )
         ids = {"chat": chat_id, "fast": fast_id, "embed": embed_id}
         for role, model_id in ids.items():
-            if self._memory_model_ids.get(role) == model_id:
-                continue
             field = self._memory_estimates[role]
+            estimate = self._manual_memory_estimates.get(
+                model_id, (self._known_memory_mb(model_id) or 0) / 1024)
+            if (self._memory_model_ids.get(role) == model_id
+                    and field.value() == estimate):
+                continue
             field.blockSignals(True)
-            field.setValue((self._known_memory_mb(model_id) or 0) / 1024)
+            field.setValue(estimate)
             field.blockSignals(False)
             self._memory_model_ids[role] = model_id
 
@@ -1427,27 +1449,33 @@ class OpenAICompatiblePage(ScrollableWizardPage):
         embed_gb = self._memory_estimates["embed"].value() if embed_id else 0
         whisper_gb = self._whisper_memory_mb / 1024
         local_server = self._server_is_loopback(self._base_url_input.text().strip())
+        local_ollama = embed_on_ollama and self._server_is_loopback(self._ollama_embed_base_url)
+        server_gb = chat_gb + fast_gb + (0 if embed_on_ollama else embed_gb)
+        local_gb = whisper_gb + (server_gb if local_server else 0)
+        if local_ollama:
+            local_gb += embed_gb
         if local_server:
-            total_gb = chat_gb + fast_gb + embed_gb + whisper_gb
             detail = (
-                f"Estimated model memory: {chat_gb + fast_gb + embed_gb:.1f} GB. "
+                f"Estimated model memory: {server_gb:.1f} GB. "
                 f"Whisper ~{whisper_gb:.1f} GB locally. "
-                f"Combined ~{total_gb:.1f} GB if they share a GPU."
             )
+            if local_ollama:
+                detail += f"Ollama embeddings: {embed_gb:.1f} GB locally. "
+            detail += f"Combined ~{local_gb:.1f} GB if they share a GPU."
             if self._detected_vram_mb is not None:
                 gpu_gb = self._detected_vram_mb / 1024
-                if total_gb > gpu_gb:
-                    detail += f" ⚠️ About {total_gb - gpu_gb:.1f} GB over the detected {gpu_gb:.1f} GB GPU."
+                if local_gb > gpu_gb:
+                    detail += f" ⚠️ About {local_gb - gpu_gb:.1f} GB over the detected {gpu_gb:.1f} GB GPU."
                 else:
                     detail += f" Detected GPU: {gpu_gb:.1f} GB."
+            if embed_on_ollama and not local_ollama:
+                detail += f" Ollama embeddings: {embed_gb:.1f} GB on its server."
         else:
-            server_gb = chat_gb + fast_gb + (0 if embed_on_ollama else embed_gb)
-            local_gb = whisper_gb + (embed_gb if embed_on_ollama else 0)
-            detail = (
-                f"Server model estimate: {server_gb:.1f} GB. "
-                f"Whisper and local embeddings: ~{local_gb:.1f} GB locally. "
-                "These are separate memory budgets."
-            )
+            detail = f"Server model estimate: {server_gb:.1f} GB. "
+            if embed_on_ollama:
+                location = "locally" if local_ollama else "on its server"
+                detail += f"Ollama embeddings: {embed_gb:.1f} GB {location}. "
+            detail += f"Whisper ~{whisper_gb:.1f} GB locally. Check which servers share a GPU."
         self._memory_summary.setText(detail)
 
     def _labelled_edit(self, form, label_text, placeholder, password=False):
@@ -1663,7 +1691,7 @@ class OpenAICompatiblePage(ScrollableWizardPage):
             self._fast_model_combo.setVisible(True)
         self._use_ollama_embed.setVisible(False)
         self._connect_status.setText("")
-        self._whisper_memory_mb = self._selected_whisper_memory_mb()
+        self._refresh_memory_runtime()
         self._refresh_memory_display()
         # Only auto-discover when the user hasn't already saved a custom URL.
         if not saved_url:

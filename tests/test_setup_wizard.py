@@ -1334,7 +1334,13 @@ class TestWizardMemoryBudget:
     def test_remote_ollama_embedding_uses_local_budget(self, qapp):
         from PyQt6.QtWidgets import QDoubleSpinBox, QLabel
 
-        page = OpenAICompatiblePage()
+        settings = SimpleNamespace(
+            whisper_model="small",
+            ollama_embed_model="nomic-embed-text",
+            ollama_base_url="http://localhost:11434",
+        )
+        with patch("desktop_app.setup_wizard.load_settings", return_value=settings):
+            page = OpenAICompatiblePage()
         page._base_url_input.setText("http://model-host:8000/v1")
         page._chat_model_combo.setCurrentText("custom-model")
         page.findChild(QDoubleSpinBox, "memory_chat").setValue(4)
@@ -1345,6 +1351,82 @@ class TestWizardMemoryBudget:
         summary = page.findChild(QLabel, "memory_summary").text()
         assert "Server model estimate: 4.0 GB" in summary
         assert "locally" in summary
+
+    def test_ollama_fallback_uses_configured_model_and_endpoint(self, qapp):
+        from PyQt6.QtWidgets import QDoubleSpinBox, QLabel
+
+        settings = SimpleNamespace(
+            whisper_model="small",
+            ollama_embed_model="custom-embed",
+            ollama_base_url="http://embed-host:11434",
+        )
+        with patch("desktop_app.setup_wizard.load_settings", return_value=settings):
+            page = OpenAICompatiblePage()
+        page._base_url_input.setText("http://model-host:8000/v1")
+        page._chat_model_combo.setCurrentText("custom-chat")
+        page.findChild(QDoubleSpinBox, "memory_chat").setValue(4)
+        page._use_ollama_embed.setChecked(True)
+
+        embed = page.findChild(QDoubleSpinBox, "memory_embed")
+        summary = page.findChild(QLabel, "memory_summary")
+        assert embed.value() == 0
+        assert "embeddings" in summary.text().lower()
+        embed.setValue(3)
+        assert "Server model estimate: 4.0 GB" in summary.text()
+        assert "Ollama embeddings: 3.0 GB" in summary.text()
+        assert "Whisper ~2.0 GB locally" in summary.text()
+
+    def test_remote_ollama_embedding_is_not_charged_to_local_gpu(self, qapp):
+        from PyQt6.QtWidgets import QDoubleSpinBox, QLabel
+
+        settings = SimpleNamespace(
+            whisper_model="small",
+            ollama_embed_model="custom-embed",
+            ollama_base_url="http://embed-host:11434",
+        )
+        with patch("desktop_app.setup_wizard.load_settings", return_value=settings):
+            with patch("desktop_app.setup_wizard.detect_total_vram_mb", return_value=8192):
+                page = OpenAICompatiblePage()
+        page._base_url_input.setText("http://localhost:8000/v1")
+        page._chat_model_combo.setCurrentText("custom-chat")
+        page.findChild(QDoubleSpinBox, "memory_chat").setValue(4)
+        page._use_ollama_embed.setChecked(True)
+        page.findChild(QDoubleSpinBox, "memory_embed").setValue(3)
+
+        summary = page.findChild(QLabel, "memory_summary").text()
+        assert "Combined ~6.0 GB" in summary
+        assert "Ollama embeddings: 3.0 GB on its server" in summary
+        assert "over" not in summary
+
+    def test_local_ollama_embedding_appears_in_combined_breakdown(self, qapp):
+        from PyQt6.QtWidgets import QDoubleSpinBox, QLabel
+
+        settings = SimpleNamespace(
+            whisper_model="small",
+            ollama_embed_model="nomic-embed-text",
+            ollama_base_url="http://localhost:11434",
+        )
+        with patch("desktop_app.setup_wizard.load_settings", return_value=settings):
+            page = OpenAICompatiblePage()
+        page._base_url_input.setText("http://localhost:8000/v1")
+        page._chat_model_combo.setCurrentText("custom-chat")
+        page.findChild(QDoubleSpinBox, "memory_chat").setValue(4)
+        page._use_ollama_embed.setChecked(True)
+        summary = page.findChild(QLabel, "memory_summary").text()
+        assert "Ollama embeddings: 1.0 GB locally" in summary
+        assert "Combined ~7.0 GB" in summary
+
+    def test_manual_estimate_survives_model_comparison(self, qapp):
+        from PyQt6.QtWidgets import QDoubleSpinBox
+
+        page = OpenAICompatiblePage()
+        chat = page.findChild(QDoubleSpinBox, "memory_chat")
+        page._chat_model_combo.setCurrentText("candidate-one")
+        chat.setValue(6.5)
+        page._chat_model_combo.setCurrentText("candidate-two")
+        assert chat.value() == 0
+        page._chat_model_combo.setCurrentText("candidate-one")
+        assert chat.value() == 6.5
 
     def test_whisper_budget_refreshes_after_returning_from_voice_step(self, qapp):
         from PyQt6.QtWidgets import QDoubleSpinBox, QLabel
