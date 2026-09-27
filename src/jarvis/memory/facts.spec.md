@@ -30,8 +30,12 @@ above the per-batch candidate cap is treated as failed before any candidate is
 written, leaving the complete source batch for retry rather than dropping its
 tail.
 
-The extractor sees the numbered source messages and a bounded list of current
-facts. It returns independent facts with an exact evidence quote and source
+The extractor sees explicit zero-based source identifiers and a bounded list of
+current facts. Its format example distinguishes direct assertions from speech
+quoted inside a message; JSON string delimiters are not reported speech.
+Corrections reuse the existing subject and predicate metadata. Model-supplied
+validity dates must be explicit ISO-8601 instants, not source Unix timestamps.
+It returns independent facts with an exact evidence quote and source
 index. Invalid indices, absent quotes, empty text and invalid categories are
 rejected. User ownership and directives require a direct addressed user
 utterance. A visibly paired quotation is rejected deterministically, whether
@@ -42,6 +46,9 @@ fact or directive. Ambiguous ownership stays `unknown`. The model must
 classify a statement as direct; attribution is not guessed from a topic or an
 assistant claim. The source quote is verified against the source text before
 SQLite accepts the fact. Content is redacted again at the storage boundary.
+Extraction has a 1200-token generation cap, including any provider-side reasoning,
+and the caller's bounded timeout. Empty or truncated JSON is retryable, not a
+successful extraction.
 
 `add_fact()` stores a new assertion. It never infers supersession from recency.
 An explicit `supersedes_id` is accepted only for an active fact with matching
