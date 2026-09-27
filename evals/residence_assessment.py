@@ -3,8 +3,8 @@
 import re
 
 
-def has_current_residence_claim(text: str, place: str) -> bool:
-    """Require an affirmative link between the user and their current home."""
+def has_current_residence_claim(text: str, place: str, *, allow_first_person: bool = False) -> bool:
+    """Require an affirmative current-home claim; first person needs verified source authority."""
     value = text.casefold().replace("’", "'")
     location = re.escape(place.casefold())
     subject = r"(?:the\s+)?user|they"
@@ -17,4 +17,12 @@ def has_current_residence_claim(text: str, place: str) -> bool:
         rf"\b{location}\s+is\s+where\s+(?:{subject})\s+(?:currently\s+)?(?:lives?|resides?)\b",
         rf"\b{location}\s+is\s+(?:{possessive})\s+(?:current\s+)?(?:home|residence|city|location)\b",
     )
-    return any(re.search(pattern, value) for pattern in patterns)
+    first_person_patterns = (
+        rf"\bi\s+(?:(?:now|currently)\s+)?(?:live|reside)\s+in\s+{location}\b",
+        rf"\bi\s+am\s+(?:(?:now|currently)\s+)?based\s+in\s+{location}\b",
+        rf"\bmy\s+(?:current\s+)?(?:home|residence|address|city|location)\s+(?:is|:)\s+{location}\b",
+        rf"\b{location}\s+is\s+my\s+(?:current\s+)?(?:home|residence)\b",
+    )
+    return any(re.search(pattern, value) for pattern in patterns) or (
+        allow_first_person and any(re.search(pattern, value) for pattern in first_person_patterns)
+    )

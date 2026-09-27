@@ -46,13 +46,14 @@ def _correction_successful(store: FactStore, old_id: int, message: dict) -> bool
             and source["source_role"] == "user"
             and source["source_channel"] == message["channel"]
             and source["evidence"] in message["content"]
-            and has_current_residence_claim(fact["text"], "bath")
+            and has_current_residence_claim(fact["text"], "bath", allow_first_person=True)
         ):
             return True
     return False
 
 
-def test_correction_assessment_requires_active_linked_user_residence(tmp_path):
+@pytest.mark.parametrize("decoy_text", ["Bath is in England", "I live in Bath now"])
+def test_correction_assessment_requires_active_linked_user_residence(tmp_path, decoy_text):
     with closing(FactStore(str(tmp_path / "facts.db"))) as store:
         old_observed_at, correction = _correction_fixture()
         old = store.add_fact("The user lives in Bristol", kind="user", owner="user",
@@ -66,14 +67,20 @@ def test_correction_assessment_requires_active_linked_user_residence(tmp_path):
                        source_type="dialogue", source_role="user", source_channel=correction["channel"],
                        evidence=correction["content"], source_text=correction["content"],
                        observed_at=old_observed_at, supersedes_id=old["id"])
-        store.add_fact("Bath is in England", kind="world", owner="unknown", source_ref="decoy",
+        store.add_fact(decoy_text, kind="world", owner="unknown", source_ref="decoy",
                        source_type="dialogue", source_role="user", source_channel="addressed_dialogue",
                        source_text=correction["content"], evidence=correction["content"],
                        observed_at=old_observed_at)
         assert not _correction_successful(store, old["id"], correction)
 
 
-def test_correction_assessment_accepts_grounded_successor(tmp_path):
+@pytest.mark.parametrize("successor_text", [
+    "The user is based in Bath, not Bristol",
+    "I live in Bath now, not Bristol",
+    "My current home is Bath, not Bristol",
+    "I am based in Bath now",
+])
+def test_correction_assessment_accepts_grounded_successor(tmp_path, successor_text):
     with closing(FactStore(str(tmp_path / "facts.db"))) as store:
         old_observed_at, correction = _correction_fixture()
         old = store.add_fact("The user lives in Bristol", kind="user", owner="user",
@@ -81,12 +88,39 @@ def test_correction_assessment_accepts_grounded_successor(tmp_path):
                              source_type="dialogue", source_role="user", source_channel="addressed_dialogue",
                              source_text="I live in Bristol", evidence="I live in Bristol",
                              observed_at=old_observed_at)
-        store.add_fact("The user is based in Bath, not Bristol", kind="user", owner="user",
+        store.add_fact(successor_text, kind="user", owner="user",
                        subject="user", predicate_key="residence", source_ref="correct-successor",
                        source_type="dialogue", source_role="user", source_channel=correction["channel"],
                        evidence=correction["content"], source_text=correction["content"],
                        observed_at=old_observed_at, supersedes_id=old["id"])
         assert _correction_successful(store, old["id"], correction)
+
+
+@pytest.mark.parametrize("successor_text", [
+    "I do not live in Bath",
+    "I no longer live in Bath",
+    "I used to live in Bath",
+    "My former home is Bath",
+])
+def test_correction_assessment_rejects_negated_first_person_successor(tmp_path, successor_text):
+    with closing(FactStore(str(tmp_path / "facts.db"))) as store:
+        old_observed_at, correction = _correction_fixture()
+        old = store.add_fact("The user lives in Bristol", kind="user", owner="user",
+                             subject="user", predicate_key="residence", source_ref="old",
+                             source_type="dialogue", source_role="user", source_channel="addressed_dialogue",
+                             source_text="I live in Bristol", evidence="I live in Bristol",
+                             observed_at=old_observed_at)
+        store.add_fact(successor_text, kind="user", owner="user",
+                       subject="user", predicate_key="residence", source_ref="candidate",
+                       source_type="dialogue", source_role="user", source_channel=correction["channel"],
+                       evidence=correction["content"], source_text=correction["content"],
+                       observed_at=old_observed_at, supersedes_id=old["id"])
+        assert not _correction_successful(store, old["id"], correction)
+
+
+def test_first_person_residence_requires_explicit_source_authority():
+    assert not has_current_residence_claim("I live in Bath now", "bath")
+    assert has_current_residence_claim("I live in Bath now", "bath", allow_first_person=True)
 
 
 @pytest.mark.eval
