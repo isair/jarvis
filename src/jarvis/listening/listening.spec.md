@@ -408,7 +408,7 @@ When components are unavailable, the system degrades gracefully:
 | Component | Unavailable Behaviour |
 |-----------|---------------------|
 | Intent Judge | Simple text-based wake word + query extraction; hot window override still applies |
-| 16 kHz sample rate | Stream at device native rate, resample to 16 kHz for Whisper |
+| Unsupported input format | Retry channel count and native sample rate on the selected device, then convert to 16 kHz mono for Whisper |
 | Transcript Buffer | Process each utterance independently |
 
 ## Download Recovery

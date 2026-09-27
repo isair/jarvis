@@ -17,11 +17,12 @@ from typing import Optional, TYPE_CHECKING, Any
 from datetime import datetime
 
 from rapidfuzz import fuzz
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager
 
 from .echo_detection import EchoDetector
 from .state_manager import StateManager, ListeningState
 from ..utils.audio_lock import portaudio_lock
+from ..utils.audio_capture import mono_capture, open_input_stream, resolve_input_device
 from .wake_detection import is_wake_word_detected, extract_query_after_wake, is_stop_command
 from .transcript_buffer import TranscriptBuffer
 from .intent_judge import (
@@ -37,49 +38,6 @@ from ..utils.location import is_location_available
 if TYPE_CHECKING:
     from ..memory.db import Database
     from ..memory.conversation import DialogueMemory
-
-
-def _is_input_format_error(exc: Exception) -> bool:
-    """Distinguish unsupported capture formats from access/device failures."""
-    code = exc.args[1] if len(exc.args) > 1 else None
-    message = str(exc).lower()
-    return code in (-9998, -9997) or any(part in message for part in (
-        'invalid number of channels', 'invalid channel count',
-        'invalid sample rate', 'paerrorcode -9998', 'paerrorcode -9997',
-    ))
-
-
-def _open_input_stream(sample_rate, frame_ms, device_kwargs, *, callback=None, serialise=True):
-    """Open mono first, then bounded native-rate/channel alternatives on the same input."""
-    candidates = [(sample_rate, 1)]
-    last_error = None
-    for rate, channels in candidates:
-        try:
-            with portaudio_lock if serialise else nullcontext():
-                stream = sd.InputStream(
-                    samplerate=rate, channels=channels, dtype='float32',
-                    blocksize=max(1, int(rate * frame_ms / 1000)),
-                    callback=callback, **device_kwargs,
-                )
-            debug_log(f"Input format accepted: {rate} Hz, {channels} channel(s)", "voice")
-            return stream, rate, channels
-        except Exception as exc:
-            if not _is_input_format_error(exc):
-                raise
-            last_error = exc
-            debug_log(f"Input format rejected: {rate} Hz, {channels} channel(s): {exc}", "voice")
-            if len(candidates) == 1:
-                try:
-                    info = (sd.query_devices(device_kwargs['device']) if 'device' in device_kwargs
-                            else sd.query_devices(kind='input'))
-                    native_rate = int(info.get('default_samplerate', sample_rate))
-                    max_channels = int(info.get('max_input_channels', 1))
-                except Exception:
-                    raise exc
-                rates = list(dict.fromkeys(r for r in (sample_rate, native_rate) if r > 0))
-                counts = list(dict.fromkeys(c for c in (1, 2, max_channels) if 0 < c <= max_channels))
-                candidates.extend((r, c) for c in counts for r in rates if (r, c) != candidates[0])
-    raise last_error
 
 
 def is_whisper_hallucination(no_speech_prob: float, threshold: float) -> bool:
@@ -1580,7 +1538,7 @@ class VoiceListener(threading.Thread):
 
     def _audio_frames(self, buf):
         """Keep native-rate frame boundaries across arbitrary callback block sizes."""
-        mono = buf.mean(axis=1) if buf.ndim > 1 else buf.flatten()
+        mono = mono_capture(buf)
         if mono.size:
             self._audio_peak = max(self._audio_peak, float(np.max(np.abs(mono))))
         if self._pending_audio is not None:
@@ -1837,20 +1795,12 @@ class VoiceListener(threading.Thread):
             return
 
         # Resolve the same input for the permission probe and continuous capture.
-        stream_kwargs = {}
-        device_env = (self.cfg.voice_device or '').strip().lower()
-        if device_env and device_env not in ('default', 'system'):
-            try:
-                stream_kwargs['device'] = int(self.cfg.voice_device)
-            except ValueError:
-                for idx, dev in enumerate(devices):
-                    if dev.get('max_input_channels', 0) > 0 and device_env in dev.get('name', '').lower():
-                        stream_kwargs['device'] = idx
-                        break
-                else:
-                    print("  ❌ Selected microphone not found. Choose an available input in Settings.", flush=True)
-                    debug_log("configured input device did not match an available microphone", "voice")
-                    return
+        try:
+            stream_kwargs = resolve_input_device(sd, self.cfg.voice_device, devices)
+        except ValueError as exc:
+            print(f'  ❌ {exc}', flush=True)
+            debug_log('configured input device did not match an available microphone', 'voice')
+            return
 
         # Windows 11: Test microphone permission by attempting a brief recording
         # This catches privacy settings that silently block audio access.
@@ -1876,8 +1826,8 @@ class VoiceListener(threading.Thread):
                     # stop/close after a successful start stays guarded.
                     stream = None
                     try:
-                        stream, _, _ = _open_input_stream(
-                            self._samplerate, 100, stream_kwargs, serialise=False,
+                        stream, _, _ = open_input_stream(
+                            sd, self._samplerate, 100, stream_kwargs, serialise=False,
                         )
                         stream.start()
                         time.sleep(0.15)
@@ -2275,8 +2225,8 @@ class VoiceListener(threading.Thread):
         self._stream_samplerate = self._samplerate
         open_error = None
         try:
-            stream, self._stream_samplerate, channels = _open_input_stream(
-                self._samplerate, frame_ms, stream_kwargs, callback=self._on_audio,
+            stream, self._stream_samplerate, channels = open_input_stream(
+                sd, self._samplerate, frame_ms, stream_kwargs, callback=self._on_audio,
             )
             self._frame_samples = max(1, int(self._stream_samplerate * frame_ms / 1000))
             if self._stream_samplerate != self._samplerate or channels != 1:
