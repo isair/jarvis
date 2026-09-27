@@ -76,6 +76,17 @@ def extract_text_from_response(data: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+def _thinking_level(chat_model: str, thinking: bool | str) -> bool | str:
+    """Use GPT-OSS's named Ollama levels while preserving other models' controls."""
+    model_name = chat_model.rsplit("/", 1)[-1].partition(":")[0]
+    if model_name.casefold() == "gpt-oss":
+        if thinking is False:
+            return "low"
+        if thinking is True:
+            return "high"
+    return thinking
+
+
 class OllamaBackend(LLMBackend):
     """:class:`LLMBackend` implementation that talks to a local Ollama server."""
 
@@ -136,7 +147,7 @@ class OllamaBackend(LLMBackend):
             "stream": False,
             "cache_prompt": True,
             "options": options,
-            "think": thinking,
+            "think": _thinking_level(chat_model, thinking),
         }
 
         try:
@@ -194,7 +205,7 @@ class OllamaBackend(LLMBackend):
             "stream": True,
             "cache_prompt": True,
             "options": {"num_ctx": 4096},
-            "think": thinking,
+            "think": _thinking_level(chat_model, thinking),
         }
 
         try:
@@ -277,6 +288,8 @@ class OllamaBackend(LLMBackend):
                             payload["options"][inner_key] = inner_value
                 else:
                     payload["options"][key] = value
+
+        payload["think"] = _thinking_level(chat_model, payload["think"])
 
         if tools and isinstance(tools, list) and len(tools) > 0:
             payload["tools"] = tools

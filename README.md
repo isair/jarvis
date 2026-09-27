@@ -131,6 +131,7 @@ Jarvis is actively developed, primarily on macOS. Windows and Linux behaviour ma
 - **Whisper turbo needs a compatible backend.** The wizard hides it when the selected backend cannot load it; an existing unsupported selection uses `medium` instead.
 - **Optional capabilities need their dependencies.** Location awareness needs a GeoLite2 database. Semantic memory search needs working embeddings; otherwise search falls back to keywords.
 - **Memory extraction can make mistakes.** Review the Facts tab before relying on personal details. Retraction excludes a fact from current recall but keeps its visible audit history; it is not permanent erasure.
+- **GPT-OSS reasoning cannot be switched off in Ollama.** Jarvis requests its `low` level when thinking is off and `high` when thinking is on.
 
 ## Configuration
 
