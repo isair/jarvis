@@ -11,6 +11,7 @@ from jarvis.reply.execution import (
     ExecutionDeadlineExceeded,
     ToolCall,
     execute_tool_batch,
+    is_mutating_call,
 )
 from jarvis.reply.task_state import TaskStore, task_scope
 from jarvis.tools.builtin.read_task_result import ReadTaskResultTool
@@ -126,6 +127,12 @@ def test_writes_and_same_server_reads_are_serial():
 
     assert seen == ["server__one", "server__two", "localWrite"]
     assert max_active == 1
+
+
+def test_control_tools_are_not_journalled_as_external_mutations():
+    assert not is_mutating_call(ToolCall("stop", {}, "a"), {})
+    assert not is_mutating_call(ToolCall("toolSearchTool", {}, "b"), {})
+    assert is_mutating_call(ToolCall("localFiles", {"operation": "write"}, "c"), {})
 
 
 def test_cancellation_does_not_issue_following_mutation():

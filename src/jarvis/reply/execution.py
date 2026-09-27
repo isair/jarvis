@@ -94,6 +94,11 @@ def is_read_only_call(call: ToolCall, mcp_tools: dict) -> bool:
     return bool(spec is not None and getattr(spec, "read_only", False))
 
 
+def is_mutating_call(call: ToolCall, mcp_tools: dict) -> bool:
+    """Distinguish external writes from serial-only control/read operations."""
+    return call.name not in {"stop", "toolSearchTool"} and not is_read_only_call(call, mcp_tools)
+
+
 def tool_affinity(call: ToolCall) -> Optional[str]:
     """Calls sharing one persistent MCP session cannot overlap."""
     return call.name.split("__", 1)[0] if "__" in call.name else None
