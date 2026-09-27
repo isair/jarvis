@@ -255,15 +255,24 @@ class MockConfig:
         """Auto-configure provider from EVAL_JUDGE_BASE_URL when set."""
         import os as _os
         judge_url = _os.environ.get("EVAL_JUDGE_BASE_URL", "").strip()
-        if judge_url and "11434" not in judge_url:
+        provider = _os.environ.get("EVAL_PROVIDER", "").strip()
+        judge_model = _os.environ.get("EVAL_JUDGE_MODEL", "").strip()
+        if judge_url and provider == "ollama":
+            self.ollama_base_url = judge_url.rstrip("/")
+            if judge_model:
+                self.ollama_chat_model = judge_model
+        if judge_url and (
+            provider == "openai_compatible"
+            or (provider != "ollama" and "11434" not in judge_url)
+        ):
             # Non-default judge URL (e.g. LM Studio) → switch to
             # OpenAI-compatible provider. The backend appends
             # ``/chat/completions``, so the base URL must include ``/v1``
             # for servers that require the versioned path (LM Studio,
             # oMLX, etc.).
             self.llm_provider = "openai_compatible"
-            self.llm_base_url = judge_url.rstrip("/") + "/v1"
-            judge_model = _os.environ.get("EVAL_JUDGE_MODEL", "").strip()
+            base = judge_url.rstrip("/")
+            self.llm_base_url = base if base.endswith("/v1") else base + "/v1"
             if judge_model:
                 self.llm_chat_model = judge_model
                 self.ollama_chat_model = judge_model
@@ -294,6 +303,11 @@ class MockConfig:
     llm_embedding_timeout_sec: float = 10.0
     llm_chat_timeout_sec: float = 120.0
     agentic_max_turns: int = 8
+    agentic_query_timeout_sec: float = 180.0
+    agentic_parallel_reads: int = 3
+    agentic_tool_result_chars: int = 4000
+    agentic_context_tokens: int = 8192
+    agentic_preparation: str = "staged"
     memory_enrichment_max_results: int = 5
     active_profiles: List[str] = field(default_factory=lambda: ["developer", "business", "life"])
     location_enabled: bool = True
@@ -442,7 +456,8 @@ def is_judge_llm_available() -> bool:
 
     def _check_openai() -> bool:
         try:
-            resp = requests.get(f"{base}/v1/models", timeout=2)
+            openai_base = base if base.endswith("/v1") else f"{base}/v1"
+            resp = requests.get(f"{openai_base}/models", timeout=2)
             if resp.status_code != 200:
                 return False
             data = resp.json()
@@ -498,8 +513,9 @@ def call_judge_llm(system_prompt: str, user_prompt: str, timeout_sec: float = 12
             if isinstance(data, dict) and "message" in data:
                 return data["message"].get("content", "")
         else:
+            openai_base = base if base.endswith("/v1") else f"{base}/v1"
             resp = requests.post(
-                f"{base}/v1/chat/completions",
+                f"{openai_base}/chat/completions",
                 json=openai_payload,
                 timeout=timeout_sec
             )
@@ -716,4 +732,3 @@ Tools Called:
         )
 
     return _parse_judge_response(judge_response)
-
