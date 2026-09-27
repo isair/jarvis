@@ -81,6 +81,14 @@ def test_malformed_memory_decision_fails_open(monkeypatch, mock_config, memory):
     assert decision is None
 
 
+def test_memory_queries_cannot_be_silently_disabled(monkeypatch, mock_config):
+    decision, _ = prepare(monkeypatch, mock_config, {
+        "tools": [], "steps": [],
+        "memory": {"required": False, "keywords": ["old address"], "questions": []},
+    })
+    assert decision is None
+
+
 def test_unknown_tools_or_task_ids_cannot_grant_actions(monkeypatch, mock_config):
     decision, _ = prepare(monkeypatch, mock_config, {
         "tools": ["deleteEverything"], "steps": [], "memory": {"required": False},
