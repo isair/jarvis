@@ -5,7 +5,12 @@ It does not observe text streaming or audio output, so first useful text and
 first useful spoken output remain unmeasured.
 
 Run manually:
-    pytest tests/performance/ -v -m performance -s
+    JARVIS_PERF_PREPARATION=staged pytest tests/performance/ -v -m performance -s
+    JARVIS_PERF_PREPARATION=combined pytest tests/performance/ -v -m performance -s
+
+Use the same local model, query set and run count in both processes. Each
+pipeline request uses a fresh temporary database and dialogue; all tools are
+deterministic local fixtures, so no benchmark query reaches an external tool.
 
 Requires a reachable local provider and an already installed model.
 
@@ -34,6 +39,7 @@ PERF_BASE_URL = os.environ.get(
 )
 PERF_MODEL = os.environ.get("JARVIS_PERF_MODEL", "gemma4:e2b")
 PERF_RUNS = int(os.environ.get("JARVIS_PERF_RUNS", "3"))
+PERF_PREPARATION = os.environ.get("JARVIS_PERF_PREPARATION", "staged")
 PERF_REPORT_DIR = Path(os.environ.get(
     "JARVIS_PERF_REPORT_DIR",
     str(Path(__file__).parent / "reports"),
@@ -66,6 +72,8 @@ pytestmark = [
 
 def _make_cfg():
     from evals.helpers import MockConfig
+    if PERF_PREPARATION not in {"staged", "combined"}:
+        raise ValueError("JARVIS_PERF_PREPARATION must be staged or combined")
     cfg = MockConfig()
     cfg.ollama_base_url = (
         PERF_BASE_URL.rstrip("/")[:-3]
@@ -73,11 +81,11 @@ def _make_cfg():
         else PERF_BASE_URL
     )
     cfg.ollama_chat_model = PERF_MODEL
+    cfg.llm_chat_model = PERF_MODEL
     cfg.fast_model = PERF_MODEL
     cfg.llm_provider = PROVIDER_STATUS.provider or "ollama"
     if cfg.llm_provider == "openai_compatible":
         cfg.llm_base_url = PERF_BASE_URL if PERF_BASE_URL.rstrip("/").endswith("/v1") else f"{PERF_BASE_URL.rstrip('/')}/v1"
-        cfg.llm_chat_model = PERF_MODEL
     # Let size-aware defaults kick in (evaluator + digests ON for small).
     cfg.evaluator_enabled = None
     cfg.memory_digest_enabled = None
@@ -85,6 +93,7 @@ def _make_cfg():
     # Force the LLM-based router so its timing shows up in the report.
     # MockConfig doesn't set this attribute, and the engine's default varies.
     cfg.tool_selection_strategy = "llm"
+    cfg.agentic_preparation = PERF_PREPARATION
     return cfg
 
 
@@ -95,6 +104,8 @@ def _write_report(
     end_to_end_sec: list[float] | None = None,
     initial_call_sec: float | None = None,
     unnecessary_tool_calls: int | None = None,
+    preparation_mode: str | None = None,
+    warm_condition: str = "no explicit warm-up; prior server state unknown",
 ) -> Path:
     PERF_REPORT_DIR.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -110,7 +121,8 @@ def _write_report(
             ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=False
         ).stdout.strip(),
         "runs": PERF_RUNS,
-        "warm_condition": "one unmeasured warm-up call; prior server state unknown",
+        "warm_condition": warm_condition,
+        "preparation_mode": preparation_mode,
         "initial_call_sec": initial_call_sec,
         "end_to_end_sec": latency_summary(end_to_end_sec or []),
         "first_useful_text_sec": None,
@@ -168,7 +180,10 @@ def test_micro_benchmark_tiny_prompt():
             )
 
     rec.print_report(title=f"Micro-benchmark: tiny prompt × {PERF_RUNS} on {PERF_MODEL}")
-    path = _write_report(rec, "micro", initial_call_sec=initial_call_sec)
+    path = _write_report(
+        rec, "micro", initial_call_sec=initial_call_sec,
+        warm_condition="one measured initial tiny call; prior server state unknown",
+    )
     print(f"   📄 saved: {path}")
 
     assert len(rec.calls) == PERF_RUNS
@@ -180,45 +195,59 @@ def test_micro_benchmark_tiny_prompt():
 
 
 @pytest.mark.performance
-def test_pipeline_timings_by_context():
-    """Run representative text requests and record observed timings."""
+def test_pipeline_timings_by_context(tmp_path):
+    """Run independent text requests with local, deterministic tool results."""
     from jarvis.memory.db import Database
     from jarvis.memory.conversation import DialogueMemory
     from jarvis.reply.engine import run_reply_engine
+    from jarvis.llm.factory import get_llm_backend
+    from jarvis.tools.types import ToolExecutionResult
 
-    cfg = _make_cfg()
+    warm_cfg = _make_cfg()
+    warm_start = time.perf_counter()
+    warm_result = get_llm_backend(warm_cfg).direct(
+        chat_model=PERF_MODEL, system_prompt=TINY_SYSTEM,
+        user_content=TINY_USER, timeout_sec=120.0,
+    )
+    initial_call_sec = time.perf_counter() - warm_start
+    assert warm_result is not None, "local model warm-up returned no response"
 
     from jarvis.reply import engine as reply_engine
 
     wall_times = []
     unnecessary_tools = 0
     current_query = ""
-    run_tool = reply_engine.run_tool_with_retries
-
     def observed_tool(*args, **kwargs):
         nonlocal unnecessary_tools
         tool_name = kwargs.get("tool_name") or (args[2] if len(args) > 2 else "")
         if current_query == "hello" and tool_name != "stop":
             unnecessary_tools += 1
-        return run_tool(*args, **kwargs)
+        if tool_name == "getTime":
+            return ToolExecutionResult(True, "Benchmark fixture: Tokyo time is 12:00 JST.")
+        return ToolExecutionResult(False, None, "Tool disabled in isolated performance benchmark")
 
     with TimingRecorder() as rec, patch.object(reply_engine, "run_tool_with_retries", observed_tool):
-        for query in PIPELINE_QUERIES:
+        for query_index, query in enumerate(PIPELINE_QUERIES):
             current_query = query
-            db = Database(":memory:", sqlite_vss_path=None)
-            dlg = DialogueMemory(inactivity_timeout=300, max_interactions=20)
-            try:
-                for _ in range(PERF_RUNS):
+            for run_index in range(PERF_RUNS):
+                cfg = _make_cfg()
+                cfg.db_path = str(tmp_path / f"{PERF_PREPARATION}-{query_index}-{run_index}.db")
+                db = Database(cfg.db_path, sqlite_vss_path=None)
+                dlg = DialogueMemory(inactivity_timeout=300, max_interactions=20)
+                try:
                     start = time.perf_counter()
                     run_reply_engine(db, cfg, None, query, dlg)
                     wall_times.append(time.perf_counter() - start)
-            finally:
-                db.close()
+                finally:
+                    db.close()
 
     rec.print_report(title=f"Pipeline timings — {len(PIPELINE_QUERIES)} queries × {PERF_RUNS} runs on {PERF_MODEL}")
     path = _write_report(
-        rec, "pipeline", end_to_end_sec=wall_times,
+        rec, f"pipeline-{PERF_PREPARATION}", end_to_end_sec=wall_times,
+        initial_call_sec=initial_call_sec,
         unnecessary_tool_calls=unnecessary_tools,
+        preparation_mode=PERF_PREPARATION,
+        warm_condition="one measured tiny call before pipeline; prior server state unknown",
     )
     print(f"   📄 saved: {path}")
 
