@@ -3,7 +3,7 @@
 import pytest
 from PyQt6.QtCore import QPoint
 from PyQt6.QtTest import QTest
-from PyQt6.QtWidgets import QComboBox, QLineEdit, QPushButton, QScrollArea, QWizard
+from PyQt6.QtWidgets import QComboBox, QDoubleSpinBox, QLineEdit, QPushButton, QScrollArea, QWizard
 
 from desktop_app import setup_wizard as ui
 
@@ -65,6 +65,32 @@ def test_wizard_initial_size_fits_available_screen(qapp, monkeypatch):
     QTest.qWait(100)
     try:
         assert wizard.frameGeometry().height() <= wizard.screen().availableGeometry().height()
+    finally:
+        wizard.close()
+
+
+@pytest.mark.parametrize("width,height", [(700, 600), (960, 780)])
+def test_expanded_memory_estimates_remain_usable(qapp, monkeypatch, width, height):
+    monkeypatch.setattr(ui.OpenAICompatiblePage, "initializePage", lambda self: None)
+    wizard = QWizard()
+    wizard.setStyleSheet(ui.JARVIS_THEME_STYLESHEET + ui.WIZARD_STYLESHEET)
+    page = ui.OpenAICompatiblePage()
+    wizard.addPage(page)
+    wizard.resize(width, height)
+    wizard.show()
+    page._memory_toggle.click()
+    QTest.qWait(100)
+    try:
+        assert wizard.height() <= height
+        scroll = page.findChild(QScrollArea)
+        assert scroll.horizontalScrollBar().maximum() == 0
+        for estimate in page.findChildren(QDoubleSpinBox):
+            assert estimate.isVisible()
+            assert estimate.height() >= estimate.minimumSizeHint().height()
+        scroll.verticalScrollBar().setValue(scroll.verticalScrollBar().maximum())
+        bottom = scroll.widget().mapTo(scroll.viewport(), QPoint(0, scroll.widget().height()))
+        assert bottom.y() <= scroll.viewport().height()
+        assert wizard.button(QWizard.WizardButton.FinishButton).isVisible()
     finally:
         wizard.close()
 

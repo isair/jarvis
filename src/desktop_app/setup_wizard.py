@@ -11,12 +11,14 @@ import shutil
 import sys
 import os
 import platform
+import ipaddress
 import webbrowser
 import json
 from pathlib import Path
 from typing import Optional, List, Tuple, Dict
 from dataclasses import dataclass
 from enum import Enum, auto
+from urllib.parse import urlsplit
 
 import requests
 
@@ -374,6 +376,7 @@ try:
         QApplication, QWizard, QWizardPage, QVBoxLayout, QHBoxLayout,
         QLabel, QPushButton, QProgressBar, QTextEdit, QWidget, QFrame,
         QSizePolicy, QScrollArea, QLineEdit, QSlider, QComboBox, QCheckBox,
+        QDoubleSpinBox,
         QRadioButton, QButtonGroup, QStackedWidget, QLayout, QBoxLayout
     )
     from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread, QObject
@@ -584,10 +587,8 @@ class SetupWizard(QWizard):
         self.location_page_id = self.addPage(self.location_page)
         self.complete_page_id = self.addPage(self.complete_page)
 
-        # The provider choice is the first step: Ollama is optional now, so
-        # the wizard must ask which runtime the user wants before running any
-        # Ollama-specific checks. The Welcome/status page and the Ollama
-        # install/server/models pages are only reached on the Ollama branch.
+        # Speech recognition comes first; the provider choice then branches
+        # to Ollama readiness or OpenAI-compatible connection settings.
         self.setStartId(self.mlx_whisper_page_id)
 
         # Custom button labels
@@ -1113,9 +1114,7 @@ class _CapabilityWorker(KeepAliveWorker):
 
 
 class OpenAICompatiblePage(ScrollableWizardPage):
-    """Collect the OpenAI-compatible server's connection details. Shown only
-    on the OpenAI-compatible branch; it writes the ``llm_*`` /
-    ``embedding_model`` config keys and then skips straight to Whisper setup.
+    """Collect the OpenAI-compatible server's connection and model details.
 
     Guided rather than freeform: the page auto-discovers running local
     servers, offers a one-click app preset, and (after Connect) fetches the
@@ -1197,7 +1196,7 @@ class OpenAICompatiblePage(ScrollableWizardPage):
             password=True)
 
         # Connect button + status: fetch the model list, then probe the model.
-        self._connect_btn = QPushButton("Connect & load models")
+        self._connect_btn = QPushButton("Connect && load models")
         self._connect_btn.setObjectName("secondary")
         self._connect_btn.clicked.connect(self._on_connect)
         form.addWidget(self._connect_btn)
@@ -1262,6 +1261,82 @@ class OpenAICompatiblePage(ScrollableWizardPage):
         columns.addWidget(model_card, 1)
         layout.addLayout(columns)
 
+        memory_card = QFrame()
+        memory_card.setObjectName("card")
+        memory_layout = QVBoxLayout(memory_card)
+        memory_layout.setContentsMargins(20, 10, 20, 10)
+        memory_layout.setSpacing(4)
+        memory_header = QHBoxLayout()
+        memory_title = QLabel("03  Memory budget")
+        memory_title.setObjectName("section_title")
+        memory_header.addWidget(memory_title)
+        memory_header.addStretch()
+        self._memory_toggle = QPushButton("Edit estimates ↓")
+        self._memory_toggle.setObjectName("secondary")
+        self._memory_toggle.clicked.connect(self._toggle_memory_details)
+        memory_header.addWidget(self._memory_toggle)
+        memory_layout.addLayout(memory_header)
+        self._memory_summary = QLabel()
+        self._memory_summary.setObjectName("memory_summary")
+        self._memory_summary.setWordWrap(True)
+        self._memory_summary.setStyleSheet(
+            f"font-size: 13px; color: {COLORS['text_secondary']};")
+        memory_layout.addWidget(self._memory_summary)
+
+        self._memory_details = QWidget()
+        self._memory_details.setObjectName("memoryDetails")
+        self._memory_details.setStyleSheet(
+            "QWidget#memoryDetails { background: transparent; }")
+        detail_layout = QVBoxLayout(self._memory_details)
+        detail_layout.setContentsMargins(0, 8, 0, 0)
+        detail_layout.setSpacing(8)
+        memory_hint = QLabel(
+            "Model lists do not report memory needs. Adjust these estimates "
+            "for your model, quantisation and context length."
+        )
+        memory_hint.setWordWrap(True)
+        memory_hint.setStyleSheet(f"font-size: 12px; color: {COLORS['text_secondary']};")
+        detail_layout.addWidget(memory_hint)
+        self._memory_estimates = {}
+        self._memory_model_ids = {}
+        self._manual_memory_estimates = {}
+        for role, label_text in (
+            ("chat", "Chat model"),
+            ("fast", "Fast model"),
+            ("embed", "Embeddings"),
+        ):
+            row = QHBoxLayout()
+            row.setSpacing(12)
+            label = QLabel(label_text)
+            row.addWidget(label, 1)
+            estimate = QDoubleSpinBox()
+            estimate.setObjectName(f"memory_{role}")
+            estimate.setAccessibleName(f"{label_text} memory estimate in GB")
+            estimate.setRange(0, 1024)
+            estimate.setDecimals(1)
+            estimate.setSingleStep(0.5)
+            estimate.setSuffix(" GB")
+            estimate.setSpecialValueText("Unknown")
+            estimate.setKeyboardTracking(False)
+            estimate.setMinimumWidth(116)
+            estimate.valueChanged.connect(
+                lambda value, role=role: self._on_memory_estimate_changed(role, value))
+            row.addWidget(estimate)
+            self._memory_estimates[role] = estimate
+            detail_layout.addLayout(row)
+        memory_layout.addWidget(self._memory_details)
+        self._memory_details.setVisible(False)
+        layout.addWidget(memory_card)
+        self._detected_vram_mb = detect_total_vram_mb()
+        self._refresh_memory_runtime()
+
+        self._chat_model_combo.currentTextChanged.connect(self._refresh_memory_display)
+        self._fast_model_combo.currentTextChanged.connect(self._refresh_memory_display)
+        self._embed_model_combo.currentTextChanged.connect(self._refresh_memory_display)
+        self._base_url_input.textChanged.connect(self._refresh_memory_display)
+        self._use_ollama_embed.toggled.connect(self._refresh_memory_display)
+        self._openai_link_cb.toggled.connect(self._refresh_memory_display)
+
         tip = QLabel(
             "Only a server URL and chat model are required. "
             "Without embeddings, memory uses keyword search."
@@ -1276,6 +1351,132 @@ class OpenAICompatiblePage(ScrollableWizardPage):
 
         layout.addStretch()
         self.setLayout(layout)
+        self._refresh_memory_display()
+
+    def _toggle_memory_details(self):
+        expanded = self._memory_details.isHidden()
+        self._memory_details.setVisible(expanded)
+        self._memory_toggle.setText("Hide estimates ↑" if expanded else "Edit estimates ↓")
+
+    @staticmethod
+    def _server_is_loopback(base_url: str) -> bool:
+        """Only compare a model server with the local GPU on loopback URLs."""
+        try:
+            host = urlsplit(base_url).hostname
+            if host == "localhost":
+                return True
+            return bool(host and ipaddress.ip_address(host).is_loopback)
+        except ValueError:
+            return False
+
+    @staticmethod
+    def _known_memory_mb(model_id: str) -> Optional[int]:
+        """Known local model estimates; unknown server ids stay editable."""
+        if model_id == "nomic-embed-text":
+            return 1024
+        return required_vram_mb(model_id)
+
+    def _refresh_memory_runtime(self):
+        """Read the local Whisper and Ollama setup for the current wizard visit."""
+        try:
+            settings = load_settings()
+        except Exception:
+            settings = None
+        whisper_id = getattr(settings, "whisper_model", "small") or "small"
+        self._whisper_memory_mb = WhisperSetupPage.get_whisper_vram_mb(whisper_id)
+        self._ollama_embed_model_id = (
+            getattr(settings, "ollama_embed_model", "nomic-embed-text")
+            or "nomic-embed-text"
+        )
+        self._ollama_embed_base_url = (
+            getattr(settings, "ollama_base_url", "http://localhost:11434")
+            or "http://localhost:11434"
+        )
+
+    def _on_memory_estimate_changed(self, role: str, value: float):
+        model_id = self._memory_model_ids.get(role)
+        if model_id:
+            self._manual_memory_estimates[model_id] = value
+        self._refresh_memory_display()
+
+    def _refresh_memory_display(self, *_):
+        if not hasattr(self, "_memory_estimates"):
+            return
+        chat_id = self._chat_model_combo.currentText().strip()
+        fast_id = self._fast_model_combo.currentText().strip()
+        embed_on_ollama = self._use_ollama_embed.isChecked()
+        embed_id = (
+            self._ollama_embed_model_id if embed_on_ollama
+            else self._embed_model_combo.currentText().strip()
+        )
+        ids = {"chat": chat_id, "fast": fast_id, "embed": embed_id}
+        for role, model_id in ids.items():
+            field = self._memory_estimates[role]
+            estimate = self._manual_memory_estimates.get(
+                model_id, (self._known_memory_mb(model_id) or 0) / 1024)
+            if (self._memory_model_ids.get(role) == model_id
+                    and field.value() == estimate):
+                continue
+            field.blockSignals(True)
+            field.setValue(estimate)
+            field.blockSignals(False)
+            self._memory_model_ids[role] = model_id
+
+        distinct_fast = bool(fast_id and not self._openai_linked and fast_id != chat_id)
+        self._memory_estimates["fast"].setEnabled(distinct_fast)
+        self._memory_estimates["embed"].setEnabled(bool(embed_id))
+        if not chat_id:
+            self._memory_summary.setText("Choose a chat model to see its memory budget.")
+            return
+
+        needed = ["chat"]
+        if distinct_fast:
+            needed.append("fast")
+        if embed_id:
+            needed.append("embed")
+        unknown = [role for role in needed if self._memory_estimates[role].value() == 0]
+        if unknown:
+            names = {"chat": "chat", "fast": "fast", "embed": "embeddings"}
+            missing = ", ".join(names[role] for role in unknown)
+            self._memory_summary.setText(
+                f"Add a GB estimate for {missing} to see a total. "
+                "The server does not provide memory requirements."
+            )
+            return
+
+        chat_gb = self._memory_estimates["chat"].value()
+        fast_gb = self._memory_estimates["fast"].value() if distinct_fast else 0
+        embed_gb = self._memory_estimates["embed"].value() if embed_id else 0
+        whisper_gb = self._whisper_memory_mb / 1024
+        local_server = self._server_is_loopback(self._base_url_input.text().strip())
+        local_ollama = embed_on_ollama and self._server_is_loopback(self._ollama_embed_base_url)
+        server_gb = chat_gb + fast_gb + (0 if embed_on_ollama else embed_gb)
+        local_gb = whisper_gb + (server_gb if local_server else 0)
+        if local_ollama:
+            local_gb += embed_gb
+        if local_server:
+            detail = (
+                f"Estimated model memory: {server_gb:.1f} GB. "
+                f"Whisper ~{whisper_gb:.1f} GB locally. "
+            )
+            if local_ollama:
+                detail += f"Ollama embeddings: {embed_gb:.1f} GB locally. "
+            detail += f"Combined ~{local_gb:.1f} GB if they share a GPU."
+            if self._detected_vram_mb is not None:
+                gpu_gb = self._detected_vram_mb / 1024
+                if local_gb > gpu_gb:
+                    detail += f" ⚠️ About {local_gb - gpu_gb:.1f} GB over the detected {gpu_gb:.1f} GB GPU."
+                else:
+                    detail += f" Detected GPU: {gpu_gb:.1f} GB."
+            if embed_on_ollama and not local_ollama:
+                detail += f" Ollama embeddings: {embed_gb:.1f} GB on its server."
+        else:
+            detail = f"Server model estimate: {server_gb:.1f} GB. "
+            if embed_on_ollama:
+                location = "locally" if local_ollama else "on its server"
+                detail += f"Ollama embeddings: {embed_gb:.1f} GB {location}. "
+            detail += f"Whisper ~{whisper_gb:.1f} GB locally. Check which servers share a GPU."
+        self._memory_summary.setText(detail)
 
     def _labelled_edit(self, form, label_text, placeholder, password=False):
         label = QLabel(label_text)
@@ -1454,6 +1655,7 @@ class OpenAICompatiblePage(ScrollableWizardPage):
                          default=(embed_models[0] if embed_models else ""))
         self._fill_combo(self._fast_model_combo, models, blank=True,
                          default=self._preferred_fast_default(models))
+        self._refresh_memory_display()
 
     def _fill_combo(self, combo, items, *, blank: bool, default: str):
         current = (combo.currentText() or "").strip()
@@ -1489,6 +1691,8 @@ class OpenAICompatiblePage(ScrollableWizardPage):
             self._fast_model_combo.setVisible(True)
         self._use_ollama_embed.setVisible(False)
         self._connect_status.setText("")
+        self._refresh_memory_runtime()
+        self._refresh_memory_display()
         # Only auto-discover when the user hasn't already saved a custom URL.
         if not saved_url:
             self._start_discovery()
