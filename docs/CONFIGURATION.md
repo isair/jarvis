@@ -94,6 +94,11 @@ is ready. The first LLM-backed request after startup or idle may be slower.
 
 Speed is relative to the original large model. [Source](https://github.com/openai/whisper)
 
+`large-v3-turbo` is available when MLX Whisper is usable on Apple Silicon or
+faster-whisper 1.1.0 or newer is installed. If the selected faster-whisper
+cannot load turbo, the wizard hides that option and an existing turbo setting
+loads `medium` instead. Choose a different model in Settings → Whisper.
+
 With the faster-whisper backend, `whisper_model` also accepts a Hugging Face
 model ID such as `deepdml/faster-whisper-large-v3-turbo-ct2`, or a local
 converted model directory.
