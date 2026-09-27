@@ -355,3 +355,39 @@ def test_query_deadline_in_slow_preparation_prevents_model_reply(
     assert "ran out of time" in reply
     chat.assert_not_called()
     assert dialogue_memory.get_recent_messages() == []
+
+
+def test_cancel_during_max_turn_digest_does_not_emit_fallback_reply(
+    mock_config, db, tmp_path,
+):
+    mock_config.llm_chat_model = "gpt-oss:20b"
+    mock_config.db_path = str(tmp_path / "jarvis.db")
+    mock_config.agentic_max_turns = 1
+    cancelled = threading.Event()
+    entered = threading.Event()
+    release = threading.Event()
+    outcome = []
+
+    def blocked_digest(*a, **k):
+        entered.set()
+        release.wait(timeout=2)
+        return "late digest"
+
+    with patch.object(engine_mod, "chat_with_messages", return_value=_content_reply("")), \
+         patch.object(engine_mod, "digest_loop_for_max_turns", side_effect=blocked_digest), \
+         patch.object(engine_mod, "select_tools", return_value=[]), \
+         patch.object(engine_mod, "extract_search_params_for_memory", return_value={"keywords": []}):
+        work = threading.Thread(target=lambda: outcome.append(engine_mod.run_reply_engine(
+            db, mock_config, None, "hello", None, quiet=True,
+            cancel_event=cancelled,
+        )))
+        work.start()
+        try:
+            assert entered.wait(timeout=2)
+            cancelled.set()
+            work.join(timeout=1)
+            assert not work.is_alive()
+        finally:
+            release.set()
+
+    assert outcome == [None]
