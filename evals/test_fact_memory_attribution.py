@@ -1,6 +1,7 @@
 """Live attribution and correction evaluation for source-grounded facts."""
 
 import time
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -8,6 +9,7 @@ import pytest
 from evals.conftest import _JUDGE_LLM_AVAILABLE
 from evals.benchmark_report import Attempt, Scenario
 from evals.helpers import JUDGE_MODEL, MockConfig
+from evals.residence_assessment import has_current_residence_claim
 from jarvis.memory.fact_ops import ingest_dialogue_facts
 from jarvis.memory.facts import FactStore
 
@@ -25,6 +27,66 @@ def _correction_fixture():
 def test_correction_fixture_observes_new_fact_after_old_fact():
     observed_at, message = _correction_fixture()
     assert datetime.fromtimestamp(message["ts"], timezone.utc) > datetime.fromisoformat(observed_at)
+
+
+def _correction_successful(store: FactStore, old_id: int, message: dict) -> bool:
+    old = store.get_fact(old_id)
+    if old is None or old["status"] != "superseded":
+        return False
+    for fact in store.list_facts():
+        source = fact["source"]
+        if (
+            fact["supersedes_id"] == old_id
+            and fact["status"] == "active"
+            and fact["kind"] == old["kind"] == "user"
+            and fact["owner"] == old["owner"] == "user"
+            and fact["subject"] == old["subject"] == "user"
+            and fact["predicate_key"] == old["predicate_key"] == "residence"
+            and source["source_type"] == "dialogue"
+            and source["source_role"] == "user"
+            and source["source_channel"] == message["channel"]
+            and source["evidence"] in message["content"]
+            and has_current_residence_claim(fact["text"], "bath")
+        ):
+            return True
+    return False
+
+
+def test_correction_assessment_requires_active_linked_user_residence(tmp_path):
+    with closing(FactStore(str(tmp_path / "facts.db"))) as store:
+        old_observed_at, correction = _correction_fixture()
+        old = store.add_fact("The user lives in Bristol", kind="user", owner="user",
+                             subject="user", predicate_key="residence", source_ref="old",
+                             source_type="dialogue", source_role="user", source_channel="addressed_dialogue",
+                             source_text="I live in Bristol", evidence="I live in Bristol",
+                             observed_at=old_observed_at)
+        assert not _correction_successful(store, old["id"], correction)
+        store.add_fact("The user lives in London", kind="user", owner="user",
+                       subject="user", predicate_key="residence", source_ref="wrong-successor",
+                       source_type="dialogue", source_role="user", source_channel=correction["channel"],
+                       evidence=correction["content"], source_text=correction["content"],
+                       observed_at=old_observed_at, supersedes_id=old["id"])
+        store.add_fact("Bath is in England", kind="world", owner="unknown", source_ref="decoy",
+                       source_type="dialogue", source_role="user", source_channel="addressed_dialogue",
+                       source_text=correction["content"], evidence=correction["content"],
+                       observed_at=old_observed_at)
+        assert not _correction_successful(store, old["id"], correction)
+
+
+def test_correction_assessment_accepts_grounded_successor(tmp_path):
+    with closing(FactStore(str(tmp_path / "facts.db"))) as store:
+        old_observed_at, correction = _correction_fixture()
+        old = store.add_fact("The user lives in Bristol", kind="user", owner="user",
+                             subject="user", predicate_key="residence", source_ref="old",
+                             source_type="dialogue", source_role="user", source_channel="addressed_dialogue",
+                             source_text="I live in Bristol", evidence="I live in Bristol",
+                             observed_at=old_observed_at)
+        store.add_fact("The user is based in Bath, not Bristol", kind="user", owner="user",
+                       subject="user", predicate_key="residence", source_ref="correct-successor",
+                       source_type="dialogue", source_role="user", source_channel=correction["channel"],
+                       evidence=correction["content"], source_text=correction["content"],
+                       observed_at=old_observed_at, supersedes_id=old["id"])
+        assert _correction_successful(store, old["id"], correction)
 
 
 @pytest.mark.eval
@@ -93,8 +155,7 @@ def test_explicit_user_correction_links_existing_fact(tmp_path, scenario_recorde
                                        chat_model=JUDGE_MODEL, timeout_sec=60.0)
         extraction_sec = time.perf_counter() - extraction_started
         assert not result.failed
-        assert store.get_fact(old["id"])["status"] == "superseded"
-        assert any("bath" in f["text"].lower() for f in store.list_facts())
+        assert _correction_successful(store, old["id"], correction)
         passed = True
     finally:
         elapsed = time.perf_counter() - started

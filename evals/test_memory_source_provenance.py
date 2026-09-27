@@ -8,6 +8,7 @@ import pytest
 from evals.conftest import _JUDGE_LLM_AVAILABLE
 from evals.benchmark_report import Attempt, Scenario
 from evals.helpers import JUDGE_MODEL, MockConfig
+from evals.residence_assessment import has_current_residence_claim
 from jarvis.reply.enrichment import digest_memory_for_query
 
 
@@ -33,7 +34,7 @@ def _assess_residence_digest(digest: str) -> tuple[bool, bool]:
     """Return stale and unsupported residence claims for this source scenario."""
     text = digest.casefold()
     stale_retrieval = (
-        not _has_unrefuted_place(text, "bath", allow_history=True)
+        not has_current_residence_claim(text, "bath")
         or _has_unrefuted_place(text, "bristol", allow_history=True)
     )
     unsupported_claim = _has_unrefuted_place(text, "paris", allow_history=False)
@@ -43,7 +44,13 @@ def _assess_residence_digest(digest: str) -> tuple[bool, bool]:
 @pytest.mark.parametrize("digest, expected", [
     ("The user lives in Bath, not Bristol (said on 2026-03-01).", (False, False)),
     ("The user lives in Bath. Bristol is a former residence.", (False, False)),
+    ("The user's current home is Bath, not Bristol.", (False, False)),
+    ("Bath is where the user lives; Bristol is a former residence.", (False, False)),
+    ("Current residence: Bath. Not Bristol.", (False, False)),
     ("The user lives in Bath, not Paris.", (False, False)),
+    ("Bath is a city. The user's current residence is unknown; not Bristol.", (True, False)),
+    ("The user does not live in Bath. Bristol is a former residence.", (True, False)),
+    ("The user formerly lived in Bath; current residence unknown.", (True, False)),
     ("The user lives in Bristol, not Bath.", (True, False)),
     ("Not Bath, not Bristol; the location is unknown.", (True, False)),
     ("The user lives in Bath and Bristol.", (True, False)),
