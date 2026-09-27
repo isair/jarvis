@@ -407,7 +407,7 @@ class TestLargeV3TurboFallback:
         captured = capsys.readouterr()
         assert "large-v3-turbo is not supported" in captured.out
         assert "using medium instead" in captured.out
-        assert "Voice settings" in captured.out
+        assert "Whisper settings" in captured.out
 
     def test_turbo_kept_when_faster_whisper_supports_it(self):
         """large-v3-turbo config is kept when faster-whisper >= 1.1.0."""

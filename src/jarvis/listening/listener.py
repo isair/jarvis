@@ -1795,7 +1795,7 @@ class VoiceListener(threading.Thread):
                 )
                 print(
                     "  ⚠️  large-v3-turbo is not supported by the installed Whisper engine, "
-                    "using medium instead. Change the Whisper model in Voice settings "
+                    "using medium instead. Change the model in Whisper settings "
                     "or rerun the Setup Wizard.", flush=True,
                 )
                 model_name = "medium"
