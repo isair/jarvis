@@ -27,10 +27,10 @@ SUPPORTED_CHAT_MODELS: Dict[str, Dict[str, str]] = {
         "size": "~9.6GB",
         "vram": "16GB+",
     },
-    "gpt-oss:20b": {
-        "name": "GPT-OSS 20B (High-end)",
-        "description": "Best performance, ~12GB download",
-        "size": "~12GB",
+    "qwen3.8:27b": {
+        "name": "Qwen 3.8 27B (High-end)",
+        "description": "Best performance, ~18GB download",
+        "size": "~18GB",
         "vram": "24GB+",
     },
     "qwen3.5:0.8b": {

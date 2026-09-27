@@ -4,6 +4,34 @@ This document outlines the voice listening architecture. The system uses a **tra
 
 ## Architecture Overview
 
+### Capture format and health
+
+The input stream tries mono at the configured sample rate. Unsupported channel
+counts or sample rates trigger bounded retries on the same selected input:
+mono, stereo and the device's advertised maximum channel count, at the configured
+and native rates, without duplicate attempts. Access and device-availability
+errors are not retried as format failures. Both the Windows permission probe and
+continuous capture use this negotiation and input selection. Name matching skips
+output-only devices; a missing named microphone produces an actionable error
+rather than silently selecting another input. Multichannel samples are averaged
+to mono before framing and speech detection.
+
+Frames always span the configured 10, 20 or
+30 ms at the actual capture rate; unsupported frame durations use 20 ms. Partial
+callback blocks are retained until a complete frame is available and discarded
+on audio-state resets. WebRTC VAD receives a 16 kHz mono PCM copy, including when
+the hardware captures at 44.1 or 48 kHz. Utterances retain native-rate samples
+until resampling for Whisper, preserving their duration.
+
+VAD errors emit a single warning and use the configured energy threshold instead
+of silently discarding speech. Capture health is checked every five seconds with
+a monotonic clock. Missing callbacks, silent samples, callback errors, PortAudio
+status flags and dropped queue blocks are reported outside the audio callback.
+Warnings are transition-based; dictation pauses suspend health checks. With
+`voice_debug`, diagnostics include callback/frame counts, speech-frame counts,
+peak level and capture rate, without saving microphone audio. Linux warnings
+point users to PipeWire/PulseAudio recording-source routing.
+
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                         Audio Stream                            │
@@ -380,12 +408,20 @@ When components are unavailable, the system degrades gracefully:
 | Component | Unavailable Behaviour |
 |-----------|---------------------|
 | Intent Judge | Simple text-based wake word + query extraction; hot window override still applies |
-| 16 kHz sample rate | Stream at device native rate, resample to 16 kHz for Whisper |
+| Unsupported input format | Retry channel count and native sample rate on the selected device, then convert to 16 kHz mono for Whisper |
 | Transcript Buffer | Process each utterance independently |
 
 ## Download Recovery
 
 Whisper model loading handles transient download failures automatically:
+
+### Download and loading visibility
+
+LLM startup messages report warmup probe results, not role readiness. Chat, judge and router roles sharing one model share one reported probe; the configured intent deadline is displayed separately, with an explicit notice that the full intent request was not tested. Embeddings always use their own embedding-endpoint probe, even when configured with the same model name. Failure directs users to model availability/settings rather than promising success on first use.
+
+MLX Whisper prepares files through Hugging Face's snapshot cache before loading the model. The desktop displays the Hub's native per-file byte progress rather than an outer file-count bar. Existing caching, authentication, offline cache fallback and transfer resume remain owned by the Hub. The resulting local path is used for both warmup and subsequent transcription so the in-memory MLX model is reused.
+
+Startup distinguishes checking/downloading model files, loading into memory and warming up, and model readiness. Starting the listener thread is not reported as voice readiness. A failed download does not emit a loading or ready message.
 
 ### Corrupted Cache Recovery
 

@@ -374,13 +374,13 @@ try:
         QApplication, QWizard, QWizardPage, QVBoxLayout, QHBoxLayout,
         QLabel, QPushButton, QProgressBar, QTextEdit, QWidget, QFrame,
         QSizePolicy, QScrollArea, QLineEdit, QSlider, QComboBox, QCheckBox,
-        QRadioButton, QButtonGroup, QStackedWidget
+        QRadioButton, QButtonGroup, QStackedWidget, QLayout, QBoxLayout
     )
     from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread, QObject
     from PyQt6.QtGui import QFont, QColor, QPalette, QPixmap, QPainter
 
     from desktop_app.qt_worker import KeepAliveWorker
-    from desktop_app.themes import JARVIS_THEME_STYLESHEET, COLORS, _ensure_icons, _ICON_STYLESHEET_TEMPLATE
+    from desktop_app.themes import JARVIS_THEME_STYLESHEET, WIZARD_STYLESHEET, COLORS, _ensure_icons, _ICON_STYLESHEET_TEMPLATE
     from desktop_app.mcp_catalogue import get_wizard_entries, MCPEntry
 
     # Import location utilities with crash protection for Windows native modules
@@ -489,6 +489,58 @@ class CommandWorker(KeepAliveWorker):
             self.completed.emit(False, f"❌ Error: {str(e)}")
 
 
+class ScrollableWizardPage(QWizardPage):
+    """Keep page content at its minimum usable size inside a scroll viewport."""
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        columns = getattr(self, "_responsive_columns", None)
+        if columns is not None:
+            columns.setDirection(
+                QBoxLayout.Direction.LeftToRight if self.width() >= 820
+                else QBoxLayout.Direction.TopToBottom
+            )
+
+    def setLayout(self, layout):
+        has_scroll = any(isinstance(layout.itemAt(i).widget(), QScrollArea)
+                         for i in range(layout.count()))
+        stage = {
+            "WhisperSetupPage": 0, "ProviderChoicePage": 1,
+            "WelcomePage": 1, "OpenAICompatiblePage": 1,
+            "OllamaInstallPage": 1, "OllamaServerPage": 1, "ModelsPage": 1,
+            "DictationPage": 2, "MCPPage": 2, "SearchProvidersPage": 2,
+            "LocationPage": 2, "CompletePage": 3,
+        }[type(self).__name__]
+        header = QHBoxLayout()
+        if has_scroll and layout.contentsMargins().left() == 0:
+            header.setContentsMargins(28, 20, 28, 0)
+        brand = QLabel("J A R V I S   /   SETUP")
+        brand.setObjectName("setupBrand")
+        header.addWidget(brand)
+        header.addStretch()
+        for index, name in enumerate(("Voice", "Intelligence", "Capabilities", "Ready")):
+            label = QLabel(f"{index + 1:02}  {name}")
+            label.setObjectName("setupStage")
+            label.setProperty("active", index == stage)
+            header.addWidget(label)
+        layout.insertLayout(0, header)
+        # Pages with a dedicated scroll area already provide overflow handling.
+        if has_scroll:
+            super().setLayout(layout)
+            return
+        content = QWidget()
+        layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
+        content.setLayout(layout)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setWidget(content)
+        outer = QVBoxLayout()
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(scroll)
+        super().setLayout(outer)
+
+
 class SetupWizard(QWizard):
     """Main setup wizard window."""
 
@@ -496,7 +548,11 @@ class SetupWizard(QWizard):
         super().__init__(parent)
         self.setWindowTitle("🚀 Jarvis Setup Wizard")
         self.setWizardStyle(QWizard.WizardStyle.ModernStyle)
-        self.setMinimumSize(700, 875)
+        available = self.screen().availableGeometry()
+        self.setMinimumSize(min(700, available.width() - 40),
+                            min(500, available.height() - 80))
+        self.resize(min(960, available.width() - 40),
+                    min(780, available.height() - 80))
 
         # Apply dark theme
         self._apply_theme()
@@ -539,11 +595,19 @@ class SetupWizard(QWizard):
         self.setButtonText(QWizard.WizardButton.BackButton, "← Back")
         self.setButtonText(QWizard.WizardButton.FinishButton, "🎉 Start Jarvis")
         self.setButtonText(QWizard.WizardButton.CancelButton, "Exit")
+        self.setButtonLayout([
+            QWizard.WizardButton.CancelButton, QWizard.WizardButton.Stretch,
+            QWizard.WizardButton.BackButton, QWizard.WizardButton.NextButton,
+            QWizard.WizardButton.FinishButton,
+        ])
+        self.button(QWizard.WizardButton.NextButton).setObjectName("setupNext")
+        self.button(QWizard.WizardButton.FinishButton).setObjectName("setupNext")
 
         # Store status for sharing between pages
         self.ollama_status: Optional[OllamaStatus] = None
         self.mlx_whisper_status: Optional[MLXWhisperStatus] = None
         self._location_working: Optional[bool] = None
+        self._apply_theme()
 
     def ollama_entry_page_id(self) -> int:
         """First Ollama-flow page to show, based on detection status:
@@ -621,10 +685,10 @@ class SetupWizard(QWizard):
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
                     stop:0 #4ade80, stop:1 #22c55e);
             }
-        """)
+        """ + WIZARD_STYLESHEET)
 
 
-class WelcomePage(QWizardPage):
+class WelcomePage(ScrollableWizardPage):
     """Welcome page with status overview."""
 
     def __init__(self, parent=None):
@@ -633,12 +697,12 @@ class WelcomePage(QWizardPage):
 
         layout = QVBoxLayout()
         layout.setSpacing(20)
-        layout.setContentsMargins(40, 40, 40, 40)
+        layout.setContentsMargins(28, 20, 28, 20)
 
         # Header
         header_layout = QVBoxLayout()
 
-        title = QLabel("🤖 Welcome to Jarvis")
+        title = QLabel("Welcome to your Jarvis")
         title.setObjectName("title")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         header_layout.addWidget(title)
@@ -655,7 +719,7 @@ class WelcomePage(QWizardPage):
         self.status_card = QFrame()
         self.status_card.setObjectName("card")
         status_layout = QVBoxLayout(self.status_card)
-        status_layout.setContentsMargins(24, 24, 24, 24)
+        status_layout.setContentsMargins(18, 16, 18, 16)
         status_layout.setSpacing(12)
 
         status_title = QLabel("📋 System Status")
@@ -842,7 +906,7 @@ class WelcomePage(QWizardPage):
         return wizard.ollama_entry_page_id()
 
 
-class ProviderChoicePage(QWizardPage):
+class ProviderChoicePage(ScrollableWizardPage):
     """Choose which local runtime serves the LLM: Ollama (the bundled
     default) or an OpenAI-compatible server (LM Studio, oMLX, llama.cpp's
     ``llama-server``, vLLM, LocalAI). The choice branches the rest of the
@@ -857,16 +921,14 @@ class ProviderChoicePage(QWizardPage):
 
         layout = QVBoxLayout()
         layout.setSpacing(16)
-        layout.setContentsMargins(40, 40, 40, 40)
+        layout.setContentsMargins(28, 20, 28, 20)
 
-        title = QLabel("🔌 Choose Your LLM Provider")
+        title = QLabel("Choose your local intelligence")
         title.setObjectName("title")
         layout.addWidget(title)
 
         subtitle = QLabel(
-            "Welcome to Jarvis. Choose how it runs its language model. Both "
-            "options keep everything on machines you control, never a "
-            "third-party cloud."
+            "Two ways to run Jarvis. Your models stay on hardware you control."
         )
         subtitle.setObjectName("subtitle")
         subtitle.setWordWrap(True)
@@ -878,6 +940,9 @@ class ProviderChoicePage(QWizardPage):
         # lives in its own card (Qt's auto-exclusivity only applies to radios
         # sharing a direct parent, which these do not).
         self._button_group = QButtonGroup(self)
+        choices = QHBoxLayout()
+        self._responsive_columns = choices
+        choices.setSpacing(20)
 
         self._ollama_radio = QRadioButton("  🦙  Ollama (recommended)")
         self._ollama_radio.setChecked(True)
@@ -888,7 +953,7 @@ class ProviderChoicePage(QWizardPage):
             "Ollama and downloads the models for you. Best if you have no "
             "model server already.",
         )
-        layout.addWidget(ollama_card)
+        choices.addWidget(ollama_card, 1)
 
         self._openai_radio = QRadioButton("  🔗  OpenAI-compatible server")
         self._button_group.addButton(self._openai_radio)
@@ -899,7 +964,8 @@ class ProviderChoicePage(QWizardPage):
             "LocalAI) running on your own machine or network. You provide its "
             "URL and model name on the next step.",
         )
-        layout.addWidget(openai_card)
+        choices.addWidget(openai_card, 1)
+        layout.addLayout(choices)
 
         self._ollama_radio.toggled.connect(self._on_toggle)
         self._openai_radio.toggled.connect(self._on_toggle)
@@ -921,6 +987,14 @@ class ProviderChoicePage(QWizardPage):
         desc.setWordWrap(True)
         desc.setStyleSheet("color: #a1a1aa; font-size: 13px;")
         card_layout.addWidget(desc)
+        card_layout.addStretch()
+        def update_selection():
+            card.setProperty("selected", radio.isChecked())
+            card.style().unpolish(card)
+            card.style().polish(card)
+            card.update()
+        radio.toggled.connect(update_selection)
+        update_selection()
         return card
 
     def _preselect_from_config(self):
@@ -1038,7 +1112,7 @@ class _CapabilityWorker(KeepAliveWorker):
         self.done.emit(caps)
 
 
-class OpenAICompatiblePage(QWizardPage):
+class OpenAICompatiblePage(ScrollableWizardPage):
     """Collect the OpenAI-compatible server's connection details. Shown only
     on the OpenAI-compatible branch; it writes the ``llm_*`` /
     ``embedding_model`` config keys and then skips straight to Whisper setup.
@@ -1075,16 +1149,14 @@ class OpenAICompatiblePage(QWizardPage):
 
         layout = QVBoxLayout()
         layout.setSpacing(14)
-        layout.setContentsMargins(40, 40, 40, 40)
+        layout.setContentsMargins(28, 20, 28, 20)
 
-        title = QLabel("🔗 OpenAI-compatible Server")
+        title = QLabel("Connect your model server")
         title.setObjectName("title")
         layout.addWidget(title)
 
         subtitle = QLabel(
-            "Point Jarvis at a local server (LM Studio, Ollama, Jan, llama.cpp, "
-            "vLLM, …). Pick your app or let Jarvis find it, then Connect to load "
-            "its models. Only the base URL and chat model are required."
+            "Choose your local server, then select the models Jarvis will use."
         )
         subtitle.setObjectName("subtitle")
         subtitle.setWordWrap(True)
@@ -1092,11 +1164,17 @@ class OpenAICompatiblePage(QWizardPage):
 
         layout.addSpacing(4)
 
+        columns = QHBoxLayout()
+        self._responsive_columns = columns
+        columns.setSpacing(20)
         form_card = QFrame()
         form_card.setObjectName("card")
         form = QVBoxLayout(form_card)
         form.setContentsMargins(16, 14, 16, 14)
         form.setSpacing(10)
+        connection_title = QLabel("01  Connection")
+        connection_title.setObjectName("section_title")
+        form.addWidget(connection_title)
 
         # App preset: prefills the base URL for a known server so the user
         # never has to remember a port.
@@ -1113,13 +1191,13 @@ class OpenAICompatiblePage(QWizardPage):
 
         self._base_url_input = self._labelled_edit(
             form, "Base URL",
-            "e.g. http://localhost:1234/v1 (LM Studio default)")
+            "http://localhost:1234/v1")
         self._api_key_input = self._labelled_edit(
             form, "API key (optional)", "leave empty if your server needs none",
             password=True)
 
         # Connect button + status: fetch the model list, then probe the model.
-        self._connect_btn = QPushButton("🔌 Connect & load models")
+        self._connect_btn = QPushButton("Connect & load models")
         self._connect_btn.setObjectName("secondary")
         self._connect_btn.clicked.connect(self._on_connect)
         form.addWidget(self._connect_btn)
@@ -1128,28 +1206,41 @@ class OpenAICompatiblePage(QWizardPage):
         self._connect_status.setStyleSheet(
             f"font-size: 12px; color: {COLORS['text_secondary']};")
         form.addWidget(self._connect_status)
+        form.addStretch()
+        columns.addWidget(form_card, 1)
+
+        model_card = QFrame()
+        model_card.setObjectName("card")
+        form = QVBoxLayout(model_card)
+        form.setContentsMargins(20, 20, 20, 20)
+        form.setSpacing(10)
+        models_title = QLabel("02  Models")
+        models_title.setObjectName("section_title")
+        form.addWidget(models_title)
 
         self._chat_model_combo = self._labelled_combo(
-            form, "Chat model", "pick after connecting, or type the model id")
+            form, "Chat model", "Select or enter a model")
         self._embed_model_combo = self._labelled_combo(
             form, "Embedding model (optional)",
-            "leave empty to skip embeddings (memory uses keyword search)")
+            "Optional, for memory search")
 
         # Fast model link toggle + selector
         self._openai_linked = False
         self._openai_link_cb = QCheckBox(
-            "\u2699\ufe0f Use same model for fast tasks (voice, routing)")
+            "Use chat model for fast tasks")
         self._openai_link_cb.setChecked(False)
         self._openai_link_cb.setStyleSheet("font-size: 13px; color: #e4e4e7; padding: 4px 0;")
         self._openai_link_cb.toggled.connect(self._on_openai_link_toggled)
         form.addWidget(self._openai_link_cb)
 
         # Fast model selector: label + combo stored for visibility toggling
-        self._fast_label = QLabel("Fast model (voice intent, tool routing)")
+        self._fast_label = QLabel("Fast model · voice & tools")
         self._fast_label.setStyleSheet("font-size: 13px; font-weight: bold;")
         form.addWidget(self._fast_label)
         self._fast_model_combo = QComboBox()
         self._fast_model_combo.setEditable(True)
+        self._fast_model_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self._fast_model_combo.setMinimumContentsLength(16)
         self._fast_model_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._fast_model_combo.lineEdit().setPlaceholderText(
             "leave empty to use the chat model")
@@ -1162,17 +1253,18 @@ class OpenAICompatiblePage(QWizardPage):
         # Shown only when the probe finds the server can't embed: a one-click
         # way to keep full semantic memory by routing embeddings to Ollama.
         self._use_ollama_embed = QCheckBox(
-            "Use Ollama for embeddings instead (keeps full semantic memory)")
+            "Use Ollama for memory embeddings")
         self._use_ollama_embed.setVisible(False)
         self._use_ollama_embed.toggled.connect(lambda *_: self.completeChanged.emit())
         form.addWidget(self._use_ollama_embed)
 
-        layout.addWidget(form_card)
+        form.addStretch()
+        columns.addWidget(model_card, 1)
+        layout.addLayout(columns)
 
         tip = QLabel(
-            "💡  Memory search uses embeddings. If your server has no "
-            "embeddings endpoint, leave the embedding model empty and Jarvis "
-            "falls back to keyword search."
+            "Only a server URL and chat model are required. "
+            "Without embeddings, memory uses keyword search."
         )
         tip.setWordWrap(True)
         tip.setStyleSheet(
@@ -1205,6 +1297,8 @@ class OpenAICompatiblePage(QWizardPage):
         form.addWidget(label)
         combo = QComboBox()
         combo.setEditable(True)  # power users can type a model the listing omits
+        combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        combo.setMinimumContentsLength(16)
         combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         combo.lineEdit().setPlaceholderText(placeholder)
         combo.currentTextChanged.connect(lambda *_: self.completeChanged.emit())
@@ -1269,10 +1363,6 @@ class OpenAICompatiblePage(QWizardPage):
         self._fast_model_combo.setVisible(not linked)
         if linked:
             self._fast_model_combo.setCurrentText("")
-        # Let the wizard recalculate its size from the current page's content
-        wizard = self.wizard()
-        if wizard:
-            wizard.adjustSize()
         self.completeChanged.emit()
 
     def _on_connect(self):
@@ -1402,12 +1492,6 @@ class OpenAICompatiblePage(QWizardPage):
         # Only auto-discover when the user hasn't already saved a custom URL.
         if not saved_url:
             self._start_discovery()
-        # Force the wizard to recalculate its height for this page's content.
-        # Without this, Qt compresses widgets to fit the wizard's current size
-        # instead of growing the window (see CLAUDE.md Qt Layout section).
-        wizard = self.wizard()
-        if wizard:
-            QTimer.singleShot(0, wizard.adjustSize)
 
     def _start_discovery(self):
         self._connect_status.setText("🔍 Looking for local servers…")
@@ -1505,7 +1589,7 @@ class OpenAICompatiblePage(QWizardPage):
         return super().nextId()
 
 
-class OllamaInstallPage(QWizardPage):
+class OllamaInstallPage(ScrollableWizardPage):
     """Page for installing Ollama CLI."""
 
     def __init__(self, parent=None):
@@ -1514,10 +1598,10 @@ class OllamaInstallPage(QWizardPage):
 
         layout = QVBoxLayout()
         layout.setSpacing(20)
-        layout.setContentsMargins(40, 40, 40, 40)
+        layout.setContentsMargins(28, 20, 28, 20)
 
         # Header
-        title = QLabel("💻 Install Ollama")
+        title = QLabel("Bring your models home")
         title.setObjectName("title")
         layout.addWidget(title)
 
@@ -1532,7 +1616,7 @@ class OllamaInstallPage(QWizardPage):
         card = QFrame()
         card.setObjectName("card")
         card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(24, 24, 24, 24)
+        card_layout.setContentsMargins(18, 16, 18, 16)
         card_layout.setSpacing(12)
 
         instructions_title = QLabel("📥 Installation Instructions")
@@ -1648,7 +1732,7 @@ class OllamaInstallPage(QWizardPage):
         return super().nextId()
 
 
-class OllamaServerPage(QWizardPage):
+class OllamaServerPage(ScrollableWizardPage):
     """Page for starting Ollama server."""
 
     def __init__(self, parent=None):
@@ -1657,10 +1741,10 @@ class OllamaServerPage(QWizardPage):
 
         layout = QVBoxLayout()
         layout.setSpacing(20)
-        layout.setContentsMargins(40, 40, 40, 40)
+        layout.setContentsMargins(28, 20, 28, 20)
 
         # Header
-        title = QLabel("🌐 Start Ollama Server")
+        title = QLabel("Wake up your model server")
         title.setObjectName("title")
         layout.addWidget(title)
 
@@ -1675,7 +1759,7 @@ class OllamaServerPage(QWizardPage):
         card = QFrame()
         card.setObjectName("card")
         card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(24, 24, 24, 24)
+        card_layout.setContentsMargins(18, 16, 18, 16)
         card_layout.setSpacing(12)
 
         instructions_title = QLabel("🚀 Starting the Server")
@@ -1844,7 +1928,7 @@ class OllamaServerPage(QWizardPage):
         return super().nextId()
 
 
-class ModelsPage(QWizardPage):
+class ModelsPage(ScrollableWizardPage):
     """Page for installing required AI models — dual-category (fast + chat)."""
 
     MODEL_OPTIONS = SUPPORTED_CHAT_MODELS
@@ -1873,10 +1957,6 @@ class ModelsPage(QWizardPage):
             pass
         return self._WHISPER_VRAM_MB
 
-    _WIZARD_HEIGHT_BASE = 875
-    _WIZARD_HEIGHT_WITH_BUTTONS = 955
-    _WIZARD_HEIGHT_INSTALLING = 1170
-
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setTitle("")
@@ -1887,9 +1967,9 @@ class ModelsPage(QWizardPage):
 
         layout = QVBoxLayout()
         layout.setSpacing(16)
-        layout.setContentsMargins(40, 40, 40, 40)
+        layout.setContentsMargins(28, 20, 28, 20)
 
-        title = QLabel("🧠 Install AI Models")
+        title = QLabel("Choose your AI models")
         title.setObjectName("title")
         layout.addWidget(title)
 
@@ -1923,8 +2003,12 @@ class ModelsPage(QWizardPage):
         # Model selection card with dropdowns
         selection_card = QFrame()
         selection_card.setObjectName("card")
-        card_layout = QVBoxLayout(selection_card)
-        card_layout.setContentsMargins(24, 20, 24, 20)
+        model_columns = QHBoxLayout(selection_card)
+        self._responsive_columns = model_columns
+        model_columns.setContentsMargins(20, 20, 20, 20)
+        model_columns.setSpacing(24)
+        card_layout = QVBoxLayout()
+        model_columns.addLayout(card_layout, 1)
         card_layout.setSpacing(10)
 
         # Chat model dropdown
@@ -1942,7 +2026,9 @@ class ModelsPage(QWizardPage):
         self._chat_combo.currentIndexChanged.connect(self._on_chat_combo_changed)
         card_layout.addWidget(self._chat_combo)
 
-        card_layout.addSpacing(8)
+        card_layout = QVBoxLayout()
+        card_layout.setSpacing(10)
+        model_columns.addLayout(card_layout, 1)
 
         # Fast model dropdown
         fast_label = QLabel("⚡ Fast Model (voice intent, tool routing)")
@@ -1965,7 +2051,6 @@ class ModelsPage(QWizardPage):
         self._detected_vram_mb = detect_total_vram_mb()
         self._vram_bar = QFrame()
         self._vram_bar.setObjectName("card")
-        self._vram_bar.setStyleSheet("QFrame#card { padding: 12px 20px; }")
         vl = QVBoxLayout(self._vram_bar)
         vl.setContentsMargins(24, 16, 24, 16)
         vl.setSpacing(4)
@@ -1982,7 +2067,7 @@ class ModelsPage(QWizardPage):
         card = QFrame()
         card.setObjectName("card")
         cl = QVBoxLayout(card)
-        cl.setContentsMargins(24, 24, 24, 24)
+        cl.setContentsMargins(18, 16, 18, 16)
         cl.setSpacing(12)
         mt = QLabel("📦 Required Models")
         mt.setStyleSheet("font-size: 16px; font-weight: bold; color: #fbbf24;")
@@ -2192,15 +2277,11 @@ class ModelsPage(QWizardPage):
             self.install_btn.setVisible(True)
             self.install_btn.setEnabled(True)
             self.skip_btn.setVisible(True)
-            if not self.progress.isVisible():
-                self._set_wizard_height(self._WIZARD_HEIGHT_WITH_BUTTONS)
         else:
             self.models_label.setText(f"All required models are installed: {', '.join(rinst)}")
             self._is_complete = True
             self.install_btn.setVisible(False)
             self.skip_btn.setVisible(False)
-            if not self.progress.isVisible():
-                self._set_wizard_height(self._WIZARD_HEIGHT_BASE)
         self.completeChanged.emit()
 
     def _save_model_to_config(self):
@@ -2250,10 +2331,6 @@ class ModelsPage(QWizardPage):
         self._sync_combo_states()
         self._refresh_vram_display()
         self._update_models_display()
-        # Force the wizard to recalculate its height for this page's content.
-        wiz = self.wizard()
-        if wiz:
-            QTimer.singleShot(0, wiz.adjustSize)
 
     def _install_models(self):
         if not self._save_model_to_config():
@@ -2281,7 +2358,6 @@ class ModelsPage(QWizardPage):
         self.progress.setVisible(True)
         self.progress.setRange(0, 0)
         self.log_output.setVisible(True)
-        self._set_wizard_height(self._WIZARD_HEIGHT_INSTALLING)
         self.status_label.setText(f"Installing {m}... ({self._current_model_index + 1}/{len(self._missing_models)})")
         self.status_label.setStyleSheet("color: #a1a1aa;")
         op = "ollama"
@@ -2332,11 +2408,7 @@ class ModelsPage(QWizardPage):
             return w.dictation_page_id
         return super().nextId()
 
-    def _set_wizard_height(self, height):
-        w = self.wizard()
-        if w:
-            w.setMinimumHeight(height)
-            w.resize(w.width(), height)
+
 def _is_faster_whisper_turbo_supported() -> bool:
     """Check if the installed faster-whisper supports the large-v3-turbo model."""
     try:
@@ -2347,7 +2419,7 @@ def _is_faster_whisper_turbo_supported() -> bool:
         return False
 
 
-class WhisperSetupPage(QWizardPage):
+class WhisperSetupPage(ScrollableWizardPage):
     """Page for setting up Whisper speech recognition (all platforms)."""
 
     # Multilingual models - support ~99 languages
@@ -2406,19 +2478,18 @@ class WhisperSetupPage(QWizardPage):
         scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
 
         content = QWidget()
-        content.setStyleSheet("background: transparent;")
         layout = QVBoxLayout(content)
         layout.setSpacing(10)
         layout.setContentsMargins(30, 20, 30, 20)
 
         # Header - different text based on platform
         if self._is_apple_silicon:
-            title = QLabel("🎤 MLX Whisper Setup")
+            title = QLabel("Let Jarvis hear you")
             subtitle_text = (
                 "GPU-accelerated speech recognition. Choose language and model size."
             )
         else:
-            title = QLabel("🎤 Whisper Model Selection")
+            title = QLabel("Let Jarvis hear you")
             subtitle_text = "Choose language mode and model size for speech recognition."
 
         title.setObjectName("title")
@@ -2436,8 +2507,8 @@ class WhisperSetupPage(QWizardPage):
         lang_layout.setContentsMargins(16, 12, 16, 12)
         lang_layout.setSpacing(8)
 
-        lang_title = QLabel("🌍 Language Support")
-        lang_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #fbbf24; background: transparent;")
+        lang_title = QLabel("01  Language")
+        lang_title.setObjectName("section_title")
         lang_layout.addWidget(lang_title)
 
         # Language toggle buttons
@@ -2497,8 +2568,8 @@ class WhisperSetupPage(QWizardPage):
         selection_layout.setContentsMargins(16, 12, 16, 12)
         selection_layout.setSpacing(4)
 
-        selection_title = QLabel("🎯 Choose Model Size")
-        selection_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #fbbf24; background: transparent;")
+        selection_title = QLabel("02  Accuracy & speed")
+        selection_title.setObjectName("section_title")
         selection_layout.addWidget(selection_title)
 
         # Container for slider labels (will be rebuilt on language change)
@@ -2566,7 +2637,6 @@ class WhisperSetupPage(QWizardPage):
         self._model_info_label = QLabel()
         self._model_info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._model_info_label.setWordWrap(True)
-        self._model_info_label.setFixedHeight(32)
         self._model_info_label.setStyleSheet("""
             font-size: 11px;
             color: #e4e4e7;
@@ -2592,8 +2662,8 @@ class WhisperSetupPage(QWizardPage):
         mlx_layout.setContentsMargins(16, 12, 16, 12)
         mlx_layout.setSpacing(6)
 
-        status_title = QLabel("📋 Requirements")
-        status_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #fbbf24; background: transparent;")
+        status_title = QLabel("03  Local acceleration")
+        status_title.setObjectName("section_title")
         mlx_layout.addWidget(status_title)
 
         self.ffmpeg_status = self._create_status_row("🎬 FFmpeg", "Checking...")
@@ -2621,12 +2691,10 @@ class WhisperSetupPage(QWizardPage):
         btn_layout.setSpacing(8)
 
         self.install_ffmpeg_btn = QPushButton("🎬 FFmpeg")
-        self.install_ffmpeg_btn.setFixedHeight(32)
         self.install_ffmpeg_btn.clicked.connect(self._install_ffmpeg)
         btn_layout.addWidget(self.install_ffmpeg_btn)
 
         self.install_mlx_btn = QPushButton("🧠 MLX Whisper")
-        self.install_mlx_btn.setFixedHeight(32)
         self.install_mlx_btn.clicked.connect(self._install_mlx_whisper)
         btn_layout.addWidget(self.install_mlx_btn)
 
@@ -3012,7 +3080,7 @@ class WhisperSetupPage(QWizardPage):
         return super().nextId()
 
 
-class LocationPage(QWizardPage):
+class LocationPage(ScrollableWizardPage):
     """Page for configuring location detection."""
 
     def __init__(self, parent=None):
@@ -3037,10 +3105,10 @@ class LocationPage(QWizardPage):
         content = QWidget()
         layout = QVBoxLayout(content)
         layout.setSpacing(20)
-        layout.setContentsMargins(40, 40, 40, 40)
+        layout.setContentsMargins(28, 20, 28, 20)
 
         # Header
-        title = QLabel("📍 Location Configuration")
+        title = QLabel("Make Jarvis feel at home")
         title.setObjectName("title")
         layout.addWidget(title)
 
@@ -3055,7 +3123,7 @@ class LocationPage(QWizardPage):
         card = QFrame()
         card.setObjectName("card")
         card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(24, 24, 24, 24)
+        card_layout.setContentsMargins(18, 16, 18, 16)
         card_layout.setSpacing(12)
 
         status_title = QLabel("🔍 Detection Status")
@@ -3074,7 +3142,7 @@ class LocationPage(QWizardPage):
         config_card = QFrame()
         config_card.setObjectName("card")
         config_layout = QVBoxLayout(config_card)
-        config_layout.setContentsMargins(24, 24, 24, 24)
+        config_layout.setContentsMargins(18, 16, 18, 16)
         config_layout.setSpacing(12)
 
         config_title = QLabel("⚙️ Manual Configuration (Optional)")
@@ -3303,7 +3371,7 @@ class LocationPage(QWizardPage):
         return super().nextId()
 
 
-class DictationPage(QWizardPage):
+class DictationPage(ScrollableWizardPage):
     """Page for configuring dictation (hold-to-dictate) settings."""
 
     @staticmethod
@@ -3329,16 +3397,16 @@ class DictationPage(QWizardPage):
 
         layout = QVBoxLayout()
         layout.setSpacing(16)
-        layout.setContentsMargins(40, 40, 40, 40)
+        layout.setContentsMargins(28, 20, 28, 20)
 
         # Header
-        title = QLabel("🎙️ Dictation Mode")
+        title = QLabel("Your words, anywhere")
         title.setObjectName("title")
         layout.addWidget(title)
 
         subtitle = QLabel(
             "Hold a hotkey to record speech, release to paste the transcription "
-            "into any app. A free, offline alternative to WisprFlow."
+            "into any app. Private, local, and ready when you are."
         )
         subtitle.setObjectName("subtitle")
         subtitle.setWordWrap(True)
@@ -3374,7 +3442,7 @@ class DictationPage(QWizardPage):
         hotkey_card = QFrame()
         hotkey_card.setObjectName("card")
         hotkey_layout = QVBoxLayout(hotkey_card)
-        hotkey_layout.setContentsMargins(24, 24, 24, 24)
+        hotkey_layout.setContentsMargins(18, 16, 18, 16)
         hotkey_layout.setSpacing(12)
 
         hotkey_title = QLabel("⌨️ Dictation Hotkey")
@@ -3410,7 +3478,7 @@ class DictationPage(QWizardPage):
         tips_card = QFrame()
         tips_card.setObjectName("card")
         tips_layout = QVBoxLayout(tips_card)
-        tips_layout.setContentsMargins(24, 24, 24, 24)
+        tips_layout.setContentsMargins(18, 16, 18, 16)
         tips_layout.setSpacing(8)
 
         tips_title = QLabel("💡 How it Works")
@@ -3418,11 +3486,9 @@ class DictationPage(QWizardPage):
         tips_layout.addWidget(tips_title)
 
         tips = QLabel(
-            "• <b>Hold</b> the hotkey to record, <b>release</b> to transcribe and paste\n"
-            "• <b>Double-tap</b> the hotkey for hands-free mode (tap again or press Esc to stop)\n"
-            "• Uses the same Whisper model as voice input — no extra memory\n"
-            "• View past dictations from the system tray → 🎙️ Dictation History\n"
-            "• Fine-tune in Settings: filler word removal, custom dictionary, and more"
+            "<b>Hold to speak.</b> Release to transcribe and paste.<br><br>"
+            "<b>Double-tap for hands-free.</b> Tap again or press Esc to stop.<br><br>"
+            "Find past dictations in the tray, and customise your dictionary in Settings."
         )
         tips.setWordWrap(True)
         tips.setStyleSheet("color: #d4d4d8; font-size: 13px; line-height: 1.6;")
@@ -3488,7 +3554,7 @@ class DictationPage(QWizardPage):
         return super().nextId()
 
 
-class MCPPage(QWizardPage):
+class MCPPage(ScrollableWizardPage):
     """Page for selecting popular MCP servers to enable."""
 
     def __init__(self, parent=None):
@@ -3497,10 +3563,10 @@ class MCPPage(QWizardPage):
 
         layout = QVBoxLayout()
         layout.setSpacing(16)
-        layout.setContentsMargins(40, 40, 40, 40)
+        layout.setContentsMargins(28, 20, 28, 20)
 
         # Header
-        title = QLabel("🔌 MCP Servers")
+        title = QLabel("Give Jarvis more abilities")
         title.setObjectName("title")
         layout.addWidget(title)
 
@@ -3645,7 +3711,7 @@ class MCPPage(QWizardPage):
         return super().nextId()
 
 
-class SearchProvidersPage(QWizardPage):
+class SearchProvidersPage(ScrollableWizardPage):
     """Explain and configure web-search fallback providers.
 
     Ordering mirrors the runtime fallback chain: DDG → Brave → Wikipedia →
@@ -3661,9 +3727,9 @@ class SearchProvidersPage(QWizardPage):
 
         layout = QVBoxLayout()
         layout.setSpacing(16)
-        layout.setContentsMargins(40, 40, 40, 40)
+        layout.setContentsMargins(28, 20, 28, 20)
 
-        title = QLabel("🔎 Search Providers")
+        title = QLabel("Stay curious")
         title.setObjectName("title")
         layout.addWidget(title)
 
@@ -3812,7 +3878,7 @@ class SearchProvidersPage(QWizardPage):
         return super().nextId()
 
 
-class CompletePage(QWizardPage):
+class CompletePage(ScrollableWizardPage):
     """Final page showing setup is complete."""
 
     def __init__(self, parent=None):
@@ -3822,7 +3888,7 @@ class CompletePage(QWizardPage):
 
         layout = QVBoxLayout()
         layout.setSpacing(20)
-        layout.setContentsMargins(40, 60, 40, 40)
+        layout.setContentsMargins(28, 20, 28, 20)
 
         # Big success icon
         success_icon = QLabel("🎉")
@@ -3831,7 +3897,7 @@ class CompletePage(QWizardPage):
         layout.addWidget(success_icon)
 
         # Header
-        title = QLabel("Setup Complete!")
+        title = QLabel("Meet your Jarvis")
         title.setObjectName("title")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title)
@@ -3848,7 +3914,7 @@ class CompletePage(QWizardPage):
         card = QFrame()
         card.setObjectName("card")
         card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(24, 24, 24, 24)
+        card_layout.setContentsMargins(18, 16, 18, 16)
         card_layout.setSpacing(12)
 
         tips_title = QLabel("💡 Quick Tips")
@@ -3928,4 +3994,3 @@ if __name__ == "__main__":
     result = wizard.exec()
     print(f"Wizard result: {result}")
     sys.exit(0)
-

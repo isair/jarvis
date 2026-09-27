@@ -26,6 +26,7 @@ def _create_mock_config(**kwargs):
     mock_cfg.voice_max_collect_seconds = kwargs.get("voice_max_collect_seconds", 60.0)
     mock_cfg.voice_device = kwargs.get("voice_device", None)
     mock_cfg.voice_debug = kwargs.get("voice_debug", False)
+    mock_cfg.vad_frame_ms = kwargs.get("vad_frame_ms", 20)
     mock_cfg.tune_enabled = kwargs.get("tune_enabled", False)
     return mock_cfg
 
@@ -955,6 +956,7 @@ class TestCrossPlatformAudioHealthWarning:
 
                             with patch("jarvis.listening.listener.time") as mock_time:
                                 mock_time.time.side_effect = advancing_time
+                                mock_time.monotonic.side_effect = [0, 6, 6, 6]
                                 mock_time.sleep = time.sleep
 
                                 # No LLM warmup threads: keeps time.time() call
@@ -967,8 +969,8 @@ class TestCrossPlatformAudioHealthWarning:
                                     listener.run()
 
                             captured = capsys.readouterr()
-                            assert "No audio received after 5 seconds" in captured.out
-                            assert "pactl" in captured.out
+                            assert "No microphone callbacks" in captured.out
+                            assert "PipeWire" in captured.out
 
 
 class TestResample:
@@ -1032,14 +1034,17 @@ class TestResample:
 
 
 class TestSampleRateFallback:
-    """Tests for InputStream sample rate fallback on Linux."""
+    """Input format fallback and native-rate transcription across platforms."""
 
-    def test_fallback_to_native_rate_on_invalid_sample_rate(self, capsys):
-        """Falls back to device native rate when 16 kHz is rejected."""
+    @pytest.mark.parametrize('platform_name', ['linux', 'win32'])
+    @pytest.mark.parametrize('input_channels', [1, 2])
+    def test_fallback_to_native_rate_on_invalid_sample_rate(self, capsys, platform_name, input_channels):
+        """Negotiated headset capture reaches Whisper at the correct duration."""
         mock_whisper_model = MagicMock()
+        mock_whisper_model.transcribe.return_value = ([], None)
 
         with patch("jarvis.listening.listener.sys") as mock_sys:
-            mock_sys.platform = "linux"
+            mock_sys.platform = platform_name
             with patch("jarvis.listening.listener.FASTER_WHISPER_AVAILABLE", True):
                 with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
                     with patch("jarvis.listening.listener.WhisperModel", return_value=mock_whisper_model):
@@ -1048,25 +1053,28 @@ class TestSampleRateFallback:
 
                             # query_devices returns native rate info
                             device_info = {
-                                "name": "ALSA HDA Intel",
-                                "max_input_channels": 2,
+                                "name": "Test Headset",
+                                "max_input_channels": input_channels,
                                 "default_samplerate": 44100.0,
                             }
                             mock_sd.query_devices.side_effect = lambda *args, **kwargs: (
-                                device_info if args or kwargs else [device_info]
+                                device_info if args or kwargs else [
+                                    {'name': 'Test Headset', 'max_input_channels': 0}, device_info,
+                                ]
                             )
 
-                            # First InputStream call rejects 16 kHz, second succeeds
+                            # The headset accepts only its advertised input format.
                             mock_stream = MagicMock()
                             mock_stream.active = False
                             mock_stream.__enter__ = MagicMock(return_value=mock_stream)
                             mock_stream.__exit__ = MagicMock(return_value=False)
 
-                            call_count = [0]
                             def input_stream_side_effect(**kw):
-                                call_count[0] += 1
-                                if call_count[0] == 1:
-                                    raise Exception("Invalid sample rate [PaErrorCode -9987]")
+                                assert kw['device'] == 1
+                                if kw['channels'] != input_channels:
+                                    raise Exception('Invalid number of channels [PaErrorCode -9998]')
+                                if kw['samplerate'] != device_info['default_samplerate']:
+                                    raise Exception("Invalid sample rate [PaErrorCode -9997]")
                                 return mock_stream
 
                             mock_sd.InputStream.side_effect = input_stream_side_effect
@@ -1074,18 +1082,32 @@ class TestSampleRateFallback:
                             from jarvis.listening.listener import VoiceListener
 
                             mock_db = MagicMock()
-                            mock_cfg = _create_mock_config()
+                            mock_cfg = _create_mock_config(voice_device='Test Headset', whisper_device='cpu')
                             mock_tts = MagicMock()
                             mock_dialogue_memory = MagicMock()
 
                             listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
 
-                            # Make the run loop exit immediately
+                            # Drive native-rate speech through framing, VAD and Whisper.
+                            import numpy as np
+                            class StrictVad:
+                                def is_speech(self, pcm, rate):
+                                    assert rate == 16000 and len(pcm) == 640
+                                    return bool(np.max(np.abs(np.frombuffer(pcm, dtype=np.int16))) > 0)
+                            listener._vad = StrictVad()
+                            mock_cfg.endpoint_silence_ms = 40
+                            mock_cfg.whisper_min_audio_duration = 0.3
+                            listener._check_query_timeout = MagicMock()
                             get_calls = [0]
                             def fake_get(timeout=0.2):
                                 get_calls[0] += 1
-                                if get_calls[0] >= 2:
-                                    listener._should_stop = True
+                                if get_calls[0] == 1:
+                                    audio = np.zeros((17640, input_channels), dtype=np.float32)
+                                    audio[:, -1] = .1 * input_channels
+                                    return audio
+                                if get_calls[0] == 2:
+                                    return np.zeros((4410, input_channels), dtype=np.float32)
+                                listener._should_stop = True
                                 raise q.Empty()
 
                             listener._audio_q = MagicMock()
@@ -1093,16 +1115,19 @@ class TestSampleRateFallback:
 
                             with patch("jarvis.listening.listener.time") as mock_time:
                                 mock_time.time.return_value = 0
+                                mock_time.monotonic.return_value = 0
                                 mock_time.sleep = time.sleep
                                 listener.run()
 
-                            # InputStream should have been called twice
-                            assert mock_sd.InputStream.call_count == 2
-                            # Second call should use native 44100 rate
-                            second_call_kwargs = mock_sd.InputStream.call_args_list[1][1]
-                            assert second_call_kwargs["samplerate"] == 44100
+                            capture_kwargs = mock_sd.InputStream.call_args_list[-1][1]
+                            assert capture_kwargs["samplerate"] == 44100
+                            assert capture_kwargs['channels'] == input_channels
                             # Listener should store the stream rate
                             assert listener._stream_samplerate == 44100
+                            assert listener._frame_samples == 44100 * mock_cfg.vad_frame_ms // 1000
+                            assert capture_kwargs['blocksize'] == listener._frame_samples
+                            assert len(mock_whisper_model.transcribe.call_args[0][0]) == 6400
+                            np.testing.assert_allclose(mock_whisper_model.transcribe.call_args[0][0], .1, atol=.001)
 
                             captured = capsys.readouterr()
                             assert "44100" in captured.out

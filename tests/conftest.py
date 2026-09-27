@@ -154,9 +154,9 @@ def dialogue_memory():
     return DialogueMemory(inactivity_timeout=300, max_interactions=20)
 
 
-@pytest.fixture
-def qapp():
-    """Provide a shared QApplication for Qt-based UI tests.
+@pytest.fixture(scope="session")
+def _qapplication():
+    """Keep one QApplication alive for the entire test process.
 
     Qt requires exactly one QApplication per process.  Re-uses an existing
     instance when present so repeated test runs inside a single session
@@ -172,5 +172,20 @@ def qapp():
     app = QApplication.instance()
     if app is None:
         app = QApplication([])
+    app.setQuitOnLastWindowClosed(False)
     yield app
 
+
+@pytest.fixture
+def qapp(_qapplication):
+    """Dispose each test's widgets while the shared application is still alive."""
+    from PyQt6 import sip
+    from PyQt6.QtCore import QCoreApplication, QEvent
+
+    existing = set(_qapplication.topLevelWidgets())
+    yield _qapplication
+    for widget in _qapplication.topLevelWidgets():
+        if widget not in existing and not sip.isdeleted(widget):
+            widget.deleteLater()
+    # Flush deferred destruction, not unrelated timers or application callbacks.
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
