@@ -108,6 +108,9 @@ class TestReplyEngineDialogueMemory:
         mock_cfg.location_auto_detect = False
         mock_cfg.agentic_max_turns = 8
         mock_cfg.agentic_query_timeout_sec = 180.0
+        mock_cfg.agentic_context_tokens = 8192
+        mock_cfg.agentic_preparation = "staged"
+        mock_cfg.planner_timeout_sec = 3.0
         mock_cfg.db_path = str(tmp_path / "test.db")
         
         # Create dialogue memory
@@ -174,6 +177,9 @@ class TestReplyEngineDialogueMemory:
         mock_cfg.location_auto_detect = False
         mock_cfg.agentic_max_turns = 8
         mock_cfg.agentic_query_timeout_sec = 180.0
+        mock_cfg.agentic_context_tokens = 8192
+        mock_cfg.agentic_preparation = "staged"
+        mock_cfg.planner_timeout_sec = 3.0
         mock_cfg.db_path = str(tmp_path / "test.db")
 
         # Create dialogue memory
