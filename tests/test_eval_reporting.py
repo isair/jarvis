@@ -155,3 +155,52 @@ def test_scenario_recorder_writes_structured_outcomes(tmp_path, monkeypatch):
     data = json.loads(path.read_text())
     assert data["summary"]["offline"]["first_attempt_success"] == 0
     assert data["summary"]["offline"]["recovered_success"] == 1
+
+
+def test_live_preparation_cases_report_unavailable_when_model_is_absent(tmp_path):
+    import json
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    report_path = tmp_path / "scenarios.json"
+    root = Path(__file__).resolve().parents[1]
+    env = {
+        **os.environ,
+        "EVAL_JUDGE_BASE_URL": "http://127.0.0.1:1",
+        "EVAL_JUDGE_MODEL": "not-installed",
+        "EVAL_SCENARIO_REPORT_PATH": str(report_path),
+    }
+    run = subprocess.run(
+        [sys.executable, "-m", "pytest", "evals/test_turn_preparation.py", "-q"],
+        cwd=root, env=env, capture_output=True, text=True, timeout=30,
+    )
+
+    assert run.returncode == 0, run.stdout + run.stderr
+    payload = json.loads(report_path.read_text())
+    category = payload["summary"]["live_preparation"]
+    assert category["scenarios"] == len(payload["scenarios"]) > 0
+    assert category["availability"] == "unavailable"
+    assert category["eligible"] == 0
+    assert category["first_attempt_success"] == 0
+    assert category["recovered_success"] == 0
+
+
+def test_live_preparation_case_records_observed_first_attempt(monkeypatch):
+    from evals import test_turn_preparation as live
+    from jarvis.reply.preparation import PreparedTurn
+
+    observed = []
+    monkeypatch.setattr(live, "_JUDGE_LLM_AVAILABLE", True)
+    monkeypatch.setattr(
+        "jarvis.reply.preparation.prepare_turn",
+        lambda **kwargs: PreparedTurn([], [], False, {}),
+    )
+
+    live.test_combined_preparation_quality("Hello", set(), False, observed.append)
+
+    assert len(observed) == 1
+    assert observed[0].category == "live_preparation"
+    assert observed[0].attempts == [Attempt(True)]
+    assert observed[0].stage_durations["turn_preparation"][0] >= 0
