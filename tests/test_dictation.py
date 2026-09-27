@@ -287,6 +287,90 @@ class TestRecordingStateMachine:
             # Cleanup
             engine._stop_recording(discard=True)
 
+    def test_named_stereo_headset_records_both_channels(self):
+        """Dictation uses the selected headset even when mono capture is rejected."""
+        import numpy as np
+
+        engine = _make_engine(voice_device='Headset')
+        engine._recording = True
+        engine._session = 1
+
+        with patch('src.jarvis.dictation.dictation_engine.sd') as mock_sd, \
+             patch('src.jarvis.dictation.dictation_engine._play_beep'):
+            devices = [
+                {'name': None, 'max_input_channels': 1},
+                {'name': 'Headset microphone', 'max_input_channels': 2,
+                 'default_samplerate': 48000},
+            ]
+            mock_sd.query_devices.side_effect = lambda device=None, **kwargs: (
+                devices if device is None and not kwargs else devices[device]
+            )
+            stream = MagicMock()
+
+            def open_stream(**kwargs):
+                assert kwargs['device'] == 1
+                if kwargs['channels'] == 1:
+                    raise RuntimeError('Invalid number of channels', -9998)
+                assert kwargs['samplerate'] == 48000
+                return stream
+
+            mock_sd.InputStream.side_effect = open_stream
+            engine._begin_recording(1)
+            assert engine._stream is stream
+            assert engine._stream_sample_rate == 48000
+
+            audio = np.zeros((48000, 2), dtype=np.float32)
+            audio[:, 1] = 0.4
+            engine._audio_callback(audio, len(audio), None, None)
+            np.testing.assert_allclose(engine._audio_frames[-1], 0.2)
+            with patch.object(engine, '_transcribe', return_value='') as transcribe:
+                engine._transcribe_and_paste(engine._audio_frames)
+            whisper_audio = transcribe.call_args.args[0]
+            assert len(whisper_audio) == 16000
+            np.testing.assert_allclose(whisper_audio, 0.2)
+            engine._stop_recording(discard=True)
+
+    def test_missing_named_microphone_does_not_use_default_for_dictation(self, capsys):
+        ended = threading.Event()
+        engine = _make_engine(voice_device='Disconnected Headset', on_dictation_end=ended.set)
+        engine._recording = True
+        engine._session = 1
+
+        with patch('src.jarvis.dictation.dictation_engine.sd') as mock_sd, \
+             patch('src.jarvis.dictation.dictation_engine._play_beep'):
+            mock_sd.query_devices.return_value = [
+                {'name': 'Built-in Microphone', 'max_input_channels': 1},
+            ]
+            engine._begin_recording(1)
+            mock_sd.InputStream.assert_not_called()
+
+        assert not engine._recording
+        assert ended.is_set()
+        assert 'Selected microphone not found' in capsys.readouterr().out
+
+    def test_dictation_uses_whisper_rate_if_native_rate_is_rejected(self):
+        engine = _make_engine(voice_device='1')
+        engine._recording = True
+        engine._session = 1
+
+        with patch('src.jarvis.dictation.dictation_engine.sd') as mock_sd, \
+             patch('src.jarvis.dictation.dictation_engine._play_beep'):
+            mock_sd.query_devices.return_value = {
+                'max_input_channels': 2, 'default_samplerate': 48000,
+            }
+
+            def open_stream(**kwargs):
+                if kwargs['samplerate'] == 48000:
+                    raise RuntimeError('Invalid sample rate', -9997)
+                return MagicMock()
+
+            mock_sd.InputStream.side_effect = open_stream
+            engine._begin_recording(1)
+
+            assert engine._stream is not None
+            assert engine._stream_sample_rate == 16000
+            engine._stop_recording(discard=True)
+
     def test_stop_recording_discard_clears_frames(self):
         engine = _make_engine()
         engine._recording = True
