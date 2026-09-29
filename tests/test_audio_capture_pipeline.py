@@ -318,7 +318,7 @@ def test_transcription_worker_preserves_utterance_order():
             release_first.wait(timeout=2)
         else:
             second_started.set()
-        return str(audio), "en"
+        return str(audio), "en", ()
 
     obj._transcribe_audio = transcribe
     obj._transcription_jobs_q.put(SimpleNamespace(audio="first", start_time=1.0, end_time=2.0, energy=0.1, dictation_generation=0, captured_during_tts=False, captured_tts_start_time=0))
@@ -354,7 +354,7 @@ def test_utterance_finalisation_continues_while_whisper_is_busy():
         if isinstance(audio, str):
             whisper_started.set()
             release_whisper.wait(timeout=2)
-        return "recognised", "en"
+        return "recognised", "en", ()
 
     obj._transcribe_audio = transcribe
     obj._transcription_jobs_q.put(
@@ -406,6 +406,7 @@ def test_transcription_result_keeps_language_and_utterance_context():
     result = SimpleNamespace(
         text="hello there",
         language="en",
+        low_confidence_events=(),
         start_time=10.0,
         end_time=11.0,
         energy=0.2,
@@ -444,7 +445,7 @@ def test_shutdown_discards_full_backlog_without_waiting_for_whisper():
     def transcribe(_audio):
         started.set()
         release.wait(timeout=3)
-        return "late answer", "en"
+        return "late answer", "en", ()
 
     obj._transcribe_audio = transcribe
     job = SimpleNamespace(audio="active", start_time=1.0, end_time=2.0, energy=0.1, dictation_generation=0, captured_during_tts=False, captured_tts_start_time=0)
@@ -482,7 +483,7 @@ def test_transcription_result_during_dictation_is_not_dispatched():
     obj._transcript_buffer = Mock()
     obj._process_transcript = Mock()
     obj._is_repetitive_hallucination = lambda text: False
-    result = SimpleNamespace(text="jarvis do this", language="en", start_time=10.0, end_time=11.0, energy=0.2, dictation_generation=0, captured_during_tts=False, captured_tts_start_time=0)
+    result = SimpleNamespace(text="jarvis do this", language="en", low_confidence_events=(), start_time=10.0, end_time=11.0, energy=0.2, dictation_generation=0, captured_during_tts=False, captured_tts_start_time=0)
 
     obj._handle_transcription_result(result)
 
@@ -503,7 +504,7 @@ def test_transcription_result_without_detected_language_clears_previous_locale()
     obj._process_transcript = Mock()
     obj._is_repetitive_hallucination = lambda text: False
 
-    obj._handle_transcription_result(SimpleNamespace(text="hello", language=None, start_time=10.0, end_time=11.0, energy=0.2, dictation_generation=0, captured_during_tts=False, captured_tts_start_time=0))
+    obj._handle_transcription_result(SimpleNamespace(text="hello", language=None, low_confidence_events=(), start_time=10.0, end_time=11.0, energy=0.2, dictation_generation=0, captured_during_tts=False, captured_tts_start_time=0))
 
     assert obj._last_detected_language is None
 
@@ -520,7 +521,7 @@ def test_echo_flag_uses_capture_interval_when_tts_starts_during_whisper():
     obj._process_transcript = Mock()
     obj._is_repetitive_hallucination = lambda text: False
 
-    obj._handle_transcription_result(SimpleNamespace(text="jarvis hello", language="en", start_time=10.0, end_time=11.0, energy=0.2, dictation_generation=0, captured_during_tts=False, captured_tts_start_time=0))
+    obj._handle_transcription_result(SimpleNamespace(text="jarvis hello", language="en", low_confidence_events=(), start_time=10.0, end_time=11.0, energy=0.2, dictation_generation=0, captured_during_tts=False, captured_tts_start_time=0))
 
     assert obj._transcript_buffer.add.call_args.kwargs["is_during_tts"] is False
 
@@ -545,7 +546,7 @@ def test_queued_job_keeps_tts_context_from_audio_capture():
     job = obj._transcription_jobs_q.get_nowait()
     obj.echo_detector._tts_start_time = 12.0
     obj.tts.is_speaking.return_value = True
-    obj._transcribe_audio = lambda audio: ("stop", "en")
+    obj._transcribe_audio = lambda audio: ("stop", "en", ())
     obj._transcription_jobs_q.put(job)
     obj._transcription_jobs_q.put(None)
     obj._run_transcription_worker()
@@ -563,7 +564,7 @@ def test_run_cleans_up_worker_after_listener_exception():
     obj._transcription_jobs_q = queue.Queue(maxsize=1)
     obj._transcription_results_q = queue.Queue()
     obj._handle_transcription_result = Mock()
-    obj._transcribe_audio = lambda audio: ("hello", "en")
+    obj._transcribe_audio = lambda audio: ("hello", "en", ())
     obj._start_transcription_worker()
     worker = obj._transcription_worker_thread
     obj._run = lambda: (_ for _ in ()).throw(RuntimeError("capture failed"))
@@ -590,7 +591,7 @@ def test_dictation_session_invalidates_decode_even_after_listener_resumes():
     def transcribe(_audio):
         started.set()
         release.wait(timeout=2)
-        return "jarvis do this", "en"
+        return "jarvis do this", "en", ()
 
     obj._transcribe_audio = transcribe
     obj._start_transcription_worker()

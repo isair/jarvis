@@ -1910,36 +1910,41 @@ class TestFilterNoisySegmentsNoSpeechProb:
         listener = self._create_mock_listener()
         # avg_logprob=-0.1 → confidence 0.9 (high), but no_speech_prob=0.8 → hallucination
         seg = self._make_segment("MBC 뉴스 이재경입니다", avg_logprob=-0.1, no_speech_prob=0.8)
-        result = listener._filter_noisy_segments([seg])
+        result, events = listener._filter_noisy_segments([seg])
         assert result == [], "High no_speech_prob segment should be filtered"
+        assert events == ()
 
     def test_low_no_speech_prob_passes_through(self):
         """Segments with low no_speech_prob and good logprob pass through."""
         listener = self._create_mock_listener()
         seg = self._make_segment("what is the weather today", avg_logprob=-0.2, no_speech_prob=0.1)
-        result = listener._filter_noisy_segments([seg])
+        result, events = listener._filter_noisy_segments([seg])
         assert len(result) == 1, "Low no_speech_prob segment should not be filtered"
+        assert events == ()
 
     def test_no_speech_prob_at_threshold_filtered(self):
         """Segment at the 0.5 threshold is filtered."""
         listener = self._create_mock_listener()
         seg = self._make_segment("hello world", avg_logprob=-0.2, no_speech_prob=0.5)
-        result = listener._filter_noisy_segments([seg])
+        result, events = listener._filter_noisy_segments([seg])
         assert result == [], "Segment at no_speech_prob threshold should be filtered"
+        assert events == ()
 
     def test_no_speech_prob_below_threshold_passes(self):
         """Segment below threshold passes through."""
         listener = self._create_mock_listener()
         seg = self._make_segment("hello world", avg_logprob=-0.2, no_speech_prob=0.49)
-        result = listener._filter_noisy_segments([seg])
+        result, events = listener._filter_noisy_segments([seg])
         assert len(result) == 1
+        assert events == ()
 
     def test_only_avg_logprob_uses_logprob_confidence(self):
         """When only avg_logprob is present, confidence logic still applies."""
         listener = self._create_mock_listener()
         seg = self._make_segment("hello", avg_logprob=-0.5)  # confidence 0.5 > 0.3 threshold
-        result = listener._filter_noisy_segments([seg])
+        result, events = listener._filter_noisy_segments([seg])
         assert len(result) == 1
+        assert events == ()
 
 
 class TestIsWhisperHallucination:

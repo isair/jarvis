@@ -14,7 +14,7 @@ import sys
 import platform
 from collections import deque
 from dataclasses import dataclass
-from typing import Optional, TYPE_CHECKING, Any
+from typing import Optional, TYPE_CHECKING, Any, Callable, Literal
 from datetime import datetime
 
 from rapidfuzz import fuzz
@@ -41,13 +41,22 @@ if TYPE_CHECKING:
     from ..memory.conversation import DialogueMemory
 
 
+@dataclass(frozen=True)
+class LowConfidenceEvent:
+    """A rejected Whisper segment, available in memory to listener consumers."""
+
+    confidence: float
+    transcript: str
+    reason: Literal["low_confidence"] = "low_confidence"
+
+
 def is_whisper_hallucination(no_speech_prob: float, threshold: float) -> bool:
     """Shared Whisper no-speech gate.
 
     Whisper can report high `avg_logprob` confidence on hallucinated phrases
     when the audio is silent or noise. `no_speech_prob` is an independent
     signal and must be checked first. Used by both the faster-whisper path
-    (`_filter_noisy_segments`) and the MLX path (`_finalize_utterance`) so
+    (`_filter_noisy_segments`) and the MLX path (`_transcribe_audio`) so
     both backends apply identical policy.
     """
     return no_speech_prob >= threshold
@@ -68,6 +77,7 @@ class _TranscriptionJob:
 class _TranscriptionResult:
     text: str
     language: Optional[str]
+    low_confidence_events: tuple[LowConfidenceEvent, ...]
     start_time: float
     end_time: float
     energy: float
@@ -406,7 +416,8 @@ class VoiceListener(threading.Thread):
     """Main voice listening thread that orchestrates all voice processing."""
 
     def __init__(self, db: "Database", cfg, tts: Optional[Any],
-                 dialogue_memory: "DialogueMemory"):
+                 dialogue_memory: "DialogueMemory", *,
+                 on_low_confidence: Optional[Callable[[LowConfidenceEvent], None]] = None):
         """
         Initialise voice listener.
 
@@ -415,6 +426,9 @@ class VoiceListener(threading.Thread):
             cfg: Configuration object
             tts: Text-to-speech engine (optional)
             dialogue_memory: Dialogue memory instance
+            on_low_confidence: Optional per-segment rejection callback. Runs
+                synchronously on the listener thread and must not block;
+                consumers should enqueue work for their own thread if needed.
         """
         super().__init__(daemon=True)
 
@@ -422,6 +436,7 @@ class VoiceListener(threading.Thread):
         self.cfg = cfg
         self.tts = tts
         self.dialogue_memory = dialogue_memory
+        self.on_low_confidence = on_low_confidence
         self._should_stop = False
         self._dictation_is_active = False
         self._dictation_generation = 0
@@ -1391,6 +1406,15 @@ class VoiceListener(threading.Thread):
                 print("  ⚠️  Speech detection failed; using audio-level detection. Enable voice_debug for details.", flush=True)
             return rms >= float(getattr(self.cfg, "voice_min_energy", 0.0045))
 
+    def _emit_low_confidence(self, event: LowConfidenceEvent) -> None:
+        """Notify a consumer without allowing its failure to interrupt listening."""
+        if self.on_low_confidence is None:
+            return
+        try:
+            self.on_low_confidence(event)
+        except Exception as exc:
+            debug_log(f"low-confidence callback failed ({type(exc).__name__})", "voice")
+
     def _filter_noisy_segments(self, segments):
         """Filter out low-confidence Whisper segments."""
         min_confidence = getattr(self.cfg, "whisper_min_confidence", 0.3)
@@ -1400,6 +1424,7 @@ class VoiceListener(threading.Thread):
         # hallucinated phrase even when no real speech is present.
         no_speech_threshold = getattr(self.cfg, "whisper_no_speech_threshold", 0.5)
         filtered = []
+        low_confidence_events = []
 
         for seg in segments:
             # Hard filter: high no_speech_prob means no real speech regardless of logprob.
@@ -1417,6 +1442,8 @@ class VoiceListener(threading.Thread):
                 confidence = 1.0 - seg.no_speech_prob
 
             if confidence is not None and confidence < min_confidence:
+                if self.on_low_confidence is not None:
+                    low_confidence_events.append(LowConfidenceEvent(confidence, seg.text))
                 if confidence >= marginal_threshold:
                     # Marginal confidence - show in log viewer (not debug)
                     print(f"🔇 Low confidence ({confidence:.2f}): \"{seg.text.strip()[:50]}...\"", flush=True)
@@ -1427,7 +1454,7 @@ class VoiceListener(threading.Thread):
 
             filtered.append(seg)
 
-        return filtered
+        return filtered, tuple(low_confidence_events)
 
     def _is_repetitive_hallucination(self, text: str) -> bool:
         """
@@ -1587,24 +1614,32 @@ class VoiceListener(threading.Thread):
         self._transcription_worker_thread.start()
         debug_log("started serial Whisper transcription worker", "voice")
 
+    def _transcription_is_current(self, generation: int) -> bool:
+        return (
+            not self._should_stop
+            and not self._dictation_active
+            and generation == self._dictation_generation
+        )
+
     def _run_transcription_worker(self) -> None:
         while True:
             job = self._transcription_jobs_q.get()
             if job is None:
                 return
-            if self._should_stop or self._dictation_active or job.dictation_generation != self._dictation_generation:
+            if not self._transcription_is_current(job.dictation_generation):
                 continue
             try:
-                text, language = self._transcribe_audio(job.audio)
+                text, language, low_confidence_events = self._transcribe_audio(job.audio)
             except Exception as exc:
                 debug_log(f"transcription worker error: {exc}", "voice")
-                text, language = "", None
-            if self._should_stop or self._dictation_active or job.dictation_generation != self._dictation_generation:
+                text, language, low_confidence_events = "", None, ()
+            if not self._transcription_is_current(job.dictation_generation):
                 continue
             self._transcription_results_q.put(
                 _TranscriptionResult(
                     text=text,
                     language=language,
+                    low_confidence_events=low_confidence_events,
                     start_time=job.start_time,
                     end_time=job.end_time,
                     energy=job.energy,
@@ -1638,7 +1673,13 @@ class VoiceListener(threading.Thread):
             debug_log("finished queued Whisper transcription work", "voice")
 
     def _handle_transcription_result(self, result: _TranscriptionResult) -> None:
-        if self._should_stop or self._dictation_active or result.dictation_generation != self._dictation_generation:
+        if not self._transcription_is_current(result.dictation_generation):
+            return
+        for event in result.low_confidence_events:
+            if not self._transcription_is_current(result.dictation_generation):
+                return
+            self._emit_low_confidence(event)
+        if not self._transcription_is_current(result.dictation_generation):
             return
         self._last_detected_language = result.language
         text = result.text
@@ -2643,9 +2684,10 @@ class VoiceListener(threading.Thread):
             print("  ⚠️  Whisper is behind; this utterance was not transcribed.", flush=True)
             self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
 
-    def _transcribe_audio(self, audio) -> tuple[str, Optional[str]]:
-        """Run Whisper and return filtered text with its detected language."""
+    def _transcribe_audio(self, audio) -> tuple[str, Optional[str], tuple[LowConfidenceEvent, ...]]:
+        """Run Whisper and return filtered text, language and rejection events."""
         detected = None
+        low_confidence_events = []
         try:
             if self._whisper_backend == "mlx":
                 # MLX Whisper transcription
@@ -2682,6 +2724,10 @@ class VoiceListener(threading.Thread):
                             continue
 
                         if confidence < min_confidence:
+                            if self.on_low_confidence is not None:
+                                low_confidence_events.append(
+                                    LowConfidenceEvent(confidence, seg.get("text", ""))
+                                )
                             if confidence >= marginal_threshold:
                                 # Marginal confidence - show in log viewer (not debug)
                                 print(f"🔇 Low confidence ({confidence:.2f}): \"{seg_text[:50]}...\"", flush=True)
@@ -2714,11 +2760,11 @@ class VoiceListener(threading.Thread):
                 # on the info object). Guard against older API variants
                 # where the attribute may be absent.
                 detected = getattr(_info, "language", None)
-                filtered_segments = self._filter_noisy_segments(segments_list)
+                filtered_segments, low_confidence_events = self._filter_noisy_segments(segments_list)
                 text = " ".join(seg.text for seg in filtered_segments).strip()
         except Exception as e:
             debug_log(f"transcription error: {e}", "voice")
             if sys.platform == 'win32':
                 print(f"  ❌ Whisper error: {e}", flush=True)
-            return "", None
-        return text, detected if isinstance(detected, str) and detected else None
+            return "", None, ()
+        return text, detected if isinstance(detected, str) and detected else None, tuple(low_confidence_events)

@@ -347,6 +347,35 @@ If the intent judge later rejects the query (and no hot window override applies)
 
 **Face state is not set during TTS** — the beep is suppressed while TTS is playing to avoid self-triggering.
 
+## Low-Confidence Rejection Events
+
+`VoiceListener` accepts an optional keyword-only `on_low_confidence` callback.
+Both faster-whisper and MLX emit one immutable `LowConfidenceEvent` per segment
+discarded because its confidence is below `whisper_min_confidence`, including
+very low-confidence segments that only appear in debug logs. The event contains:
+
+- `confidence`: the same score used by the rejection check.
+- `transcript`: the full raw segment text, without trimming or truncation.
+- `reason`: `"low_confidence"`.
+
+The event is available from `jarvis.listening`. Rejection events travel with
+their transcription result and are emitted in segment order on the listener
+thread after the result passes shutdown and dictation-generation checks. An
+invalidated result emits no events, and invalidation during a callback stops
+further event delivery and transcript processing. The callback runs
+synchronously and must not block. Consumers that need to update another thread
+must enqueue their own work. Callback exceptions are logged by exception type,
+without payloads, and do not interrupt voice processing. Events are held only
+until their transcription result is processed; the listener does not persist
+them.
+
+Segments rejected by the earlier no-speech gate do not emit low-confidence
+events. Accepted segments and segments without confidence metadata retain their
+existing backend-specific filtering behaviour. These events do not trigger TTS,
+UI updates, transcript-buffer entries, or query dispatch; accepted speech in a
+mixed utterance continues through the normal pipeline. Without a callback, the
+listener filters and logs rejected segments without notifying any consumer.
+
 ## Configuration
 
 ```json
