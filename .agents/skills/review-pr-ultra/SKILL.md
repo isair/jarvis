@@ -28,7 +28,7 @@ gh pr view <PR> --json title,body,author,baseRefName,headRefOid,labels,files,add
 gh pr diff <PR>
 ```
 
-Read the project's `CLAUDE.md` for coding conventions the review should enforce.
+Read the project's `AGENTS.md` for coding conventions the review should enforce.
 Store all context — include it in each specialist agent's prompt.
 
 ## Step 2 — Spawn Specialist Agents (Parallel)
@@ -73,7 +73,7 @@ Focus: Design quality, readability, and simplicity.
 - Unnecessary abstraction, indirection, or over-engineering (e.g. frameworks,
   generics, or extra layers a straightforward implementation would avoid)
 - Dead code, unused parameters/imports, leftover debug statements
-- Inconsistency with project conventions (from CLAUDE.md)
+- Inconsistency with project conventions (from AGENTS.md)
 
 ### Agent 5: Completeness Reviewer
 Focus: What's missing.
@@ -90,7 +90,7 @@ Each agent's prompt MUST include:
 1. The full diff
 2. The changed file list
 3. The PR description
-4. Relevant project conventions from CLAUDE.md
+4. Relevant project conventions from AGENTS.md
 5. Instruction to READ the surrounding code in changed files (not just the diff lines) for full context
 6. Instruction to output findings as a structured list:
 

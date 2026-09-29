@@ -38,9 +38,42 @@ COLORS = {
     "error_light": "#f87171",
 }
 
+CHAT_THEME_STYLESHEET = f"""
+    QMainWindow#chatWindow, QWidget#phoneShell {{ background: transparent; }}
+    QWidget#chatSurface {{
+        background: {COLORS['bg_primary']}; border: 1px solid {COLORS['border']};
+        border-radius: 28px;
+    }}
+    QWidget#chatSurface QWidget {{ background: transparent; }}
+    QLabel#chatEyebrow {{ color: {COLORS['text_muted']}; font-size: 10px; letter-spacing: 2px; }}
+    QLabel#chatName {{ color: {COLORS['text_primary']}; font-size: 24px; font-weight: 600; }}
+    QLabel#chatCapsule {{
+        color: {COLORS['accent_secondary']}; background: {COLORS['bg_secondary']};
+        border: 1px solid {COLORS['border_glow']}; border-radius: 12px;
+        padding: 5px 12px; font-size: 10px; letter-spacing: 2px;
+    }}
+    QPushButton#chatWindowControl {{
+        color: {COLORS['text_secondary']}; background: transparent; border: none;
+        border-radius: 18px; padding: 0; font-size: 19px; min-width: 36px;
+    }}
+    QPushButton#chatWindowControl:hover {{ background: {COLORS['bg_hover']}; color: {COLORS['text_primary']}; }}
+    QPushButton#chatWindowControl:focus {{ border: 1px solid {COLORS['accent_primary']}; }}
+    QLabel#chatEmptyTitle {{ font-size: 24px; font-weight: 600; color: {COLORS['text_primary']}; }}
+    QLabel#chatEmptyDetail {{ font-size: 13px; color: {COLORS['text_secondary']}; }}
+    QWidget#chatSurface QWidget#chatComposer {{ background: {COLORS['bg_secondary']}; border: 1px solid {COLORS['border']}; border-radius: 22px; }}
+    QWidget#chatSurface QLabel#chatHomeIndicator {{ background: {COLORS['text_muted']}; border-radius: 2px; }}
+    QScrollBar:vertical {{ background: transparent; width: 5px; margin: 0; }}
+    QScrollBar::handle:vertical {{ background: {COLORS['border']}; border-radius: 2px; min-height: 28px; }}
+"""
+
 
 # Comprehensive Qt stylesheet matching the Memory Viewer's design
 JARVIS_THEME_STYLESHEET = """
+    QWidget#download_card {
+        background-color: #161920;
+        border: 1px solid #27272a;
+        border-radius: 12px;
+    }
     QMainWindow, QDialog, QWizard, QWizardPage {
         background-color: #0a0b0f;
     }
@@ -456,6 +489,48 @@ JARVIS_THEME_STYLESHEET = """
 """
 
 
+WIZARD_STYLESHEET = f"""
+    QWizard {{ background: {COLORS['bg_primary']}; }}
+    QWizard QFrame#card {{
+        background: {COLORS['bg_secondary']};
+        border: 1px solid {COLORS['border']}; border-radius: 14px; padding: 0;
+    }}
+    QWizard QLabel#title {{
+        color: {COLORS['text_primary']}; font-size: 28px; font-weight: 700;
+    }}
+    QWizard QLabel#subtitle {{
+        color: {COLORS['text_secondary']}; font-size: 14px;
+    }}
+    QWizard QLabel#setupBrand {{
+        color: {COLORS['accent_primary']}; font-size: 11px; font-weight: 700;
+    }}
+    QWizard QFrame#card[selected="true"] {{
+        border-color: {COLORS['accent_primary']};
+        background: {COLORS['bg_tertiary']};
+    }}
+    QWizard QLabel#setupStage {{
+        color: {COLORS['text_muted']}; font-size: 11px; padding: 6px 10px;
+        border-bottom: 2px solid {COLORS['border']};
+    }}
+    QWizard QLabel#setupStage[active="true"] {{
+        color: {COLORS['text_primary']}; border-color: {COLORS['accent_primary']};
+    }}
+    QWizard QLabel#section_title {{
+        color: {COLORS['text_primary']}; font-size: 15px; font-weight: 600;
+    }}
+    QWizard QPushButton {{ padding: 9px 16px; min-width: 80px; }}
+    QWizard QPushButton#setupNext {{
+        background: {COLORS['accent_primary']}; color: {COLORS['bg_primary']};
+        border: none; font-weight: 600;
+    }}
+    QWizard QPushButton#setupNext:disabled {{
+        background: {COLORS['bg_tertiary']}; color: {COLORS['text_muted']};
+    }}
+    QWizard QComboBox QLineEdit {{ padding: 0; border: none; background: transparent; }}
+    QWizard QScrollArea {{ border: none; background: transparent; }}
+"""
+
+
 _CHECKMARK_SVG = (
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 18 18">'
     '<path d="M4 9l3.5 3.5L14 5" stroke="#0a0b0f" stroke-width="2.5" '
@@ -530,4 +605,3 @@ def apply_theme(widget) -> None:
     icons = _ensure_icons()
     icon_css = _ICON_STYLESHEET_TEMPLATE.format(**icons)
     widget.setStyleSheet(JARVIS_THEME_STYLESHEET + icon_css)
-

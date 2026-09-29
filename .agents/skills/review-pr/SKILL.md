@@ -26,7 +26,7 @@ gh pr view <PR> --json title,body,author,baseRefName,headRefOid,labels,files,add
 gh pr diff <PR>
 ```
 
-Read the project's `CLAUDE.md` for coding conventions to enforce.
+Read the project's `AGENTS.md` for coding conventions to enforce.
 
 ## Step 2 — Diagnose CI
 
@@ -69,7 +69,7 @@ fits into the module.
 - SOLID violations, excessive coupling, low cohesion
 - Code duplication (DRY violations)
 - Naming clarity (variables, functions, classes)
-- Inconsistency with project conventions (from CLAUDE.md)
+- Inconsistency with project conventions (from AGENTS.md)
 - Missing or misleading comments/docstrings
 
 #### Simplicity
