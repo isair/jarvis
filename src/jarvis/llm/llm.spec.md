@@ -23,6 +23,9 @@ from jarvis.llm import (
     call_llm_streaming,
     chat_with_messages,
     extract_text_from_response,
+    Provider,                  # registered provider names
+    available_providers,       # installed adapter names
+    register_provider,         # optional self-hosted adapter hook
 )
 ```
 
@@ -43,6 +46,18 @@ Two interchangeable styles dispatch to the same backend:
 | `warm_up(model, *, timeout_sec, keep_alive)` | `bool` | Pre-load probe before the first real request. The `LLMBackend` default returns `True` (no-op for runtimes without a useful probe). `OllamaBackend` verifies the server is Ollama via `GET /api/version`, then issues a minimal `/api/chat` completion with the caller-provided `keep_alive` duration (default `"30m"`, `"1m"` in low-power mode) to page the model into resident memory **and** trigger full inference-pipeline initialisation (JIT compilation, KV-cache allocation) — the chat-endpoint warmup prevents the timeout that an empty `/api/generate` ping would mask on the first real call. `OpenAICompatibleBackend` first runs a fast reachability check (`GET /models`, 25 % of budget, max 5 s), then sends a single-token chat completion (`max_tokens=1`) to force the runtime to load the model into memory. |
 
 `direct()` and `streaming()` are convenience methods over `chat()`: they construct the `[system, user]` messages array internally so callers running classification-shaped passes (planner, intent judge, evaluator, enrichment extractor) do not have to. `chat()` is the low-level primitive for arbitrary message arrays — multi-turn dialogue, native tool calls, and anything that needs custom roles.
+
+### Provider catalogue
+
+`Provider` contains the stable configuration names for the built-in adapters:
+`Provider.OLLAMA` and `Provider.OPENAI_COMPATIBLE`. The factory resolves
+provider names through the process-local catalogue exposed by
+`available_providers()`, rather than coupling call sites to concrete backend
+classes. Optional self-hosted packages can register another constructor with
+`register_provider(name, constructor)`. A constructor receives `(base_url,
+api_key)` and must return an `LLMBackend`; it owns all provider-specific wire
+translation and response normalisation. Registration does not add a network
+dependency or send data anywhere.
 
 ### Tool calling
 
@@ -74,7 +89,7 @@ Provider-aware fields in `Settings` (see [src/jarvis/config.py](../config.py)):
 | `embedding_model` | (OpenAI-compatible only) | The OpenAI-compatible embedding model. Read only when the effective embedding provider is `openai_compatible` (falling back to `ollama_embed_model` if blank); the Ollama path uses `ollama_embed_model`. |
 | `low_power_mode` | `false` | When enabled, voice startup skips LLM warmup and Ollama keep-alive windows used by warmup and the intent judge are short. |
 
-The `ollama_base_url` / `ollama_chat_model` / `ollama_embed_model` keys hold the Ollama configuration and are authoritative whenever the active (chat or embedding) provider is Ollama. `_load_settings` resolves `cfg.llm_chat_model`, `cfg.embedding_model`, and `cfg.fast_model` per-provider — the Ollama keys win on the Ollama path, the provider-aware keys win on the OpenAI-compatible path — so the codebase reads a single resolved field while each provider keeps its own on-disk model name. The v1 → v2 migration promotes any explicitly-set `ollama_*` values into the provider-aware keys; per-provider resolution means a promoted value never shadows the Ollama picker. The v2 → v3 migration folds the retired per-context model keys (`intent_judge_model`, `tool_router_model`, `evaluator_model`, `planner_model`) into `fast_model` (an explicitly chosen judge or router model is kept; the old default value is not pinned).
+The `ollama_base_url` / `ollama_chat_model` / `ollama_embed_model` keys hold the Ollama configuration and are authoritative whenever the active (chat or embedding) provider is Ollama. `_load_settings` resolves `cfg.llm_chat_model`, `cfg.embedding_model`, and `cfg.fast_model` per-provider. Ollama keys win on the Ollama path; provider-aware keys win for every registered non-Ollama adapter, so the codebase reads a single resolved field while each provider keeps its own on-disk model name. The v1 → v2 migration promotes any explicitly-set `ollama_*` values into the provider-aware keys; per-provider resolution means a promoted value never shadows the Ollama picker. The v2 → v3 migration folds the retired per-context model keys (`intent_judge_model`, `tool_router_model`, `evaluator_model`, `planner_model`) into `fast_model` (an explicitly chosen judge or router model is kept; the old default value is not pinned).
 
 ### Model tiers
 
@@ -89,8 +104,8 @@ Fast-tier contexts take a few thousand tokens in and emit tiny strict-JSON answe
 
 ### Factory dispatch
 
-- `get_llm_backend(cfg)` reads `llm_provider`. For `openai_compatible` it resolves `llm_base_url` (falling back to `ollama_base_url`); for `ollama` it uses `ollama_base_url` directly so a stale `llm_base_url` from a previous OpenAI-compatible config cannot leak into the Ollama backend. `llm_api_key` is read regardless (sent only when non-empty).
-- `get_embedding_backend(cfg)` reads `embedding_provider` (falls back to `llm_provider` when unset), resolves `embedding_base_url` (falls back per-provider: `llm_base_url` for OpenAI-compatible, `ollama_base_url` for Ollama), and `embedding_api_key` (falls back to `llm_api_key`).
+- `get_llm_backend(cfg)` reads `llm_provider` from the provider catalogue. Non-Ollama adapters resolve `llm_base_url` (falling back to `ollama_base_url`); Ollama uses `ollama_base_url` directly so a stale `llm_base_url` from a previous provider cannot leak into the Ollama backend. `llm_api_key` is read regardless (sent only when non-empty).
+- `get_embedding_backend(cfg)` reads `embedding_provider` (falls back to `llm_provider` when unset), resolves `embedding_base_url` (falls back per-provider: `llm_base_url` for registered non-Ollama adapters, `ollama_base_url` for Ollama), and `embedding_api_key` (falls back to `llm_api_key`). Config loading validates both provider fields against the same catalogue.
 - Construction is fail-soft: an unset URL becomes the default Ollama URL, so `get_*_backend` never raises. Errors surface at request time, not construction time.
 
 ### v1 → v2 config migration
@@ -149,6 +164,7 @@ src/jarvis/llm/
 ├── backend.py              # LLMBackend ABC + ToolsNotSupportedError
 ├── ollama.py               # OllamaBackend + extract_text_from_response
 ├── openai_compatible.py    # OpenAICompatibleBackend + _normalise_response
+├── providers.py            # Provider names and optional adapter catalogue
 ├── factory.py              # get_llm_backend(cfg) + get_embedding_backend(cfg)
 └── llm.spec.md             # this file
 ```
