@@ -47,6 +47,19 @@ from .debug import debug_log
 from .listening.listener import VoiceListener
 from .utils.location import get_location_context, is_location_available
 
+
+def _start_tts_engine(tts) -> None:
+    """Start local speech output and report its runtime availability."""
+    if not tts.enabled:
+        print("  🔇 TTS disabled", flush=True)
+        return
+    tts.start()
+    if tts.enabled:
+        print("✅ TTS engine started", flush=True)
+    else:
+        print("  ⚠️ Speech output unavailable. Check the voice model settings and restart Jarvis.", flush=True)
+
+
 # Global instances for coordination between modules
 _global_dialogue_memory: Optional[DialogueMemory] = None
 _global_stop_requested: bool = False
@@ -919,11 +932,7 @@ def main(smoke_test: bool = False) -> None:
         piper_sentence_silence=cfg.tts_piper_sentence_silence,
     )
     _global_tts_engine = tts  # Expose for face widget speaking animation
-    if tts.enabled:
-        tts.start()
-        print("✓ TTS engine started", flush=True)
-    else:
-        print("  TTS disabled", flush=True)
+    _start_tts_engine(tts)
 
     # Initialize voice listening (only if dependencies available)
     print("🎤 Preparing speech recognition in the background...", flush=True)

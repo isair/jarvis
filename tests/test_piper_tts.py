@@ -211,17 +211,25 @@ class TestPiperTTSWithMocking:
             # Should have caught the error
             assert tts._init_error is not None
 
-    def test_speak_queues_text(self):
-        """PiperTTS.speak should queue text for processing."""
+    @pytest.mark.unit
+    def test_speak_delivers_text_to_worker(self):
+        """An available voice passes speech text to its worker."""
         from src.jarvis.output.tts import PiperTTS
 
-        tts = PiperTTS(enabled=True, model_path="/fake/model.onnx")
-
-        # Don't actually start the thread
-        tts.speak("Hello world")
-
-        # Text should be in queue (may have been preprocessed)
-        assert not tts._q.empty()
+        tts = PiperTTS(enabled=True)
+        delivered = []
+        completed = threading.Event()
+        def synthesise(text):
+            delivered.append(text)
+            completed.set()
+        with patch.object(tts, "_ensure_initialized", return_value=True), \
+             patch.object(tts, "_speak_once", side_effect=synthesise):
+            try:
+                tts.speak("Hello world")
+                assert completed.wait(timeout=1)
+                assert delivered == ["Hello world"]
+            finally:
+                tts.stop()
 
     def test_speak_does_nothing_when_disabled(self):
         """PiperTTS.speak should do nothing when disabled."""

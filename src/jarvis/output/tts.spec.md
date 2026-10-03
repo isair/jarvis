@@ -4,6 +4,15 @@ Speech synthesis runs locally. Piper uses a local ONNX voice and its JSON
 configuration; Chatterbox uses locally loaded model weights. Neither backend
 sends user text or audio to a cloud synthesis service.
 
+## Startup availability
+
+Both speech backends load their local model before accepting speech work. A
+model or dependency failure reports its reason and disables speech output for
+that engine instance. No worker or queued speech is started for an unavailable
+backend. The daemon reports availability after startup, and continues initialising
+the listener and text chat when speech output is unavailable. Saved settings are
+unchanged; restarting Jarvis creates a fresh engine that can load a repaired model.
+
 ## Piper voice downloads
 
 Missing voice files are downloaded from the configured public model-file source.

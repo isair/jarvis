@@ -469,8 +469,12 @@ class ChatterboxTTS:
     def start(self) -> None:
         if not self.enabled or self._thread is not None:
             return
-        # Initialize on first actual start
-        self._ensure_initialized()
+        if not self._ensure_model():
+            self.enabled = False
+            message = f"Chatterbox speech output unavailable: {self._model_error}"
+            print(f"  ⚠️ {message}", flush=True)
+            debug_log(message, "tts")
+            return
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
@@ -498,6 +502,8 @@ class ChatterboxTTS:
         # Lazy start the worker thread and lazy init on first speak
         if self._thread is None:
             self.start()
+        if not self.enabled:
+            return
         self._completion_callback = completion_callback
         self._duration_callback = duration_callback
         # Preprocess text for speech (convert links to readable descriptions)
@@ -774,9 +780,13 @@ class PiperTTS:
     def start(self) -> None:
         if not self.enabled or self._thread is not None:
             return
-        # Initialize model eagerly at startup (downloads if needed)
-        # This provides better UX - download happens during startup, not first speech
-        self._ensure_initialized()
+        # Load the local voice before accepting speech work.
+        if not self._ensure_initialized():
+            self.enabled = False
+            message = f"Piper speech output unavailable: {self._init_error}"
+            print(f"  ⚠️ {message}", flush=True)
+            debug_log(message, "tts")
+            return
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
@@ -803,6 +813,8 @@ class PiperTTS:
         # Lazy start the worker thread
         if self._thread is None:
             self.start()
+        if not self.enabled:
+            return
         self._completion_callback = completion_callback
         self._duration_callback = duration_callback
         # Preprocess text for speech
