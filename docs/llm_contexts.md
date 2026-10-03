@@ -69,9 +69,9 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 - **Trigger**: once per reply when enrichment returns hits AND `memory_digest_enabled` (default OFF; `null` = auto-ON for SMALL ≤7.5B / OFF for LARGE). Skipped if raw < `_DIGEST_MIN_CHARS` (400). Batched if raw > `_DIGEST_BATCH_MAX_CHARS` (2000).
 - **Model / gating**: `cfg.llm_chat_model` via `get_llm_backend(cfg)`. Gated by `memory_digest_enabled`; the auto-on path reads the same chat model so model-size detection follows the active provider.
 - **Inputs**: user query, raw diary entries, raw graph nodes.
-- **System prompt**: `_DIGEST_SYSTEM_PROMPT` at [enrichment.py:122](src/jarvis/reply/enrichment.py:122). Teaches relevance filtering, preference-signal detection, attribution preservation, `NONE` sentinel, identity queries.
-- **Output**: ≤400 chars text per batch (`_DIGEST_MAX_CHARS`) injected as reference-only memory context into the main loop's system message. Empty on failure.
-- **Limits**: `llm_digest_timeout_sec` (8s, shared). `max_tokens: 200`.
+- **System prompt**: `_DIGEST_SYSTEM_PROMPT` at [enrichment.py:161](src/jarvis/reply/enrichment.py:161). Teaches relevance filtering, preference-signal detection, attribution preservation, `NONE` sentinel, identity queries.
+- **Output**: ≤500 chars text per batch, plus a truncation ellipsis (`_DIGEST_MAX_CHARS`) injected as reference-only memory context into the main loop's system message. Empty on failure.
+- **Limits**: `llm_digest_timeout_sec` (8s, shared). `max_tokens: 1024` (`_MEMORY_DIGEST_TOKEN_BUDGET`) per batch, including reasoning and the final relevance note.
 
 ## 5. Tool-Result Digest (optional, opt-in)
 

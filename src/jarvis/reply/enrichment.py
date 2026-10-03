@@ -149,10 +149,12 @@ _DIGEST_MIN_CHARS = 400
 # concatenate the per-batch notes. Roughly ~500 tokens at 4 chars/token.
 _DIGEST_BATCH_MAX_CHARS = 2000
 
-# Upper bound on EACH per-batch digest. The final combined digest is at
-# most `_DIGEST_MAX_CHARS * num_batches`, but in practice most batches
-# return NONE or a one-sentence note.
+# Per-batch note length before a truncation ellipsis. The combined digest
+# joins surviving notes with newline separators.
 _DIGEST_MAX_CHARS = 500
+
+# Includes reasoning and the final relevance note for each bounded batch.
+_MEMORY_DIGEST_TOKEN_BUDGET = 1024
 
 _NONE_SENTINELS = {"NONE", "(NONE)", "[NONE]", "N/A", "NIL"}
 
@@ -303,7 +305,7 @@ def _distil_batch(
             user_content=user_content,
             timeout_sec=timeout_sec,
             thinking=thinking,
-            max_tokens=200,
+            max_tokens=_MEMORY_DIGEST_TOKEN_BUDGET,
         )
     except Exception as e:
         debug_log(f"memory digest batch failed: {e}", "memory")
