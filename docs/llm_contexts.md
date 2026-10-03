@@ -91,7 +91,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 - **Inputs**: user query + loop activity (tool calls, results summaries, any prose).
 - **System prompt**: `_LOOP_DIGEST_SYSTEM_PROMPT` — caveat-prefixed, user-language, concise.
 - **Output**: caveat-prefixed final reply. Fails open to the last raw candidate or generic error.
-- **Limits**: `llm_digest_timeout_sec` (8s, shared). `max_tokens: 200`.
+- **Limits**: `llm_digest_timeout_sec` (8s, shared). `max_tokens: 1024` (`_LOOP_DIGEST_TOKEN_BUDGET`), including reasoning and the final partial reply.
 
 ## 7. Tool Router (pre-loop tool selection)
 
