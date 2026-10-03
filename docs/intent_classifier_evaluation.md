@@ -62,11 +62,13 @@ remain responsible for query extraction, wake-word removal and topic synthesis.
 
 | Candidate | Environment | Qualification |
 |-----------|-------------|---------------|
-| Laya multilingual, 322M parameters | Laya 0.3.24, CPU, Apple M5 Max | 20/54 pass, 33 abstentions, 1 confidently missed stop |
+| Laya multilingual, 322M parameters | Laya 0.3.24, CPU, Apple M5 Max | 26/54 pass, 24 abstentions, 4 confident errors |
 
 The model bundle is `convaiinnovations/laya`, revision
 `55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851`. The confidence threshold is `0.9`.
-Median request latency is 74.2 ms, with a maximum of 130.9 ms across these 54
+The confident errors comprise three missed stops and one narrative mention
+classified as directed. Median request latency is 72.0 ms, with a maximum of
+126.4 ms across these 54
 cases. These measurements cover local HTTP inference with cached weights;
 they exclude server startup and downloading. The candidate does not qualify
 for runtime use. There is no measured accuracy comparison with the FAST-tier

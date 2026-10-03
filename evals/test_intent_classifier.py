@@ -23,7 +23,8 @@ from evals.test_intent_judge import (
 def speech_case(name, text, *, directed=True, stop=False, echo=False, hot=False, tts=""):
     return MultiSegmentTestCase(
         name=name, segments=[(text, echo)], last_tts_text=tts,
-        in_hot_window=hot, wake_timestamp=None, expected_directed=directed,
+        in_hot_window=hot, wake_timestamp=None if hot or echo else 1000.8,
+        expected_directed=directed,
         expected_stop=stop, expected_query_contains=None,
     )
 
