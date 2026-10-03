@@ -66,3 +66,65 @@ reasoning is disabled uniformly, and production output caps are retained.
 The exploratory profile allows 15 seconds for planning and 20 seconds for
 the intent judge. These results do not establish quality or latency for the
 default Gemma FAST-tier model, or the production planner's 3-second timeout.
+
+### Grounded completion
+
+| Arm | Completed trials | Answer facts correct | All repeats passed | Median latency | Successful median |
+|-----|------------------|----------------------|--------------------|----------------|-------------------|
+| `rewrite` | 23/36 | 28/36 | 7/12 cases | 14.74s | 15.41s |
+| `raw_only` | 12/36 | 12/36 | 4/12 cases | 10.99s | 12.22s |
+| `raw_context` | 36/36 | 36/36 | 12/12 cases | 13.84s | 13.84s |
+
+Latency includes query handling and the full reply loop; the rewrite arm
+includes the intent-judge pass. Raw arms exclude classifier latency.
+Failed clarification and unsupported answers
+can finish sooner, so successful-trial medians are also shown.
+All trial outcomes remain in the denominator.
+
+| Scenario | `rewrite` | `raw_only` | `raw_context` |
+|----------|-----------|------------|---------------|
+| explicit_weather | 1/3 | 3/3 | 3/3 |
+| explicit_film | 1/3 | 3/3 | 3/3 |
+| ambient_item_price | 3/3 | 0/3 | 3/3 |
+| answer_prior_question | 0/3 | 0/3 | 3/3 |
+| interleaved_parent_brand | 3/3 | 0/3 | 3/3 |
+| echo_followup | 3/3 | 3/3 | 3/3 |
+| spanish_reference | 3/3 | 0/3 | 3/3 |
+| turkish_reference | 3/3 | 0/3 | 3/3 |
+| reference_already_spoken | 0/3 | 0/3 | 3/3 |
+| current_topic_wins | 3/3 | 3/3 | 3/3 |
+| ambient_instruction_is_data | 0/3 | 0/3 | 3/3 |
+| long_buffer | 3/3 | 0/3 | 3/3 |
+
+[Recorded synthetic trials](evaluation_results/query_context_qwen_2026-10-03.jsonl)
+include the model/profile metadata, per-request timings and token usage,
+rewritten queries, final replies and executed fixture tool calls.
+There are 0 invalid-model trials and 0 unexpected tool actions.
+The native-call trace has one model tool-call response per executed
+fixture tool call in every trial. API keys and headers are excluded.
+
+The run uses oMLX 0.6.3rc1. The installed model configuration has SHA-256
+`ce61dae160bd5edf4a78b2e2385ff21008aa6e3ed5c304288090e377d47b47aa`.
+Its quantisation configuration is 4-bit affine with group size 32 and
+module overrides. The model name is the local server identifier.
+
+The default 3-second planner profile produced timeouts during preflight
+on this 27B model. That incomplete preflight is excluded from the
+controlled comparison and provides no accuracy conclusion. The measured
+15-second planner profile is exploratory, not production timing evidence.
+
+### Interpretation
+
+Preserving transcript context supports reference resolution without a
+generated query on these fixtures. Raw speech alone loses ambient
+subjects and facts; shared dialogue is sufficient for the echo follow-up.
+The rewritten-query path drops the parcel reference, and the reply model
+sometimes skips required grounding tools despite a usable rewritten query.
+Grounded completion therefore differs from answer-fact matching.
+
+The candidate architecture is promising for further qualification with
+the default small model and production timing limits. These twelve
+synthetic scenarios do not establish arbitrary-language accuracy, safety
+against hostile transcripts or live search quality. The Laya classifier
+remains unqualified at 26/54 cases; downstream context results assume a
+correct directed verdict and cannot compensate for classifier errors.

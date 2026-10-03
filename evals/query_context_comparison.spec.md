@@ -53,6 +53,11 @@ trial requires correct arguments and answer, no unexpected tool or replay
 error, and valid model responses throughout. A later fallback cannot hide
 an earlier empty, truncated, malformed or failed model request.
 
+Argument checks use the registered tool's public schema: required arguments
+must be present, string properties must contain strings, and only recognised
+property values can establish the referent. Unused fields cannot supply a
+matching entity. The fixtures use built-in tools with string properties.
+
 All trials stay in the accuracy denominator. Initial router mistakes are
 reported separately because later planning can recover them. Latency includes
 the rewrite pass where applicable, and both all-trial and successful-trial
