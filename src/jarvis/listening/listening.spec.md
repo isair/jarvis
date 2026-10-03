@@ -481,8 +481,8 @@ Startup distinguishes checking/downloading model files, loading into memory and 
 ### Isolated faster-whisper downloads
 
 Every faster-whisper load, including cache and CPU recovery, prepares complete
-local model files before CTranslate2 initialisation. The installed downloader
-owns model aliases and Hub cache resolution. Cached files and user-supplied local
+local model files before CTranslate2 initialisation. The installed faster-whisper alias registry defines model repositories; the
+Hub owns cache resolution and transfer resume. Cached files and user-supplied local
 directories require non-empty weights, configuration, tokeniser and vocabulary;
 an incomplete local directory produces an error rather than downloading a
 replacement or a tokeniser.
@@ -491,8 +491,8 @@ Network preparation runs in a multiprocessing spawn child, compatible with the
 desktop's frozen-process bootstrap. It has a five-minute timeout, is terminated
 and reaped on failure, and returns a validated local path or a classified error.
 Child exit and timeout stop model loading without falling back to in-process
-network work. Rate-limit status is preserved through nested Hub cache errors
-for the existing bounded startup retries. Every model constructor receives the
+network work. Remote failures remain visible when a partial cache exists. Rate-limit status
+is preserved through nested errors for the existing bounded startup retries. Every model constructor receives the
 local path and `local_files_only=True`. Cached files remain available after a
 failed attempt, retaining the Hub's download resume behaviour.
 

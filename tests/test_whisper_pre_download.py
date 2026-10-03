@@ -205,3 +205,29 @@ def test_rate_limited_preparation_recovers_before_listener_can_decode(tmp_path, 
     monkeypatch.setattr(module, 'WhisperModel', load)
     listener.run()
     assert listener._transcribe_audio(np.zeros(16000)) == ('speech after retry', 'en', ())
+
+
+def test_partial_cache_cannot_hide_remote_rate_limit(tmp_path, monkeypatch):
+    import requests
+    import huggingface_hub
+    from huggingface_hub.utils import HfHubHTTPError
+
+    partial = tmp_path / 'partial'
+    partial.mkdir()
+    (partial / 'model.bin').write_bytes(b'partial weights')
+    response = requests.Response()
+    response.status_code = 429
+    def snapshot(repo_id, **kwargs):
+        if kwargs.get('local_files_only'):
+            return str(partial)
+        raise HfHubHTTPError('remote request rejected', response=response)
+    monkeypatch.setattr(huggingface_hub, 'snapshot_download', snapshot)
+    class Result:
+        value = None
+        def send(self, value):
+            self.value = value
+        def close(self):
+            pass
+    connection = Result()
+    model_download._download_worker(connection, 'small')
+    assert connection.value == ('error', 'rate_limit', 'HTTP 429')
