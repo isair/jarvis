@@ -6,6 +6,11 @@ Typed decision models can supply the first part. They cannot generate a query
 or resolve a reference into a new string. The runtime judge uses the FAST-tier
 LLM for the full contract.
 
+[Query/context comparison](query_context_comparison.md) evaluates the downstream
+alternative: original speech plus separate transcript context on router,
+planner and reply requests. It assumes successful classification and does not
+replace this qualification suite.
+
 [Jev](https://docs.typesafe.ai/introduction) exposes atomic typed decisions.
 This evaluation uses the self-hostable System One protocol implemented by
 [Laya](https://github.com/NandhaKishorM/laya). It permits loopback endpoints only,
