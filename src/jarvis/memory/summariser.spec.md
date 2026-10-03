@@ -13,13 +13,22 @@ The summariser prompt is the only write-time defence. There is no post-process s
 - Input per generation pass: up to 10 conversation chunks plus the previous summary.
   A diary flush processes the complete pending snapshot in chronological batches,
   feeding each intermediate summary into the next pass. Intermediate results stay
-  in memory; only the completed snapshot is written. All passes share the caller's
-  generation deadline. A failed/incomplete pass or exhausted deadline preserves
+  in memory; only the completed snapshot is written. Passes in each flush attempt
+  share the caller's generation deadline. A failed/incomplete pass or exhausted deadline preserves
   the existing diary and leaves the snapshot pending. Messages arriving during
   generation remain pending beyond the captured save watermark.
+  Completed passes remain in private dialogue memory so a later flush can resume
+  the same frozen snapshot at the same timeout. A changed starting diary row,
+  day, source, model, endpoint, thinking or streaming mode restarts generation.
+  Clearing, restoring, rewinding or explicitly marking dialogue saved discards
+  resumable work; an in-flight superseded snapshot cannot commit. Flushes on the
+  same dialogue memory do not overlap. The final write and watermark advance
+  share the session mutation lock, without holding it during inference.
   Earlier user-stated facts, preferences, plans and attributed claims remain
   relevant even when absent from the current batch; correction chains are retained.
   Live diary tokens show only the final pass, keeping intermediate drafts private.
+  A completed final pass retained after deadline exhaustion supplies its cached
+  text to the live display on a later retry.
 - Output: a free-form summary (≤ 200 words) and 3–5 comma-separated topic keywords.
 - Direct generation reserves a bounded 1,024-token allowance, including reasoning,
   the summary and topics, within the caller's timeout. Streaming retains its
