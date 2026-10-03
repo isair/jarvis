@@ -688,6 +688,18 @@ def _parse_plan_step_concrete(
     return name, _normalise_url_args(args)
 
 
+def _has_required_arguments(name: str, args: dict, required_props: dict[str, set[str]]) -> bool:
+    """Only complete argument objects can leave the resolver for dispatch."""
+    missing = required_props.get(name, set()) - args.keys()
+    if missing:
+        debug_log(
+            f"planner.resolve_next_tool_call: missing required args {sorted(missing)!r} for {name!r}",
+            "planning",
+        )
+        return False
+    return True
+
+
 def resolve_next_tool_call(
     cfg,
     next_step_text: str,
@@ -700,8 +712,9 @@ def resolve_next_tool_call(
 
     Fast path: if the step is fully concrete (tool name + ``key='value'``
     args, no ``<placeholder>``), parse it deterministically and return
-    without an LLM call. Otherwise fall through to the LLM resolver which
-    handles placeholder substitution from prior results.
+    without an LLM call when every required field is present. Otherwise
+    use the LLM resolver for missing fields and placeholder substitution
+    from prior results.
 
     Returns ``(tool_name, arguments)`` or ``None`` if the step is a
     synthesis step, the LLM call fails, or the emitted JSON is invalid /
@@ -721,6 +734,7 @@ def resolve_next_tool_call(
     allowed_names: list[str] = []
     schema_lines: list[str] = []
     allowed_props: dict[str, set[str]] = {}
+    required_props: dict[str, set[str]] = {}
     for entry in tools_schema:
         fn = entry.get("function", {}) if isinstance(entry, dict) else {}
         name = fn.get("name") if isinstance(fn, dict) else None
@@ -736,6 +750,10 @@ def resolve_next_tool_call(
             prop_keys = set()
             keys = ""
         allowed_props[str(name)] = prop_keys
+        required = params.get("required") if isinstance(params, dict) else None
+        required_props[str(name)] = {
+            key for key in required if isinstance(key, str)
+        } if isinstance(required, list) else set()
         desc = (fn.get("description") or "").strip().splitlines()
         first = desc[0] if desc else ""
         schema_lines.append(f"- {name} (args: {keys}) — {first[:120]}")
@@ -744,7 +762,7 @@ def resolve_next_tool_call(
     fast = _parse_plan_step_concrete(
         next_step_text, allowed_names, allowed_props,
     )
-    if fast is not None:
+    if fast is not None and _has_required_arguments(fast[0], fast[1], required_props):
         debug_log(
             f"planner.resolve_next_tool_call: fast-parsed "
             f"{fast[0]}({fast[1]!r}) without LLM",
@@ -821,9 +839,12 @@ def resolve_next_tool_call(
     if not isinstance(obj, dict):
         return None
     name = str(obj.get("name") or "").strip()
-    args = obj.get("arguments") or {}
-    if not isinstance(args, dict):
+    args = obj.get("arguments")
+    if args is None:
         args = {}
+    if not isinstance(args, dict):
+        debug_log("planner.resolve_next_tool_call: arguments must be an object", "planning")
+        return None
     if not name or name not in allowed_names:
         debug_log(
             f"planner.resolve_next_tool_call: rejected unknown tool {name!r}",
@@ -844,6 +865,8 @@ def resolve_next_tool_call(
                 "planning",
             )
         args = filtered
+    if not _has_required_arguments(name, args, required_props):
+        return None
     return name, _normalise_url_args(args)
 
 
