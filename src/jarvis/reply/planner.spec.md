@@ -48,7 +48,7 @@ integration in `src/jarvis/reply/engine.py`.
 - Only when the query is at least `MIN_QUERY_CHARS` long (default 4).
   Pure noise like "hi" / "ok" still short-circuits.
 - Only when `cfg.planner_enabled` is True (default).
-- Only when an `ollama_base_url` and a resolvable model are available.
+- Only when a resolvable chat model is available; calls use the configured LLM backend.
 
 ### Fast-path skip (engine-level)
 
@@ -86,6 +86,11 @@ The planner prompt instructs the model to emit:
   when** answering requires information the user shared in prior
   conversations. Omit otherwise — every extra directive is an
   avoidable LLM call downstream.
+  Personalised recommendations retrieve the user's tastes, interests,
+  diet or history first. General facts about named people or places,
+  utility requests and definitions use available tools or a direct reply
+  without searching private conversation history. Explicit requests for
+  what the user said about a named person still require memory.
 - Tool names from the provided catalog only (exact match), for any
   concrete tool step.
 - Concrete arguments composed against dialogue context, not the raw
@@ -102,6 +107,8 @@ The planner prompt instructs the model to emit:
 - A final synthesis/reply step when any `searchMemory` or tool step
   was planned.
 - Steps in the same language the user wrote the query in.
+- Zero-temperature sampling for the plan classification; execution and
+  synthesis keep their own sampling settings.
 - Never emit `stop` as a plan step. The main assistant decides
   when to stop at runtime; a pre-planned stop directive would
   produce a silent dismissal for many non-trivial queries.

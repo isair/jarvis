@@ -104,3 +104,38 @@ def test_provider_override_applies_to_the_default_endpoint(monkeypatch):
     cfg = helpers.MockConfig()
     assert cfg.llm_provider == 'openai_compatible'
     assert cfg.llm_base_url == helpers.JUDGE_BASE_URL.rstrip('/') + '/v1'
+
+
+@pytest.mark.parametrize('provider,url,expected', [
+    ('', '', 'http://localhost:11434/api/chat'),
+    ('ollama', 'http://127.0.0.1:11439', 'http://127.0.0.1:11439/api/chat'),
+    ('openai_compatible', 'http://127.0.0.1:8000', 'http://127.0.0.1:8000/v1/chat/completions'),
+])
+def test_planner_eval_reaches_the_selected_backend(monkeypatch, provider, url, expected):
+    """The eval must generate a plan, rather than silently skip an unset model."""
+    import requests
+    from jarvis.reply.planner import plan_query
+    if provider:
+        monkeypatch.setenv('EVAL_JUDGE_PROVIDER', provider)
+    if url:
+        monkeypatch.setenv('EVAL_JUDGE_BASE_URL', url)
+    monkeypatch.setattr(helpers, 'JUDGE_BASE_URL', 'http://localhost:11434')
+    monkeypatch.setattr(helpers, 'JUDGE_MODEL', 'synthetic-planner-model')
+    def post(endpoint, **kwargs):
+        assert endpoint == expected
+        assert kwargs['json']['model'] == helpers.JUDGE_MODEL
+        payload = kwargs['json']
+        sampling = payload.get('options', payload)
+        assert sampling['temperature'] == 0.0
+        from unittest.mock import MagicMock
+        response = MagicMock()
+        response.__enter__.return_value = response
+        response.json.return_value = {
+            'message': {'content': 'Reply to the user.'},
+            'choices': [{'message': {'content': 'Reply to the user.'}}],
+        }
+        return response
+    monkeypatch.setattr(requests, 'post', post)
+    assert plan_query(helpers.planner_config(), 'What is two plus two?', '', []) == [
+        'Reply to the user.',
+    ]

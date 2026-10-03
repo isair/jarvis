@@ -67,7 +67,7 @@ Budget memory for Whisper and, when different from chat, the fast model used for
 ## What you can do
 
 - **A third person in the room.** Bring Jarvis into an ongoing conversation with friends, talk through a problem aloud, or ask it to weigh in on a decision. “Jarvis, what do you think?” draws on the recent discussion, not just that one sentence.
-- **Remember beyond one session.** Search your local diary and knowledge graph. Jarvis checks graph candidates for lasting value before storing them. Browse what Jarvis has stored in the Memory Viewer.
+- **Remember beyond one session.** Search your local diary and knowledge graph. Planning requests memory for personal context and distinguishes it from general facts; accuracy depends on the selected model. Jarvis checks graph candidates for lasting value before storing them. Browse what Jarvis has stored in the Memory Viewer.
 - **Get things done.** Built-in tools cover web search, weather, time, screenshot OCR, file access, nutrition tracking and optional location awareness.
 - **Connect your own tools.** MCP servers add browser automation, smart-home controls and other integrations. Tool routing selects a relevant subset for each request.
 - **Dictate into other apps.** Hold a hotkey, speak, then release to paste locally transcribed text. See the [platform limitations](#known-limitations) first.
