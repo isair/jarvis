@@ -2112,3 +2112,9 @@ class TestBoundedWhisperCacheRecovery:
         final_failure = [line for line in capsys.readouterr().out.splitlines() if "❌ Failed to load Whisper model:" in line]
         assert len(final_failure) == 1
         assert "Recovery download disconnected" in final_failure[0]
+
+@pytest.fixture(autouse=True)
+def cached_whisper_files(monkeypatch):
+    """Model-loading tests use synthetic local files and never access the Hub."""
+    monkeypatch.setattr("jarvis.listening.model_download.prepare_faster_whisper_model",
+                        lambda name: name)

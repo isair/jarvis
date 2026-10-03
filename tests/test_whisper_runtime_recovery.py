@@ -121,3 +121,9 @@ def test_startup_warmup_recovers_cuda_before_listening(monkeypatch):
     monkeypatch.setattr('jarvis.listening.listener.sd', sd)
     listener.run()
     assert listener._transcribe_audio(np.zeros(16000)) == ('hello Jarvis', 'en', ())
+
+@pytest.fixture(autouse=True)
+def cached_whisper_files(monkeypatch):
+    """Model-loading tests use synthetic local files and never access the Hub."""
+    monkeypatch.setattr("jarvis.listening.model_download.prepare_faster_whisper_model",
+                        lambda name: name)

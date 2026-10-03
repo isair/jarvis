@@ -478,6 +478,27 @@ MLX Whisper prepares files through Hugging Face's snapshot cache before loading 
 
 Startup distinguishes checking/downloading model files, loading into memory and warming up, and model readiness. Starting the listener thread is not reported as voice readiness. A failed download does not emit a loading or ready message.
 
+### Isolated faster-whisper downloads
+
+Every faster-whisper load, including cache and CPU recovery, prepares complete
+local model files before CTranslate2 initialisation. The installed downloader
+owns model aliases and Hub cache resolution. Cached files and user-supplied local
+directories require non-empty weights, configuration, tokeniser and vocabulary;
+an incomplete local directory produces an error rather than downloading a
+replacement or a tokeniser.
+
+Network preparation runs in a multiprocessing spawn child, compatible with the
+desktop's frozen-process bootstrap. It has a five-minute timeout, is terminated
+and reaped on failure, and returns a validated local path or a classified error.
+Child exit and timeout stop model loading without falling back to in-process
+network work. Visible rate-limit status is preserved through nested errors for bounded
+startup retries. Remote preparation that returns incomplete files also receives
+up to four retries with exponential backoff (2, 4, 8 and 16 seconds), including
+when an upstream cache fallback hides the remote error. An incomplete explicit
+local directory fails immediately. Every model constructor receives the
+local path and `local_files_only=True`. Cached files remain available after a
+failed attempt, retaining the Hub's download resume behaviour.
+
 ### Corrupted Cache Recovery
 
 If the HuggingFace model cache is corrupted (e.g. from an interrupted download), the system detects the CTranslate2 "unable to open file" error, deletes the parent `models--` cache directory, and retries the download once. Recovery is attempted at most once per startup, across all device and compute fallbacks. Downloaded files from that attempt remain available to later fallbacks and restarts. Missing-file errors take priority over device and compute classification, including when the cache path contains those terms. If the retry also fails, a message guides the user to manually delete the cache, and the final failure reports the latest loading error.

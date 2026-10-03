@@ -734,3 +734,9 @@ def test_listener_reports_missing_default_before_loading_whisper(monkeypatch, ca
     monkeypatch.setattr(capture, 'WhisperModel', lambda *args, **kwargs: pytest.fail('unexpected model load'))
     obj.run()
     assert 'default microphone' in capsys.readouterr().out
+
+@pytest.fixture(autouse=True)
+def cached_whisper_files(monkeypatch):
+    """Model-loading tests use synthetic local files and never access the Hub."""
+    monkeypatch.setattr("jarvis.listening.model_download.prepare_faster_whisper_model",
+                        lambda name: name)

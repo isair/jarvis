@@ -21,6 +21,7 @@ from rapidfuzz import fuzz
 from contextlib import contextmanager
 
 from .echo_detection import EchoDetector
+from .model_download import ModelDownloadError
 from .state_manager import StateManager, ListeningState
 from ..utils.audio_lock import portaudio_lock
 from ..utils.audio_capture import mono_capture, open_input_stream, resolve_input_device
@@ -389,6 +390,16 @@ def _clear_corrupted_whisper_cache(error_message: str) -> bool:
         debug_log(f"failed to clear corrupted cache: {e}", "voice")
         return False
 
+
+def _load_faster_whisper_model(model_name: str, *, device: str, compute_type: str,
+                               cpu_threads: int):
+    """Load complete local files after isolated preparation on every load path."""
+    from .model_download import prepare_faster_whisper_model
+
+    path = prepare_faster_whisper_model(model_name)
+    print(f"     🎤 Loading Whisper '{model_name}' (device={device}, compute={compute_type})...", flush=True)
+    return WhisperModel(path, device=device, compute_type=compute_type,
+                        cpu_threads=cpu_threads, local_files_only=True)
 
 
 @contextmanager
@@ -2243,8 +2254,7 @@ class VoiceListener(threading.Thread):
             for try_device, try_compute in configs_to_try:
                 try:
                     cpu_threads = (os.cpu_count() or 4) if try_device in ("cpu", "auto") else 0
-                    print(f"     🎤 Loading Whisper '{model_name}' (device={try_device}, compute={try_compute})...", flush=True)
-                    self.model = WhisperModel(
+                    self.model = _load_faster_whisper_model(
                         model_name, device=try_device, compute_type=try_compute,
                         cpu_threads=cpu_threads,
                     )
@@ -2286,7 +2296,7 @@ class VoiceListener(threading.Thread):
                         if cache_cleared:
                             try:
                                 print(f"     🎤 Re-downloading Whisper '{model_name}'...", flush=True)
-                                self.model = WhisperModel(
+                                self.model = _load_faster_whisper_model(
                                     model_name, device=try_device, compute_type=try_compute,
                                     cpu_threads=cpu_threads,
                                 )
@@ -2304,6 +2314,9 @@ class VoiceListener(threading.Thread):
                                 debug_log(f"retry after cache clear also failed: {retry_e}", "voice")
                                 print(f"  ❌ Failed to load Whisper model after cache recovery: {retry_e}", flush=True)
                                 print("  💡 Try manually deleting the Whisper model cache directory and restarting", flush=True)
+                                if (isinstance(retry_e, ModelDownloadError)
+                                        and retry_e.category not in ('rate_limit', 'incomplete_download')):
+                                    return
                                 debug_log("trying next device/compute fallback config", "voice")
                                 continue
                         else:
@@ -2314,28 +2327,35 @@ class VoiceListener(threading.Thread):
                     # Check for rate limiting (HTTP 429) — check string and response status code
                     # (HfHubHTTPError may carry the status on .response without "429" in str(e))
                     is_rate_limited = (
-                        any(x in error_str for x in ["429", "too many requests", "rate limit"])
+                        (isinstance(e, ModelDownloadError) and e.category == 'rate_limit')
+                        or any(x in error_str for x in ["429", "too many requests", "rate limit"])
                         or getattr(getattr(e, "response", None), "status_code", None) == 429
                     )
 
-                    if is_rate_limited:
+                    incomplete_download = (
+                        isinstance(e, ModelDownloadError)
+                        and e.category == 'incomplete_download'
+                    )
+                    if is_rate_limited or incomplete_download:
                         _max_retries = 4
                         _backoff = 2
-                        debug_log(f"rate limited loading Whisper model: {e}", "voice")
+                        retry_reason = ('Rate limited by HuggingFace' if is_rate_limited
+                                        else 'Whisper download is incomplete')
+                        debug_log(f"retryable Whisper preparation failure: {e}", "voice")
                         retry_succeeded = False
                         for retry_num in range(1, _max_retries + 1):
                             wait = _backoff ** retry_num
-                            print(f"  ⏳ Rate limited by HuggingFace, retrying in {wait}s ({retry_num}/{_max_retries})...", flush=True)
+                            print(f"  ⏳ {retry_reason}, retrying in {wait}s ({retry_num}/{_max_retries})...", flush=True)
                             time.sleep(wait)
                             try:
-                                self.model = WhisperModel(
+                                self.model = _load_faster_whisper_model(
                                     model_name, device=try_device, compute_type=try_compute,
                                     cpu_threads=cpu_threads,
                                 )
                                 self._apply_whisper_load_success(
                                     model_name, try_device, try_compute,
                                     device, compute, cpu_threads,
-                                    context="rate-limit retry",
+                                    context="download retry",
                                 )
                                 used_device = try_device
                                 used_compute = try_compute
@@ -2343,13 +2363,20 @@ class VoiceListener(threading.Thread):
                                 retry_succeeded = True
                                 break
                             except Exception as retry_e:
-                                debug_log(f"rate-limit retry {retry_num} failed: {retry_e}", "voice")
+                                debug_log(f"download retry {retry_num} failed: {retry_e}", "voice")
                                 last_error = retry_e
+                                if (isinstance(retry_e, ModelDownloadError)
+                                        and retry_e.category not in ('rate_limit', 'incomplete_download')):
+                                    print(f"  ❌ Failed to prepare Whisper model: {retry_e}", flush=True)
+                                    return
                         if retry_succeeded:
                             break
-                        debug_log(f"gave up after {_max_retries} rate-limit retries", "voice")
+                        debug_log(f"gave up after {_max_retries} download retries", "voice")
                         print(f"  ❌ Failed to load Whisper model after {_max_retries} retries: {last_error}", flush=True)
-                        print("  💡 HuggingFace is rate limiting downloads. Please wait a few minutes and restart.", flush=True)
+                        if is_rate_limited:
+                            print("  💡 HuggingFace is rate limiting downloads. Please wait a few minutes and restart.", flush=True)
+                        else:
+                            print("  💡 Check connectivity and free disk space, then restart to resume the download.", flush=True)
                         return
                     else:
                         # For other errors (model not found, etc.), don't try fallbacks
@@ -2740,7 +2767,7 @@ class VoiceListener(threading.Thread):
                 cpu_threads = os.cpu_count() or 4
                 # Publish the replacement only after a successful load. Dictation
                 # resolves its shared model reference while holding this lock.
-                model = WhisperModel(
+                model = _load_faster_whisper_model(
                     self._whisper_model_name, device="cpu", compute_type=cpu_compute,
                     cpu_threads=cpu_threads,
                 )
