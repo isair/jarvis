@@ -227,6 +227,10 @@ The engine consumes the plan in two phases.
   Arrays, strings, numbers and booleans are rejected rather than converted
   into empty calls. Argument value types remain the tool implementation's
   responsibility.
+- Both paths normalise Markdown links and bare domains for explicit URL
+  keys (`url`, `uri`, `href`, `link`, `target_url`, `page_url`) and properties
+  with JSON-schema `format: uri` or `uri-reference`. Literal `location` and
+  `address` values remain untouched unless their schema declares a URI format.
 - Tolerates markdown fences the model may add despite instructions.
 - Both planner LLM calls (`plan_query` and `resolve_next_tool_call`)
   request `num_ctx=8192` from Ollama so enriched memory and tool

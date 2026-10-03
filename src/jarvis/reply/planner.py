@@ -84,28 +84,9 @@ MIN_QUERY_CHARS = 4
 SEARCH_MEMORY_DIRECTIVE = "searchMemory"
 
 
-# URL hygiene applied to resolved tool arguments.
-#
-# Background (2026-05 field trace, chrome-devtools__navigate_page):
-# the planner LLM emitted `page='[youtube.com](http://youtube.com)'`
-# (markdown link syntax leaked from training priors) and even when the
-# resolver remapped the key to `url` the value retained the wrapper.
-# Puppeteer's Page.navigate then rejected with "Cannot navigate to
-# invalid URL". A separate failure mode is bare-domain values like
-# `youtube.com` with no scheme — Page.navigate rejects those too.
-#
-# Two-stage normalisation closes both holes in one place:
-#   1. Strip `[text](url)` markdown wrappers, keeping only the URL
-#      portion. Tools should never receive markdown — it's never a
-#      valid tool argument.
-#   2. Prepend `https://` to scheme-less bare domains so URL-shaped
-#      arguments always reach the tool as a fully-qualified URL.
-#
-# Scoped to keys whose name suggests a URL value to avoid stomping on
-# unrelated string args (a `query='youtube.com tutorials'` step must
-# stay literal). Keys are matched against a small allow-list of common
-# URL-ish parameter names; this is generic enough to cover every MCP
-# server we ship with and every tool we plan to add.
+# URL fields accept Markdown links and scheme-less bare domains. Strip
+# wrappers and qualify domains before dispatch. Explicit URL key names and
+# URI formats identify these fields; place names and addresses remain literal.
 _MARKDOWN_LINK_RE = re.compile(r"^\s*\[([^\]]*)\]\((https?://[^\s)]+)\)\s*$")
 _BARE_DOMAIN_RE = re.compile(
     r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?"
@@ -114,7 +95,7 @@ _BARE_DOMAIN_RE = re.compile(
     re.IGNORECASE,
 )
 _URL_KEY_RE = re.compile(
-    r"^(?:url|uri|href|link|address|target_?url|page_?url|location)$",
+    r"^(?:url|uri|href|link|target_?url|page_?url)$",
     re.IGNORECASE,
 )
 
@@ -122,9 +103,7 @@ _URL_KEY_RE = re.compile(
 def _normalise_url_value(value: str) -> str:
     """Coerce a string tool argument into a valid URL when it's URL-shaped.
 
-    See module-level commentary above ``_MARKDOWN_LINK_RE`` for the
-    motivating field trace. Returns the input unchanged if it doesn't
-    look like a URL (so unrelated string args pass through untouched).
+    Returns the input unchanged if it does not look like a URL.
     """
     if not isinstance(value, str):
         return value
@@ -139,17 +118,22 @@ def _normalise_url_value(value: str) -> str:
     return s
 
 
-def _normalise_url_args(args: dict) -> dict:
-    """Apply :func:`_normalise_url_value` to every URL-keyed string arg.
+def _normalise_url_args(args: dict, properties: dict) -> dict:
+    """Normalise explicit URL keys and properties declaring a URI format.
 
-    Returns a new dict; non-URL keys and non-string values pass through
-    unchanged. Safe to call on any resolver output.
+    Literal place and address fields retain their values unless their
+    schema identifies them as URIs. Non-string values pass through.
     """
     if not isinstance(args, dict) or not args:
         return args
     out = dict(args)
     for k, v in args.items():
-        if isinstance(v, str) and _URL_KEY_RE.match(str(k)):
+        property_schema = properties.get(k)
+        uri_format = (
+            isinstance(property_schema, dict)
+            and property_schema.get("format") in ("uri", "uri-reference")
+        )
+        if isinstance(v, str) and (_URL_KEY_RE.match(str(k)) or uri_format):
             out[k] = _normalise_url_value(v)
     return out
 
@@ -685,7 +669,7 @@ def _parse_plan_step_concrete(
             # The planner used key names that don't match the tool's
             # schema — surface to the LLM resolver which can remap them.
             return None
-    return name, _normalise_url_args(args)
+    return name, args
 
 
 def _has_required_arguments(name: str, args: dict, required_props: dict[str, set[str]]) -> bool:
@@ -735,6 +719,7 @@ def resolve_next_tool_call(
     schema_lines: list[str] = []
     allowed_props: dict[str, set[str]] = {}
     required_props: dict[str, set[str]] = {}
+    property_schemas: dict[str, dict] = {}
     for entry in tools_schema:
         fn = entry.get("function", {}) if isinstance(entry, dict) else {}
         name = fn.get("name") if isinstance(fn, dict) else None
@@ -750,6 +735,7 @@ def resolve_next_tool_call(
             prop_keys = set()
             keys = ""
         allowed_props[str(name)] = prop_keys
+        property_schemas[str(name)] = props if isinstance(props, dict) else {}
         required = params.get("required") if isinstance(params, dict) else None
         required_props[str(name)] = {
             key for key in required if isinstance(key, str)
@@ -768,7 +754,7 @@ def resolve_next_tool_call(
             f"{fast[0]}({fast[1]!r}) without LLM",
             "planning",
         )
-        return fast
+        return fast[0], _normalise_url_args(fast[1], property_schemas[fast[0]])
 
     model = resolve_model(cfg, Tier.CHAT)
     if not model:
@@ -867,7 +853,7 @@ def resolve_next_tool_call(
         args = filtered
     if not _has_required_arguments(name, args, required_props):
         return None
-    return name, _normalise_url_args(args)
+    return name, _normalise_url_args(args, property_schemas[name])
 
 
 __all__ = [
