@@ -39,6 +39,10 @@ def _create_mock_config(**kwargs):
     mock_cfg.voice_device = kwargs.get("voice_device", None)
     mock_cfg.voice_debug = kwargs.get("voice_debug", False)
     mock_cfg.vad_frame_ms = kwargs.get("vad_frame_ms", 20)
+    from jarvis.config import get_default_config
+    defaults = get_default_config()
+    mock_cfg.max_utterance_ms = kwargs.get("max_utterance_ms", defaults["max_utterance_ms"])
+    mock_cfg.tts_max_utterance_ms = kwargs.get("tts_max_utterance_ms", defaults["tts_max_utterance_ms"])
     mock_cfg.tune_enabled = kwargs.get("tune_enabled", False)
     return mock_cfg
 

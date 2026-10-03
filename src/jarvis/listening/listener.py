@@ -2660,11 +2660,14 @@ class VoiceListener(threading.Thread):
                             self._silence_frames = 0
                         else:
                             self._silence_frames += 1
-                            # Use shorter timeout during TTS for quick stop command detection
-                            current_max_frames = tts_max_utt_frames if (self.tts and self.tts.is_speaking()) else normal_max_utt_frames
-                            if self._silence_frames >= endpoint_silence_frames or len(self._utterance_frames) >= current_max_frames:
-                                self._finalize_utterance()
-                                self._pre_roll.clear()
+                    if self.is_speech_active:
+                        # Bound continuous speech as well as silent endpoints.
+                        current_max_frames = tts_max_utt_frames if (self.tts and self.tts.is_speaking()) else normal_max_utt_frames
+                        if self._silence_frames >= endpoint_silence_frames or len(self._utterance_frames) >= current_max_frames:
+                            if len(self._utterance_frames) >= current_max_frames:
+                                debug_log(f"utterance reached capture limit ({current_max_frames * frame_ms} ms)", "voice")
+                            self._finalize_utterance()
+                            self._pre_roll.clear()
 
                     # Check for query timeouts
                     self._check_query_timeout()
