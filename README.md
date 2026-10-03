@@ -128,6 +128,7 @@ Jarvis is actively developed, primarily on macOS. Windows and Linux behaviour ma
 - **No mobile app** is available ([#17](https://github.com/isair/jarvis/issues/17)).
 - **Slow speech recognition produces guidance.** After several utterances decode slower than real time, Logs recommends a smaller Whisper model or checking available acceleration. Smaller models can reduce accuracy.
 - **First-run downloads can take time.** Whisper and language models can be large. Check Logs for progress before assuming startup is stuck.
+- **Apple Silicon desktop bundles include MLX speech recognition.** Windows, Linux and Intel Mac builds use faster-whisper.
 - **CUDA speech failures use a CPU fallback.** If the CUDA runtime fails during decoding, Jarvis makes one recovery attempt on CPU. Speech recognition can be slower in this mode.
 - **Whisper turbo needs a compatible backend.** The wizard hides it when the selected backend cannot load it; an existing unsupported selection uses `medium` instead.
 - **Optional capabilities need their dependencies.** Location awareness needs a GeoLite2 database. Semantic memory search needs working embeddings; otherwise search falls back to keywords.
