@@ -58,22 +58,11 @@ def _download_error_category(error: Exception) -> str:
 def _download_worker(connection, model_name: str) -> None:
     """Prepare Hub files in a spawn child without starting audio or the daemon."""
     try:
-        from faster_whisper.utils import _MODELS, disabled_tqdm
-        from huggingface_hub import snapshot_download
+        from faster_whisper.utils import download_model
 
-        # The installed alias registry defines the repository; the Hub call
-        # exposes remote failures without an incomplete-cache fallback.
-        repo = model_name if '/' in model_name else _MODELS.get(model_name)
-        if repo is None:
-            raise ValueError('Unknown faster-whisper model')
-        path = snapshot_download(
-            repo_id=repo,
-            allow_patterns=['config.json', 'preprocessor_config.json', 'model.bin',
-                            'tokenizer.json', 'vocabulary.*'],
-            tqdm_class=disabled_tqdm,
-        )
+        path = download_model(model_name)
         if not _complete_faster_whisper_model(path):
-            raise ModelDownloadError('incomplete', 'required model files are missing')
+            raise ModelDownloadError('incomplete_download', 'required model files are missing')
         connection.send(('ready', path, ''))
     except Exception as error:
         category = (error.category if isinstance(error, ModelDownloadError)

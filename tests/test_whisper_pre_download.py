@@ -182,12 +182,14 @@ def test_local_directory_is_available_with_no_worker(tmp_path, monkeypatch):
     assert model_download.prepare_faster_whisper_model(str(model)) == str(model)
 
 
-def test_rate_limited_preparation_recovers_before_listener_can_decode(tmp_path, monkeypatch):
+@pytest.mark.parametrize('category', ['rate_limit', 'incomplete_download'])
+def test_retryable_preparation_recovers_before_listener_can_decode(tmp_path, monkeypatch, category):
     import numpy as np
     from types import SimpleNamespace
     listener, module = listener_for_loading(monkeypatch)
     ready = str(complete_model(tmp_path / 'ready'))
-    results = iter([model_download.ModelDownloadError('rate_limit', 'HTTP 429'), ready])
+    detail = 'remote quota exhausted' if category == 'rate_limit' else 'required files missing'
+    results = iter([model_download.ModelDownloadError(category, detail), ready])
     def prepare(name):
         result = next(results)
         if isinstance(result, Exception):
@@ -207,7 +209,7 @@ def test_rate_limited_preparation_recovers_before_listener_can_decode(tmp_path, 
     assert listener._transcribe_audio(np.zeros(16000)) == ('speech after retry', 'en', ())
 
 
-def test_partial_cache_cannot_hide_remote_rate_limit(tmp_path, monkeypatch):
+def test_partial_cache_fallback_remains_retryable(tmp_path, monkeypatch):
     import requests
     import huggingface_hub
     from huggingface_hub.utils import HfHubHTTPError
@@ -230,4 +232,75 @@ def test_partial_cache_cannot_hide_remote_rate_limit(tmp_path, monkeypatch):
             pass
     connection = Result()
     model_download._download_worker(connection, 'small')
-    assert connection.value == ('error', 'rate_limit', 'HTTP 429')
+    assert connection.value[0:2] == ('error', 'incomplete_download')
+
+
+def test_hub_metadata_fallback_to_partial_cache_remains_retryable(tmp_path, monkeypatch):
+    import requests
+    import huggingface_hub
+    from huggingface_hub.utils import HfHubHTTPError
+    from faster_whisper.utils import _MODELS
+
+    root = tmp_path / ('models--' + _MODELS['small'].replace('/', '--'))
+    snapshot = root / 'snapshots' / ('a' * 40)
+    snapshot.mkdir(parents=True)
+    (root / 'refs').mkdir()
+    (root / 'refs' / 'main').write_text('a' * 40)
+    (snapshot / 'model.bin').write_bytes(b'partial weights')
+    monkeypatch.setattr(huggingface_hub.constants, 'HF_HUB_CACHE', str(tmp_path))
+    response = requests.Response()
+    response.status_code = 429
+    def rejected_metadata(*args, **kwargs):
+        raise HfHubHTTPError('metadata request rejected', response=response)
+    monkeypatch.setattr(huggingface_hub.HfApi, 'repo_info', rejected_metadata)
+    class Result:
+        value = None
+        def send(self, value):
+            self.value = value
+        def close(self):
+            pass
+    connection = Result()
+    model_download._download_worker(connection, 'small')
+    assert connection.value[0:2] == ('error', 'incomplete_download')
+
+
+@pytest.mark.parametrize('category', ['worker_exit', 'timeout', 'download'])
+def test_retry_stops_when_preparation_becomes_non_retryable(monkeypatch, capsys, category):
+    listener, module = listener_for_loading(monkeypatch)
+    outcomes = iter([model_download.ModelDownloadError('incomplete_download', 'partial cache'),
+                     model_download.ModelDownloadError(category, 'terminal preparation failure')])
+    def prepare(name):
+        try:
+            raise next(outcomes)
+        except StopIteration:
+            pytest.fail('Terminal preparation failures must stop further download attempts')
+    monkeypatch.setattr(model_download, 'prepare_faster_whisper_model', prepare)
+    monkeypatch.setattr(module.time, 'sleep', lambda seconds: None)
+    def forbidden_load(*args, **kwargs):
+        pytest.fail('A failed preparation cannot reach the model constructor')
+    monkeypatch.setattr(module, 'WhisperModel', forbidden_load)
+    listener.run()
+    output = capsys.readouterr().out
+    assert 'terminal preparation failure' in output
+    assert 'Listening!' not in output
+
+
+def test_cache_recovery_stops_after_download_child_failure(tmp_path, monkeypatch, capsys):
+    listener, module = listener_for_loading(monkeypatch)
+    snapshot = complete_model(tmp_path / 'models--Test--whisper' / 'snapshots' / 'revision')
+    outcomes = iter([str(snapshot), model_download.ModelDownloadError('worker_exit', 'child aborted')])
+    def prepare(name):
+        try:
+            outcome = next(outcomes)
+        except StopIteration:
+            pytest.fail('Cache recovery must not repeat a failed download child across devices')
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+    monkeypatch.setattr(model_download, 'prepare_faster_whisper_model', prepare)
+    def corrupted(path, **options):
+        raise RuntimeError(f"Unable to open file 'model.bin' in model '{snapshot}'")
+    monkeypatch.setattr(module, 'WhisperModel', corrupted)
+    listener.run()
+    assert 'child aborted' in capsys.readouterr().out
+    assert not snapshot.exists()
