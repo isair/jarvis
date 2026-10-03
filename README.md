@@ -164,6 +164,7 @@ Connect MCP servers for browser automation, Home Assistant, GitHub, databases an
 
 - 🔊 **Piper download interruptions:** Connection resets and timeouts receive bounded retries. If they persist, check connectivity and restart Jarvis; completed voice files are retained. Certificate errors require correcting the trust configuration.
 
+- 📥 **Whisper download failures:** Faster-whisper downloads run in a separate process with a five-minute limit. If a download crashes or times out, restart Jarvis to resume it; cached models stay available offline.
 - 🎤 **Whisper cache errors:** Jarvis attempts one clean download recovery per startup. If it fails, check connectivity and free disk space, then follow the printed cache guidance and restart. Device fallbacks retain files downloaded during recovery.
 
 <details>
