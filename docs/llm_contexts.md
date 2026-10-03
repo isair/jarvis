@@ -186,7 +186,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 
 ## 14. Tool-specific LLM calls
 
-- **Weather** ([src/jarvis/tools/builtin/weather.py](src/jarvis/tools/builtin/weather.py), ~line 60) — factory-dispatched. Place extraction is a FAST-tier pass (`resolve_model(cfg, Tier.FAST)`) so small/warm models handle the parse without paging in the chat model. `max_tokens: 50`. Parses location/time/unit from the query.
+- **Weather** ([src/jarvis/tools/builtin/weather.py](src/jarvis/tools/builtin/weather.py), ~line 60) — factory-dispatched. Place extraction is a FAST-tier pass (`resolve_model(cfg, Tier.FAST)`) so small/warm models handle the parse without paging in the chat model. `max_tokens: 1024` (`_PLACE_TOKEN_BUDGET`, including reasoning and answer); `llm_tools_timeout_sec` still bounds the request. Extracts a missing place name from the redacted query when detected coordinates are unavailable. Short names retain internal punctuation; surrounding quote/punctuation wrappers and no-place sentinels are removed.
 - **Nutrition log_meal** ([src/jarvis/tools/builtin/nutrition/log_meal.py](src/jarvis/tools/builtin/nutrition/log_meal.py), lines 48 & 136) — factory-dispatched. Both the nutrition extractor and the follow-up generator use `cfg.llm_chat_model`. Extractor `max_tokens: 200`, follow-up `max_tokens: 100`. Extracts nutrients, confirms logging.
 
 ## 15. Server Capability Probe (setup-time, OpenAI-compatible only)

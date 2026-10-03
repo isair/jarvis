@@ -9,6 +9,10 @@ from ..base import Tool, ToolContext
 from ..types import ToolExecutionResult
 
 
+# Generation room includes a local model's reasoning and its short answer.
+_PLACE_TOKEN_BUDGET = 1024
+
+
 # Sentinel strings an LLM extractor may emit to mean "no place mentioned".
 # Matched case-insensitively as whole-value comparisons, not substrings.
 _NO_PLACE_SENTINELS = frozenset({
@@ -52,7 +56,7 @@ def _extract_place_from_user_text(text: str, cfg) -> Optional[str]:
         resp = get_llm_backend(cfg).direct(
             model, sys_prompt, user_prompt,
             timeout_sec=float(getattr(cfg, "llm_tools_timeout_sec", 8.0)),
-            max_tokens=50,
+            max_tokens=_PLACE_TOKEN_BUDGET,
         )
     except Exception as e:
         debug_log(f"    ⚠️ place extraction failed: {e}", "tools")
@@ -67,11 +71,10 @@ def _extract_place_from_user_text(text: str, cfg) -> Optional[str]:
         return None
     if place.lower() in _NO_PLACE_SENTINELS:
         return None
-    # Reject multi-sentence or overly long replies — those are almost always
-    # the model explaining ("the user did not name a place") instead of
-    # answering. Place names are at most a handful of words (e.g. "New York",
-    # "Stratford-upon-Avon", "São Paulo"), so 5 words is a generous cap.
-    if len(place) > 60 or "." in place or len(place.split()) > 5:
+    # Bound explanatory output while retaining punctuation within place names.
+    # Short names such as "New York", "Stratford-upon-Avon" and "São Paulo"
+    # fit within the five-word limit.
+    if len(place) > 60 or len(place.split()) > 5:
         return None
     return place
 
