@@ -21,8 +21,8 @@ from typing import List, Optional
 
 import pytest
 
-from conftest import requires_judge_llm
-from helpers import (
+from evals.conftest import requires_judge_llm
+from evals.helpers import (
     MockConfig,
     JUDGE_MODEL,
     call_judge_llm,
@@ -286,7 +286,7 @@ def _judge_extraction_quality(
         )
 
     # Parse structured response
-    from helpers import _parse_judge_response
+    from evals.helpers import _parse_judge_response
     return _parse_judge_response(response)
 
 
