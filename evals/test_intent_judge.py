@@ -10,7 +10,7 @@ from unittest.mock import patch, MagicMock
 from dataclasses import dataclass
 from typing import Optional, List, Union
 
-from helpers import JUDGE_MODEL, JUDGE_BASE_URL, is_judge_llm_available
+from evals.helpers import JUDGE_MODEL, JUDGE_BASE_URL, is_judge_llm_available
 
 
 # =============================================================================
@@ -847,15 +847,18 @@ class TestIntentJudgeFallback:
     """Tests for intent judge fallback behaviour."""
 
     def test_returns_none_when_ollama_unavailable(self):
+        import socket
+        from evals.helpers import MockConfig
         from jarvis.listening.intent_judge import IntentJudge, IntentJudgeConfig
 
-        judge = IntentJudge(IntentJudgeConfig(
-            ollama_base_url="http://127.0.0.1:99999",
-            timeout_sec=1.0,
-        ))
-
-        segments = [create_transcript_segment("test")]
-        result = judge.judge(segments)
+        # A bound, non-listening port guarantees there is no Ollama server.
+        with socket.socket() as unavailable:
+            unavailable.bind(("127.0.0.1", 0))
+            cfg = MockConfig(ollama_base_url=f"http://127.0.0.1:{unavailable.getsockname()[1]}")
+            cfg.llm_provider = "ollama"
+            judge = IntentJudge(IntentJudgeConfig(cfg=cfg, timeout_sec=1.0))
+            segments = [create_transcript_segment("test")]
+            result = judge.judge(segments)
 
         assert result is None
 
