@@ -98,6 +98,13 @@ class TestFieldMetadata:
             assert fa.key == fb.key
             assert fa.category == fb.category
 
+    def test_low_power_mode_is_exposed_as_feature_toggle(self):
+        """Low-power mode should be available without hand-editing config.json."""
+        field = next((fm for fm in FIELD_METADATA if fm.key == "low_power_mode"), None)
+        assert field is not None
+        assert field.category == "features"
+        assert field.field_type == "bool"
+
 
 class TestLLMProviderFields:
     """The settings UI must expose the provider-aware LLM config so a user

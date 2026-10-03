@@ -147,6 +147,44 @@ class TestOllamaBackendChat:
             )
 
     @patch("jarvis.llm.requests.post")
+    def test_translates_max_tokens_to_num_predict(self, mock_post):
+        """``extra_options["max_tokens"]`` is the canonical generation cap
+        across backends — Ollama receives it as ``options.num_predict`` and
+        the canonical key must not leak into the sampling options."""
+        from jarvis.llm import OllamaBackend
+
+        mock_post.return_value = _make_response(json_data={"message": {"content": "ok"}})
+        backend = OllamaBackend("http://localhost:11434")
+
+        backend.chat(
+            "qwen3.5:0.8b",
+            [{"role": "user", "content": "hi"}],
+            extra_options={"max_tokens": 500, "temperature": 0.0},
+        )
+        sent = mock_post.call_args.kwargs["json"]
+        assert sent["options"]["num_predict"] == 500
+        assert sent["options"]["temperature"] == 0.0
+        assert "max_tokens" not in sent["options"]
+
+    @patch("jarvis.llm.requests.post")
+    def test_translates_nested_options_max_tokens(self, mock_post):
+        """An explicitly nested ``options.max_tokens`` is translated too."""
+        from jarvis.llm import OllamaBackend
+
+        mock_post.return_value = _make_response(json_data={"message": {"content": "ok"}})
+        backend = OllamaBackend("http://localhost:11434")
+
+        backend.chat(
+            "qwen3.5:0.8b",
+            [{"role": "user", "content": "hi"}],
+            extra_options={"options": {"max_tokens": 300, "num_ctx": 4096}},
+        )
+        sent = mock_post.call_args.kwargs["json"]
+        assert sent["options"]["num_predict"] == 300
+        assert sent["options"]["num_ctx"] == 4096
+        assert "max_tokens" not in sent["options"]
+
+    @patch("jarvis.llm.requests.post")
     def test_returns_none_on_http_400_without_tools(self, mock_post):
         import requests
         from jarvis.llm import OllamaBackend
@@ -241,6 +279,81 @@ class TestOllamaBackendChat:
 
         sent = mock_post.call_args.kwargs["json"]
         assert sent["options"] == {"num_ctx": 8192}
+
+
+class TestOllamaBackendPromptCaching:
+    """Every Ollama chat payload must explicitly request prompt caching so
+    the server keeps the KV state of the request and reuses it when the
+    next request starts with the same prefix."""
+
+    @patch("jarvis.llm.requests.post")
+    def test_chat_payload_requests_prompt_caching(self, mock_post):
+        from jarvis.llm import OllamaBackend
+
+        mock_post.return_value = _make_response(json_data={"message": {"content": "ok"}})
+        backend = OllamaBackend("http://localhost:11434")
+
+        backend.chat("any", [{"role": "user", "content": "hi"}])
+
+        sent = mock_post.call_args.kwargs["json"]
+        assert sent["cache_prompt"] is True
+
+    @patch("jarvis.llm.requests.post")
+    def test_direct_payload_requests_prompt_caching(self, mock_post):
+        from jarvis.llm import OllamaBackend
+
+        mock_post.return_value = _make_response(json_data={"message": {"content": "ok"}})
+        backend = OllamaBackend("http://localhost:11434")
+
+        backend.direct("gemma4:e2b", "sys", "user")
+
+        sent = mock_post.call_args.kwargs["json"]
+        assert sent["cache_prompt"] is True
+
+    @patch("jarvis.llm.requests.post")
+    def test_streaming_payload_requests_prompt_caching(self, mock_post):
+        from jarvis.llm import OllamaBackend
+
+        mock_post.return_value = _make_response(
+            iter_lines=[b'{"message": {"content": "hi"}}']
+        )
+        backend = OllamaBackend("http://localhost:11434")
+
+        backend.streaming("gemma4:e2b", "sys", "user")
+
+        sent = mock_post.call_args.kwargs["json"]
+        assert sent["cache_prompt"] is True
+
+
+# ---------------------------------------------------------------------------
+# OllamaBackend — warmup
+# ---------------------------------------------------------------------------
+
+
+class TestOllamaBackendWarmUp:
+    @patch("jarvis.llm.requests.post")
+    def test_warmup_uses_default_keep_alive(self, mock_post):
+        from jarvis.llm import OllamaBackend
+
+        mock_post.return_value = MagicMock(status_code=200)
+        backend = OllamaBackend("http://localhost:11434")
+
+        assert backend.warm_up("gemma4:e2b") is True
+
+        sent = mock_post.call_args.kwargs["json"]
+        assert sent["keep_alive"] == "30m"
+
+    @patch("jarvis.llm.requests.post")
+    def test_warmup_uses_caller_keep_alive(self, mock_post):
+        from jarvis.llm import OllamaBackend
+
+        mock_post.return_value = MagicMock(status_code=200)
+        backend = OllamaBackend("http://localhost:11434")
+
+        assert backend.warm_up("gemma4:e2b", keep_alive="1m") is True
+
+        sent = mock_post.call_args.kwargs["json"]
+        assert sent["keep_alive"] == "1m"
 
 
 # ---------------------------------------------------------------------------
@@ -502,7 +615,7 @@ class TestCheckVersion:
 
 
 # ---------------------------------------------------------------------------
-# OllamaBackend — warm_up (version check + generate ping)
+# OllamaBackend — warm_up (version check + chat ping)
 # ---------------------------------------------------------------------------
 
 
@@ -520,7 +633,7 @@ class TestOllamaBackendWarmUp:
         get_url = mock_get.call_args[0][0]
         assert "api/version" in get_url
         post_url = mock_post.call_args[0][0]
-        assert "api/generate" in post_url
+        assert "api/chat" in post_url
 
     @patch("jarvis.llm.requests.post")
     @patch("jarvis.llm.requests.get")
@@ -567,7 +680,7 @@ class TestOllamaBackendWarmUp:
 
     @patch("jarvis.llm.requests.post")
     @patch("jarvis.llm.requests.get")
-    def test_warmup_fails_when_generate_fails_after_version_check(self, mock_get, mock_post):
+    def test_warmup_fails_when_chat_fails_after_version_check(self, mock_get, mock_post):
         from jarvis.llm import OllamaBackend
 
         mock_get.return_value = _make_response(json_data={"version": "0.5.1"})
@@ -578,7 +691,7 @@ class TestOllamaBackendWarmUp:
 
     @patch("jarvis.llm.requests.post")
     @patch("jarvis.llm.requests.get")
-    def test_warmup_models_on_subsequent_api_call(self, mock_get, mock_post):
+    def test_warmup_sends_chat_request_with_correct_payload(self, mock_get, mock_post):
         from jarvis.llm import OllamaBackend
 
         mock_get.return_value = _make_response(json_data={"version": "0.5.1"})
@@ -590,6 +703,12 @@ class TestOllamaBackendWarmUp:
         assert post_body["model"] == "gemma4:e2b"
         assert post_body["keep_alive"] == "30m"
         assert post_body["stream"] is False
+        # Must use chat endpoint with messages to exercise full inference pipeline
+        assert "messages" in post_body
+        assert len(post_body["messages"]) == 2
+        assert post_body["messages"][0]["role"] == "system"
+        assert post_body["messages"][1]["role"] == "user"
+        assert post_body["options"]["num_predict"] == 1
 
     @patch("jarvis.llm.requests.post")
     @patch("jarvis.llm.requests.get")

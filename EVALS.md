@@ -2,6 +2,24 @@
 
 **Generated:** 2026-05-04 (gemma4:e2b column refreshed with retry-aware outcomes from a full `--single` run; gpt-oss:20b column inherited unchanged from the 2026-04-27 regen)
 
+## 🧰 Local evaluation endpoints
+
+The model under test and judge share `EVAL_JUDGE_MODEL` and `EVAL_JUDGE_BASE_URL`.
+Set `EVAL_JUDGE_PROVIDER=ollama` for a native Ollama endpoint on a custom port,
+or `openai_compatible` for a local OpenAI-compatible server. OpenAI-compatible
+URLs accept either the server root or a `/v1` suffix.
+
+```bash
+EVAL_JUDGE_PROVIDER=ollama EVAL_JUDGE_BASE_URL=http://127.0.0.1:11439 \
+EVAL_JUDGE_MODEL=gemma4:e2b python -m pytest evals/test_graph_branch_routing.py -q
+```
+
+An explicit provider selects that transport for both availability checks and
+judge calls. Without an override, judge calls detect the endpoint; the model
+fixture defaults to Ollama on port 11434 and OpenAI-compatible on other ports.
+Use an explicit provider for custom ports. The results below belong to the dated
+report above; a targeted local run does not refresh the full report.
+
 ## 📊 TL;DR
 
 **Overall:** 🟢 **340/354 passed (96.0%)** across all categories *(small-model column re-baselined from a fresh `gemma4:e2b` run with up to 3× retries; three new tests added in #352, one intent-judge regression introduced by `a8f133c` recovered by the prompt fix in this PR — see "Intent judge" below)*
@@ -275,6 +293,25 @@
 
 ---
 
+## 🔄 KV-cache prompt restructure: regression comparison (2026-08-03)
+
+> Verification run for commit `0edfbc3` ("perf: restructure LLM prompts for maximum KV-cache prefix reuse"), which moved the reply loop's live `[Context: ...]` block from the head of the system message to the end of its dynamic region (computed once per reply), made the memory-enrichment extractor's system prompt byte-static, reordered the tool router's user prompt to put the static catalogue before the dynamic hint, and set `cache_prompt: true` on all Ollama payloads. The prompt restructure must not change agent behaviour, so the affected eval files were run **before and after** the change on the same server and compared failure-set-by-failure-set.
+
+**Setup:** `EVAL_JUDGE_BASE_URL=http://localhost:1234 EVAL_JUDGE_MODEL=google/gemma-4-e2b` (LM Studio, OpenAI-compatible endpoint), which is **not** the canonical Ollama `gemma4:e2b` used by the tables above, so absolute pass counts are not comparable across sections; this run is a base-vs-change comparison only. No retries, plain `pytest` run.
+
+| File set | Base (pre-change) | With change (final layout) |
+|----------|------------------:|---------------------------:|
+| Router + multi-turn + greeting + planner (6 files: `test_tool_router_implicit`, `test_tool_router_context_aware`, `test_multi_turn_context`, `test_greeting_no_tools`, `test_planner_personalisation`, `test_planner_trivial_with_tools`) | 12 passed / 38 failed | 12 passed / 38 failed |
+| `test_agent_behavior.py::TestMemoryEnrichment` (extractor prompt change) | 6 failed | 6 failed |
+
+**Result:** ✅ No regression. The sorted `FAILED` lists are byte-identical between base and the change for both file sets. All 38 failures are pre-existing model-behaviour issues of the `google/gemma-4-e2b` / LM Studio combination (router and planner misroutes, gemma-native tool-fence emissions) that also occur on base.
+
+**Notes:**
+- One intermediate layout (context line appended *after* the text-tool syntax guidance) produced a single extra failure on `test_multi_turn_context.py::TestTopicSwitching::test_search_then_weather` (the model emitted the forbidden gemma-native `<|tool_call|>` fence instead of the JSON literal). It passed 3/3 in isolation, and the final layout (context inserted *before* the tool-call syntax guidance, keeping the instruction block final for small models) restored the exact base failure set. The same fence-emission failure mode appears on base in other tests, so it is ambient small-model variance rather than a prompt-placement effect.
+- The unit-level KV-cache assertions (byte-identical system message across in-loop calls, once-per-reply context fetch, context at the tail) live in `tests/test_engine_kv_cache.py`; the full unit suite showed no regressions (99 pre-existing environment failures, identical before and after).
+
+---
+
 ### 📖 Legend
 
 | Symbol | Meaning |
@@ -286,5 +323,21 @@
 | 🔸 | Expected failure (known limitation) |
 | 🎉 | Unexpectedly passed (bug fixed!) |
 | ➖ | Not run for this model |
+
+## Hybrid diary retrieval (offline ranking regression)
+
+`evals/test_hybrid_retrieval.py` uses 24 synthetic summaries, nine keyword queries
+and nine paraphrases with controlled embeddings. This measures fusion correctness,
+not embedding-model quality or general real-world recall.
+
+| Retrieval | Lexical recall@3 | Semantic recall@3 |
+|-----------|------------------|-------------------|
+| FTS-only | 9/9 | 0/9 |
+| Baseline hybrid (d1b4c76) | 0/9 | 9/9 |
+| Weighted reciprocal rank fusion | 9/9 | 9/9 |
+
+Run: `PYTHONPATH=src pytest evals/test_hybrid_retrieval.py -q -s`.
+Separate regression tests cover equal-distance keyword matches, missing-source
+candidates and the native sqlite-vss query path when the extension is installed.
 
 *Report generated by Jarvis eval suite*

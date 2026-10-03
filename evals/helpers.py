@@ -26,6 +26,22 @@ JUDGE_MODEL = os.environ.get("EVAL_JUDGE_MODEL", "gemma4:e2b")
 JUDGE_BASE_URL = os.environ.get("EVAL_JUDGE_BASE_URL", "http://localhost:11434")
 
 
+def _judge_urls(base_url: str) -> tuple[str, str]:
+    """Return canonical native Ollama and versioned OpenAI-compatible bases."""
+    base = base_url.rstrip('/')
+    native = base[:-3] if base.endswith('/v1') else base
+    openai = base if base.endswith('/v1') else base + '/v1'
+    return native, openai
+
+
+def _requested_judge_provider() -> str:
+    """Read and validate an optional evaluation transport override."""
+    provider = os.environ.get("EVAL_JUDGE_PROVIDER", "").strip().lower()
+    if provider not in ("", "ollama", "openai_compatible"):
+        raise ValueError("EVAL_JUDGE_PROVIDER must be ollama or openai_compatible")
+    return provider
+
+
 # =============================================================================
 # Tool Call Capture
 # =============================================================================
@@ -245,6 +261,27 @@ class MockConfig:
     ollama_base_url: str = "http://localhost:11434"
     ollama_chat_model: str = "gemma4:e2b"
     ollama_embed_model: str = "nomic-embed-text"
+    # Provider-aware fields (for LM Studio, OpenAI-compatible, etc.)
+    llm_provider: str = ""
+    llm_base_url: str = ""
+    llm_chat_model: str = ""
+    embedding_model: Optional[str] = None
+
+    def __post_init__(self):
+        """Apply the model and transport selected for the evaluation run."""
+        judge_url = os.environ.get("EVAL_JUDGE_BASE_URL", "").strip()
+        judge_model = os.environ.get("EVAL_JUDGE_MODEL", "").strip()
+        if judge_model:
+            self.llm_chat_model = self.ollama_chat_model = judge_model
+        provider = _requested_judge_provider()
+        if judge_url or provider:
+            native, openai = _judge_urls(judge_url or JUDGE_BASE_URL)
+            if not provider:
+                provider = "ollama" if "11434" in native else "openai_compatible"
+            self.llm_provider = provider
+            self.llm_base_url = native if provider == "ollama" else openai
+            if provider == "ollama":
+                self.ollama_base_url = native
     db_path: str = ":memory:"
     sqlite_vss_path: Optional[str] = None
     voice_debug: bool = True
@@ -396,50 +433,100 @@ class JudgeVerdict:
 
 
 def is_judge_llm_available() -> bool:
-    """Check if the judge LLM is available and the model exists."""
+    """Check if the judge LLM is available and the model exists.
+
+    Supports both Ollama (``/api/tags``) and OpenAI-compatible (``/v1/models``)
+    providers. An explicit provider override takes precedence over detection.
+    """
     import requests
-    try:
-        # First check if Ollama is running
-        resp = requests.get(f"{JUDGE_BASE_URL.rstrip('/')}/api/tags", timeout=2)
-        if resp.status_code != 200:
+
+    native_base, openai_base = _judge_urls(JUDGE_BASE_URL)
+
+    def _check_ollama() -> bool:
+        try:
+            resp = requests.get(f"{native_base}/api/tags", timeout=2)
+            if resp.status_code != 200:
+                return False
+            data = resp.json()
+            models = data.get("models", [])
+            model_names = [m.get("name", "").split(":")[0] for m in models]
+            judge_base = JUDGE_MODEL.split(":")[0]
+            return any(judge_base in name for name in model_names)
+        except Exception:
             return False
 
-        # Check if the judge model is available
-        data = resp.json()
-        models = data.get("models", [])
-        model_names = [m.get("name", "").split(":")[0] for m in models]
+    def _check_openai() -> bool:
+        try:
+            resp = requests.get(f"{openai_base}/models", timeout=2)
+            if resp.status_code != 200:
+                return False
+            data = resp.json()
+            models = data.get("data", [])
+            model_ids = [m.get("id", "") for m in models]
+            return any(JUDGE_MODEL in mid for mid in model_ids)
+        except Exception:
+            return False
 
-        # Check if our judge model (or a variant) is available
-        judge_base = JUDGE_MODEL.split(":")[0]
-        return any(judge_base in name for name in model_names)
-    except Exception:
-        return False
+    provider = _requested_judge_provider()
+    if provider == "ollama":
+        return _check_ollama()
+    if provider == "openai_compatible":
+        return _check_openai()
+    if _check_ollama():
+        return True
+    return _check_openai()
 
 
 def call_judge_llm(system_prompt: str, user_prompt: str, timeout_sec: float = 120.0) -> Optional[str]:
-    """Call the judge LLM with a prompt."""
+    """Call the judge LLM with a prompt.
+
+    Supports both Ollama (``/api/chat``) and OpenAI-compatible (``/v1/chat/completions``)
+    endpoints. An explicit provider override takes precedence over detection.
+    """
     import requests
 
-    payload = {
+    native_base, openai_base = _judge_urls(JUDGE_BASE_URL)
+
+    # Detect provider
+    def _is_ollama() -> bool:
+        try:
+            return requests.get(f"{native_base}/api/tags", timeout=2).status_code == 200
+        except Exception:
+            return False
+
+    openai_payload = {
         "model": JUDGE_MODEL,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
         ],
         "stream": False,
-        "options": {"num_ctx": 4096},
     }
 
+    ollama_payload = {**openai_payload, "options": {"num_ctx": 4096}}
+
     try:
-        resp = requests.post(
-            f"{JUDGE_BASE_URL.rstrip('/')}/api/chat",
-            json=payload,
-            timeout=timeout_sec
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        if isinstance(data, dict) and "message" in data:
-            return data["message"].get("content", "")
+        provider = _requested_judge_provider()
+        if provider == "ollama" or (not provider and _is_ollama()):
+            resp = requests.post(
+                f"{native_base}/api/chat",
+                json=ollama_payload,
+                timeout=timeout_sec
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            if isinstance(data, dict) and "message" in data:
+                return data["message"].get("content", "")
+        else:
+            resp = requests.post(
+                f"{openai_base}/chat/completions",
+                json=openai_payload,
+                timeout=timeout_sec
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            if isinstance(data, dict) and "choices" in data:
+                return data["choices"][0].get("message", {}).get("content", "")
     except Exception as e:
         print(f"⚠️ Judge LLM call failed: {e}")
         return None

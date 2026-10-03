@@ -41,7 +41,7 @@ _SYSTEM_PROMPT_TEMPLATE: str = (
     "Adapt your tone to the topic: surgical for code/errors (propose minimal testable fixes), "
     "pragmatic for business decisions (surface options with tradeoffs), "
     "calm and encouraging for lifestyle/wellbeing topics (suggest small realistic steps). "
-    "The [Context: ...] line at the top of this system message is refreshed every turn "
+    "The [Context: ...] line at the end of this system message is refreshed each reply "
     "with the real current local time and location. When asked what time or date it is, "
     "answer with the value from that line, phrased naturally in the user's language. "
     "Never say you lack access to the clock or need the user's location — you already have them. "

@@ -14,7 +14,7 @@ from ...types import ToolExecutionResult
 
 def call_llm_direct(*, cfg, chat_model, system_prompt, user_content,
                     timeout_sec=10.0, thinking=False, num_ctx=4096,
-                    temperature=None):
+                    temperature=None, max_tokens=None):
     """Local indirection: route logMeal LLM calls through the backend
     configured by ``cfg.llm_provider``. Tests patch this single symbol
     to intercept the nutrition extractor and follow-up generator."""
@@ -22,6 +22,7 @@ def call_llm_direct(*, cfg, chat_model, system_prompt, user_content,
         chat_model, system_prompt, user_content,
         timeout_sec=timeout_sec, thinking=thinking,
         num_ctx=num_ctx, temperature=temperature,
+        max_tokens=max_tokens,
     )
 
 
@@ -84,6 +85,11 @@ def extract_and_log_meal(db: Database, cfg: Any, original_text: str, source_app:
         user_content=user_prompt,
         timeout_sec=cfg.llm_chat_timeout_sec,
         thinking=getattr(cfg, 'llm_thinking_enabled', False),
+        # JSON with ~11 fields (description, macros, micros dict, confidence);
+        # a multi-item meal with a filled micros dict can legitimately reach
+        # ~120 tokens. 200 gives margin so the meal is never dropped by a
+        # truncated JSON parse.
+        max_tokens=200,
     ) or ""
     text = (raw or "").strip()
     if text.upper() == "NONE":
@@ -154,6 +160,7 @@ def generate_followups_for_meal(cfg: Any, description: str, approx: str) -> str:
         user_content=follow_user,
         timeout_sec=cfg.llm_chat_timeout_sec,
         thinking=getattr(cfg, 'llm_thinking_enabled', False),
+        max_tokens=100,
     ) or ""
     return (follow_text or "").strip()
 

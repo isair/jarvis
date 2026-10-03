@@ -1,10 +1,11 @@
 """
 Model-size-specific prompt variations.
 
-Small models (1b, 3b, 7b) need explicit guidance on when NOT to use tools,
+Small models (0.5B-7.5B) need explicit guidance on when NOT to use tools,
 while larger models can infer this from context.
 """
 
+import re
 from enum import Enum
 from typing import Optional
 
@@ -18,39 +19,82 @@ from .system import (
 
 class ModelSize(Enum):
     """Classification of model sizes for prompt selection."""
-    SMALL = "small"  # 1b, 3b, 7b - needs explicit tool constraints
-    LARGE = "large"  # 8b+ - can infer tool usage from context
+    SMALL = "small"  # 0.5B-7.5B - needs explicit tool constraints
+    LARGE = "large"  # 8B+ - can infer tool usage from context
 
 
-# Model size patterns - models matching these are considered SMALL
-_SMALL_MODEL_PATTERNS = (
-    ":1b", ":3b", ":7b",
-    "-1b", "-3b", "-7b",
-    "_1b", "_3b", "_7b",
-    "gemma4",  # Gemma 4 - always small regardless of tag
+# Threshold in billions of parameters — models at or below this are SMALL.
+# Set at 7.5 (midpoint between 7B and 8B) so 7B models are SMALL and 8B+ are LARGE.
+_SMALL_MODEL_THRESHOLD = 7.5
+
+# Model families whose bare names (no size tag) should be treated as SMALL.
+# Sized variants follow the size threshold like any other model — e.g.
+# ``gemma4:12b`` is LARGE, only a bare ``gemma4`` (the 2B default) is SMALL.
+_SMALL_MODEL_FAMILIES = ("gemma4", "gemma-4")
+
+# Regex to extract parameter count from a model name.
+#
+# Matches patterns like:
+#   :0.8b  :1b  :3b  :7b  :14b  :70b     — standard sizes
+#   :2.7b  :1.1b  :0.5b                    — decimal sizes
+#   model-3b-instruct  model_1b_chat       — common separators
+#   :8x7b  :8x22b                          — Mixture-of-Experts (MoE)
+#
+# Group 1: the base parameter count (float-compatible)
+# Group 2: if present, the MoE expert size — indicates a large MoE model
+_PARAM_REGEX = re.compile(
+    r"(\d+(?:\.\d+)?)(?:x(\d+))?b(?![a-z0-9])",
+    re.IGNORECASE,
 )
 
 
 def detect_model_size(model_name: Optional[str]) -> ModelSize:
     """
-    Detect model size from model name.
+    Detect model size by parsing the actual parameter count from the name.
+
+    Uses a regex to extract the parameter count (e.g. "0.8b", "7b", "14b")
+    and compares it against the SMALL_MODEL_THRESHOLD. MoE models (e.g.
+    "8x7b") are treated as LARGE since their total parameter count is much
+    higher. Gemma 4 variants with a known size tag follow the same threshold;
+    only bare Gemma 4 names with no size indicator default to SMALL.
 
     Args:
-        model_name: Ollama model name (e.g., "gemma4", "gpt-oss:20b")
+        model_name: Model name (e.g., "qwen3.5:0.8b", "qwen3.8:27b",
+                    "mixtral:8x7b")
 
     Returns:
-        ModelSize.SMALL for 1b/3b/7b models, ModelSize.LARGE otherwise
+        ModelSize.SMALL for models ≤7.5B parameters, ModelSize.LARGE otherwise
     """
     if not model_name:
         return ModelSize.LARGE  # Default to large for safety
 
     name_lower = model_name.lower()
 
-    for pattern in _SMALL_MODEL_PATTERNS:
-        if pattern in name_lower:
+    # Extract parameter count from model name — this runs first so that
+    # known sizes are honoured even for Gemma 4 variants (e.g. a 12B Gemma 4
+    # should be treated as LARGE, not SMALL).
+    match = _PARAM_REGEX.search(name_lower)
+    if match:
+        # MoE format (e.g. "8x7b") — total parameters are much larger than the
+        # base number implies, so classify as LARGE
+        if match.group(2) is not None:
+            return ModelSize.LARGE
+
+        param_count = float(match.group(1))
+
+        if param_count <= _SMALL_MODEL_THRESHOLD:
+            return ModelSize.SMALL
+        else:
+            return ModelSize.LARGE
+
+    # No size indicator found. Fall back to model-family heuristics.
+    # Gemma 4 variants without an explicit size tag (e.g. bare "gemma4")
+    # are assumed to be the default small variant.
+    for family in _SMALL_MODEL_FAMILIES:
+        if family in name_lower:
             return ModelSize.SMALL
 
-    return ModelSize.LARGE
+    return ModelSize.LARGE  # No size indicator found
 
 
 # =============================================================================
@@ -81,7 +125,7 @@ TOOL_GUIDANCE_LARGE = (
     "The links are provenance, not a substitute for an answer."
 )
 
-# Large models also confabulate on named entities — e.g. gpt-oss:20b produces a
+# Large models also confabulate on named entities — e.g. qwen3.8:27b produces a
 # confident but wrong cast list for the film "Possessor" without calling
 # webSearch. The anti-confabulation rule is therefore not a small-model-only
 # concern. We keep a shorter version here (large models follow concise
@@ -138,10 +182,15 @@ TOOL_CONSTRAINTS_LARGE = (
 # =============================================================================
 
 TOOL_INCENTIVES_SMALL = (
-    "Use tools when they can provide better, more accurate responses. "
-    "Follow each tool's description to decide when to use it. "
-    "For current information, real-time data, or external lookups - use tools confidently. "
-    "For greetings and small talk - respond directly without tools."
+    "You MUST call the right tool whenever one is available for what the user "
+    "is talking about. Your training knowledge is stale — tools give you "
+    "current, accurate data for weather, news, recent events, named-entity "
+    "facts, and any information that changes over time. Never answer a "
+    "question or make an observation about a topic a tool covers without "
+    "having called that tool first. "
+    "The only case where you respond without tools is when the user is "
+    "greeting you, giving you behavioural instructions, or making casual "
+    "chat with no information need — everything else demands a tool call."
 )
 
 TOOL_GUIDANCE_SMALL = (
@@ -189,6 +238,9 @@ When the user asks for an action (open something, navigate somewhere, send a mes
 
 GREETING HANDLING:
 When the user's message is a greeting or casual social phrase (whatever language), respond directly and warmly WITHOUT calling any tools. Greetings do not require external data.
+
+WEATHER AND CURRENT CONDITIONS:
+When the user brings up weather, climate, temperature, or current conditions — whether as a question ("what is the weather like"), a statement ("it is nice today", "it is cold out there"), a contextual remark ("I am in London" after a prior weather exchange), or otherwise — call getWeather immediately with no arguments. Do NOT offer an opinion, an observation, or a generic pleasantry about the weather before calling the tool. The tool provides the actual readings; your training data does not know today's temperature anywhere. Even a casual weather remark is a trigger for getWeather.
 
 USER INSTRUCTIONS:
 When the user gives you instructions about how to behave or respond (units, brevity, language, tone), acknowledge and respond directly WITHOUT calling tools. These are behavioural instructions, not data requests.

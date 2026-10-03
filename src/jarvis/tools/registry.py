@@ -18,6 +18,7 @@ from .builtin.nutrition.fetch_meals import FetchMealsTool
 from .builtin.nutrition.delete_meal import DeleteMealTool
 from .builtin.refresh_mcp_tools import RefreshMCPToolsTool
 from .builtin.weather import WeatherTool
+from .builtin.time_tool import TimeTool
 from .builtin.stop import StopTool
 from .builtin.tool_search import ToolSearchTool
 from .types import ToolExecutionResult
@@ -37,6 +38,7 @@ BUILTIN_TOOLS = {
     "deleteMeal": DeleteMealTool(),
     "refreshMCPTools": RefreshMCPToolsTool(),
     "getWeather": WeatherTool(),
+    "getTime": TimeTool(),
     "stop": StopTool(),
     "toolSearchTool": ToolSearchTool(),
 }
@@ -334,7 +336,8 @@ def run_tool_with_retries(
                 text = result.get("text") or None
                 return ToolExecutionResult(success=(not is_error), reply_text=text, error_message=(text if is_error else None))
             except Exception as e:
-                return ToolExecutionResult(success=False, reply_text=None, error_message=f"MCP tool '{raw_name}' error: {e}")
+                detail = str(e) or type(e).__name__
+                return ToolExecutionResult(success=False, reply_text=None, error_message=f"MCP tool '{raw_name}' error: {detail}")
 
     # Friendly user print helper (non-debug only)
     def _user_print(message: str) -> None:

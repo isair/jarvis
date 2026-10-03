@@ -27,11 +27,17 @@ SUPPORTED_CHAT_MODELS: Dict[str, Dict[str, str]] = {
         "size": "~9.6GB",
         "vram": "16GB+",
     },
-    "gpt-oss:20b": {
-        "name": "GPT-OSS 20B (High-end)",
-        "description": "Best performance, ~12GB download",
-        "size": "~12GB",
+    "qwen3.8:27b": {
+        "name": "Qwen 3.8 27B (High-end)",
+        "description": "Best performance, ~18GB download",
+        "size": "~18GB",
         "vram": "24GB+",
+    },
+    "qwen3.5:0.8b": {
+        "name": "Qwen 3.5 0.8B (Low-VRAM)",
+        "description": "Tiny agentic model, strong reasoning for its size, built for tool-use flows; ~1.0GB download",
+        "size": "~1.0GB",
+        "vram": "2GB+",
     },
 }
 
@@ -172,6 +178,7 @@ class Settings:
     tune_enabled: bool
     hot_window_enabled: bool
     hot_window_seconds: float
+    low_power_mode: bool
 
     # Echo Detection
     echo_energy_threshold: float
@@ -442,6 +449,25 @@ def _expand_path(value: Any) -> Optional[str]:
         return str(value)
 
 
+def _expand_model_reference(value: Any) -> Optional[str]:
+    """Normalise a model setting that may name a model rather than a file.
+
+    A Whisper model is given as a size ("medium"), a Hugging Face repo ID
+    ("owner/model"), or a directory on disk. Only the last is a path, and
+    path normalisation would rewrite the repo ID's separator to a backslash
+    on Windows, leaving an identifier the loader cannot resolve. Expansion
+    therefore applies to what is recognisably a path and nothing else.
+    """
+    if value in (None, "", "null"):
+        return None
+    raw = str(value)
+    try:
+        is_a_path = raw.startswith("~") or Path(raw).is_absolute() or Path(raw).exists()
+    except Exception:
+        is_a_path = False
+    return _expand_path(raw) if is_a_path else raw
+
+
 def _ensure_dict(value: Any) -> Dict[str, Any]:
     if isinstance(value, dict):
         return value
@@ -563,6 +589,7 @@ def get_default_config() -> Dict[str, Any]:
         "tune_enabled": True,
         "hot_window_enabled": True,
         "hot_window_seconds": 3.0,
+        "low_power_mode": False,
         "echo_energy_threshold": 2.0,
         "echo_tolerance": 0.3,  # Time tolerance for echo detection timing
 
@@ -760,9 +787,7 @@ def load_settings() -> Settings:
     wake_word = str(merged.get("wake_word", "jarvis")).strip().lower()
     wake_aliases = [a.strip().lower() for a in _ensure_list(merged.get("wake_aliases")) if a.strip()]
     wake_fuzzy_ratio = float(merged.get("wake_fuzzy_ratio", 0.78))
-    # whisper_model accepts a size name ("medium") or a local model
-    # directory; _expand_path is a no-op for plain names.
-    whisper_model = _expand_path(merged.get("whisper_model")) or "medium"
+    whisper_model = _expand_model_reference(merged.get("whisper_model")) or "medium"
     whisper_backend = os.environ.get("JARVIS_WHISPER_BACKEND", "").lower() or str(merged.get("whisper_backend", "auto")).lower()
     if whisper_backend not in ("auto", "mlx", "faster-whisper"):
         whisper_backend = "auto"
@@ -783,6 +808,7 @@ def load_settings() -> Settings:
     tune_enabled = bool(merged.get("tune_enabled", True))
     hot_window_enabled = bool(merged.get("hot_window_enabled", True))
     hot_window_seconds = float(merged.get("hot_window_seconds", 3.0))
+    low_power_mode = bool(merged.get("low_power_mode", False))
     echo_energy_threshold = float(merged.get("echo_energy_threshold", 2.0))
     echo_tolerance = float(merged.get("echo_tolerance", 0.3))
 
@@ -963,6 +989,7 @@ def load_settings() -> Settings:
         tune_enabled=tune_enabled,
         hot_window_enabled=hot_window_enabled,
         hot_window_seconds=hot_window_seconds,
+        low_power_mode=low_power_mode,
         echo_energy_threshold=echo_energy_threshold,
         echo_tolerance=echo_tolerance,
         # Fast tier (voice intent, tool routing, quick classifications)

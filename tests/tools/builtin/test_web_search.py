@@ -1148,15 +1148,22 @@ class TestLanguagePlumbingEndToEnd:
         # selection downstream reads from there.
         assert mock_wiki.call_args.kwargs.get("lang") == "tr"
 
-    def test_listener_stores_detected_language_attribute(self):
-        """The listener exposes `_last_detected_language` so `_dispatch_query`
-        can read it — this is the single attribute the reply engine bridge
-        depends on. Guard against it being renamed or removed silently."""
-        from src.jarvis.listening import listener as listener_module
-        import inspect
-        src = inspect.getsource(listener_module)
-        # One init, at least two assignment sites (MLX + faster-whisper),
-        # and the dispatch call must read it.
-        assert "self._last_detected_language: Optional[str] = None" in src
-        assert src.count("self._last_detected_language = detected") >= 2
-        assert "language=self._last_detected_language" in src
+    def test_listener_passes_detected_language_to_reply_engine(self):
+        """Voice query dispatch carries the detected language to the reply engine."""
+        from contextlib import nullcontext
+        from src.jarvis.listening.listener import VoiceListener
+
+        listener = VoiceListener.__new__(VoiceListener)
+        listener.db = object()
+        listener.cfg = object()
+        listener.dialogue_memory = object()
+        listener.tts = None
+        listener._last_detected_language = "tr"
+        listener._clear_audio_buffers = Mock()
+        listener._stop_thinking_tune = Mock()
+
+        with patch("src.jarvis.reply.engine.run_reply_engine", return_value="") as run_reply:
+            with patch("src.jarvis.daemon.query_lock", return_value=nullcontext()):
+                listener._dispatch_query("istanbul")
+
+        assert run_reply.call_args.kwargs["language"] == "tr"

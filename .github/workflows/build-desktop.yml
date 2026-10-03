@@ -1,0 +1,281 @@
+name: Build Desktop Apps
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: 'App version string (e.g. "1.2.3" or "dev-a1b2c3d")'
+        required: true
+        type: string
+      channel:
+        description: 'Release channel (stable / develop)'
+        required: true
+        type: string
+      smoke_test:
+        description: 'Run --smoke-test after each build'
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: build-desktop-${{ github.ref_name }}-${{ inputs.version }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Windows: build + optional smoke test ────────────────────────────────
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v5
+
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: 📝 Generate version file
+        shell: pwsh
+        run: |
+          @"
+          # Auto-generated at build time
+          VERSION = "${{ inputs.version }}"
+          RELEASE_CHANNEL = "${{ inputs.channel }}"
+          "@ | Out-File -FilePath src/jarvis/_version.py -Encoding utf8
+          Write-Host "Generated version file with VERSION=${{ inputs.version }}, RELEASE_CHANNEL=${{ inputs.channel }}"
+
+      - name: 📦 Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          Get-Content requirements.txt | Where-Object { $_ -notmatch '^(chatterbox-tts|mlx-whisper|nvidia-)' } | Set-Content requirements-desktop.txt
+          pip install -r requirements-desktop.txt
+          pip install pyinstaller
+
+      - name: 🎨 Generate icons
+        run: |
+          python src/desktop_app/desktop_assets/generate_icons.py
+
+      - name: 🔨 Build executable (onedir)
+        run: |
+          pyinstaller jarvis_desktop.spec
+
+      - name: 🔍 Smoke test bundled app
+        if: inputs.smoke_test
+        shell: pwsh
+        run: |
+          Write-Host "=== Smoke Test: Jarvis Desktop (Windows) ==="
+          # GUI-subsystem (console=False) executables do not attach to
+          # PowerShell's console: `& app.exe 2>&1` captures no output and
+          # leaves $LASTEXITCODE empty, so the smoke test always "failed"
+          # regardless of the app's real result. Start-Process -PassThru
+          # exposes the true exit code, and -RedirectStandardOutput/-Error
+          # give the app real stdout/stderr handles to write into.
+          $outFile = Join-Path $env:RUNNER_TEMP "jarvis-smoke-stdout.txt"
+          $errFile = Join-Path $env:RUNNER_TEMP "jarvis-smoke-stderr.txt"
+          $process = Start-Process -FilePath "dist\Jarvis\Jarvis.exe" `
+            -ArgumentList "--smoke-test" `
+            -Wait -PassThru `
+            -RedirectStandardOutput $outFile `
+            -RedirectStandardError $errFile
+          $exitCode = $process.ExitCode
+          Write-Host "----- stdout -----"
+          Get-Content $outFile -ErrorAction SilentlyContinue
+          Write-Host "----- stderr -----"
+          Get-Content $errFile -ErrorAction SilentlyContinue
+          if ($exitCode -ne 0) {
+            Write-Host "SMOKE TEST FAILED (exit code: $exitCode)"
+            exit 1
+          }
+          Write-Host "Smoke test passed"
+
+      - name: 🛠️ Install Inno Setup
+        if: always()
+        run: |
+          choco install innosetup -y
+
+      - name: 📦 Build Windows installer
+        if: always()
+        run: |
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion="${{ inputs.version }}" installer\windows\jarvis_setup.iss
+
+      - name: 📦 Package installer as Jarvis-Windows-x64.zip
+        if: always()
+        run: |
+          Copy-Item dist\Jarvis-Setup-x64.exe dist\Jarvis.exe
+          cd dist
+          Compress-Archive -Path Jarvis.exe -DestinationPath Jarvis-Windows-x64.zip
+
+      - name: 📤 Upload Windows artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: Jarvis-Windows
+          path: dist/Jarvis-Windows-x64.zip
+
+  # ── macOS: build + optional smoke test (arm64 + x64) ────────────────────
+  build-macos:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            arch: arm64
+          - os: macos-15-intel
+            arch: x64
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v5
+
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: 📝 Generate version file
+        run: |
+          cat > src/jarvis/_version.py << EOF
+          # Auto-generated at build time
+          VERSION = "${{ inputs.version }}"
+          RELEASE_CHANNEL = "${{ inputs.channel }}"
+          EOF
+          echo "Generated version file with VERSION=${{ inputs.version }}, RELEASE_CHANNEL=${{ inputs.channel }}"
+
+      - name: 📦 Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ "${{ matrix.arch }}" = "arm64" ]; then
+            grep -v -E '^chatterbox-tts' requirements.txt > requirements-desktop.txt
+          else
+            grep -v -E '^(chatterbox-tts|mlx-whisper)' requirements.txt > requirements-desktop.txt
+          fi
+          pip install -r requirements-desktop.txt
+          pip install pyinstaller
+
+      - name: 🎨 Generate icons
+        run: |
+          python src/desktop_app/desktop_assets/generate_icons.py
+
+      - name: 🔨 Build application
+        run: |
+          pyinstaller jarvis_desktop.spec
+
+      # Note: Ad-hoc code signing is intentionally skipped
+      # codesign --force --deep breaks Qt WebEngine's symlink structure
+      # causing crashes when QWebEngineView is shown.
+      # See: https://github.com/pyinstaller/pyinstaller/issues/6612
+      # Users can bypass Gatekeeper by right-clicking and selecting "Open"
+
+      - name: 🔍 Smoke test bundled app
+        if: inputs.smoke_test
+        run: |
+          echo "═══════════════════════════════════════════"
+          echo " Smoke Test: Jarvis Desktop (macOS ${{ matrix.arch }})"
+          echo "═══════════════════════════════════════════"
+          chmod +x dist/Jarvis.app/Contents/MacOS/Jarvis
+          dist/Jarvis.app/Contents/MacOS/Jarvis --smoke-test
+          echo "✅ Smoke test passed"
+
+      - name: 📦 Package macOS build
+        if: always()
+        run: |
+          cd dist
+          ditto -c -k --keepParent Jarvis.app Jarvis-macOS-${{ matrix.arch }}.zip
+
+      - name: 📤 Upload macOS artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: Jarvis-macOS-${{ matrix.arch }}
+          path: dist/Jarvis-macOS-${{ matrix.arch }}.zip
+
+  # ── Linux: build + optional smoke test ──────────────────────────────────
+  build-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: 🧹 Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force
+          df -h
+
+      - name: 📥 Checkout code
+        uses: actions/checkout@v5
+
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: 📦 Install system dependencies
+        run: |
+          sudo apt-get update
+          # libegl1/libgl1: Qt6 (even the offscreen/xcb platform plugins) dlopens
+          # libEGL.so.1/libGL.so.1 at import time; without them the bundled app
+          # dies with "ImportError: libEGL.so.1: cannot open shared object file"
+          sudo apt-get install -y libegl1 libgl1 libxcb-cursor0 libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 portaudio19-dev binutils
+          # xvfb is needed for smoke tests (virtual framebuffer for Qt)
+          if [ "${{ inputs.smoke_test }}" = "true" ]; then
+            sudo apt-get install -y xvfb
+          fi
+
+      - name: 📝 Generate version file
+        run: |
+          cat > src/jarvis/_version.py << EOF
+          # Auto-generated at build time
+          VERSION = "${{ inputs.version }}"
+          RELEASE_CHANNEL = "${{ inputs.channel }}"
+          EOF
+          echo "Generated version file with VERSION=${{ inputs.version }}, RELEASE_CHANNEL=${{ inputs.channel }}"
+
+      - name: 📦 Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          grep -v -E '^(chatterbox-tts|mlx-whisper)' requirements.txt > requirements-desktop.txt
+          pip install -r requirements-desktop.txt
+          pip install pyinstaller
+
+      - name: 🎨 Generate icons
+        run: |
+          python src/desktop_app/desktop_assets/generate_icons.py
+
+      - name: 🔨 Build executable
+        run: |
+          pyinstaller jarvis_desktop.spec
+
+      - name: 🔍 Smoke test bundled app
+        if: inputs.smoke_test
+        run: |
+          echo "═══════════════════════════════════════════"
+          echo " Smoke Test: Jarvis Desktop (Linux)"
+          echo "═══════════════════════════════════════════"
+          xvfb-run --auto-servernum dist/Jarvis/Jarvis --smoke-test
+          echo "✅ Smoke test passed"
+
+      - name: 📦 Package Linux build
+        if: always()
+        run: |
+          cd dist
+          tar -czf Jarvis-Linux-x64.tar.gz Jarvis/
+
+      - name: 📤 Upload Linux artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: Jarvis-Linux
+          path: dist/Jarvis-Linux-x64.tar.gz

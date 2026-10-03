@@ -64,7 +64,7 @@ After transcription, text passes through these stages in order:
 
 ## Architecture
 
-- **`pynput`** for global hotkey detection (cross-platform).
+- **`pynput`** for global hotkey detection (cross-platform). On supported macOS releases, the listener enters the Quartz event loop directly and retains pynput character/modifier decoding. It does not open a Carbon keyboard-layout context on its worker thread: event characters come from `CGEventKeyboardGetUnicodeString`, and the unused context can trigger a fatal TSM main-queue assertion. The macOS 26+ safety guard remains in force.
 - **Clipboard-based paste** (`Ctrl+V` / `Cmd+V`) for text insertion — more
   reliable than character-by-character typing, handles Unicode.
 - **Shared Whisper model** via lazy reference (`lambda: voice_thread.model`)
@@ -97,10 +97,16 @@ After transcription, text passes through these stages in order:
 ### Audio Device Handling
 
 - The engine accepts an optional `voice_device` parameter, passed through from
-  the daemon's configured device.
-- The stream first attempts the target Whisper sample rate (16 kHz).
-- On failure (e.g. PortAudio error -50 on macOS), it falls back to the
-  device's native sample rate and stores it in `_stream_sample_rate`.
+  the daemon's configured device. Numeric indices and input-device names select
+  that device; a missing named input fails instead of recording another device.
+  The default input is resolved once per dictation session. An unavailable
+  default produces Settings guidance and ends the session without recording.
+- The stream tries the selected device's native sample rate and mono input first.
+  Unsupported formats trigger bounded channel-count and rate retries on the
+  same input, including the Whisper target rate. Access and unavailable-device
+  errors fail immediately.
+- Multichannel samples are averaged to mono before transcription. The accepted
+  sample rate is stored in `_stream_sample_rate`.
 - If the stream rate differs from the Whisper target rate, audio is resampled
   via linear interpolation before transcription.
 
@@ -109,7 +115,7 @@ After transcription, text passes through these stages in order:
 | Case                      | Behaviour                                         |
 |---------------------------|----------------------------------------------------|
 | Whisper not yet loaded    | Play "not ready" beep, skip                        |
-| Max recording duration    | 60 s cap to prevent memory exhaustion              |
+| Max recording duration    | No cap — the user controls when to stop by releasing the hotkey. A cap would paste prematurely mid-dictation and restart recording |
 | Empty transcription       | No paste occurs                                    |
 | Concurrent with assistant | Dictation works independently; pauses listener     |
 | macOS permissions         | `pynput` requires Accessibility permissions        |
@@ -121,7 +127,7 @@ After transcription, text passes through these stages in order:
 
 ## Thread Safety
 
-- `threading.Lock` around shared Whisper model transcription calls.
+- `threading.Lock` around shared Whisper model transcription calls. Model references are resolved under the lock so CPU recovery in the voice listener is visible to waiting dictation jobs.
 - Dedicated audio stream; never touches the listener's stream.
 - The `pynput` key handlers (`_on_key_press` / `_on_key_release`) must return
   quickly — Windows silently removes low-level keyboard hooks that take more

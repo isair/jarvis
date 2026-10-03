@@ -8,7 +8,7 @@ from ..debug import debug_log
 
 def call_llm_direct(*, cfg, chat_model, system_prompt, user_content,
                     timeout_sec=10.0, thinking=False, num_ctx=4096,
-                    temperature=None):
+                    temperature=None, max_tokens=None):
     """Local indirection: route enrichment LLM calls through the backend
     configured by ``cfg.llm_provider``. Tests patch this single symbol
     to intercept every enrichment call."""
@@ -16,6 +16,7 @@ def call_llm_direct(*, cfg, chat_model, system_prompt, user_content,
         chat_model, system_prompt, user_content,
         timeout_sec=timeout_sec, thinking=thinking,
         num_ctx=num_ctx, temperature=temperature,
+        max_tokens=max_tokens,
     )
 
 
@@ -58,12 +59,12 @@ def extract_search_params_for_memory(query: str, cfg, chat_model: str,
 Extract:
 1. CONTENT KEYWORDS: 3-5 relevant topics/subjects (ignore time words). Include general, high-level category tags that would be suitable for blog-style tagging when applicable (e.g., "cooking", "fitness", "travel", "finance").
 2. TIME RANGE: If mentioned, convert to exact timestamps
-3. QUESTIONS: What implicit personal questions does this query need answered from stored knowledge about the user? These are things the assistant would need to know about the user to give a personalised answer. Omit if the query needs no personal context, OR if the answer is already visible in the ALREADY IN CONTEXT block below.
+3. QUESTIONS: What implicit personal questions does this query need answered from stored knowledge about the user? These are things the assistant would need to know about the user to give a personalised answer. Omit if the query needs no personal context, OR if the answer is already visible in the ALREADY IN CONTEXT block of the user message.
 
-{hint_block}
+The user message may include an ALREADY IN CONTEXT block listing facts the assistant can already see (current time/location, recent dialogue). When present, do NOT generate questions whose answers are already there — those facts do not need to be pulled from long-term memory.
 
 Respond ONLY with JSON in this format:
-{{"keywords": ["keyword1", "keyword2"], "questions": ["what are the user's food preferences?"], "from": "2025-08-21T00:00:00Z", "to": "2025-08-21T23:59:59Z"}}
+{"keywords": ["keyword1", "keyword2"], "questions": ["what are the user's food preferences?"], "from": "2025-08-21T00:00:00Z", "to": "2025-08-21T23:59:59Z"}
 
 Rules:
 - keywords: content topics only (no time words like "yesterday", "today"). Include both specific terms and general category tags when applicable (e.g., for recipes or meal prep you could include "cooking" and "nutrition").
@@ -73,18 +74,21 @@ Rules:
 - omit from/to if no time mentioned
 
 Examples:
-"what did we discuss about the warhammer project?" → {{"keywords": ["warhammer", "project", "figures", "gaming", "tabletop"]}}
-"what did I eat yesterday?" → {{"keywords": ["eat", "food", "cooking", "nutrition"], "from": "2025-08-21T00:00:00Z", "to": "2025-08-21T23:59:59Z"}}
-"remember that password I mentioned today?" → {{"keywords": ["password", "accounts", "security", "credentials"], "from": "2025-08-22T00:00:00Z", "to": "2025-08-22T23:59:59Z"}}
-"what news might interest me?" → {{"keywords": ["interests", "hobbies", "preferences", "likes", "passionate"], "questions": ["what topics interest the user?", "what are the user's hobbies?"]}}
-"news of interest to me" / "news that would interest me" / "news interesting for me" / "recall my interests and search for news on them" → {{"keywords": ["interests", "hobbies", "preferences", "likes", "passionate"], "questions": ["what topics interest the user?", "what are the user's hobbies?"]}}
-"recommend a restaurant I'd enjoy" (no location in context) → {{"keywords": ["food preferences", "restaurants", "cuisine", "dining", "favorites"], "questions": ["what cuisine does the user like?", "where is the user located?"]}}
-"recommend a restaurant I'd enjoy" (location already in context) → {{"keywords": ["food preferences", "restaurants", "cuisine", "dining", "favorites"], "questions": ["what cuisine does the user like?"]}}
-"suggest a movie for me" → {{"keywords": ["movies", "films", "entertainment", "preferences", "genres"], "questions": ["what film genres does the user enjoy?", "what movies has the user watched recently?"]}}
-"what time is it?" → {{"keywords": []}}
+"what did we discuss about the warhammer project?" → {"keywords": ["warhammer", "project", "figures", "gaming", "tabletop"]}
+"what did I eat yesterday?" → {"keywords": ["eat", "food", "cooking", "nutrition"], "from": "2025-08-21T00:00:00Z", "to": "2025-08-21T23:59:59Z"}
+"remember that password I mentioned today?" → {"keywords": ["password", "accounts", "security", "credentials"], "from": "2025-08-22T00:00:00Z", "to": "2025-08-22T23:59:59Z"}
+"what news might interest me?" → {"keywords": ["interests", "hobbies", "preferences", "likes", "passionate"], "questions": ["what topics interest the user?", "what are the user's hobbies?"]}
+"news of interest to me" / "news that would interest me" / "news interesting for me" / "recall my interests and search for news on them" → {"keywords": ["interests", "hobbies", "preferences", "likes", "passionate"], "questions": ["what topics interest the user?", "what are the user's hobbies?"]}
+"recommend a restaurant I'd enjoy" (no location in context) → {"keywords": ["food preferences", "restaurants", "cuisine", "dining", "favorites"], "questions": ["what cuisine does the user like?", "where is the user located?"]}
+"recommend a restaurant I'd enjoy" (location already in context) → {"keywords": ["food preferences", "restaurants", "cuisine", "dining", "favorites"], "questions": ["what cuisine does the user like?"]}
+"suggest a movie for me" → {"keywords": ["movies", "films", "entertainment", "preferences", "genres"], "questions": ["what film genres does the user enjoy?", "what movies has the user watched recently?"]}
+"what time is it?" → {"keywords": []}
 """
 
-        formatted_prompt = system_prompt.format(hint_block=hint_block)
+        # Per-call data (the hint or the UTC anchor) rides in the user message
+        # so the system prompt above stays byte-static across calls — the
+        # server's KV/prefix cache can then reuse it for every extractor call.
+        user_content = f"Extract search parameters from: {query}\n\n{hint_block}"
 
         # Try up to 2 attempts
         attempts = 0
@@ -93,10 +97,11 @@ Examples:
             response = call_llm_direct(
                 cfg=cfg,
                 chat_model=chat_model,
-                system_prompt=formatted_prompt,
-                user_content=f"Extract search parameters from: {query}",
+                system_prompt=system_prompt,
+                user_content=user_content,
                 timeout_sec=timeout_sec,
                 thinking=thinking,
+                max_tokens=50,
             )
 
             if response:
@@ -288,6 +293,7 @@ def _distil_batch(
             user_content=user_content,
             timeout_sec=timeout_sec,
             thinking=thinking,
+            max_tokens=200,
         )
     except Exception as e:
         debug_log(f"memory digest batch failed: {e}", "memory")
@@ -521,6 +527,7 @@ def _distil_tool_batch(
             user_content=user_content,
             timeout_sec=timeout_sec,
             thinking=thinking,
+            max_tokens=300,
         )
     except Exception as e:
         debug_log(f"tool digest batch failed: {e}", "tools")
@@ -855,6 +862,7 @@ def digest_loop_for_max_turns(
             user_content=user_content,
             timeout_sec=timeout_sec,
             thinking=thinking,
+            max_tokens=200,
         )
     except Exception as e:
         debug_log(f"max-turn loop digest failed: {e}", "planning")

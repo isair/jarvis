@@ -10,8 +10,9 @@ All user-supplied path-like settings must be tilde-expanded on load.
 """
 
 import json
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
+import jarvis.config as config_module
 from jarvis.config import load_settings
 
 
@@ -67,6 +68,43 @@ def test_tilde_whisper_model_path_is_expanded(tmp_path, monkeypatch):
 
     _write_config(tmp_path, monkeypatch, {"whisper_model": "medium"})
     assert load_settings().whisper_model == "medium"
+
+
+def test_hugging_face_model_id_survives_config_loading(tmp_path, monkeypatch):
+    """A repo ID is an identifier, not a path: its separator must stay a slash.
+
+    Path normalisation turns "owner/model" into "owner\\model" on Windows and
+    the download then fails with an invalid model size.
+    """
+    _write_config(tmp_path, monkeypatch, {
+        "whisper_model": "deepdml/faster-whisper-large-v3-turbo-ct2",
+    })
+
+    assert load_settings().whisper_model == "deepdml/faster-whisper-large-v3-turbo-ct2"
+
+
+def test_hugging_face_model_id_survives_windows_path_semantics(tmp_path, monkeypatch):
+    """A repo ID keeps its forward slash when path expansion uses Windows rules."""
+    model_id = "deepdml/faster-whisper-large-v3-turbo-ct2"
+    _write_config(tmp_path, monkeypatch, {"whisper_model": model_id})
+
+    def windows_path_expansion(value):
+        if value in (None, "", "null"):
+            return None
+        return str(PureWindowsPath(str(value)))
+
+    monkeypatch.setattr(config_module, "_expand_path", windows_path_expansion)
+
+    assert load_settings().whisper_model == model_id
+
+
+def test_a_local_whisper_model_directory_is_still_a_path(tmp_path, monkeypatch):
+    """Directories that exist keep being normalised for the loader."""
+    model_dir = tmp_path / "models" / "faster-whisper-medium"
+    model_dir.mkdir(parents=True)
+    _write_config(tmp_path, monkeypatch, {"whisper_model": str(model_dir)})
+
+    assert load_settings().whisper_model == str(model_dir)
 
 
 def test_absolute_and_unset_paths_are_untouched(tmp_path, monkeypatch):

@@ -93,9 +93,12 @@ class LLMBackend(ABC):
         thinking: bool = False,
         num_ctx: int = 4096,
         temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
     ) -> Optional[str]:
         """Single-shot system+user prompt; returns the assistant text or
-        ``None`` on timeout / error / empty response."""
+        ``None`` on timeout / error / empty response. Pass ``max_tokens``
+        to cap the generation length — essential for small reasoning
+        models that otherwise loop endlessly on classification tasks."""
 
     @abstractmethod
     def streaming(
@@ -145,7 +148,12 @@ class LLMBackend(ABC):
         available locally. Returns an empty list on error or when the
         runtime exposes no listing endpoint."""
 
-    def warm_up(self, model: str, timeout_sec: float = 60.0) -> bool:
+    def warm_up(
+        self,
+        model: str,
+        timeout_sec: float = 60.0,
+        keep_alive: str = "30m",
+    ) -> bool:
         """Page ``model`` into the runtime's resident memory ahead of the
         first real request. Default implementation is a no-op suitable for
         runtimes without per-call model unloading (OpenAI-compatible servers

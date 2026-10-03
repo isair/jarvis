@@ -15,12 +15,20 @@ class TestModelSizeDetection:
         ("gemma4", True),
         ("gemma4:e2b", True),
         ("gemma4:e4b", True),
+        ("google/gemma-4-e2b", True),  # OpenAI-compatible format — 2B
+        ("google/gemma-4-12b-qat", False),  # 12B > threshold — LARGE despite gemma-4 family
+        ("qwen3.5:0.8b", True),  # Sub-1B decimal
+        ("qwen3.5:0.5b", True),  # Sub-1B decimal
         ("llama3.2:3b", True),
         ("llama3.2:1b", True),
         ("mistral:7b", True),
         ("gemma:7b", True),
         ("phi3:3b", True),
         ("qwen2:7b", True),
+        # Decimal sizes (caught by regex, would be missed by hardcoded patterns)
+        ("phi:2.7b", True),
+        ("tinyllama:1.1b", True),
+        ("deepseek-coder:1.3b", True),
         # Various separators
         ("model-3b-instruct", True),
         ("model_1b_chat", True),
@@ -30,7 +38,9 @@ class TestModelSizeDetection:
         ("qwen2.5:14b", False),
         ("gemma2:27b", False),
         ("llama3:70b", False),
-        ("mixtral:8x7b", False),  # 8x7b is effectively large
+        ("mixtral:8x7b", False),  # 8x7b is MoE — large total params
+        ("dolphin-mixtral:8x7b-v2.6", False),  # MoE with version suffix
+        ("qwq:32b", False),  # Large dense model
         # Edge cases
         (None, False),  # None defaults to LARGE
         ("", False),    # Empty defaults to LARGE
@@ -75,7 +85,7 @@ class TestPromptComponents:
 
     def test_large_model_has_tool_constraints(self):
         """Large models also get constraints — a shorter restatement of the
-        named-entity and auto-derive rules. gpt-oss:20b and similar
+        named-entity and auto-derive rules. qwen3.8:27b and similar
         confabulate specifics and occasionally ask for tool args the tool
         already auto-derives, so the large variant is not a no-op."""
         from jarvis.reply.prompts import get_system_prompts, ModelSize
@@ -87,15 +97,29 @@ class TestPromptComponents:
         assert "unknown named entities" in text
         assert "arguments the tool can auto-derive" in text
 
+    def test_small_model_tool_constraints_has_weather_section(self):
+        """Small model constraints include a weather-specific rule that covers
+        statements, questions, and contextual remarks about weather."""
+        from jarvis.reply.prompts import get_system_prompts, ModelSize
+
+        prompts = get_system_prompts(ModelSize.SMALL)
+        text = prompts.tool_constraints.lower()
+
+        assert "weather and current conditions" in text
+        # Must command calling getWeather for weather topics
+        assert "call getweather" in text or "getweather" in text
+        # Must not allow generic pleasantries before tool call
+        assert "generic pleasantry" in text or "opinion" in text or "observation" in text
+
     def test_small_model_balanced_incentives(self):
-        """Small models get balanced tool incentives - use tools but not for greetings."""
+        """Small models get forceful tool incentives - must call tools, exceptions only for greetings."""
         from jarvis.reply.prompts import get_system_prompts, ModelSize
 
         prompts = get_system_prompts(ModelSize.SMALL)
 
-        # Should encourage tool use for legitimate cases
-        assert "use tools" in prompts.tool_incentives.lower()
-        # But mention greetings specifically
+        # Should command tool use for legitimate cases
+        assert "MUST call" in prompts.tool_incentives or "must call" in prompts.tool_incentives
+        # But mention greetings specifically as an exception
         assert "greeting" in prompts.tool_incentives.lower()
 
     def test_large_model_proactive_incentives(self):

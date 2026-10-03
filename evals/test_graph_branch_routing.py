@@ -28,8 +28,8 @@ from typing import List, Optional, Tuple, Union
 
 import pytest
 
-from conftest import requires_judge_llm
-from helpers import MockConfig
+from evals.conftest import requires_judge_llm
+from evals.helpers import JUDGE_MODEL, MockConfig
 
 from jarvis.memory.graph import BRANCH_DIRECTIVES, BRANCH_USER, BRANCH_WORLD
 from jarvis.memory.graph_ops import extract_graph_memories
@@ -167,8 +167,8 @@ ROUTING_CASES = [
 def _run_extraction(case: RoutingCase, config: MockConfig) -> list[tuple[str, str]]:
     return extract_graph_memories(
         summary=case.summary,
-        ollama_base_url=config.ollama_base_url,
-        ollama_chat_model=config.ollama_chat_model,
+        cfg=config,
+        chat_model=JUDGE_MODEL,
         timeout_sec=config.llm_chat_timeout_sec,
         thinking=False,
         date_utc=case.date_utc,
@@ -178,15 +178,14 @@ def _run_extraction(case: RoutingCase, config: MockConfig) -> list[tuple[str, st
 def _find_branch_for_keyword(
     facts: list[tuple[str, str]],
     keyword: Union[str, Tuple[str, ...]],
+    expected_branch: str,
 ) -> Optional[str]:
-    """Return the branch_id of the first fact whose text contains keyword
-    (case-insensitive), or None if no fact matches. If keyword is a tuple,
-    any of its strings satisfies the match."""
+    """Find a matching fact in the expected branch, allowing other matching facts."""
     alternatives = (keyword,) if isinstance(keyword, str) else keyword
     lowered = [k.lower() for k in alternatives]
     for branch_id, fact in facts:
         fact_lower = fact.lower()
-        if any(k in fact_lower for k in lowered):
+        if branch_id == expected_branch and any(k in fact_lower for k in lowered):
             return branch_id
     return None
 
@@ -213,14 +212,20 @@ class TestGraphBranchRouting:
 
         # Every expectation must be satisfied
         for keyword, expected_branch in case.expectations:
-            actual_branch = _find_branch_for_keyword(facts, keyword)
+            actual_branch = _find_branch_for_keyword(facts, keyword, expected_branch)
             assert actual_branch is not None, (
                 f"Expected a fact containing {keyword!r} (for branch "
                 f"{expected_branch!r}), but no extracted fact matched. "
                 f"Facts: {facts}"
             )
-            assert actual_branch == expected_branch, (
-                f"Keyword {keyword!r}: expected branch "
-                f"{expected_branch!r}, got {actual_branch!r}. Facts: "
-                f"{facts}"
-            )
+
+
+
+@pytest.mark.unit
+def test_branch_expectation_accepts_the_matching_fact_in_the_expected_branch():
+    facts = [
+        (BRANCH_USER, 'The user considers pescatarian suggestions unhelpful'),
+        (BRANCH_DIRECTIVES, 'Stop suggesting fish dishes'),
+    ]
+    assert _find_branch_for_keyword(facts, ('pescatarian', 'fish'), BRANCH_DIRECTIVES) == BRANCH_DIRECTIVES
+    assert _find_branch_for_keyword(facts, ('pescatarian', 'fish'), BRANCH_WORLD) is None

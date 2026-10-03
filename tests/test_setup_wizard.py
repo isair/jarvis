@@ -543,7 +543,6 @@ class TestProviderChoicePage:
         wizard = MagicMock()
         wizard.openai_compat_page_id = 42
         page.wizard = MagicMock(return_value=wizard)
-        # isinstance check in nextId: make wizard look like SetupWizard
         with patch("desktop_app.setup_wizard.SetupWizard", MagicMock):
             assert page.nextId() == 42
 
@@ -622,9 +621,8 @@ class TestProviderChoicePage:
         finally:
             cfg_path.unlink(missing_ok=True)
 
-    def test_nextid_ollama_routes_through_welcome_status(self):
-        """Ollama selection goes to the Welcome/status page (which surfaces
-        Ollama readiness only after the user has chosen Ollama)."""
+    def test_nextid_ollama_routes_to_welcome(self):
+        """Ollama selection goes to the Welcome/status page."""
         page = ProviderChoicePage.__new__(ProviderChoicePage)
         page._selected = "ollama"
         wizard = MagicMock()
@@ -633,9 +631,9 @@ class TestProviderChoicePage:
         with patch("desktop_app.setup_wizard.SetupWizard", MagicMock):
             assert page.nextId() == 5
 
-    def test_wizard_starts_on_provider_choice(self, qapp):
-        """Ollama is optional, so the wizard's first step is the provider
-        choice — not the Ollama-centric Welcome/status page."""
+    def test_wizard_starts_on_whisper(self, qapp):
+        """Whisper setup is the first step — it has no LLM dependencies
+        and informs VRAM calculations on the Models page."""
         import tempfile
         from pathlib import Path
         from desktop_app.setup_wizard import SetupWizard
@@ -645,7 +643,7 @@ class TestProviderChoicePage:
         try:
             with patch("jarvis.config.default_config_path", return_value=cfg_path):
                 wiz = SetupWizard()
-            assert wiz.startId() == wiz.provider_choice_page_id
+            assert wiz.startId() == wiz.mlx_whisper_page_id
         finally:
             cfg_path.unlink(missing_ok=True)
 
@@ -687,7 +685,7 @@ class TestOpenAICompatiblePage:
         try:
             with patch("jarvis.config.default_config_path", return_value=cfg_path):
                 page._read_inputs = MagicMock(return_value=(
-                    "http://localhost:1234/v1", "sk-secret", "lmstudio/gemma", "text-embed-3",
+                    "http://localhost:1234/v1", "sk-secret", "lmstudio/gemma", "text-embed-3", "",
                 ))
                 assert page.validatePage() is True
             saved = json.loads(cfg_path.read_text())
@@ -713,7 +711,7 @@ class TestOpenAICompatiblePage:
         try:
             with patch("jarvis.config.default_config_path", return_value=cfg_path):
                 page._read_inputs = MagicMock(return_value=(
-                    "http://localhost:1234/v1", "", "lmstudio/gemma", "",
+                    "http://localhost:1234/v1", "", "lmstudio/gemma", "", "",
                 ))
                 assert page.validatePage() is True
             saved = json.loads(cfg_path.read_text())
@@ -724,14 +722,14 @@ class TestOpenAICompatiblePage:
 
     def test_nextid_skips_ollama_pages(self):
         """After configuring the remote provider, the wizard jumps straight
-        to Whisper setup — the Ollama install/server/models pages are
+        to dictation — the Ollama install/server/models pages are
         irrelevant."""
         page = OpenAICompatiblePage.__new__(OpenAICompatiblePage)
         wizard = MagicMock()
-        wizard.mlx_whisper_page_id = 7
+        wizard.dictation_page_id = 8
         page.wizard = MagicMock(return_value=wizard)
         with patch("desktop_app.setup_wizard.SetupWizard", MagicMock):
-            assert page.nextId() == 7
+            assert page.nextId() == 8
 
     def test_initialize_page_prefills_from_existing_config(self, qapp):
         """Re-running the wizard restores the user's saved connection
@@ -914,7 +912,7 @@ class TestOpenAICompatiblePage:
         try:
             with patch("jarvis.config.default_config_path", return_value=cfg_path):
                 page._read_inputs = MagicMock(return_value=(
-                    "http://localhost:9876/v1", "", "qwen-27b", "some-embed",
+                    "http://localhost:9876/v1", "", "qwen-27b", "some-embed", "",
                 ))
                 assert page.validatePage() is True
             saved = json.loads(cfg_path.read_text())
@@ -1098,7 +1096,7 @@ class TestModelOptions:
         """Model options include both recommended and lightweight options."""
         from desktop_app.setup_wizard import ModelsPage
 
-        assert "gpt-oss:20b" in ModelsPage.MODEL_OPTIONS
+        assert "qwen3.8:27b" in ModelsPage.MODEL_OPTIONS
         assert DEFAULT_CHAT_MODEL in ModelsPage.MODEL_OPTIONS
 
     def test_model_options_have_required_fields(self):
@@ -1118,6 +1116,339 @@ class TestModelOptions:
 
         # Verify they're the same object (not just equal values)
         assert ModelsPage.MODEL_OPTIONS is SUPPORTED_CHAT_MODELS
+
+
+class TestModelsPageUI:
+    """Tests for the dropdown-based model selection UI in ModelsPage."""
+
+    def test_uses_combobox_for_chat_model(self, qapp):
+        from desktop_app.setup_wizard import ModelsPage
+        from PyQt6.QtWidgets import QComboBox
+        page = ModelsPage()
+        assert isinstance(page._chat_combo, QComboBox)
+        assert page._chat_combo.count() == len(ModelsPage.MODEL_OPTIONS)
+
+    def test_uses_combobox_for_fast_model(self, qapp):
+        from desktop_app.setup_wizard import ModelsPage
+        from PyQt6.QtWidgets import QComboBox
+        page = ModelsPage()
+        assert isinstance(page._fast_combo, QComboBox)
+        assert page._fast_combo.count() == len(ModelsPage._FAST_MODEL_IDS)
+
+    def test_defaults_to_unlinked(self, qapp):
+        from desktop_app.setup_wizard import ModelsPage
+        page = ModelsPage()
+        assert page._linked is False
+        assert page._link_cb.isChecked() is False
+
+    def test_default_fast_model_is_gemma4_e2b(self, qapp):
+        from desktop_app.setup_wizard import ModelsPage
+        with patch("desktop_app.setup_wizard.detect_total_vram_mb", return_value=None):
+            page = ModelsPage()
+        assert page._fast_model == "gemma4:e2b"
+        assert page._fast_combo.currentData() == "gemma4:e2b"
+
+    def test_default_chat_model_is_default_config_model(self, qapp):
+        from desktop_app.setup_wizard import ModelsPage
+        from jarvis.config import DEFAULT_CHAT_MODEL
+        page = ModelsPage()
+        assert page._chat_model == DEFAULT_CHAT_MODEL
+        assert page._chat_combo.currentData() == DEFAULT_CHAT_MODEL
+
+    def test_initialize_page_stays_unlinked(self, qapp):
+        from desktop_app.setup_wizard import ModelsPage
+        page = ModelsPage()
+        page.initializePage()
+        assert page._linked is False
+        assert page._link_cb.isChecked() is False
+
+    def test_linked_mode_syncs_both_combos(self, qapp):
+        from desktop_app.setup_wizard import ModelsPage
+        page = ModelsPage()
+        page._link_cb.setChecked(True)
+        assert page._linked is True
+        idx = page._chat_combo.findData("qwen3.5:0.8b")
+        assert idx >= 0
+        page._chat_combo.setCurrentIndex(idx)
+        assert page._fast_model == "qwen3.5:0.8b"
+        assert page._fast_combo.currentData() == "qwen3.5:0.8b"
+
+    def test_unlinked_mode_allows_independent_selection(self, qapp):
+        from desktop_app.setup_wizard import ModelsPage
+        page = ModelsPage()
+        assert page._linked is False
+        idx = page._fast_combo.findData("qwen3.5:0.8b")
+        assert idx >= 0
+        page._fast_combo.setCurrentIndex(idx)
+        assert page._fast_model == "qwen3.5:0.8b"
+        assert page._chat_model != "qwen3.5:0.8b"
+
+    def test_auto_downgrades_fast_model_when_smaller_chat_selected(self, qapp):
+        from desktop_app.setup_wizard import ModelsPage
+        page = ModelsPage()
+        idx = page._chat_combo.findData("qwen3.5:0.8b")
+        assert idx >= 0
+        page._chat_combo.setCurrentIndex(idx)
+        assert page._fast_model == "qwen3.5:0.8b"
+
+    def test_fast_combo_uses_data_keys_for_fast_suitable_models(self, qapp):
+        from desktop_app.setup_wizard import ModelsPage
+        page = ModelsPage()
+        datas = [page._fast_combo.itemData(i) for i in range(page._fast_combo.count())]
+        for d in datas:
+            assert d in ModelsPage._FAST_MODEL_IDS
+
+
+class TestOpenAICompatiblePageDefaults:
+    """Tests for default link state and fast model in OpenAI compatible page."""
+
+    def test_defaults_to_unlinked(self, qapp):
+        from desktop_app.setup_wizard import OpenAICompatiblePage
+        page = OpenAICompatiblePage()
+        assert page._openai_linked is False
+        assert page._openai_link_cb.isChecked() is False
+
+    def test_fast_model_selector_visible_by_default(self, qapp):
+        from desktop_app.setup_wizard import OpenAICompatiblePage
+        page = OpenAICompatiblePage()
+        assert page._openai_linked is False
+        assert page._fast_label.isHidden() is False
+        assert page._fast_model_combo.isHidden() is False
+
+    def test_fast_model_defaults_to_gemma4_e2b_when_in_model_list(self, qapp):
+        from desktop_app.setup_wizard import OpenAICompatiblePage
+        page = OpenAICompatiblePage()
+        page._populate_models(["gemma4:e2b", "llama-3-8b", "nomic-embed-text"])
+        assert page._fast_model_combo.currentText() == "gemma4:e2b"
+
+    def test_fast_model_stays_empty_when_gemma4_not_available(self, qapp):
+        from desktop_app.setup_wizard import OpenAICompatiblePage
+        page = OpenAICompatiblePage()
+        page._populate_models(["llama-3-8b", "phi-3", "nomic-embed-text"])
+        assert page._fast_model_combo.currentText() == ""
+
+    def test_link_toggle_shows_hides_fast_selector(self, qapp):
+        from desktop_app.setup_wizard import OpenAICompatiblePage
+        page = OpenAICompatiblePage()
+        assert page._fast_label.isHidden() is False
+        page._openai_link_cb.setChecked(True)
+        assert page._fast_label.isHidden() is True
+        assert page._fast_model_combo.isHidden() is True
+
+
+class TestWizardMemoryBudget:
+    """Model-memory guidance stays useful on both provider paths."""
+
+    def test_ollama_still_shows_its_memory_budget(self, qapp):
+        from desktop_app.setup_wizard import ModelsPage
+
+        with patch("desktop_app.setup_wizard.detect_total_vram_mb", return_value=None):
+            page = ModelsPage()
+        assert "Total VRAM Required" in page._vram_label.text()
+        assert "Whisper" in page._vram_detail.text() or "whisper" in page._vram_detail.text()
+
+    def test_openai_known_models_prefill_editable_estimates(self, qapp):
+        from PyQt6.QtWidgets import QDoubleSpinBox, QLabel
+        from jarvis.config import SUPPORTED_CHAT_MODELS
+        from jarvis.utils.vram import required_vram_mb
+
+        known_model = next(iter(SUPPORTED_CHAT_MODELS))
+        page = OpenAICompatiblePage()
+        page._chat_model_combo.setCurrentText(known_model)
+        page._embed_model_combo.setCurrentText("nomic-embed-text")
+
+        chat = page.findChild(QDoubleSpinBox, "memory_chat")
+        embed = page.findChild(QDoubleSpinBox, "memory_embed")
+        summary = page.findChild(QLabel, "memory_summary")
+        assert chat.value() == required_vram_mb(known_model) / 1024
+        assert embed.value() == 1
+        assert "estimate" in summary.text().lower()
+
+        before = summary.text()
+        chat.setValue(chat.value() + 2)
+        assert summary.text() != before
+        assert f"{chat.value() + embed.value():.1f} GB" in summary.text()
+
+    def test_openai_unknown_model_needs_an_estimate_before_a_total(self, qapp):
+        from PyQt6.QtWidgets import QDoubleSpinBox, QLabel
+
+        page = OpenAICompatiblePage()
+        page._chat_model_combo.setCurrentText("custom-model")
+        chat = page.findChild(QDoubleSpinBox, "memory_chat")
+        summary = page.findChild(QLabel, "memory_summary")
+        assert chat.value() == 0
+        assert "add" in summary.text().lower()
+
+        chat.setValue(6.5)
+        assert "6.5 GB" in summary.text()
+
+    def test_openai_linked_model_is_not_counted_twice(self, qapp):
+        from PyQt6.QtWidgets import QDoubleSpinBox, QLabel
+
+        page = OpenAICompatiblePage()
+        page._chat_model_combo.setCurrentText("custom-model")
+        page.findChild(QDoubleSpinBox, "memory_chat").setValue(4)
+        page._fast_model_combo.setCurrentText("custom-model")
+        page.findChild(QDoubleSpinBox, "memory_fast").setValue(4)
+        summary = page.findChild(QLabel, "memory_summary")
+        assert "4.0 GB" in summary.text()
+        assert "8.0 GB" not in summary.text()
+
+    def test_remote_server_budget_does_not_compare_with_local_gpu(self, qapp):
+        from PyQt6.QtWidgets import QDoubleSpinBox, QLabel
+
+        with patch("desktop_app.setup_wizard.detect_total_vram_mb", return_value=1024):
+            page = OpenAICompatiblePage()
+        page._base_url_input.setText("http://model-host:8000/v1")
+        page._chat_model_combo.setCurrentText("custom-model")
+        page.findChild(QDoubleSpinBox, "memory_chat").setValue(8)
+        summary = page.findChild(QLabel, "memory_summary").text().lower()
+        assert "server" in summary
+        assert "locally" in summary
+        assert "over" not in summary
+
+    def test_local_server_warns_when_shared_gpu_budget_is_exceeded(self, qapp):
+        from PyQt6.QtWidgets import QDoubleSpinBox, QLabel
+
+        with patch("desktop_app.setup_wizard.detect_total_vram_mb", return_value=1024):
+            page = OpenAICompatiblePage()
+        page._base_url_input.setText("http://127.0.0.1:8000/v1")
+        page._chat_model_combo.setCurrentText("custom-model")
+        page.findChild(QDoubleSpinBox, "memory_chat").setValue(8)
+        summary = page.findChild(QLabel, "memory_summary").text().lower()
+        assert "share a gpu" in summary
+        assert "over" in summary
+
+    def test_fetched_models_refresh_known_estimates(self, qapp):
+        from PyQt6.QtWidgets import QDoubleSpinBox
+        from jarvis.config import SUPPORTED_CHAT_MODELS
+        from jarvis.utils.vram import required_vram_mb
+
+        model_id = next(iter(SUPPORTED_CHAT_MODELS))
+        page = OpenAICompatiblePage()
+        page._populate_models([model_id])
+        assert page.findChild(QDoubleSpinBox, "memory_chat").value() == (
+            required_vram_mb(model_id) / 1024
+        )
+
+    def test_remote_ollama_embedding_uses_local_budget(self, qapp):
+        from PyQt6.QtWidgets import QDoubleSpinBox, QLabel
+
+        settings = SimpleNamespace(
+            whisper_model="small",
+            ollama_embed_model="nomic-embed-text",
+            ollama_base_url="http://localhost:11434",
+        )
+        with patch("desktop_app.setup_wizard.load_settings", return_value=settings):
+            page = OpenAICompatiblePage()
+        page._base_url_input.setText("http://model-host:8000/v1")
+        page._chat_model_combo.setCurrentText("custom-model")
+        page.findChild(QDoubleSpinBox, "memory_chat").setValue(4)
+        page._embed_model_combo.setCurrentText("custom-embed")
+        page.findChild(QDoubleSpinBox, "memory_embed").setValue(3)
+        page._use_ollama_embed.setChecked(True)
+        assert page.findChild(QDoubleSpinBox, "memory_embed").value() == 1
+        summary = page.findChild(QLabel, "memory_summary").text()
+        assert "Server model estimate: 4.0 GB" in summary
+        assert "locally" in summary
+
+    def test_ollama_fallback_uses_configured_model_and_endpoint(self, qapp):
+        from PyQt6.QtWidgets import QDoubleSpinBox, QLabel
+
+        settings = SimpleNamespace(
+            whisper_model="small",
+            ollama_embed_model="custom-embed",
+            ollama_base_url="http://embed-host:11434",
+        )
+        with patch("desktop_app.setup_wizard.load_settings", return_value=settings):
+            page = OpenAICompatiblePage()
+        page._base_url_input.setText("http://model-host:8000/v1")
+        page._chat_model_combo.setCurrentText("custom-chat")
+        page.findChild(QDoubleSpinBox, "memory_chat").setValue(4)
+        page._use_ollama_embed.setChecked(True)
+
+        embed = page.findChild(QDoubleSpinBox, "memory_embed")
+        summary = page.findChild(QLabel, "memory_summary")
+        assert embed.value() == 0
+        assert "embeddings" in summary.text().lower()
+        embed.setValue(3)
+        assert "Server model estimate: 4.0 GB" in summary.text()
+        assert "Ollama embeddings: 3.0 GB" in summary.text()
+        assert "Whisper ~2.0 GB locally" in summary.text()
+
+    def test_remote_ollama_embedding_is_not_charged_to_local_gpu(self, qapp):
+        from PyQt6.QtWidgets import QDoubleSpinBox, QLabel
+
+        settings = SimpleNamespace(
+            whisper_model="small",
+            ollama_embed_model="custom-embed",
+            ollama_base_url="http://embed-host:11434",
+        )
+        with patch("desktop_app.setup_wizard.load_settings", return_value=settings):
+            with patch("desktop_app.setup_wizard.detect_total_vram_mb", return_value=8192):
+                page = OpenAICompatiblePage()
+        page._base_url_input.setText("http://localhost:8000/v1")
+        page._chat_model_combo.setCurrentText("custom-chat")
+        page.findChild(QDoubleSpinBox, "memory_chat").setValue(4)
+        page._use_ollama_embed.setChecked(True)
+        page.findChild(QDoubleSpinBox, "memory_embed").setValue(3)
+
+        summary = page.findChild(QLabel, "memory_summary").text()
+        assert "Combined ~6.0 GB" in summary
+        assert "Ollama embeddings: 3.0 GB on its server" in summary
+        assert "over" not in summary
+
+    def test_local_ollama_embedding_appears_in_combined_breakdown(self, qapp):
+        from PyQt6.QtWidgets import QDoubleSpinBox, QLabel
+
+        settings = SimpleNamespace(
+            whisper_model="small",
+            ollama_embed_model="nomic-embed-text",
+            ollama_base_url="http://localhost:11434",
+        )
+        with patch("desktop_app.setup_wizard.load_settings", return_value=settings):
+            page = OpenAICompatiblePage()
+        page._base_url_input.setText("http://localhost:8000/v1")
+        page._chat_model_combo.setCurrentText("custom-chat")
+        page.findChild(QDoubleSpinBox, "memory_chat").setValue(4)
+        page._use_ollama_embed.setChecked(True)
+        summary = page.findChild(QLabel, "memory_summary").text()
+        assert "Ollama embeddings: 1.0 GB locally" in summary
+        assert "Combined ~7.0 GB" in summary
+
+    def test_manual_estimate_survives_model_comparison(self, qapp):
+        from PyQt6.QtWidgets import QDoubleSpinBox
+
+        page = OpenAICompatiblePage()
+        chat = page.findChild(QDoubleSpinBox, "memory_chat")
+        page._chat_model_combo.setCurrentText("candidate-one")
+        chat.setValue(6.5)
+        page._chat_model_combo.setCurrentText("candidate-two")
+        assert chat.value() == 0
+        page._chat_model_combo.setCurrentText("candidate-one")
+        assert chat.value() == 6.5
+
+    def test_whisper_budget_refreshes_after_returning_from_voice_step(self, qapp):
+        from PyQt6.QtWidgets import QDoubleSpinBox, QLabel
+
+        with patch("desktop_app.setup_wizard.load_settings",
+                   return_value=SimpleNamespace(whisper_model="small")):
+            page = OpenAICompatiblePage()
+        page._base_url_input.setText("http://localhost:8000/v1")
+        page._chat_model_combo.setCurrentText("custom-model")
+        page.findChild(QDoubleSpinBox, "memory_chat").setValue(4)
+        summary = page.findChild(QLabel, "memory_summary")
+        assert "Whisper ~2.0 GB" in summary.text()
+
+        saved = {
+            "llm_base_url": "http://localhost:8000/v1",
+            "llm_chat_model": "custom-model",
+        }
+        with patch("desktop_app.setup_wizard.load_settings",
+                   return_value=SimpleNamespace(whisper_model="medium")):
+            with patch("jarvis.config._load_json", return_value=saved):
+                page.initializePage()
+        assert "Whisper ~5.0 GB" in summary.text()
 
 
 class TestDefaultModelDetection:
@@ -1273,8 +1604,8 @@ class TestWhisperModelOptions:
         model_ids = [m[0] for m in options]
         assert "large-v3-turbo" in model_ids
 
-    def test_turbo_always_shown_on_apple_silicon(self):
-        """large-v3-turbo is always available on Apple Silicon (MLX backend)."""
+    def test_turbo_hidden_on_apple_without_usable_mlx(self):
+        """Turbo is hidden when Apple Silicon falls back to old faster-whisper."""
         from desktop_app.setup_wizard import WhisperSetupPage
 
         page = MagicMock(spec=WhisperSetupPage)
@@ -1283,10 +1614,94 @@ class TestWhisperModelOptions:
         page.WHISPER_MODEL_OPTIONS = WhisperSetupPage.WHISPER_MODEL_OPTIONS
         page.WHISPER_MODEL_OPTIONS_EN = WhisperSetupPage.WHISPER_MODEL_OPTIONS_EN
 
-        with patch("desktop_app.setup_wizard._is_faster_whisper_turbo_supported", return_value=False):
+        with patch("desktop_app.setup_wizard._is_faster_whisper_turbo_supported", return_value=False), \
+             patch("desktop_app.setup_wizard.check_mlx_whisper_installed", return_value=False), \
+             patch("desktop_app.setup_wizard.load_settings", return_value=SimpleNamespace(whisper_backend="auto")):
+            options = WhisperSetupPage._get_current_model_options(page)
+        model_ids = [m[0] for m in options]
+        assert "large-v3-turbo" not in model_ids
+
+    def test_turbo_shown_on_apple_with_usable_mlx(self):
+        """Apple Silicon auto mode exposes turbo when MLX imports successfully."""
+        from desktop_app.setup_wizard import WhisperSetupPage
+
+        page = MagicMock(spec=WhisperSetupPage)
+        page._is_english_only = False
+        page._is_apple_silicon = True
+        page.WHISPER_MODEL_OPTIONS = WhisperSetupPage.WHISPER_MODEL_OPTIONS
+        page.WHISPER_MODEL_OPTIONS_EN = WhisperSetupPage.WHISPER_MODEL_OPTIONS_EN
+
+        with patch("desktop_app.setup_wizard._is_faster_whisper_turbo_supported", return_value=False), \
+             patch("desktop_app.setup_wizard.check_mlx_whisper_installed", return_value=True), \
+             patch("desktop_app.setup_wizard.load_settings", return_value=SimpleNamespace(whisper_backend="auto")):
             options = WhisperSetupPage._get_current_model_options(page)
         model_ids = [m[0] for m in options]
         assert "large-v3-turbo" in model_ids
+
+    def test_turbo_shown_on_apple_without_mlx_when_faster_whisper_supports_it(self):
+        """Apple Silicon can still expose turbo through a newer faster-whisper."""
+        from desktop_app.setup_wizard import WhisperSetupPage
+
+        page = MagicMock(spec=WhisperSetupPage)
+        page._is_english_only = False
+        page._is_apple_silicon = True
+        page.WHISPER_MODEL_OPTIONS = WhisperSetupPage.WHISPER_MODEL_OPTIONS
+        page.WHISPER_MODEL_OPTIONS_EN = WhisperSetupPage.WHISPER_MODEL_OPTIONS_EN
+
+        with patch("desktop_app.setup_wizard._is_faster_whisper_turbo_supported", return_value=True), \
+             patch("desktop_app.setup_wizard.check_mlx_whisper_installed", return_value=False), \
+             patch("desktop_app.setup_wizard.load_settings", return_value=SimpleNamespace(whisper_backend="auto")):
+            options = WhisperSetupPage._get_current_model_options(page)
+        model_ids = [m[0] for m in options]
+        assert "large-v3-turbo" in model_ids
+
+    def test_turbo_hidden_when_mlx_is_explicitly_disabled(self):
+        """An explicit faster-whisper backend must not inherit Apple MLX support."""
+        from desktop_app.setup_wizard import WhisperSetupPage
+
+        page = MagicMock(spec=WhisperSetupPage)
+        page._is_english_only = False
+        page._is_apple_silicon = True
+        page.WHISPER_MODEL_OPTIONS = WhisperSetupPage.WHISPER_MODEL_OPTIONS
+        page.WHISPER_MODEL_OPTIONS_EN = WhisperSetupPage.WHISPER_MODEL_OPTIONS_EN
+
+        with patch("desktop_app.setup_wizard._is_faster_whisper_turbo_supported", return_value=False), \
+             patch("desktop_app.setup_wizard.check_mlx_whisper_installed", return_value=True), \
+             patch("desktop_app.setup_wizard.load_settings", return_value=SimpleNamespace(whisper_backend="faster-whisper")):
+            options = WhisperSetupPage._get_current_model_options(page)
+        model_ids = [m[0] for m in options]
+        assert "large-v3-turbo" not in model_ids
+
+    def test_unavailable_turbo_selection_displays_medium(self, qapp):
+        """An existing turbo choice displays the runtime fallback in the wizard."""
+        from desktop_app.setup_wizard import WhisperSetupPage
+
+        with patch("desktop_app.setup_wizard._is_faster_whisper_turbo_supported", return_value=False):
+            page = WhisperSetupPage()
+            page._is_apple_silicon = False
+            page._is_english_only = False
+            page._selected_whisper_model = "large-v3-turbo"
+
+            page._rebuild_slider_ui()
+
+        model_ids = [model[0] for model in page._get_current_model_options()]
+        assert page._selected_whisper_model == "medium"
+        assert page._model_slider.value() == model_ids.index("medium")
+
+    def test_mlx_install_refreshes_model_options(self):
+        """Installing MLX rebuilds the slider so its turbo option is current."""
+        from desktop_app.setup_wizard import WhisperSetupPage
+
+        page = MagicMock(spec=WhisperSetupPage)
+        page.progress = MagicMock()
+        page.install_mlx_btn = MagicMock()
+        page._refresh_mlx_status = MagicMock()
+        page._rebuild_slider_ui = MagicMock()
+
+        WhisperSetupPage._on_mlx_installed(page, True, "installed")
+
+        page._refresh_mlx_status.assert_called_once_with()
+        page._rebuild_slider_ui.assert_called_once_with()
 
     def test_whisper_english_model_options_have_required_fields(self):
         """Each English-only whisper model option has required info fields."""
@@ -1604,4 +2019,3 @@ class TestSearchProvidersPage:
             assert saved["mcps"] == {"x": {}}
         finally:
             cfg_path.unlink(missing_ok=True)
-

@@ -17,6 +17,24 @@ from ..llm import get_llm_backend, resolve_model, Tier
 from .transcript_buffer import TranscriptSegment
 
 
+DEFAULT_OLLAMA_KEEP_ALIVE = "30m"
+LOW_POWER_OLLAMA_KEEP_ALIVE = "1m"
+
+
+def _is_low_power_mode_enabled(cfg: Any) -> bool:
+    """Return True only when Settings.low_power_mode is explicitly enabled."""
+    if cfg is None:
+        return False
+    return getattr(cfg, "low_power_mode", False) is True
+
+
+def _ollama_keep_alive_for_power_mode(cfg: Any) -> str:
+    """Return the Ollama residency duration for the active power mode."""
+    if _is_low_power_mode_enabled(cfg):
+        return LOW_POWER_OLLAMA_KEEP_ALIVE
+    return DEFAULT_OLLAMA_KEEP_ALIVE
+
+
 def warm_up_chat_model(cfg, model: str, timeout: float) -> bool:
     """Page ``model`` into the active backend's resident memory.
 
@@ -30,7 +48,11 @@ def warm_up_chat_model(cfg, model: str, timeout: float) -> bool:
     if not model:
         return False
     try:
-        ok = get_llm_backend(cfg).warm_up(model, timeout_sec=timeout)
+        ok = get_llm_backend(cfg).warm_up(
+            model,
+            timeout_sec=timeout,
+            keep_alive=_ollama_keep_alive_for_power_mode(cfg),
+        )
     except Exception as e:
         debug_log(f"warmup error (model={model}): {e}", "voice")
         return False
@@ -41,39 +63,59 @@ def warm_up_chat_model(cfg, model: str, timeout: float) -> bool:
     return ok
 
 
-def _extract_json_object(text: str) -> str:
-    """Return the first balanced `{...}` object in `text`, or "" if none.
+def _extract_json_object(text: str, last: bool = False) -> str:
+    """Return a balanced `{...}` object in `text`, or "" if none.
 
     Walks character-by-character tracking brace depth while respecting string
     literals and escapes. Handles markdown code fences and values containing
     braces — cases a simple regex cannot.
-    """
-    start = text.find("{")
-    if start == -1:
-        return ""
 
-    depth = 0
-    in_string = False
-    escape = False
-    for i in range(start, len(text)):
-        ch = text[i]
-        if in_string:
-            if escape:
-                escape = False
-            elif ch == "\\":
-                escape = True
-            elif ch == '"':
-                in_string = False
+    Returns the first balanced object by default, or the **last** when
+    ``last=True`` — used for reasoning-model recovery, where the answer sits
+    at the end of the thinking text and earlier balanced objects may be
+    echoes of the system prompt's JSON example rather than the verdict.
+    Unbalanced objects are skipped so a truncated draft cannot hide a later
+    complete answer.
+    """
+    candidates: list[str] = []
+    search_from = 0
+    while True:
+        start = text.find("{", search_from)
+        if start == -1:
+            break
+        depth = 0
+        in_string = False
+        escape = False
+        end = -1
+        for i in range(start, len(text)):
+            ch = text[i]
+            if in_string:
+                if escape:
+                    escape = False
+                elif ch == "\\":
+                    escape = True
+                elif ch == '"':
+                    in_string = False
+                continue
+            if ch == '"':
+                in_string = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    end = i + 1
+                    break
+        if end == -1:
+            # Unbalanced from this `{` — skip it and keep scanning for a
+            # later complete object.
+            search_from = start + 1
             continue
-        if ch == '"':
-            in_string = True
-        elif ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                return text[start:i + 1]
-    return ""
+        candidates.append(text[start:end])
+        search_from = end
+    if not candidates:
+        return ""
+    return candidates[-1] if last else candidates[0]
 
 
 @dataclass
@@ -160,6 +202,7 @@ STOP DETECTION:
 NOT DIRECTED:
 - No wake word AND not hot window -> directed=false
 - Wake word used only as a narrative mention ("I told my friend about {name}") -> directed=false
+- (INVALID) "statement about [topic], not a command or question" — with the wake word present to ADDRESS {name}, EVERY statement is directed. "Not a command or question" is never a valid reason for directed=false. Only the two rules above are valid reasons.
 
 Output JSON only:
 {{"directed": true/false, "query": "...", "stop": true/false, "confidence": "high/medium/low", "reasoning": "brief"}}
@@ -178,6 +221,7 @@ Examples:
 - Hot window, user says "I think absurdism is better" -> {{"directed": true, "query": "I think absurdism is better", "stop": false, "confidence": "high", "reasoning": "user statement in hot window"}}
 - "(during TTS)" segments only -> {{"directed": false, "query": "", "stop": false, "confidence": "high", "reasoning": "only echo"}}
 - "stop" -> {{"directed": true, "query": "", "stop": true, "confidence": "high", "reasoning": "stop command"}}
+- "Yeah, the light is very bright but the heat isn't too bad this week honestly Jarvis" -> {{"directed": true, "query": "Yeah, the light is very bright but the heat isn't too bad this week honestly", "stop": false, "confidence": "high", "reasoning": "wake word + statement about weather — directed"}}
 - No wake word, not hot window -> {{"directed": false, "query": "", "stop": false, "confidence": "high", "reasoning": "no wake word"}}'''
 
     def __init__(self, config: Optional[IntentJudgeConfig] = None):
@@ -393,7 +437,7 @@ Examples:
             debug_log(f"🧠 Intent judge [{mode}]: \"{transcript_preview}...\"", "voice")
 
             # Voice sessions can have long quiet stretches; the Ollama
-            # ``keep_alive: "30m"`` keeps the judge model resident between
+            # ``keep_alive`` keeps the judge model resident between
             # engagements so we don't pay the cold-reload tax on each one.
             # ``num_ctx: 8192`` covers a ~2k-token system prompt plus up to
             # ~2 minutes of multi-speaker transcript without truncating the
@@ -410,9 +454,21 @@ Examples:
                     timeout_sec=self.config.timeout_sec,
                     extra_options={
                         "temperature": 0.0,
-                        "num_predict": 200,
+                        # Reasoning models count thinking tokens against
+                        # this cap, so it must cover reasoning + the JSON
+                        # answer. Too tight a cap truncates ``content``
+                        # mid-JSON on complex transcripts and the whole
+                        # judgment is lost (500 cut this exact case off at
+                        # "I said tomorro"). 1500 gives ~4.5x headroom over
+                        # the measured 326-token reasoning+answer baseline
+                        # while ``intent_judge_timeout_sec`` (6s default)
+                        # still bounds slow or runaway generations; the
+                        # model normally stops long before the cap.
+                        "max_tokens": 1500,
                         "num_ctx": 8192,
-                        "keep_alive": "30m",
+                        "keep_alive": _ollama_keep_alive_for_power_mode(
+                            self.config.cfg
+                        ),
                     },
                     thinking=self.config.thinking,
                 )
@@ -436,7 +492,28 @@ Examples:
                 content = message.get("content")
                 if isinstance(content, str):
                     response_text = content
-            if not response_text:
+
+            judgment = self._parse_response(response_text)
+
+            # Reasoning models (e.g. Qwen3.5 / Gemma 4 e2b on LM Studio)
+            # put their thinking in ``reasoning_content`` and the answer in
+            # ``content`` — but the shared token cap can truncate ``content``
+            # mid-JSON (or leave it empty) when the thinking runs long. The
+            # model usually ends its thinking with the full JSON answer, so
+            # recover it from the reasoning text when content did not parse.
+            # The last balanced object wins — the answer comes after any
+            # earlier echoes of the system prompt's JSON example.
+            if judgment is None and isinstance(message, dict):
+                reasoning = message.get("reasoning_content")
+                if isinstance(reasoning, str):
+                    extracted = _extract_json_object(reasoning, last=True)
+                    if extracted:
+                        recovered = self._parse_response(extracted)
+                        if recovered is not None:
+                            judgment = recovered
+                            response_text = extracted
+
+            if judgment is None and not response_text:
                 # Ollama's /api/generate returned ``response``; chat() shape
                 # surfaces content under ``message.content``. Some adapters
                 # may still expose a top-level ``response`` field — accept
@@ -444,8 +521,7 @@ Examples:
                 fallback = resp.get("response")
                 if isinstance(fallback, str):
                     response_text = fallback
-
-            judgment = self._parse_response(response_text)
+                    judgment = self._parse_response(response_text)
 
             if judgment:
                 self._last_failure_reason = ""

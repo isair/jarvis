@@ -20,6 +20,7 @@ import json
 import requests
 
 from ..debug import debug_log
+from .errors import is_timeout_error
 from .backend import LLMBackend, ToolsNotSupportedError, strip_nonstandard_message_fields
 
 
@@ -96,6 +97,7 @@ class OllamaBackend(LLMBackend):
         thinking: bool = False,
         num_ctx: int = 4096,
         temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
     ) -> Optional[str]:
         """Direct LLM call without temporal context, location, or other
         ``ask_coach`` features.
@@ -111,6 +113,11 @@ class OllamaBackend(LLMBackend):
         creativity — Ollama defaults to ~0.8 otherwise, which can
         flake small models on rule-following tasks (e.g. the knowledge
         extractor's banned-form list).
+
+        ``max_tokens`` maps to Ollama's ``num_predict``, capping the
+        total generated tokens (including reasoning). Essential for
+        classification calls where small reasoning models otherwise
+        loop endlessly.
         """
         messages = [
             {"role": "system", "content": system_prompt},
@@ -120,11 +127,14 @@ class OllamaBackend(LLMBackend):
         options: Dict[str, Any] = {"num_ctx": num_ctx}
         if temperature is not None:
             options["temperature"] = temperature
+        if max_tokens is not None:
+            options["num_predict"] = max_tokens
 
         payload: Dict[str, Any] = {
             "model": chat_model,
             "messages": messages,
             "stream": False,
+            "cache_prompt": True,
             "options": options,
             "think": thinking,
         }
@@ -182,6 +192,7 @@ class OllamaBackend(LLMBackend):
             "model": chat_model,
             "messages": messages,
             "stream": True,
+            "cache_prompt": True,
             "options": {"num_ctx": 4096},
             "think": thinking,
         }
@@ -241,6 +252,7 @@ class OllamaBackend(LLMBackend):
             "model": chat_model,
             "messages": sanitised,
             "stream": False,
+            "cache_prompt": True,
             "options": {"num_ctx": 8192},
             "think": thinking,
         }
@@ -248,12 +260,21 @@ class OllamaBackend(LLMBackend):
         # request-level fields (``keep_alive``, ``format``, ``think``); the
         # rest fold into the sampling-options dict. The split lets callers
         # pin per-request keep-alive without learning Ollama's wire shape.
+        # ``max_tokens`` is the canonical generation cap across backends —
+        # translate it to Ollama's ``num_predict`` so callers don't need to
+        # know which knob each server speaks.
         if extra_options and isinstance(extra_options, dict):
             for key, value in extra_options.items():
                 if key in {"keep_alive", "format", "think"}:
                     payload[key] = value
+                elif key == "max_tokens":
+                    payload["options"]["num_predict"] = int(value)
                 elif key == "options" and isinstance(value, dict):
-                    payload["options"].update(value)
+                    for inner_key, inner_value in value.items():
+                        if inner_key == "max_tokens":
+                            payload["options"]["num_predict"] = int(inner_value)
+                        else:
+                            payload["options"][inner_key] = inner_value
                 else:
                     payload["options"][key] = value
 
@@ -269,9 +290,13 @@ class OllamaBackend(LLMBackend):
             if isinstance(data, dict):
                 return data
         except requests.exceptions.Timeout:
-            print("  ⏱️ LLM request timed out", flush=True)
+            print(f"  ⏱️ LLM request timed out (configured timeout: {timeout_sec:g}s)", flush=True)
             return None
-        except requests.exceptions.ConnectionError:
+        except requests.exceptions.ConnectionError as exc:
+            if is_timeout_error(exc):
+                debug_log("chat response read timed out (wrapped transport timeout)", "llm")
+                print(f"  ⏱️ LLM request timed out (configured timeout: {timeout_sec:g}s)", flush=True)
+                return None
             # Bubble out so callers (e.g. the intent judge) can distinguish
             # "server unreachable" from a transient error and apply their own
             # back-off policy.
@@ -332,17 +357,28 @@ class OllamaBackend(LLMBackend):
         except Exception:
             return []
 
-    def warm_up(self, model: str, timeout_sec: float = 60.0) -> bool:
+    def warm_up(
+        self,
+        model: str,
+        timeout_sec: float = 60.0,
+        keep_alive: str = "30m",
+    ) -> bool:
         """Probe ``/api/version`` to verify the server is Ollama, then issue a
-        minimal ``/api/generate`` request so it loads ``model`` into resident
-        memory with a 30-minute ``keep_alive``.  Best-effort: errors are
-        swallowed so callers never crash on warmup failure."""
+        minimal ``/api/chat`` request so it loads ``model`` into resident memory
+        for the requested ``keep_alive`` duration. The chat-endpoint warmup
+        exercises the full inference pipeline (JIT compilation, KV-cache
+        allocation) that an empty ``/api/generate`` would not trigger,
+        preventing a timeout on the first real intent-judge or reply-engine
+        call. ``keep_alive`` is caller-supplied so low power mode can ask for a
+        short residency instead of holding the model for half an hour.
+        Best-effort: errors are swallowed so callers never crash on warmup
+        failure."""
         if not self._base_url or not model:
             return False
         try:
             # Verify the server is actually Ollama before warming up —
             # a non-Ollama HTTP server on the same port could return 200
-            # to the generate POST and produce a false positive.
+            # to a chat POST and produce a false positive.
             version_to = min(timeout_sec, 5.0)
             ok, _ = check_version(self._base_url, timeout=version_to)
             if not ok:
@@ -350,13 +386,16 @@ class OllamaBackend(LLMBackend):
 
             remaining = max(1.0, timeout_sec - version_to)
             resp = requests.post(
-                f"{self._base_url}/api/generate",
+                f"{self._base_url}/api/chat",
                 json={
                     "model": model,
-                    "prompt": "",
+                    "messages": [
+                        {"role": "system", "content": "You are a helpful assistant."},
+                        {"role": "user", "content": "ping"},
+                    ],
                     "stream": False,
-                    "keep_alive": "30m",
-                    "options": {"num_predict": 1},
+                    "keep_alive": keep_alive,
+                    "options": {"num_predict": 1, "temperature": 0.0},
                 },
                 timeout=remaining,
             )

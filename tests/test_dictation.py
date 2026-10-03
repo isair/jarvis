@@ -212,26 +212,6 @@ class TestEngineLifecycle:
     @patch("src.jarvis.dictation.dictation_engine.platform")
     @patch("src.jarvis.dictation.dictation_engine.sys")
     @patch("src.jarvis.dictation.dictation_engine.pynput_keyboard")
-    def test_start_allowed_on_macos_15(self, mock_kb, mock_sys, mock_platform):
-        """pynput should still work on macOS 15 (Sequoia) and earlier."""
-        mock_sys.platform = "darwin"
-        mock_platform.mac_ver.return_value = ("15.4", ("", "", ""), "")
-        mock_listener = MagicMock()
-        mock_kb.Listener.return_value = mock_listener
-        mock_kb.Key = MagicMock()
-        mock_kb.KeyCode = MagicMock()
-        mock_kb.Key.ctrl_l = MagicMock()
-        mock_kb.Key.shift = MagicMock()
-
-        engine = _make_engine()
-        engine.start()
-        assert engine._started is True
-        mock_listener.start.assert_called_once()
-        engine.stop()
-
-    @patch("src.jarvis.dictation.dictation_engine.platform")
-    @patch("src.jarvis.dictation.dictation_engine.sys")
-    @patch("src.jarvis.dictation.dictation_engine.pynput_keyboard")
     def test_start_allowed_on_windows(self, mock_kb, mock_sys, mock_platform):
         """Windows should not be affected by the macOS guard."""
         mock_sys.platform = "win32"
@@ -285,6 +265,90 @@ class TestRecordingStateMachine:
             engine._start_recording()
             assert engine._recording is True
             # Cleanup
+            engine._stop_recording(discard=True)
+
+    def test_named_stereo_headset_records_both_channels(self):
+        """Dictation uses the selected headset even when mono capture is rejected."""
+        import numpy as np
+
+        engine = _make_engine(voice_device='Headset')
+        engine._recording = True
+        engine._session = 1
+
+        with patch('src.jarvis.dictation.dictation_engine.sd') as mock_sd, \
+             patch('src.jarvis.dictation.dictation_engine._play_beep'):
+            devices = [
+                {'name': None, 'max_input_channels': 1},
+                {'name': 'Headset microphone', 'max_input_channels': 2,
+                 'default_samplerate': 48000},
+            ]
+            mock_sd.query_devices.side_effect = lambda device=None, **kwargs: (
+                devices if device is None and not kwargs else devices[device]
+            )
+            stream = MagicMock()
+
+            def open_stream(**kwargs):
+                assert kwargs['device'] == 1
+                if kwargs['channels'] == 1:
+                    raise RuntimeError('Invalid number of channels', -9998)
+                assert kwargs['samplerate'] == 48000
+                return stream
+
+            mock_sd.InputStream.side_effect = open_stream
+            engine._begin_recording(1)
+            assert engine._stream is stream
+            assert engine._stream_sample_rate == 48000
+
+            audio = np.zeros((48000, 2), dtype=np.float32)
+            audio[:, 1] = 0.4
+            engine._audio_callback(audio, len(audio), None, None)
+            np.testing.assert_allclose(engine._audio_frames[-1], 0.2)
+            with patch.object(engine, '_transcribe', return_value='') as transcribe:
+                engine._transcribe_and_paste(engine._audio_frames)
+            whisper_audio = transcribe.call_args.args[0]
+            assert len(whisper_audio) == 16000
+            np.testing.assert_allclose(whisper_audio, 0.2)
+            engine._stop_recording(discard=True)
+
+    def test_missing_named_microphone_does_not_use_default_for_dictation(self, capsys):
+        ended = threading.Event()
+        engine = _make_engine(voice_device='Disconnected Headset', on_dictation_end=ended.set)
+        engine._recording = True
+        engine._session = 1
+
+        with patch('src.jarvis.dictation.dictation_engine.sd') as mock_sd, \
+             patch('src.jarvis.dictation.dictation_engine._play_beep'):
+            mock_sd.query_devices.return_value = [
+                {'name': 'Built-in Microphone', 'max_input_channels': 1},
+            ]
+            engine._begin_recording(1)
+            mock_sd.InputStream.assert_not_called()
+
+        assert not engine._recording
+        assert ended.is_set()
+        assert 'Selected microphone not found' in capsys.readouterr().out
+
+    def test_dictation_uses_whisper_rate_if_native_rate_is_rejected(self):
+        engine = _make_engine(voice_device='1')
+        engine._recording = True
+        engine._session = 1
+
+        with patch('src.jarvis.dictation.dictation_engine.sd') as mock_sd, \
+             patch('src.jarvis.dictation.dictation_engine._play_beep'):
+            mock_sd.query_devices.return_value = {
+                'max_input_channels': 2, 'default_samplerate': 48000,
+            }
+
+            def open_stream(**kwargs):
+                if kwargs['samplerate'] == 48000:
+                    raise RuntimeError('Invalid sample rate', -9997)
+                return MagicMock()
+
+            mock_sd.InputStream.side_effect = open_stream
+            engine._begin_recording(1)
+
+            assert engine._stream is not None
+            assert engine._stream_sample_rate == 16000
             engine._stop_recording(discard=True)
 
     def test_stop_recording_discard_clears_frames(self):
@@ -373,37 +437,34 @@ class TestRecordingStateMachine:
         # Only one of the two calls should have reached the stream.
         assert stream_mock.close.call_count == 1
 
-    def test_max_duration_callback_still_stops_recording(self):
-        """Hitting the 60s cap must still close the stream and fire the end
-        callback, even though the new teardown path runs off-thread.
-
-        ``_audio_callback`` spawns a daemon thread that calls
-        ``_stop_recording()``; that then dispatches ``_finalise_and_transcribe``
-        which closes the stream and eventually invokes ``_on_dictation_end``
-        (via ``_transcribe_and_paste``'s finally).
-        """
+    def test_callback_accumulates_indefinitely_without_cap(self):
+        """Without a max duration cap, the audio callback must continue
+        accumulating frames regardless of duration."""
         import numpy as np
         end_called = threading.Event()
         engine = _make_engine(
-            on_dictation_end=lambda: end_called.set(),
-            whisper_model_ref=lambda: None,  # short-circuits transcribe
+            on_dictation_end=end_called.set,
+            whisper_model_ref=lambda: None,
             whisper_backend_ref=lambda: "faster-whisper",
         )
         stream_mock = MagicMock()
         engine._recording = True
         engine._stream = stream_mock
-        # Pre-fill up to the limit so one more frame triggers the cap.
-        engine._max_frames = 100
-        engine._audio_frames = [np.zeros(100, dtype=np.float32)]
+        engine._audio_frames = []
 
         with patch("src.jarvis.dictation.dictation_engine._play_beep"):
-            indata = np.random.randn(1600, 1).astype(np.float32)
-            engine._audio_callback(indata, 1600, None, None)
-            # _stop_recording runs in a daemon thread; wait for close().
-            assert end_called.wait(timeout=5.0), "on_dictation_end never fired"
+            # Send many frames — well past a hypothetical 60s cap
+            for _ in range(100):
+                indata = np.random.randn(1600, 1).astype(np.float32)
+                engine._audio_callback(indata, 1600, None, None)
 
-        assert stream_mock.close.called, "stream.close() never ran"
-        assert engine._recording is False
+        # All frames accumulated; no stop was triggered
+        assert len(engine._audio_frames) == 100
+        assert engine._recording is True
+        assert not end_called.is_set()
+
+        # Cleanup
+        engine._stop_recording(discard=True)
 
     def test_finalise_fires_on_dictation_end_when_beep_raises(self):
         """A failure in ``_play_beep`` must not strand the listener paused.
@@ -610,19 +671,19 @@ class TestAudioCallback:
         engine._audio_callback(indata, 1600, None, None)
         assert len(engine._audio_frames) == 0
 
-    def test_callback_respects_max_duration(self):
+    def test_callback_accumulates_without_cap(self):
+        """Audio callback must accumulate frames without triggering stop."""
         import numpy as np
         engine = _make_engine()
         engine._recording = True
-        # Pre-fill near the max
-        engine._max_frames = 100
         engine._audio_frames = [np.zeros(100, dtype=np.float32)]
 
         indata = np.random.randn(1600, 1).astype(np.float32)
-        with patch.object(engine, "_stop_recording"):
+        with patch.object(engine, "_stop_recording") as mock_stop:
             engine._audio_callback(indata, 1600, None, None)
-            # Should not accumulate more frames
-            assert len(engine._audio_frames) == 1
+            # Frame should be appended; _stop_recording must NOT be called
+            assert len(engine._audio_frames) == 2
+            mock_stop.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -690,6 +751,81 @@ class TestTranscribeAndPaste:
         frames = [np.zeros(8000, dtype=np.float32)]
         engine._transcribe_and_paste(frames)
         mock_paste.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Paste-activation suppression
+# ---------------------------------------------------------------------------
+
+class TestPasteActivationSuppression:
+    """Tests that synthetic key events during paste don't restart recording."""
+
+    def _make_keys(self):
+        """Get real pynput key objects for ctrl, shift, and d."""
+        from pynput import keyboard
+        import importlib
+        import src.jarvis.dictation.dictation_engine as de
+        importlib.reload(de)  # ensures _MODIFIER_MAP is populated
+        return (
+            keyboard.Key.ctrl_l,
+            keyboard.Key.shift,
+            keyboard.KeyCode.from_char("d"),
+        )
+
+    def test_paste_in_progress_suppresses_restart(self):
+        """Synthetic key events during paste must not trigger new recording."""
+        from pynput import keyboard as pynput_kb
+        from src.jarvis.dictation.dictation_engine import DictationEngine
+
+        engine = _make_engine(hotkey="ctrl+shift+d")
+        ctrl, shift, d = self._make_keys()
+
+        # Simulate post-stop state — not recording, paste in progress
+        engine._recording = False
+        engine._paste_in_progress = True
+        engine._pressed_modifiers.clear()
+
+        with patch.object(engine, "_start_recording") as mock_start:
+            # Paste thread first presses modifier keys (Ctrl, then Shift)
+            engine._on_key_press(ctrl)
+            engine._on_key_press(shift)
+            # Paste thread then taps 'd' (Ctrl+V)
+            engine._on_key_press(d)
+            # Must NOT start a new recording during paste
+            mock_start.assert_not_called()
+
+        # Now simulate paste completed — clear flag and release synthetic keys
+        engine._paste_in_progress = False
+        engine._on_key_release(d)
+        engine._on_key_release(shift)
+
+        # User is still holding the physical keys — simulate key repeat events
+        # that the OS might generate for held modifiers
+        engine._on_key_press(ctrl)
+        engine._on_key_press(shift)
+
+        with patch.object(engine, "_start_recording") as mock_start:
+            engine._on_key_press(d)
+            mock_start.assert_called_once()
+
+        engine.stop()
+
+    def test_paste_in_progress_does_not_block_normal_release_stop(self):
+        """Normal release of hotkey must still stop recording during paste."""
+        engine = _make_engine(hotkey="ctrl+shift+d")
+        ctrl, shift, d = self._make_keys()
+
+        # Simulate recording in progress
+        engine._recording = True
+        engine._paste_in_progress = False
+        engine._pressed_modifiers = {ctrl, shift}
+
+        with patch.object(engine, "_stop_recording") as mock_stop:
+            # User releases a modifier
+            engine._on_key_release(ctrl)
+            mock_stop.assert_called_once()
+
+        engine.stop()
 
 
 # ---------------------------------------------------------------------------
@@ -972,3 +1108,83 @@ class TestClipboardWindowsCtypes:
             assert result == test_text
         finally:
             user32.CloseClipboard()
+
+
+class TestLlmCleanDictation:
+    """``_llm_clean_dictation`` is a rewrite task (not a classification):
+    its generation cap must scale with the dictated text so long dictations
+    are never silently truncated."""
+
+    def test_cap_scales_with_text_length(self):
+        from src.jarvis.dictation.dictation_engine import _llm_clean_dictation
+
+        caps = {}
+
+        def fake_direct(model, system, user, timeout_sec=5.0, thinking=False, **kwargs):
+            caps["max_tokens"] = kwargs.get("max_tokens")
+            return "cleaned text"
+
+        fake_backend = MagicMock()
+        fake_backend.direct.side_effect = fake_direct
+
+        with patch("src.jarvis.llm.get_llm_backend", return_value=fake_backend):
+            _llm_clean_dictation("short", MagicMock())
+            short_cap = caps["max_tokens"]
+
+            long_text = "word " * 1000  # ~5000 chars — long dictation
+            _llm_clean_dictation(long_text, MagicMock())
+            long_cap = caps["max_tokens"]
+
+        # Short utterances hit the floor; long dictations get a proportional cap
+        assert short_cap == 64
+        assert long_cap > short_cap
+        assert long_cap >= len(long_text) // 2
+
+
+@pytest.mark.unit
+def test_unavailable_default_ends_dictation_without_recording(capsys):
+    ended = threading.Event()
+    with patch('src.jarvis.dictation.dictation_engine.parse_hotkey',
+               return_value=(frozenset(), None)):
+        engine = _make_engine(on_dictation_end=ended.set)
+    engine._recording = True
+    engine._session = 1
+    with patch('src.jarvis.dictation.dictation_engine.sd') as audio, \
+         patch('src.jarvis.dictation.dictation_engine._play_beep'):
+        audio.query_devices.side_effect = RuntimeError('Error querying device -1')
+        engine._begin_recording(1)
+        audio.InputStream.assert_not_called()
+    assert not engine._recording
+    assert ended.is_set()
+    assert 'default microphone' in capsys.readouterr().out
+
+
+@pytest.mark.unit
+def test_dictation_keeps_default_input_during_native_rate_query():
+    with patch('src.jarvis.dictation.dictation_engine.parse_hotkey',
+               return_value=(frozenset(), None)):
+        engine = _make_engine()
+    engine._recording = True
+    engine._session = 1
+    selected = {'index': 3, 'name': 'Selected microphone', 'max_input_channels': 1,
+                'default_samplerate': 48000}
+    opened = []
+    with patch('src.jarvis.dictation.dictation_engine.sd') as audio, \
+         patch('src.jarvis.dictation.dictation_engine._play_beep'):
+        def query(device=None, *, kind=None):
+            if kind == 'input':
+                return selected.copy()
+            assert device == 3
+            selected['index'] = 7
+            return dict(selected, index=device)
+
+        def open_stream(**kwargs):
+            opened.append((kwargs['device'], kwargs['samplerate']))
+            return MagicMock()
+
+        audio.query_devices.side_effect = query
+        audio.InputStream.side_effect = open_stream
+        engine._begin_recording(1)
+        assert engine._stream is not None
+        assert opened == [(3, selected['default_samplerate'])]
+        engine._stop_recording(discard=True)

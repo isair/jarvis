@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -207,6 +208,30 @@ def parse_version(tag: str) -> tuple[int, ...]:
         return (0, 0, 0)
 
 
+def _extract_commit_from_version(version: str) -> Optional[str]:
+    """Extract the git commit SHA a develop build was stamped with.
+
+    CI stamps develop builds as ``dev-<full sha>`` (``version: dev-${{
+    github.sha }}`` in ``release.yml``); local builds via
+    ``scripts/build_installer.sh``/``.bat`` use ``dev-<7-hex sha>``. Returns
+    None when the version carries no commit hash (e.g. ``dev-local`` from a
+    source run).
+    """
+    match = re.match(r"^dev-([0-9a-f]{7,40})$", version)
+    return match.group(1) if match else None
+
+
+def _extract_commit_from_release_notes(body: str) -> Optional[str]:
+    """Extract the git commit a develop release was built from.
+
+    The release workflow stamps ``**Commit**: <full sha>`` into the release
+    body. Returns None when the body doesn't carry the stamp (e.g. releases
+    published before the stamp was added).
+    """
+    match = re.search(r"\*\*Commit\*\*:\s*([0-9a-f]{40})", body)
+    return match.group(1) if match else None
+
+
 def _make_release_info(release: dict, asset: dict) -> ReleaseInfo:
     return ReleaseInfo(
         asset_id=asset["id"],
@@ -274,11 +299,26 @@ def check_for_updates(channel: Optional[UpdateChannel] = None) -> UpdateStatus:
                     latest_release=None,
                 )
 
-            last_installed_id = get_last_installed_asset_id()
-            update_available = (
-                last_installed_id is None
-                or target_release.asset_id != last_installed_id
+            # Compare the commit the installed build was stamped with against
+            # the commit the latest release was built from. Asset IDs are not
+            # a reliable "new build?" signal for develop: every CI run
+            # re-uploads the assets (fresh IDs even for the same commit) and a
+            # fresh install from the release page never records an asset ID —
+            # both used to make the update prompt appear on every startup.
+            # When either commit can't be determined, fall back to tracking
+            # the GitHub asset ID.
+            installed_commit = _extract_commit_from_version(current_version)
+            release_commit = _extract_commit_from_release_notes(
+                target_release.release_notes
             )
+            if installed_commit and release_commit:
+                update_available = not release_commit.startswith(installed_commit)
+            else:
+                last_installed_id = get_last_installed_asset_id()
+                update_available = (
+                    last_installed_id is None
+                    or target_release.asset_id != last_installed_id
+                )
             return UpdateStatus(
                 update_available=update_available,
                 current_version=current_version,

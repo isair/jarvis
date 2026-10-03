@@ -21,11 +21,10 @@ from typing import List, Optional
 
 import pytest
 
-from conftest import requires_judge_llm
-from helpers import (
+from evals.conftest import requires_judge_llm
+from evals.helpers import (
     MockConfig,
     JUDGE_MODEL,
-    JUDGE_BASE_URL,
     call_judge_llm,
     JudgeVerdict,
 )
@@ -219,8 +218,8 @@ def _run_extraction(case: ExtractionTestCase, config: MockConfig) -> list[str]:
     """
     tagged = extract_graph_memories(
         summary=case.summary,
-        ollama_base_url=config.ollama_base_url,
-        ollama_chat_model=config.ollama_chat_model,
+        cfg=config,
+        chat_model=JUDGE_MODEL,
         timeout_sec=config.llm_chat_timeout_sec,
         thinking=False,
         date_utc=case.date_utc,
@@ -287,7 +286,7 @@ def _judge_extraction_quality(
         )
 
     # Parse structured response
-    from helpers import _parse_judge_response
+    from evals.helpers import _parse_judge_response
     return _parse_judge_response(response)
 
 
@@ -456,3 +455,54 @@ class TestKnowledgeExtractionJudge:
         print(f"Extracted {len(facts)} facts from mixed summary:")
         for f in facts:
             print(f"  - {f}")
+
+
+class TestFieldMemoryHygiene:
+    """Mixed summaries retain enduring facts while dropping diary-shaped noise."""
+
+    @requires_judge_llm
+    @pytest.mark.parametrize('summary,required,forbidden', [
+        (
+            'The weather forecast for London for the week will range from 6.8 to 16.8 degrees Celsius. '
+            'The user follows an 1800 kcal daily meal plan. Trenches Boxing Club in Hackney offers evening classes.',
+            ['1800', 'Trenches'], ['6.8', '16.8', 'forecast'],
+        ),
+        (
+            'Kullanıcı oyunlarda dinamik ve sabit kamera sistemleri arasındaki farkı sordu. '
+            'Kullanıcı her gün 1800 kcal içeren bir beslenme planı uyguluyor.',
+            ['1800'], ['camera', 'kamera', 'dynamic', 'dinamik'],
+        ),
+        (
+            'El pronóstico del tiempo en Londres esta semana oscila entre 6,8 y 16,8 grados Celsius. '
+            'La usuaria adoptó una gata llamada Miso.',
+            ['Miso'], ['6,8', '16,8', 'forecast', 'pronóstico'],
+        ),
+        (
+            'The user prefers cool weather. London has mild winters. '
+            'The user instructed the assistant: always reply briefly.',
+            ['cool', 'brief'], [],
+        ),
+    ], ids=['weekly forecast with facts', 'Turkish question with fact',
+            'Spanish forecast with fact', 'climate preference and directive'])
+    def test_only_durable_facts_reach_memory(self, mock_config, summary, required, forbidden):
+        facts = extract_graph_memories(summary, mock_config, JUDGE_MODEL)
+        combined = '\n'.join(fact for _, fact in facts).casefold()
+        for keyword in required:
+            assert keyword.casefold() in combined, facts
+        for keyword in forbidden:
+            assert keyword.casefold() not in combined, facts
+
+
+class TestGraphFactHygieneReview:
+    """Enduring climate and weather preferences survive the semantic review."""
+
+    @requires_judge_llm
+    def test_climate_preferences_and_directives_are_durable(self, mock_config):
+        from jarvis.memory.graph_ops import _review_graph_facts
+        candidates = [
+            ('world', 'London has mild winters'),
+            ('user', 'The user prefers cool weather'),
+            ('directives', 'Always reply briefly'),
+            ('world', 'The forecast predicts 6.8 to 16.8 degrees Celsius this week'),
+        ]
+        assert _review_graph_facts(candidates, mock_config, JUDGE_MODEL, 30, False) == candidates[:3]

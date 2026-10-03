@@ -13,13 +13,15 @@ from ..utils.redact import redact, scrub_secrets
 
 
 def _direct_llm(cfg, system_prompt: str, user_content: str, *,
-                timeout_sec: float = 30.0, thinking: bool = False) -> Optional[str]:
+                timeout_sec: float = 30.0, thinking: bool = False,
+                max_tokens: Optional[int] = None) -> Optional[str]:
     """Single intercept for chat-direct calls in this module. Tests patch
     ``conversation._direct_llm`` to capture every diary/summary LLM round-trip
     without reaching through the backend ABC."""
     return get_llm_backend(cfg).direct(
         cfg.llm_chat_model, system_prompt, user_content,
         timeout_sec=timeout_sec, thinking=thinking,
+        max_tokens=max_tokens,
     )
 
 
@@ -119,6 +121,11 @@ def _rewrite_diary_summary(
             _REWRITE_DEFLECTION_SYSTEM_PROMPT,
             user_prompt,
             timeout_sec=timeout_sec,
+            # Rewrite output scales with the input summary (created at
+            # "max 200 words" ≈ 260 tokens), so a fixed cap could truncate
+            # it. Cap proportionally to the summary length with a floor —
+            # bounded against runaway generation, never silently short.
+            max_tokens=max(200, len(summary) // 2),
         )
     except Exception as e:
         debug_log(
@@ -456,6 +463,7 @@ def optimise_diary_topics(
             _TOPIC_OPTIMISE_SYSTEM_PROMPT,
             user_content,
             timeout_sec=60.0,
+            max_tokens=200,
         )
         if raw:
             # Strip markdown fences if the model wrapped the JSON.
@@ -801,6 +809,87 @@ class DialogueMemory:
             recent_messages = [msg for msg in self._messages if msg[0] >= cutoff]
 
             return [{"role": role, "content": content} for _, role, content in recent_messages]
+
+    # ------------------------------------------------------------------
+    # Session / rewind support (text-chat sessions)
+    # ------------------------------------------------------------------
+    # These operate on the FULL in-memory conversation, not the recent
+    # window: the chat window archives and restores whole sessions, and a
+    # rewind rolls the conversation back to a chosen turn. Everything is
+    # in-memory only — nothing here touches the diary or the disk.
+
+    def all_messages(self) -> List[dict]:
+        """Return every stored turn as ``[{"role", "content"}, ...]``.
+
+        Unlike ``get_recent_messages`` this is not bounded by the hot
+        window: it is the full in-memory conversation, used to archive a
+        session before switching or starting a new one. Content is
+        already redacted (redaction runs before a turn is stored).
+        """
+        with self._lock:
+            return [
+                {"role": role, "content": content}
+                for _ts, role, content in self._messages
+            ]
+
+    def set_messages(self, messages: List[dict]) -> None:
+        """Replace the stored conversation with ``messages`` (session restore).
+
+        ``messages`` must be ``{"role", "content"}`` dicts as produced by
+        ``all_messages``. Caches and tool carryover are cleared: the
+        restored conversation starts fresh. Timestamps are regenerated
+        with a monotonic epsilon so the restored turns count as recent
+        and keep their order.
+        """
+        with self._lock:
+            now = time.time()
+            fresh: List[Tuple[float, str, str]] = []
+            for i, msg in enumerate(messages):
+                role = str(msg.get("role", "")).strip()
+                content = str(msg.get("content", "")).strip()
+                if role and content:
+                    fresh.append((now + i * 0.001, role, content))
+            self._messages = fresh
+            self._last_ts = now + len(fresh) * 0.001
+            self._last_activity_time = self._last_ts
+            self._tool_turns = []
+            self._hot_cache = OrderedDict()
+
+    def clear(self) -> None:
+        """Drop the entire conversation and its caches (new session)."""
+        with self._lock:
+            self._messages = []
+            self._tool_turns = []
+            self._hot_cache = OrderedDict()
+            self._last_activity_time = time.time()
+
+    def rewind_before_user_message(self, user_index: int) -> bool:
+        """Drop every message from the ``user_index``-th user message on.
+
+        ``user_index`` is 1-based: 1 rewinds to before the first user
+        message (dropping the whole conversation), 2 keeps everything up
+        to but excluding the second user message, and so on. The chosen
+        user message itself is dropped so a regenerate can re-add it
+        without duplicating. Conversation-scoped caches and tool
+        carryover are cleared: they describe state after the rewind
+        point. Returns True when a rewind happened, False when the given
+        user message is not in memory (nothing to rewind).
+        """
+        with self._lock:
+            seen = 0
+            keep_until: Optional[int] = None
+            for i, (_ts, role, _content) in enumerate(self._messages):
+                if role == "user":
+                    seen += 1
+                    if seen == user_index:
+                        keep_until = i
+                        break
+            if keep_until is None:
+                return False
+            self._messages = self._messages[:keep_until]
+            self._tool_turns = []
+            self._hot_cache = OrderedDict()
+            return True
 
     def record_tool_turn(self, tool_msgs: List[dict]) -> None:
         """Store in-loop tool-call/tool-role messages from a just-finished reply.
@@ -1246,6 +1335,11 @@ TOPICS: [topic1, topic2, topic3]"""
             response = _direct_llm(
                 cfg, system_prompt, user_prompt,
                 timeout_sec=timeout_sec, thinking=thinking,
+                # Prompt allows a 200-word summary (≈260 tokens) plus the
+                # SUMMARY:/TOPICS: labels and 3-5 topics. 400 gives headroom
+                # so a full-length summary is never truncated — a cut here
+                # would persist a partial summary or skip the day entirely.
+                max_tokens=400,
             )
 
         if not response:

@@ -30,6 +30,7 @@ import json
 import requests
 
 from ..debug import debug_log
+from .errors import is_timeout_error
 from .backend import LLMBackend, ToolsNotSupportedError, strip_nonstandard_message_fields
 
 
@@ -125,6 +126,7 @@ class OpenAICompatibleBackend(LLMBackend):
         thinking: bool = False,
         num_ctx: int = 4096,
         temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
     ) -> Optional[str]:
         # ``num_ctx`` and ``thinking`` have no equivalent in the OpenAI
         # shape; servers that need a fixed context window configure it
@@ -142,6 +144,8 @@ class OpenAICompatibleBackend(LLMBackend):
         }
         if temperature is not None:
             payload["temperature"] = temperature
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
 
         try:
             with requests.post(
@@ -238,6 +242,32 @@ class OpenAICompatibleBackend(LLMBackend):
         except Exception:
             return None
 
+    @staticmethod
+    def _encode_tool_call_arguments(
+        messages: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """JSON-encode ``tool_calls[*].function.arguments`` in assistant messages.
+
+        The OpenAI API spec requires ``arguments`` to be a JSON string, but
+        ``normalise_openai_response`` decodes it to a dict for internal use.
+        When that assistant message is sent back to the server on the next
+        turn, we must re-encode it.
+        """
+        for msg in messages:
+            if msg.get("role") != "assistant":
+                continue
+            tc_list = msg.get("tool_calls")
+            if not isinstance(tc_list, list):
+                continue
+            for tc in tc_list:
+                func = tc.get("function")
+                if not isinstance(func, dict):
+                    continue
+                args = func.get("arguments")
+                if isinstance(args, dict):
+                    func["arguments"] = json.dumps(args)
+        return messages
+
     def chat(
         self,
         chat_model: str,
@@ -248,6 +278,7 @@ class OpenAICompatibleBackend(LLMBackend):
         thinking: bool = False,
     ) -> Optional[Dict[str, Any]]:
         sanitised = strip_nonstandard_message_fields(messages)
+        sanitised = self._encode_tool_call_arguments(sanitised)
         payload: Dict[str, Any] = {
             "model": chat_model,
             "messages": sanitised,
@@ -286,9 +317,13 @@ class OpenAICompatibleBackend(LLMBackend):
             if isinstance(data, dict):
                 return _normalise_response(data)
         except requests.exceptions.Timeout:
-            print("  ⏱️ LLM request timed out", flush=True)
+            print(f"  ⏱️ LLM request timed out (configured timeout: {timeout_sec:g}s)", flush=True)
             return None
-        except requests.exceptions.ConnectionError:
+        except requests.exceptions.ConnectionError as exc:
+            if is_timeout_error(exc):
+                debug_log("chat response read timed out (wrapped transport timeout)", "llm")
+                print(f"  ⏱️ LLM request timed out (configured timeout: {timeout_sec:g}s)", flush=True)
+                return None
             # ConnectionError messages embed the configured URL via the
             # underlying urllib3 exception, which can leak account-bearing
             # query strings to stdout. Print only the failure mode and
@@ -361,7 +396,12 @@ class OpenAICompatibleBackend(LLMBackend):
         except Exception:
             return []
 
-    def warm_up(self, model: str, timeout_sec: float = 60.0) -> bool:
+    def warm_up(
+        self,
+        model: str,
+        timeout_sec: float = 60.0,
+        keep_alive: str = "30m",
+    ) -> bool:
         """Warm up the model by sending a minimal inference request.
 
         Phase 1 (reachability check): calls ``GET /models`` to confirm
@@ -373,7 +413,12 @@ class OpenAICompatibleBackend(LLMBackend):
         memory. Without this, an OpenAI-compatible server may leave the
         model cold until the first real request, incurring latency on the
         user's first query. This mirrors what ``OllamaBackend.warm_up()``
-        does with ``POST /api/generate``.
+        does.
+
+        ``keep_alive`` is accepted for signature parity with
+        ``OllamaBackend.warm_up`` but ignored: OpenAI-compatible servers
+        manage model residency at server load time and have no per-call
+        keep-alive knob.
 
         Best-effort: errors are swallowed; ``False`` is returned when the
         server is unreachable, the model name is missing, or the inference

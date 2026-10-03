@@ -25,6 +25,7 @@ from ..utils.audio_lock import portaudio_lock
 # Default voice model for automatic download
 # en_GB-alan-medium: Good quality, ~60MB, British English male
 PIPER_DEFAULT_VOICE = "en_GB-alan-medium"
+_PIPER_DOWNLOAD_MAX_RETRIES = 4
 PIPER_VOICE_BASE_URL = "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0"
 
 
@@ -38,6 +39,74 @@ def _get_piper_models_dir() -> Path:
 def _get_default_piper_model_path() -> str:
     """Get the path to the default Piper voice model."""
     return str(_get_piper_models_dir() / f"{PIPER_DEFAULT_VOICE}.onnx")
+
+
+def _download_piper_file(url, target_path, desc, log, progress_callback):
+    """Publish a complete voice file after bounded transport/rate-limit retries."""
+    import requests
+
+    temp_path = target_path.with_suffix(".tmp")
+    for attempt in range(_PIPER_DOWNLOAD_MAX_RETRIES + 1):
+        response = None
+        retry_error = None
+        try:
+            response = requests.get(url, stream=True, timeout=60)
+            response.raise_for_status()
+            total_size = int(response.headers.get("content-length", 0))
+            downloaded = 0
+            started_at = time.monotonic()
+            last_update = started_at
+
+            def report_progress(complete=False):
+                elapsed = max(time.monotonic() - started_at, 0.001)
+                size = downloaded / 1_000_000
+                rate = size / elapsed
+                if total_size:
+                    pct = 100 if complete else min(99, int(downloaded * 100 / total_size))
+                    message = f"📥 Piper {desc}: {pct}%|| {size:.1f}/{total_size / 1_000_000:.1f} MB · {rate:.1f} MB/s"
+                else:
+                    if complete:
+                        message = f"📥 Piper {desc}: 100%|| {size:.1f} MB received · total size unknown"
+                    else:
+                        message = f"📥 Piper {desc}: {size:.1f} MB [total size unknown · {rate:.1f} MB/s]"
+                if progress_callback:
+                    progress_callback(message)
+
+            report_progress()
+            with open(temp_path, "wb") as file:
+                for chunk in response.iter_content(chunk_size=8192):
+                    file.write(chunk)
+                    downloaded += len(chunk)
+                    if time.monotonic() - last_update >= 1:
+                        report_progress()
+                        last_update = time.monotonic()
+
+            temp_path.rename(target_path)
+            report_progress(complete=True)
+            debug_log(f"Piper {desc} available: {target_path.name}", "tts")
+            return
+        except requests.exceptions.SSLError:
+            # Certificate and TLS configuration failures require user action.
+            raise
+        except requests.exceptions.HTTPError as exc:
+            if getattr(exc.response, "status_code", None) != 429:
+                raise
+            retry_error = exc
+        except (requests.ConnectionError, requests.Timeout,
+                requests.exceptions.ChunkedEncodingError) as exc:
+            retry_error = exc
+        finally:
+            if response is not None:
+                response.close()
+
+        if temp_path.exists():
+            temp_path.unlink()
+        if attempt == _PIPER_DOWNLOAD_MAX_RETRIES:
+            raise retry_error
+        wait = 2 ** (attempt + 1)
+        log(f"  ⏳ Piper {desc} download interrupted, retrying in {wait}s "
+            f"({attempt + 1}/{_PIPER_DOWNLOAD_MAX_RETRIES}): {retry_error}")
+        time.sleep(wait)
 
 
 def _download_piper_voice(voice_name: str, progress_callback: Optional[Callable[[str], None]] = None) -> Optional[str]:
@@ -63,7 +132,7 @@ def _download_piper_voice(voice_name: str, progress_callback: Optional[Callable[
     # Example: en_US-lessac-medium -> en/en_US/lessac/medium/en_US-lessac-medium.onnx
     parts = voice_name.split("-")
     if len(parts) < 3:
-        log(f"Invalid voice name format: {voice_name}")
+        log(f"❌ Invalid voice name format: {voice_name}")
         return None
 
     lang_region = parts[0]  # e.g., "en_US"
@@ -89,59 +158,21 @@ def _download_piper_voice(voice_name: str, progress_callback: Optional[Callable[
             (json_url, json_path, "config"),
         ]:
             if target_path.exists():
-                log(f"  {desc} already exists: {target_path.name}")
+                log(f"  📦 {desc} already exists: {target_path.name}")
                 continue
 
-            log(f"  Downloading {desc}...")
-
-            # Stream download with retry on rate limiting (HTTP 429)
-            max_retries = 4
-            response = None
-            for attempt in range(max_retries + 1):
-                response = requests.get(url, stream=True, timeout=60)
-                try:
-                    response.raise_for_status()
-                    break  # Success
-                except requests.exceptions.HTTPError as http_err:
-                    response.close()
-                    status = getattr(http_err.response, "status_code", None)
-                    if status == 429 and attempt < max_retries:
-                        wait = 2 ** (attempt + 1)
-                        log(f"  ⏳ Rate limited by HuggingFace, retrying in {wait}s ({attempt + 1}/{max_retries})...")
-                        time.sleep(wait)
-                        continue
-                    raise  # Non-429 or retries exhausted
-
-            total_size = int(response.headers.get("content-length", 0))
-            downloaded = 0
-
-            # Write to temp file first, then rename (atomic)
-            temp_path = target_path.with_suffix(".tmp")
-            with open(temp_path, "wb") as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    f.write(chunk)
-                    downloaded += len(chunk)
-                    if total_size > 0 and progress_callback:
-                        pct = (downloaded / total_size) * 100
-                        if downloaded % (1024 * 1024) < 8192:  # Log every ~1MB
-                            log(f"  Downloading {desc}... {pct:.0f}%")
-
-            # Rename temp to final
-            temp_path.rename(target_path)
-            log(f"  Downloaded {desc}: {target_path.name}")
+            _download_piper_file(url, target_path, desc, log, progress_callback)
 
         return str(onnx_path)
 
-    except requests.RequestException as e:
-        log(f"  Download failed: {e}")
-        # Clean up partial downloads
-        for p in [onnx_path, json_path]:
-            tmp = p.with_suffix(".tmp")
-            if tmp.exists():
-                tmp.unlink()
-        return None
-    except Exception as e:
-        log(f"  Download error: {e}")
+    except Exception as exc:
+        label = 'Download failed' if isinstance(exc, requests.RequestException) else 'Download error'
+        log(f"  ❌ {label}: {exc}")
+        for path in (onnx_path, json_path):
+            try:
+                path.with_suffix(".tmp").unlink(missing_ok=True)
+            except OSError as cleanup_error:
+                log(f"  ⚠️ Cannot remove partial {path.name} download: {cleanup_error}")
         return None
 
 
@@ -438,8 +469,12 @@ class ChatterboxTTS:
     def start(self) -> None:
         if not self.enabled or self._thread is not None:
             return
-        # Initialize on first actual start
-        self._ensure_initialized()
+        if not self._ensure_model():
+            self.enabled = False
+            message = f"Chatterbox speech output unavailable: {self._model_error}"
+            print(f"  ⚠️ {message}", flush=True)
+            debug_log(message, "tts")
+            return
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
@@ -467,6 +502,8 @@ class ChatterboxTTS:
         # Lazy start the worker thread and lazy init on first speak
         if self._thread is None:
             self.start()
+        if not self.enabled:
+            return
         self._completion_callback = completion_callback
         self._duration_callback = duration_callback
         # Preprocess text for speech (convert links to readable descriptions)
@@ -743,9 +780,13 @@ class PiperTTS:
     def start(self) -> None:
         if not self.enabled or self._thread is not None:
             return
-        # Initialize model eagerly at startup (downloads if needed)
-        # This provides better UX - download happens during startup, not first speech
-        self._ensure_initialized()
+        # Load the local voice before accepting speech work.
+        if not self._ensure_initialized():
+            self.enabled = False
+            message = f"Piper speech output unavailable: {self._init_error}"
+            print(f"  ⚠️ {message}", flush=True)
+            debug_log(message, "tts")
+            return
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
@@ -772,6 +813,8 @@ class PiperTTS:
         # Lazy start the worker thread
         if self._thread is None:
             self.start()
+        if not self.enabled:
+            return
         self._completion_callback = completion_callback
         self._duration_callback = duration_callback
         # Preprocess text for speech

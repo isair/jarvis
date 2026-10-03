@@ -83,6 +83,12 @@ except Exception as e:
 # Note: Qt WebEngine resources are handled by PyInstaller's hook-PyQt6.QtWebEngineWidgets.py
 # Manual collection can conflict with the hook and cause crashes
 
+# Apple Silicon speech recognition requires native libraries and Metal shaders.
+import runpy
+_mlx_collector = runpy.run_path(str(project_root / 'installer' / 'mlx_bundle.py'))
+hiddenimports_mlx, mlx_datas, mlx_binaries = _mlx_collector['collect_mlx_whisper']()
+datas += mlx_datas
+
 # Hidden imports that PyInstaller might miss
 hiddenimports = [
     # Jarvis core modules
@@ -226,38 +232,43 @@ hiddenimports = [
     'itsdangerous',
     'click',
     'blinker',
+] + hiddenimports_mlx
+
+# SciPy is required by the Apple Silicon speech backend.
+_excludes = [
+    # Exclude heavy packages to keep bundle size reasonable
+    'psycopg2',  # Not used and causes OpenSSL conflicts
+    'torch',  # PyTorch is 1.5-2GB - chatterbox TTS is optional
+    'torchaudio',
+    'torchvision',
+    'chatterbox',  # Optional TTS engine (uses PyTorch)
+    'transformers',  # Heavy ML library (not needed, faster_whisper uses ctranslate2)
+    'safetensors',
+    'accelerate',
+    'cv2',  # OpenCV - not needed for core functionality
+    'opencv-python',
+    'matplotlib',  # Not needed for core app
+    'notebook',
+    'jupyter',
+    'IPython',
+    'sklearn',
+    'scikit-learn',
+    # Note: Keep huggingface_hub - needed by faster_whisper for model downloads
 ]
+# Other builds omit SciPy with the unused Apple speech backend.
+if not hiddenimports_mlx:
+    _excludes.append('scipy')
 
 a = Analysis(
     ['src/desktop_app/app.py'],
     pathex=[str(src_path)],
-    binaries=[],
+    binaries=mlx_binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=['src/desktop_app/rthook_onnxruntime.py'],
-    excludes=[
-        # Exclude heavy packages to keep bundle size reasonable
-        'psycopg2',  # Not used and causes OpenSSL conflicts
-        'torch',  # PyTorch is 1.5-2GB - chatterbox TTS is optional
-        'torchaudio',
-        'torchvision',
-        'chatterbox',  # Optional TTS engine (uses PyTorch)
-        'transformers',  # Heavy ML library (not needed, faster_whisper uses ctranslate2)
-        'safetensors',
-        'accelerate',
-        'cv2',  # OpenCV - not needed for core functionality
-        'opencv-python',
-        'matplotlib',  # Not needed for core app
-        'notebook',
-        'jupyter',
-        'IPython',
-        'scipy',  # Large, only used by optional features
-        'sklearn',
-        'scikit-learn',
-        # Note: Keep huggingface_hub - needed by faster_whisper for model downloads
-    ],
+    excludes=_excludes,
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
