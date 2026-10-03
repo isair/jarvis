@@ -392,7 +392,7 @@ class TestReplyUsesNewerDiaryEntry:
             source_app="test",
         )
 
-        mock_config.ollama_chat_model = model
+        mock_config.llm_chat_model = mock_config.ollama_chat_model = model
         mock_config.memory_enrichment_source = "diary"
 
         query = _query_for_case(case)
