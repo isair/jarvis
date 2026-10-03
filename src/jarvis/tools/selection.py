@@ -6,6 +6,7 @@ Strategies (ToolSelectionStrategy enum):
   - KEYWORD:   score tools by keyword overlap with the query
   - EMBEDDING: rank tools by cosine similarity of embeddings
   - LLM:       ask a lightweight LLM call to choose tools
+  - DECISION:  classify tool relevance using a self-hosted typed-decision model
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ class ToolSelectionStrategy(Enum):
     KEYWORD = "keyword"
     EMBEDDING = "embedding"
     LLM = "llm"
+    DECISION = "decision"
 
 
 # Tools that must always be available regardless of selection strategy.
@@ -392,6 +394,9 @@ def select_tools(
     embed_model: str = "",
     embed_timeout_sec: float = 10.0,
     context_hint: Optional[str] = None,
+    decision_base_url: str = "http://127.0.0.1:8000",
+    decision_model: str = "multilingual",
+    decision_threshold: float = 0.7,
 ) -> List[str]:
     """
     Return a list of tool names relevant to *query*.
@@ -410,10 +415,36 @@ def select_tools(
         embed_model:        Embedding model name (needed for "embedding" strategy).
         embed_timeout_sec:  Timeout for embedding calls.
         context_hint:       Optional facts/dialogue surface for the LLM router.
+        decision_base_url:  Self-hosted System One server URL.
+        decision_model:     Checkpoint name on the decision server.
+        decision_threshold: Minimum probability for a relevance decision.
 
     Returns:
         List of tool name strings.
     """
+    if strategy == ToolSelectionStrategy.DECISION:
+        from .decision import classify_tools
+
+        descriptions = {
+            name: tool.description
+            for name, tool in {**builtin_tools, **mcp_tools}.items()
+            if name not in _ALWAYS_INCLUDED and name != "toolSearchTool"
+        }
+        if not descriptions:
+            return _ensure_always_included([], builtin_tools, mcp_tools)
+        try:
+            selected = classify_tools(
+                query, descriptions, base_url=decision_base_url,
+                model=decision_model, threshold=decision_threshold,
+                timeout_sec=llm_timeout_sec, context_hint=context_hint,
+                max_selected=_LLM_MAX_SELECTED,
+            )
+            debug_log(f"Decision tool selection: {len(selected)}/{len(descriptions)} tools selected", "planning")
+            return _ensure_always_included(selected, builtin_tools, mcp_tools)
+        except Exception as error:
+            debug_log(f"Decision tool selection unavailable: {error}; using LLM router", "planning")
+        strategy = ToolSelectionStrategy.LLM
+
     if strategy == ToolSelectionStrategy.KEYWORD:
         return _select_keyword(query, builtin_tools, mcp_tools)
     elif strategy == ToolSelectionStrategy.EMBEDDING:

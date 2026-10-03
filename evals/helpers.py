@@ -250,6 +250,9 @@ class MockConfig:
     llm_base_url: str = ""
     llm_chat_model: str = ""
     embedding_model: Optional[str] = None
+    tool_decision_base_url: str = "http://127.0.0.1:8000"
+    tool_decision_model: str = "multilingual"
+    tool_decision_threshold: float = 0.7
 
     def __post_init__(self):
         """Auto-configure provider from EVAL_JUDGE_BASE_URL when set."""

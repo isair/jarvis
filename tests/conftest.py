@@ -86,6 +86,9 @@ class MockConfig:
     llm_chat_timeout_sec: float = 45.0
     agentic_max_turns: int = 8
     tool_selection_strategy: str = "embedding"
+    tool_decision_base_url: str = "http://127.0.0.1:8000"
+    tool_decision_model: str = "multilingual"
+    tool_decision_threshold: float = 0.7
     fast_model: str = ""
     memory_enrichment_max_results: int = 5
     memory_enrichment_source: str = "diary"

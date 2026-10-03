@@ -933,6 +933,11 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             embed_model=cfg.embedding_model,
             embed_timeout_sec=float(getattr(cfg, "llm_embedding_timeout_sec", 10.0)),
             context_hint=context_hint,
+            **({
+                "decision_base_url": cfg.tool_decision_base_url,
+                "decision_model": cfg.tool_decision_model,
+                "decision_threshold": cfg.tool_decision_threshold,
+            } if strategy == ToolSelectionStrategy.DECISION else {}),
         )
         # Don't cache the router's "fall open to all tools" fallback. That
         # path fires when the LLM router times out, returns empty, or emits
