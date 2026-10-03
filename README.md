@@ -160,6 +160,8 @@ Connect MCP servers for browser automation, Home Assistant, GitHub, databases an
 
 ## Troubleshooting
 
+- 🔇 **Speech output unavailable:** A voice-model or dependency failure disables speech output for the current run. Check the reason in Logs, correct the voice model settings or missing dependencies, then restart Jarvis.
+
 - 🔊 **Piper download interruptions:** Connection resets and timeouts receive bounded retries. If they persist, check connectivity and restart Jarvis; completed voice files are retained. Certificate errors require correcting the trust configuration.
 
 - 🎤 **Whisper cache errors:** Jarvis attempts one clean download recovery per startup. If it fails, check connectivity and free disk space, then follow the printed cache guidance and restart. Device fallbacks retain files downloaded during recovery.
