@@ -53,11 +53,15 @@ microphone-frame consumption or silently losing an utterance. A full result
 queue applies cancellable backpressure to Whisper without dropping results.
 A dictation pause immediately clears captured audio and invalidates work started
 before the pause, including a decode or intent decision that finishes after
-resumption. Audio batches already dequeued cannot append remaining frames after
-a buffer reset. Listener shutdown discards pending transcriptions and results;
+resumption. Callback blocks carry the audio generation from before their copy; stale blocks
+are discarded after a reset, including blocks already dequeued. Remaining
+frames in a dequeued batch cannot append after a buffer reset. Transcript
+processing retains the result generation through buffer storage. Listener shutdown discards pending transcriptions and results;
 workers receive bounded join grace periods. Invalidated voice queries cannot
 start a reply after waiting for the shared query lock, and an invalidated reply
-cannot produce speech or a spoken error. In-flight model calls retain their
+cannot produce speech or a spoken error, including invalidation during thinking
+tune teardown. Cancelled language work stops its thinking tune without
+overwriting an active dictation face state. In-flight model calls retain their
 configured deadlines. Transcript echo flags use the utterance capture interval
 against TTS timing. The job carries that capture-time context through Whisper
 to echo rejection, stop-command handling and intent processing, so later TTS

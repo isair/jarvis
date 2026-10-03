@@ -64,6 +64,12 @@ def is_whisper_hallucination(no_speech_prob: float, threshold: float) -> bool:
 
 
 @dataclass(frozen=True)
+class _CapturedAudio:
+    audio: Any
+    generation: int
+
+
+@dataclass(frozen=True)
 class _TranscriptionJob:
     audio: Any
     start_time: float
@@ -572,7 +578,8 @@ class VoiceListener(threading.Thread):
             self._tune_player = None
             try:
                 from desktop_app.face_widget import get_jarvis_state, JarvisState
-                get_jarvis_state().set_state(JarvisState.IDLE)
+                if not self._dictation_active:
+                    get_jarvis_state().set_state(JarvisState.IDLE)
             except ImportError:
                 pass
             except Exception:
@@ -617,7 +624,7 @@ class VoiceListener(threading.Thread):
         debug_log(f"scheduling hot window activation (echo_tolerance={self.state_manager.echo_tolerance}s, hot_window={self.state_manager.hot_window_seconds}s)", "voice")
         self.state_manager.schedule_hot_window_activation(self.cfg.voice_debug)
 
-    def _process_transcript(self, text: str, utterance_energy: float = 0.0, utterance_start_time: float = 0.0, utterance_end_time: float = 0.0, *, captured_during_tts: bool, captured_tts_start_time: float) -> None:
+    def _process_transcript(self, text: str, utterance_energy: float = 0.0, utterance_start_time: float = 0.0, utterance_end_time: float = 0.0, *, generation: int, captured_during_tts: bool, captured_tts_start_time: float) -> None:
         """
         Process a transcript from speech recognition.
 
@@ -625,7 +632,6 @@ class VoiceListener(threading.Thread):
             text: Transcribed text from audio
             utterance_energy: Pre-calculated energy from the utterance frames
         """
-        generation = self._dictation_generation
         if not self._transcription_is_current(generation):
             return
         if not text or not text.strip():
@@ -892,6 +898,7 @@ class VoiceListener(threading.Thread):
 
             if not self._transcription_is_current(generation):
                 debug_log("discarded intent result after voice generation invalidation", "voice")
+                self._stop_thinking_tune()
                 return
 
             if intent_judgment is not None:
@@ -1346,6 +1353,7 @@ class VoiceListener(threading.Thread):
             with query_lock():
                 if not self._transcription_is_current(generation):
                     debug_log("discarded voice dispatch after waiting for query lock", "voice")
+                    self._stop_thinking_tune()
                     return
                 reply = run_reply_engine(
                     self.db, self.cfg, None, query, self.dialogue_memory,
@@ -1363,6 +1371,7 @@ class VoiceListener(threading.Thread):
 
         if not self._transcription_is_current(generation):
             debug_log("discarded voice reply after voice generation invalidation", "voice")
+            self._stop_thinking_tune()
             return
 
         # Handle TTS with proper callbacks
@@ -1381,6 +1390,10 @@ class VoiceListener(threading.Thread):
                 debug_log(f"TTS exact duration: {duration:.2f}s", "voice")
                 if self.echo_detector:
                     self.echo_detector._tts_exact_duration = duration
+
+            if not self._transcription_is_current(generation):
+                debug_log("discarded voice speech after thinking-tune teardown", "voice")
+                return
 
             # Track TTS start for echo detection with actual text
             self.track_tts_start(reply)
@@ -1793,6 +1806,7 @@ class VoiceListener(threading.Thread):
         )
         self._process_transcript(
             text, result.energy, result.start_time, result.end_time,
+            generation=result.dictation_generation,
             captured_during_tts=result.captured_during_tts,
             captured_tts_start_time=result.captured_tts_start_time,
         )
@@ -1819,9 +1833,10 @@ class VoiceListener(threading.Thread):
                 self._callback_status = str(status)
             if self._should_stop or self._dictation_active:
                 return
+            generation = self._audio_generation
             chunk = (indata.copy() if hasattr(indata, "copy") else indata)
             try:
-                self._audio_q.put_nowait(chunk)
+                self._audio_q.put_nowait(_CapturedAudio(chunk, generation))
             except queue.Full:
                 self._audio_dropped += 1
         except Exception as exc:
@@ -2675,8 +2690,10 @@ class VoiceListener(threading.Thread):
                 if np is None:
                     continue
 
-                frames = self._audio_frames(item)
-                audio_generation = self._audio_generation
+                if item.generation != self._audio_generation:
+                    continue
+                frames = self._audio_frames(item.audio)
+                audio_generation = item.generation
             for frame in frames:
                 with self._audio_state_lock:
                     if (self._should_stop or self._dictation_active

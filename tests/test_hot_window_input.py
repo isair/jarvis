@@ -118,6 +118,7 @@ def _process_transcript(listener, text, **kwargs):
         text,
         captured_during_tts=bool(listener.tts and listener.tts.is_speaking()),
         captured_tts_start_time=listener.echo_detector._tts_start_time,
+        generation=listener._dictation_generation,
         **kwargs,
     )
 

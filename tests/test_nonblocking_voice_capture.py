@@ -141,7 +141,7 @@ def test_invalidated_intent_result_does_not_start_query(synthetic_listener, inva
                               confidence='high', reasoning='Addressed to Jarvis')
     obj._intent_judge = SimpleNamespace(available=True, judge=judge)
     obj._process_transcript('Jarvis weather', captured_during_tts=False,
-                            captured_tts_start_time=0.)
+                            captured_tts_start_time=0., generation=obj._dictation_generation)
     assert not obj.state_manager.get_pending_query(), 'Invalidated intent was accepted as a new query'
 
 
@@ -172,7 +172,7 @@ def test_brief_dictation_pause_discards_captured_audio_without_waiting_for_worke
     fresh = np.full(obj.cfg.sample_rate, .2, dtype=np.float32)
     obj._utterance_frames = [old]
     obj.is_speech_active = True
-    obj._audio_q.put(old[:, None])
+    obj._on_audio(old[:, None], len(old), None, None)
     obj._dictation_active = True
     obj._dictation_active = False
     decoded = []
@@ -260,10 +260,10 @@ def test_reset_discards_remaining_frames_in_an_already_dequeued_batch(synthetic_
     obj._start_transcription_worker()
     obj._start_audio_worker(obj.cfg.vad_frame_ms)
     try:
-        obj._audio_q.put(old[:, None])
+        obj._on_audio(old[:, None], len(old), None, None)
         assert reached.wait(1)
         obj._clear_audio_buffers()
-        obj._audio_q.put(fresh[:, None])
+        obj._on_audio(fresh[:, None], len(fresh), None, None)
         resume.set()
         assert decoded.wait(1)
         assert len(samples) == 1
@@ -281,7 +281,104 @@ def test_failed_frame_processing_stops_listener_and_reports_recovery(synthetic_l
         raise RuntimeError('Synthetic VAD failure')
     obj._is_speech_frame = fail
     obj._frame_samples = obj.cfg.sample_rate * obj.cfg.vad_frame_ms // 1000
-    obj._audio_q.put(np.ones((obj._frame_samples, 1), dtype=np.float32))
+    obj._on_audio(np.ones((obj._frame_samples, 1), dtype=np.float32), obj._frame_samples, None, None)
     obj._run_audio_worker(obj.cfg.vad_frame_ms)
     assert obj._should_stop
     assert 'Restart Jarvis to resume listening' in capsys.readouterr().out
+
+
+def test_pause_after_dequeue_rejects_audio_captured_before_pause(synthetic_listener):
+    import queue
+    obj = synthetic_listener
+    obj._frame_samples = obj.cfg.sample_rate * obj.cfg.vad_frame_ms // 1000
+    class PauseOnDequeue(queue.Queue):
+        def get(self, *args, **kwargs):
+            if self.empty():
+                obj.stop()
+                raise queue.Empty
+            item = super().get(*args, **kwargs)
+            obj._dictation_active = True
+            obj._dictation_active = False
+            return item
+    obj._audio_q = PauseOnDequeue()
+    detected = []
+    obj._is_speech_frame = lambda frame: detected.append(frame.copy()) or True
+    obj._on_audio(np.full((obj._frame_samples, 1), .125, dtype=np.float32),
+                  obj._frame_samples, None, None)
+    obj._consume_audio_frames(obj.cfg.vad_frame_ms)
+    assert detected == [], 'Pre-pause audio acquired the post-pause generation'
+
+
+def test_discarded_reply_stops_thinking_audio(synthetic_listener, monkeypatch):
+    obj = synthetic_listener
+    playing = [True]
+    obj._tune_player = SimpleNamespace(stop_tune=lambda: playing.__setitem__(0, False),
+                                      is_playing=lambda: playing[0])
+    def reply(*args, **kwargs):
+        obj._dictation_active = True
+        obj._dictation_active = False
+        return 'Stale reply'
+    monkeypatch.setattr('jarvis.reply.engine.run_reply_engine', reply)
+    obj._dispatch_query('weather')
+    assert not playing[0], 'Suppressed reply left thinking audio playing'
+
+
+@pytest.mark.parametrize('invalidate', ['shutdown', 'dictation'])
+def test_pause_during_thinking_tune_teardown_cancels_tts(synthetic_listener, monkeypatch, invalidate):
+    obj = synthetic_listener
+    spoken = []
+    obj.tts = SimpleNamespace(enabled=True, is_speaking=lambda: False,
+                              speak=lambda text, **kw: spoken.append(text))
+    def teardown():
+        if invalidate == 'shutdown':
+            obj.stop()
+        else:
+            obj._dictation_active = True
+            obj._dictation_active = False
+    obj._tune_player = SimpleNamespace(stop_tune=teardown)
+    if invalidate == 'shutdown':
+        # Simulate shutdown during the blocking player join without recursive teardown.
+        obj._tune_player.stop_tune = lambda: setattr(obj, '_should_stop', True)
+    monkeypatch.setattr('jarvis.reply.engine.run_reply_engine', lambda *a, **kw: 'Stale reply')
+    obj._dispatch_query('weather')
+    assert spoken == [], 'Invalidation during tune teardown still queued speech'
+
+
+def test_callback_copy_cannot_relabel_audio_after_pause(synthetic_listener):
+    obj = synthetic_listener
+    obj._frame_samples = obj.cfg.sample_rate * obj.cfg.vad_frame_ms // 1000
+    class PausingInput:
+        def copy(self):
+            obj._dictation_active = True
+            obj._dictation_active = False
+            return np.full((obj._frame_samples, 1), .125, dtype=np.float32)
+    obj._on_audio(PausingInput(), obj._frame_samples, None, None)
+    samples = []
+    obj._is_speech_frame = lambda frame: samples.append(frame.copy()) or True
+    class StopWhenEmpty:
+        def __init__(self, wrapped):
+            self.wrapped = wrapped
+        def get(self, *args, **kwargs):
+            if self.wrapped.empty():
+                obj.stop()
+            return self.wrapped.get(*args, **kwargs)
+    obj._audio_q = StopWhenEmpty(obj._audio_q)
+    obj._consume_audio_frames(obj.cfg.vad_frame_ms)
+    assert not samples, 'Pre-pause callback samples entered speech detection'
+
+
+def test_transcript_keeps_capture_generation_across_buffer_storage(synthetic_listener):
+    from jarvis.listening.listener import _TranscriptionResult
+    from jarvis.listening.intent_judge import IntentJudgment
+    obj = synthetic_listener
+    def add(**kwargs):
+        obj._dictation_active = True
+        obj._dictation_active = False
+    obj._transcript_buffer.add = add
+    obj._intent_judge = SimpleNamespace(available=True, judge=lambda **kw:
+        IntentJudgment(directed=True, query='weather', stop=False,
+                      confidence='high', reasoning='Addressed to Jarvis'))
+    result = _TranscriptionResult('Jarvis weather', 'en', (), 1., 2., .1,
+                                   obj._dictation_generation, False, 0.)
+    obj._handle_transcription_result(result)
+    assert not obj.state_manager.get_pending_query(), 'Old transcript adopted a new voice generation'
