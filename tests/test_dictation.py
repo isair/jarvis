@@ -1144,7 +1144,9 @@ class TestLlmCleanDictation:
 @pytest.mark.unit
 def test_unavailable_default_ends_dictation_without_recording(capsys):
     ended = threading.Event()
-    engine = _make_engine(on_dictation_end=ended.set)
+    with patch('src.jarvis.dictation.dictation_engine.parse_hotkey',
+               return_value=(frozenset(), None)):
+        engine = _make_engine(on_dictation_end=ended.set)
     engine._recording = True
     engine._session = 1
     with patch('src.jarvis.dictation.dictation_engine.sd') as audio, \
@@ -1159,7 +1161,9 @@ def test_unavailable_default_ends_dictation_without_recording(capsys):
 
 @pytest.mark.unit
 def test_dictation_keeps_default_input_during_native_rate_query():
-    engine = _make_engine()
+    with patch('src.jarvis.dictation.dictation_engine.parse_hotkey',
+               return_value=(frozenset(), None)):
+        engine = _make_engine()
     engine._recording = True
     engine._session = 1
     selected = {'index': 3, 'name': 'Selected microphone', 'max_input_channels': 1,
