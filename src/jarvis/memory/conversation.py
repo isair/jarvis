@@ -1536,11 +1536,16 @@ def update_daily_conversation_summary(
         # configured embedding model too (matching the search paths) so an
         # empty model never burns a doomed embed round-trip.
         if db.is_vss_enabled and cfg.embedding_model:
-            # Combine summary and topics for embedding
-            text_for_embedding = f"{summary} {topics}"
-            vec = _embed_text(text_for_embedding, cfg, timeout_sec=15.0)
-            if vec is not None:
-                db.upsert_summary_embedding(summary_id, vec)
+            try:
+                text_for_embedding = f"{summary} {topics}"
+                vec = _embed_text(text_for_embedding, cfg, timeout_sec=15.0)
+                if vec is not None:
+                    db.upsert_summary_embedding(summary_id, vec)
+            except Exception as e:
+                debug_log(
+                    f"⚠️ diary embedding refresh failed: {type(e).__name__}",
+                    "memory",
+                )
 
         return summary_id
 

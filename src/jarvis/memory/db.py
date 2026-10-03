@@ -366,15 +366,19 @@ class Database:
             # Use sqlite-vss
             import json
             with self._lock:
-                cur = self.conn.cursor()
-                emb_id = cur.execute("SELECT COALESCE(MAX(rowid), 0) + 1 FROM embeddings").fetchone()[0]
-                cur.execute("INSERT INTO embeddings(rowid, vec) VALUES (?, ?)", (emb_id, json.dumps([float(x) for x in vec])))
-                cur.execute(
-                    "INSERT OR REPLACE INTO summary_vec(summary_id, emb_id) VALUES (?, ?)",
-                    (summary_id, emb_id),
-                )
-                self.conn.commit()
-                return int(emb_id)
+                try:
+                    cur = self.conn.cursor()
+                    emb_id = cur.execute("SELECT COALESCE(MAX(rowid), 0) + 1 FROM embeddings").fetchone()[0]
+                    cur.execute("INSERT INTO embeddings(rowid, vec) VALUES (?, ?)", (emb_id, json.dumps([float(x) for x in vec])))
+                    cur.execute(
+                        "INSERT OR REPLACE INTO summary_vec(summary_id, emb_id) VALUES (?, ?)",
+                        (summary_id, emb_id),
+                    )
+                    self.conn.commit()
+                    return int(emb_id)
+                except Exception:
+                    self.conn.rollback()
+                    raise
         elif self._python_vector_store:
             # Use Python vector store
             self._python_vector_store.add_vector(summary_id, list(vec))
