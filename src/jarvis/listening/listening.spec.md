@@ -42,20 +42,30 @@ applies so interruption audio reaches Whisper promptly. Limits count complete
 native-rate frames, including pre-roll. Reaching a limit queues the captured
 chunk and allows the following frame to start the next utterance.
 
-Audio-frame processing is limited to VAD and utterance assembly. Completed
-utterances are enqueued for a single FIFO Whisper worker. Transcription results
-return to the listener loop in order, where transcript storage and intent
-processing remain serialised. The bounded transcription backlog reports an
-explicit warning when full rather than blocking microphone-frame consumption
-or silently losing an utterance. A dictation pause clears captured audio and
-invalidates transcription work started before the pause, including a decode
-that finishes after dictation resumes. Listener shutdown discards pending
-transcriptions and results; an in-progress Whisper call is given a bounded
-grace period and cannot dispatch a late transcript. Transcript echo flags use
-the utterance capture interval against TTS timing. The job carries that
-capture-time context through Whisper to echo rejection, stop-command handling
-and intent processing, so later TTS playback cannot reclassify an older
-utterance.
+Audio-frame processing runs on a dedicated serial worker, limited to VAD and
+utterance assembly. Intent judging and reply generation on the listener thread
+do not block frame consumption. The listener thread owns the PortAudio stream.
+Completed utterances are enqueued for a single FIFO Whisper worker.
+Transcription results return to the listener loop in order, where transcript
+storage and intent processing remain serialised. Both transcription queues are
+bounded. A full job backlog reports an explicit warning rather than blocking
+microphone-frame consumption or silently losing an utterance. A full result
+queue applies cancellable backpressure to Whisper without dropping results.
+A dictation pause immediately clears captured audio and invalidates work started
+before the pause, including a decode or intent decision that finishes after
+resumption. Callback blocks carry the audio generation from before their copy; stale blocks
+are discarded after a reset, including blocks already dequeued. Remaining
+frames in a dequeued batch cannot append after a buffer reset. Transcript
+processing retains the result generation through buffer storage. Listener shutdown discards pending transcriptions and results;
+workers receive bounded join grace periods. Invalidated voice queries cannot
+start a reply after waiting for the shared query lock, and an invalidated reply
+cannot produce speech or a spoken error, including invalidation during thinking
+tune teardown. Cancelled language work stops its thinking tune without
+overwriting an active dictation face state. In-flight model calls retain their
+configured deadlines. Transcript echo flags use the utterance capture interval
+against TTS timing. The job carries that capture-time context through Whisper
+to echo rejection, stop-command handling and intent processing, so later TTS
+playback cannot reclassify an older utterance.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐

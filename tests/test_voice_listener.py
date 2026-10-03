@@ -1101,9 +1101,11 @@ class TestSampleRateFallback:
                                 if get_calls[0] == 1:
                                     audio = np.zeros((17640, input_channels), dtype=np.float32)
                                     audio[:, -1] = .1 * input_channels
-                                    return audio
+                                    from jarvis.listening.listener import _CapturedAudio
+                                    return _CapturedAudio(audio, listener._audio_generation)
                                 if get_calls[0] == 2:
-                                    return np.zeros((4410, input_channels), dtype=np.float32)
+                                    from jarvis.listening.listener import _CapturedAudio
+                                    return _CapturedAudio(np.zeros((4410, input_channels), dtype=np.float32), listener._audio_generation)
                                 listener._should_stop = True
                                 raise q.Empty()
 

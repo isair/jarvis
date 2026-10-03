@@ -28,6 +28,11 @@ def listener(rate=48000):
     obj._dictation_is_active = False
     obj._dictation_generation = 0
     obj._transcription_worker_thread = None
+    import threading
+    obj._audio_worker_thread = None
+    obj._audio_state_lock = threading.RLock()
+    obj._audio_generation = 0
+    obj._pre_roll = deque()
     obj._slow_transcription_streak = 0
     obj._slow_transcription_warned = False
     obj._whisper_model_name = "small"
@@ -430,6 +435,7 @@ def test_transcription_result_keeps_language_and_utterance_context():
     )
     obj._process_transcript.assert_called_once_with(
         "hello there", 0.2, 10.0, 11.0,
+        generation=result.dictation_generation,
         captured_during_tts=False, captured_tts_start_time=0,
     )
 
@@ -643,7 +649,7 @@ def test_delayed_stop_only_interrupts_tts_that_overlapped_capture(
                             else (10.0, 11.0))
     obj._process_transcript("stop", 0.2, start_time, end_time,
                             captured_during_tts=captured_during_tts,
-                            captured_tts_start_time=captured_tts_start_time)
+                            captured_tts_start_time=captured_tts_start_time, generation=obj._dictation_generation)
 
     assert obj.tts.interrupt.called is should_interrupt
 
@@ -674,7 +680,7 @@ def test_delayed_utterance_does_not_inherit_later_tts_text_for_intent():
     obj._wake_timestamp = None
 
     obj._process_transcript("jarvis weather", 0.2, 10.0, 11.0,
-                            captured_during_tts=False, captured_tts_start_time=0)
+                            captured_during_tts=False, captured_tts_start_time=0, generation=obj._dictation_generation)
 
     assert obj._intent_judge.judge.call_args.kwargs["last_tts_text"] == ""
 
