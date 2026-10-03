@@ -615,3 +615,34 @@ class TestLLMStrategy:
         assert user.index("KNOWN FACTS") < user.index("User query:"), (
             "hint must precede the query so the query stays the final token"
         )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize('provider', ['ollama', 'openai_compatible'])
+def test_reasoning_router_has_room_for_answer_before_fallback(monkeypatch, provider):
+    import requests
+    from types import SimpleNamespace
+    from jarvis.llm import get_llm_backend
+    tools = _builtin()
+    reasoning_tokens = len(('Consider each catalogue entry carefully. ' * len(tools) * 4).split())
+    answer = 'getWeather'
+    def post(endpoint, **kwargs):
+        payload = kwargs['json']
+        budget = payload.get('max_tokens', payload.get('options', {}).get('num_predict', 0))
+        content = answer if budget >= reasoning_tokens + len(answer.split()) else ''
+        response = MagicMock()
+        response.__enter__.return_value = response
+        response.json.return_value = {
+            'message': {'content': content},
+            'choices': [{'message': {'content': content}}],
+        }
+        return response
+    monkeypatch.setattr(requests, 'post', post)
+    cfg = SimpleNamespace(llm_provider=provider, llm_base_url='http://127.0.0.1:11439/v1',
+                          ollama_base_url='http://127.0.0.1:11439')
+    selected = select_tools(
+        query='天気を調べて', builtin_tools=tools, mcp_tools={},
+        strategy=ToolSelectionStrategy.LLM, llm_backend=get_llm_backend(cfg),
+        llm_model='synthetic-reasoning-router',
+    )
+    assert selected == [answer, 'stop']
