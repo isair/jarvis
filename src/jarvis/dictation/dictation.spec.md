@@ -64,7 +64,7 @@ After transcription, text passes through these stages in order:
 
 ## Architecture
 
-- **`pynput`** for global hotkey detection (cross-platform).
+- **`pynput`** for global hotkey detection (cross-platform). On supported macOS releases, the listener enters the Quartz event loop directly and retains pynput character/modifier decoding. It does not open a Carbon keyboard-layout context on its worker thread: event characters come from `CGEventKeyboardGetUnicodeString`, and the unused context can trigger a fatal TSM main-queue assertion. The macOS 26+ safety guard remains in force.
 - **Clipboard-based paste** (`Ctrl+V` / `Cmd+V`) for text insertion — more
   reliable than character-by-character typing, handles Unicode.
 - **Shared Whisper model** via lazy reference (`lambda: voice_thread.model`)
