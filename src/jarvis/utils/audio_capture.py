@@ -7,10 +7,20 @@ from .audio_lock import portaudio_lock
 
 
 def resolve_input_device(sounddevice, voice_device, devices=None):
-    """Resolve a configured input name or numeric device index for capture."""
+    """Resolve one input index for every phase of a capture session."""
     selected = str(voice_device if voice_device is not None else '').strip()
     if not selected or selected.lower() in ('default', 'system'):
-        return {}
+        try:
+            info = sounddevice.query_devices(kind='input')
+            if info['index'] < 0 or info['max_input_channels'] <= 0:
+                raise ValueError('Default device has no microphone input')
+        except Exception as exc:
+            raise ValueError(
+                'System default microphone unavailable. Choose an available input '
+                'in Jarvis Settings or set a default microphone in system Settings.'
+            ) from exc
+        debug_log(f"Resolved default microphone: {info.get('name', 'Unknown')} (index {info['index']})", 'audio')
+        return {'device': info['index']}
     try:
         return {'device': int(selected)}
     except ValueError:

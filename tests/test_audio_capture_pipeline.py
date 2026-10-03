@@ -677,3 +677,60 @@ def test_delayed_utterance_does_not_inherit_later_tts_text_for_intent():
                             captured_during_tts=False, captured_tts_start_time=0)
 
     assert obj._intent_judge.judge.call_args.kwargs["last_tts_text"] == ""
+
+
+@pytest.mark.parametrize('configured', [None, '', 'default', 'system'])
+def test_default_input_is_pinned_across_capture_phases(configured):
+    default = {'index': 3, 'max_input_channels': 1}
+    opened = []
+
+    def query_devices(*, kind):
+        assert kind == 'input'
+        return default.copy()
+
+    def open_stream(**kwargs):
+        opened.append(kwargs['device'])
+        return object()
+
+    audio = SimpleNamespace(query_devices=query_devices, InputStream=open_stream)
+    selected = audio_capture.resolve_input_device(audio, configured)
+    audio_capture.open_input_stream(audio, 16000, 20, selected)
+    default['index'] = 7
+    audio_capture.open_input_stream(audio, 16000, 20, selected)
+    assert opened == [3, 3]
+
+
+def test_missing_default_input_is_actionable_without_selecting_another_device():
+    def missing_default(*, kind):
+        raise RuntimeError('Error querying device -1')
+
+    audio = SimpleNamespace(query_devices=missing_default)
+    with pytest.raises(ValueError, match='default microphone.*Settings'):
+        audio_capture.resolve_input_device(audio, None, [
+            {'index': 2, 'name': 'Other microphone', 'max_input_channels': 1},
+        ])
+
+
+def test_output_only_default_is_not_accepted_as_a_microphone():
+    audio = SimpleNamespace(query_devices=lambda **kwargs: {
+        'index': 2, 'max_input_channels': 0,
+    })
+    with pytest.raises(ValueError, match='default microphone.*Settings'):
+        audio_capture.resolve_input_device(audio, None)
+
+
+def test_listener_reports_missing_default_before_loading_whisper(monkeypatch, capsys):
+    obj = listener()
+    obj.cfg.voice_device = None
+    obj._warm_up_models = lambda: pytest.fail('unexpected model warm-up')
+
+    def devices(*args, **kwargs):
+        if kwargs.get('kind') == 'input':
+            raise RuntimeError('Error querying device -1')
+        return [{'index': 0, 'name': 'Available mic', 'max_input_channels': 1}]
+
+    monkeypatch.setattr(capture.sd, 'query_devices', devices)
+    monkeypatch.setattr(capture.sd, 'InputStream', lambda **kwargs: pytest.fail('unexpected capture'))
+    monkeypatch.setattr(capture, 'WhisperModel', lambda *args, **kwargs: pytest.fail('unexpected model load'))
+    obj.run()
+    assert 'default microphone' in capsys.readouterr().out

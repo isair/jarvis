@@ -951,10 +951,7 @@ class DictationEngine:
 
         # Query native sample rate
         try:
-            if "device" in stream_kwargs:
-                dev_info = sd.query_devices(stream_kwargs["device"])
-            else:
-                dev_info = sd.query_devices(kind="input")
+            dev_info = sd.query_devices(stream_kwargs["device"])
             native_rate = int(dev_info.get("default_samplerate", self._target_sample_rate))
         except Exception:
             native_rate = self._target_sample_rate
