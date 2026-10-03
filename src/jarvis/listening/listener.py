@@ -2237,6 +2237,7 @@ class VoiceListener(threading.Thread):
                     configs_to_try.append(("cpu", ct))
 
             last_error = None
+            cache_recovery_attempted = False
             used_device = device
             used_compute = compute
             for try_device, try_compute in configs_to_try:
@@ -2268,14 +2269,16 @@ class VoiceListener(threading.Thread):
                         "compute type", "int8", "float16"
                     ])
 
-                    if is_cuda_error or is_compute_error:
+                    is_corrupted_cache = "unable to open file" in error_str
+                    if not is_corrupted_cache and (is_cuda_error or is_compute_error):
                         debug_log(f"config ({try_device}, {try_compute}) failed, trying fallback: {e}", "voice")
                         continue
 
-                    # Check for corrupted model cache (e.g. interrupted download)
-                    is_corrupted_cache = "unable to open file" in error_str
-
                     if is_corrupted_cache:
+                        if cache_recovery_attempted:
+                            debug_log("cache recovery already attempted; retaining cache for device fallback", "voice")
+                            continue
+                        cache_recovery_attempted = True
                         debug_log(f"detected corrupted Whisper model cache: {e}", "voice")
                         print("  ⚠️  Whisper model cache appears corrupted, attempting recovery...", flush=True)
 
@@ -2297,8 +2300,10 @@ class VoiceListener(threading.Thread):
                                 last_error = None
                                 break
                             except Exception as retry_e:
+                                last_error = retry_e
                                 debug_log(f"retry after cache clear also failed: {retry_e}", "voice")
                                 print(f"  ❌ Failed to load Whisper model after cache recovery: {retry_e}", flush=True)
+                                print("  💡 Try manually deleting the Whisper model cache directory and restarting", flush=True)
                                 debug_log("trying next device/compute fallback config", "voice")
                                 continue
                         else:

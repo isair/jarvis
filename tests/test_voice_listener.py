@@ -2055,3 +2055,70 @@ class TestWeatherBannerExample:
 
         listener2 = self._make_listener(location_enabled=False)
         assert "Helix?" in listener2._weather_example("Helix")
+
+
+@pytest.mark.unit
+class TestBoundedWhisperCacheRecovery:
+    @pytest.mark.parametrize("cache_name", ["models--Systran--medium", "models--local--int8-whisper"])
+    def test_recreated_cache_survives_later_device_fallbacks(self, tmp_path, capsys, cache_name):
+        """A failed recovery preserves downloaded files across device fallbacks."""
+        import jarvis.listening.listener as module
+
+        snapshot = tmp_path / cache_name / "snapshots" / "revision"
+        snapshot.mkdir(parents=True)
+        original = snapshot / "original.bin"
+        original.write_bytes(b"incomplete")
+        recovered = snapshot / "recovered.bin"
+        error = f"Unable to open file 'model.bin' in model '{snapshot}'"
+
+        def unavailable_model(*args, **kwargs):
+            if not original.exists():
+                # The recovery downloader leaves files useful for a later restart.
+                if recovered.exists():
+                    recovered.write_bytes(recovered.read_bytes() + b"x")
+                else:
+                    snapshot.mkdir(parents=True, exist_ok=True)
+                    recovered.write_bytes(b"x")
+            raise RuntimeError(error)
+
+        with patch.object(module, "FASTER_WHISPER_AVAILABLE", True), \
+             patch.object(module, "MLX_WHISPER_AVAILABLE", False), \
+             patch.object(module, "_probe_windows_cuda_libraries", return_value=("auto", [])), \
+             patch.object(module, "WhisperModel", side_effect=unavailable_model), \
+             patch.object(module.VoiceListener, "_start_llm_warmup", return_value=[]), \
+             patch.object(module, "sd") as audio:
+            audio.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
+            listener = module.VoiceListener(MagicMock(), _create_mock_config(), MagicMock(), MagicMock())
+            listener.run()
+
+        assert not original.exists()
+        assert len(recovered.read_bytes()) > 1, "Later fallbacks must retain the recovered cache"
+        assert listener.model is None
+        output = capsys.readouterr().out
+        assert output.count("attempting recovery") == 1
+        assert "manually deleting" in output
+
+    def test_failed_recovery_reports_latest_error(self, tmp_path, capsys):
+        """The final failure identifies the recovery error rather than a stale one."""
+        import jarvis.listening.listener as module
+
+        snapshot = tmp_path / "models--Systran--medium" / "snapshots" / "revision"
+        snapshot.mkdir(parents=True)
+        original_error = f"Unable to open file 'model.bin' in model '{snapshot}'"
+        def unavailable_model(*args, **kwargs):
+            if snapshot.exists():
+                raise RuntimeError(original_error)
+            raise RuntimeError("Recovery download disconnected")
+
+        with patch.object(module, "FASTER_WHISPER_AVAILABLE", True), \
+             patch.object(module, "MLX_WHISPER_AVAILABLE", False), \
+             patch.object(module, "WhisperModel", side_effect=unavailable_model), \
+             patch.object(module.VoiceListener, "_start_llm_warmup", return_value=[]), \
+             patch.object(module, "sd") as audio:
+            audio.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
+            listener = module.VoiceListener(MagicMock(), _create_mock_config(whisper_device="cpu", whisper_compute_type="float32"), MagicMock(), MagicMock())
+            listener.run()
+
+        final_failure = [line for line in capsys.readouterr().out.splitlines() if "❌ Failed to load Whisper model:" in line]
+        assert len(final_failure) == 1
+        assert "Recovery download disconnected" in final_failure[0]
