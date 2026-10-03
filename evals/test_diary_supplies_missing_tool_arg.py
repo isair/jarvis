@@ -1,36 +1,21 @@
-"""
-End-to-end eval — single-turn flow where the user's location lives only
-in the diary from a past conversation. The planner must emit
-``searchMemory``, the diary must surface "Manchester", and ``getWeather``
-must then be invoked with ``location='Manchester'``.
+"""Recalled diary location facts ground weather tool arguments and answers.
 
-This stresses the diary-recall path. It complements the carry-over
-guard's hot-window path (covered by
-``evals/test_followup_supplies_missing_tool_arg.py``) by exercising the
-slower long-term-memory path: the user said "I live in Manchester" days
-ago, the conversation has lapsed, and now the user asks "how's the
-weather, Jarvis?" with no live geoip and nothing in the hot window.
-
-Memory-recall reliability on small models is itself an open failure
-mode separate from the tool carry-over guard. If gemma4:e2b consistently
-deflects rather than grounding the search, this eval is best read as an
-upper-bound regression guard: a green run on a reliable judge model
-proves the wiring works, while a red run on a small model is expected
-until follow-up memory work lands.
-
-Run: EVAL_JUDGE_MODEL=gemma4:e2b ./scripts/run_evals.sh diary_supplies_missing_tool_arg
+GeoIP is disabled and the hot window is empty. The diary supplies Manchester
+through long-term memory enrichment. Model failures remain visible.
 """
 
 from unittest.mock import patch
 
 import pytest
 
+from evals.memory_tool_grounding import assert_forecast_reply
+
 from conftest import requires_judge_llm
 from helpers import (
     ToolCallCapture,
-    assert_not_fallback_reply,
     seed_diary_summaries,
     JUDGE_MODEL,
+    voice_config,
 )
 
 
@@ -65,6 +50,11 @@ def _make_runner(capture: ToolCallCapture):
                         "tell me which city to check the weather for."
                     ),
                 )
+            if "manchester" not in location.casefold():
+                return ToolExecutionResult(
+                    success=False,
+                    reply_text="This fixture has no weather for that location.",
+                )
             return ToolExecutionResult(
                 success=True,
                 reply_text=_MANCHESTER_FORECAST,
@@ -82,16 +72,15 @@ class TestDiarySuppliesMissingToolArg:
     explicit user re-statement."""
 
     def test_diary_location_grounds_get_weather_call(
-        self, mock_config, eval_db, eval_dialogue_memory,
+        self, eval_db, eval_dialogue_memory,
     ):
         from jarvis.reply.engine import run_reply_engine
 
-        mock_config.ollama_base_url = "http://localhost:11434"
-        mock_config.ollama_chat_model = JUDGE_MODEL
+        cfg = voice_config()
         # Geoip disabled — the only way the model gets a location is from
         # diary recall.
-        mock_config.location_enabled = False
-        mock_config.memory_enrichment_source = "diary"
+        cfg.location_enabled = False
+        cfg.memory_enrichment_source = "diary"
 
         seed_diary_summaries(eval_db, _DIARY_MANCHESTER)
 
@@ -102,18 +91,18 @@ class TestDiarySuppliesMissingToolArg:
             side_effect=_make_runner(capture),
         ):
             response = run_reply_engine(
-                db=eval_db, cfg=mock_config, tts=None,
+                db=eval_db, cfg=cfg, tts=None,
                 text="how's the weather, Jarvis?",
                 dialogue_memory=eval_dialogue_memory,
             )
 
-        print(f"\n  Diary Supplies Missing Tool Arg ({JUDGE_MODEL}):")
-        print(f"  Tools called: {capture.tool_names()}")
+        print(f"\n  📖 Diary Supplies Missing Tool Arg ({JUDGE_MODEL}):")
+        print(f"  🛠️ Tools called: {capture.tool_names()}")
         for c in capture.calls:
-            print(f"    - {c['name']}({c['args']})")
-        print(f"  Response: {(response or '')[:300]}")
+            print(f"    🔧 {c['name']}({c['args']})")
+        print(f"  💬 Response: {(response or '')[:300]}")
 
-        assert_not_fallback_reply(response, context="diary-recall")
+        assert_forecast_reply(response, _MANCHESTER_FORECAST, "diary-recall")
 
         # The reply must actually use the recalled location, both at the
         # tool call layer and in the user-facing reply.
