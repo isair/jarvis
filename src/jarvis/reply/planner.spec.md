@@ -205,16 +205,10 @@ The engine consumes the plan in two phases.
 
 ### resolve_next_tool_call
 
-- **Fast path**: if the step text is fully concrete (tool name in the
-  allow-list + `key='value'` / `key="value"` pairs matching the tool's
-  declared property keys, and no `<placeholder>`), parse it
-  deterministically and return without any LLM call. This removes the
-  resolver LLM as a failure surface for the common case — small models
-  occasionally flake (timeout, empty, spurious `null`) even on
-  trivially-concrete steps like `webSearch query='foo'`, which used to
-  fall back to the chat model and produce a refusal instead of the
-  search. The fast path is purely regex-driven, language-agnostic, and
-  never calls the model.
+- **Fast path**: the step names an allowed tool, uses `key='value'` or
+  `key="value"` pairs matching its declared property keys, supplies every
+  required field and has no `<placeholder>`. The resolver parses and
+  returns this concrete call without model inference.
 - **LLM path**: when the step contains a `<placeholder>`, uses unknown
   argument keys, or doesn't fit the `key=value` shape, the step is
   passed to the LLM resolver which can substitute entities from prior
@@ -226,7 +220,13 @@ The engine consumes the plan in two phases.
 - Filters the returned `arguments` against the tool's declared
   JSON-schema property keys; unknown keys are dropped before dispatch.
   Tools that declare no properties keep the args as-is (they are
-  free-form by design).
+  free-form by design). Required fields must remain present after filtering.
+- Incomplete concrete calls use the LLM resolver. If its argument object
+  still lacks required fields, return `None` for a normal chat-model turn.
+- Missing or null `arguments` represent an empty object for optional calls.
+  Arrays, strings, numbers and booleans are rejected rather than converted
+  into empty calls. Argument value types remain the tool implementation's
+  responsibility.
 - Tolerates markdown fences the model may add despite instructions.
 - Both planner LLM calls (`plan_query` and `resolve_next_tool_call`)
   request `num_ctx=8192` from Ollama so enriched memory and tool
