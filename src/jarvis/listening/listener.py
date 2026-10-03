@@ -453,6 +453,8 @@ class VoiceListener(threading.Thread):
         self.model: Optional[Any] = None  # WhisperModel for faster-whisper, None for MLX
         self._whisper_model_name = getattr(cfg, "whisper_model", "small")
         self._whisper_cpu_recovery_attempted = False
+        self._slow_transcription_streak = 0
+        self._slow_transcription_warned = False
         self.transcribe_lock = threading.Lock()  # Shared lock for Whisper model access
         self._audio_q: queue.Queue = queue.Queue(maxsize=64)
         self._transcription_jobs_q: queue.Queue = queue.Queue(maxsize=8)
@@ -1630,6 +1632,7 @@ class VoiceListener(threading.Thread):
                 return
             if not self._transcription_is_current(job.dictation_generation):
                 continue
+            decode_started = time.monotonic()
             try:
                 text, language, low_confidence_events = self._transcribe_audio(job.audio)
             except Exception as exc:
@@ -1637,6 +1640,10 @@ class VoiceListener(threading.Thread):
                 text, language, low_confidence_events = "", None, ()
             if not self._transcription_is_current(job.dictation_generation):
                 continue
+            if text or low_confidence_events:
+                self._report_transcription_performance(
+                    len(job.audio) / self._samplerate, time.monotonic() - decode_started,
+                )
             self._transcription_results_q.put(
                 _TranscriptionResult(
                     text=text,
@@ -1649,6 +1656,41 @@ class VoiceListener(threading.Thread):
                     captured_during_tts=job.captured_during_tts,
                     captured_tts_start_time=job.captured_tts_start_time,
                 )
+            )
+
+    def _report_transcription_performance(self, audio_seconds: float, decode_seconds: float) -> None:
+        """Warn once when several usable speech samples decode slower than real time."""
+        if self._slow_transcription_warned:
+            return
+        if audio_seconds < 1.0:
+            self._slow_transcription_streak = 0
+            return
+        slow = decode_seconds > audio_seconds and decode_seconds >= 2.0
+        self._slow_transcription_streak = self._slow_transcription_streak + 1 if slow else 0
+        debug_log(
+            f"Whisper timing: audio={audio_seconds:.2f}s, decode={decode_seconds:.2f}s, "
+            f"model={self._whisper_model_name}", "voice",
+        )
+        if self._slow_transcription_streak < 3:
+            return
+        self._slow_transcription_warned = True
+        model_name = self._whisper_model_name
+        english_only = model_name.endswith(".en")
+        base_name = model_name.removesuffix(".en")
+        smaller = {"base": "tiny", "small": "base", "medium": "small",
+                   "large": "small", "large-v1": "small", "large-v2": "small",
+                   "large-v3": "small", "large-v3-turbo": "small"}.get(base_name)
+        print("  🐢 Whisper speech recognition is slower than real time on this machine.", flush=True)
+        if smaller:
+            recommendation = smaller + (".en" if english_only else "")
+            print(
+                f"     💡 Choose a smaller model such as '{recommendation}' in the Setup Wizard "
+                "or Whisper settings for faster responses (accuracy may be lower).", flush=True,
+            )
+        else:
+            print(
+                "     💡 Check other running applications and whether an accelerated "
+                "speech backend is available for your hardware.", flush=True,
             )
 
     def _finish_transcription_worker(self) -> None:
