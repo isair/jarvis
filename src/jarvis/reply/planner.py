@@ -65,6 +65,9 @@ def call_llm_direct(*, cfg, chat_model, system_prompt, user_content,
 # readable and prevents the model from treating the plan as exhaustive.
 MAX_STEPS = 5
 
+# Shared generation room for a reasoning prelude and a structured answer.
+_PLANNER_TOKEN_BUDGET = 1024
+
 # Absolute minimum query length worth planning. The planner now runs
 # FIRST in the reply flow (before memory search and tool routing), so
 # even short queries benefit: a "Reply to user." plan lets the engine
@@ -487,7 +490,7 @@ def plan_query(
             timeout_sec=effective_timeout,
             thinking=False,
             num_ctx=8192,
-            max_tokens=150,
+            max_tokens=_PLANNER_TOKEN_BUDGET,
             temperature=0.0,
         )
     except Exception as exc:  # pragma: no cover — defensive
@@ -776,7 +779,7 @@ def resolve_next_tool_call(
             timeout_sec=effective_timeout,
             thinking=False,
             num_ctx=8192,
-            max_tokens=100,
+            max_tokens=_PLANNER_TOKEN_BUDGET,
         )
     except Exception as exc:  # pragma: no cover — defensive
         debug_log(f"planner.resolve_next_tool_call: LLM failed — {exc}", "planning")

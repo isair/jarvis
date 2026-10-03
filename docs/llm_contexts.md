@@ -172,7 +172,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 - **Inputs**: user query, dialogue context, **router-narrowed** tool catalogue (names + one-line descriptions) — not the full 30+ list. When the carry-over guard from #7 fires, the previous turn's failed tool name is unioned into this catalogue before the planner sees it, so the planner can plan a re-call without `toolSearchTool` round-tripping. **No** memory context — the planner decides *whether* memory is needed.
 - **System prompt**: `_PROMPT_TEMPLATE` in `planner.py`. Teaches the `searchMemory topic='...'` directive for prior-conversation lookups and personalised recommendations. Private user history is distinguished from public facts about named entities and utility requests. Also teaches short imperative tool steps, angle-bracket entity placeholders, final synthesis step, same-language output, no numbering.
 - **Output**: list of plan steps (max `MAX_STEPS` = 5). Gates memory enrichment (#3 / #4) and augments the tool router (#7 — planner's picks are unioned in, not replacing). Single-step `["Reply to the user."]` plans are the planner's positive "no memory, no tools" signal. An empty list is fail-open — the engine reverts to running #3 unconditionally. A **stop-only plan** (every step is `stop`) is also rejected by a deterministic post-plan guard and returns `[]` — same fail-open path as an LLM failure — so the engine falls through to the tool router and chat model rather than silently dismissing the conversation. Consumed further by the engine to build the `ACTION PLAN:` system-message block and drive the direct-exec loop (#13) for small models.
-- **Limits**: `planner_timeout_sec` (3s). `max_tokens: 150`, `temperature: 0.0`. Fail-open → `[]`.
+- **Limits**: `planner_timeout_sec` (3s). `max_tokens: 1024` (shared `_PLANNER_TOKEN_BUDGET`, including reasoning and answer), `temperature: 0.0`. Fail-open → `[]`.
 
 ## 13. Plan Step Resolver (per direct-exec turn, small models)
 
@@ -182,7 +182,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 - **Inputs**: next planned step text, prior tool calls (name + args + result excerpt), per-turn tool schema.
 - **System prompt**: `_STEP_RESOLVER_SYSTEM` at [planner.py:300](src/jarvis/reply/planner.py:300). Teaches one-JSON-object output, placeholder substitution from prior results, `null` for synthesis steps.
 - **Output**: `(tool_name, arguments)` tuple or `None`. Unknown tool names are rejected via the allow-list guard.
-- **Limits**: `planner_timeout_sec` (3s). `max_tokens: 100`. Fail-open → `None` (engine falls back to the chat-model turn).
+- **Limits**: `planner_timeout_sec` (3s). `max_tokens: 1024` (shared `_PLANNER_TOKEN_BUDGET`, including reasoning and answer). Fail-open → `None` (engine falls back to the chat-model turn).
 
 ## 14. Tool-specific LLM calls
 
