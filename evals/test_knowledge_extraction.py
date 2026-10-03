@@ -480,7 +480,7 @@ class TestFieldMemoryHygiene:
         (
             'The user prefers cool weather. London has mild winters. '
             'The user instructed the assistant: always reply briefly.',
-            ['cool', 'mild', 'brief'], [],
+            ['cool', 'brief'], [],
         ),
     ], ids=['weekly forecast with facts', 'Turkish question with fact',
             'Spanish forecast with fact', 'climate preference and directive'])
@@ -491,3 +491,18 @@ class TestFieldMemoryHygiene:
             assert keyword.casefold() in combined, facts
         for keyword in forbidden:
             assert keyword.casefold() not in combined, facts
+
+
+class TestGraphFactHygieneReview:
+    """Enduring climate and weather preferences survive the semantic review."""
+
+    @requires_judge_llm
+    def test_climate_preferences_and_directives_are_durable(self, mock_config):
+        from jarvis.memory.graph_ops import _review_graph_facts
+        candidates = [
+            ('world', 'London has mild winters'),
+            ('user', 'The user prefers cool weather'),
+            ('directives', 'Always reply briefly'),
+            ('world', 'The forecast predicts 6.8 to 16.8 degrees Celsius this week'),
+        ]
+        assert _review_graph_facts(candidates, mock_config, JUDGE_MODEL, 30, False) == candidates[:3]

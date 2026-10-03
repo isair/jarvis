@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
-from src.jarvis.memory.graph_ops import extract_graph_memories
+from jarvis.memory.graph_ops import extract_graph_memories
 
 pytestmark = pytest.mark.unit
 
@@ -18,7 +18,7 @@ CANDIDATES = [
 
 
 def test_transient_and_interaction_candidates_are_not_returned(mock_config):
-    with patch('src.jarvis.memory.graph_ops.call_llm_direct', side_effect=[
+    with patch('jarvis.memory.graph_ops.call_llm_direct', side_effect=[
         json.dumps(CANDIDATES), '0 TRANSIENT\n1 DURABLE\n2 INTERACTION\n3 DURABLE',
     ]):
         assert extract_graph_memories('Mixed summary', mock_config, 'local-model') == [
@@ -33,12 +33,12 @@ def test_transient_and_interaction_candidates_are_not_returned(mock_config):
     'All entries are valid',
 ])
 def test_incomplete_or_invalid_review_does_not_store_unreviewed_facts(mock_config, verdict):
-    with patch('src.jarvis.memory.graph_ops.call_llm_direct', side_effect=[json.dumps(CANDIDATES), verdict]):
+    with patch('jarvis.memory.graph_ops.call_llm_direct', side_effect=[json.dumps(CANDIDATES), verdict]):
         assert extract_graph_memories('Mixed summary', mock_config, 'local-model') == []
 
 
 def test_review_failure_does_not_escape_or_store_candidates(mock_config):
-    with patch('src.jarvis.memory.graph_ops.call_llm_direct', side_effect=[
+    with patch('jarvis.memory.graph_ops.call_llm_direct', side_effect=[
         json.dumps(CANDIDATES), RuntimeError('Unavailable local model'),
     ]):
         assert extract_graph_memories('Mixed summary', mock_config, 'local-model') == []
@@ -49,7 +49,7 @@ def test_durable_facts_keep_their_original_branch_text_and_date(mock_config):
         {'branch': 'DIRECTIVES', 'fact': '[2026-10-03] Réponds brièvement'},
         {'branch': 'WORLD', 'fact': '[2026-10-03] Trenches Boxing Club offers evening classes'},
     ]
-    with patch('src.jarvis.memory.graph_ops.call_llm_direct', side_effect=[
+    with patch('jarvis.memory.graph_ops.call_llm_direct', side_effect=[
         json.dumps(candidates), '0 DURABLE\n1 DURABLE',
     ]):
         assert extract_graph_memories('Summary', mock_config, 'local-model', date_utc='2026-10-03') == [
@@ -59,7 +59,7 @@ def test_durable_facts_keep_their_original_branch_text_and_date(mock_config):
 
 
 def test_colon_separated_verdicts_preserve_durable_facts(mock_config):
-    with patch('src.jarvis.memory.graph_ops.call_llm_direct', side_effect=[
+    with patch('jarvis.memory.graph_ops.call_llm_direct', side_effect=[
         json.dumps(CANDIDATES), '0: TRANSIENT\n1: DURABLE\n2: INTERACTION\n3: DURABLE',
     ]):
         assert extract_graph_memories('Mixed summary', mock_config, 'local-model') == [
@@ -72,7 +72,7 @@ def test_exhausted_extraction_budget_leaves_graph_empty(mock_config):
     def slow_extraction(**kwargs):
         time.sleep(0.02)
         return json.dumps(CANDIDATES)
-    with patch('src.jarvis.memory.graph_ops.call_llm_direct', side_effect=slow_extraction):
+    with patch('jarvis.memory.graph_ops.call_llm_direct', side_effect=slow_extraction):
         assert extract_graph_memories('Summary', mock_config, 'local-model', timeout_sec=0.01) == []
 
 
@@ -86,12 +86,12 @@ def test_review_shares_the_remaining_extraction_budget(mock_config):
             return json.dumps(CANDIDATES)
         assert kwargs['timeout_sec'] <= budget - (time.monotonic() - started) + 0.005
         return '0 TRANSIENT\n1 DURABLE\n2 INTERACTION\n3 DURABLE'
-    with patch('src.jarvis.memory.graph_ops.call_llm_direct', side_effect=backend):
+    with patch('jarvis.memory.graph_ops.call_llm_direct', side_effect=backend):
         assert extract_graph_memories('Summary', mock_config, 'local-model', timeout_sec=budget) == [
             ('user', CANDIDATES[1]['fact']), ('directives', CANDIDATES[3]['fact']),
         ]
 
 
 def test_nonpositive_budget_does_not_start_extraction(mock_config):
-    with patch('src.jarvis.memory.graph_ops.call_llm_direct', side_effect=AssertionError('Unexpected inference')):
+    with patch('jarvis.memory.graph_ops.call_llm_direct', side_effect=AssertionError('Unexpected inference')):
         assert extract_graph_memories('Summary', mock_config, 'local-model', timeout_sec=0) == []

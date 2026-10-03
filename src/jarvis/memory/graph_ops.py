@@ -63,7 +63,7 @@ _LABEL_TO_BRANCH = {v: k for k, v in _BRANCH_LABELS.items()}
 # ── Memory extraction from dialogue ───────────────────────────────────
 
 
-_GRAPH_FACT_TOKEN_BUDGET = 1024
+_GRAPH_FACT_TOKEN_BUDGET = 2048
 
 
 _FACT_HYGIENE_PROMPT = (
