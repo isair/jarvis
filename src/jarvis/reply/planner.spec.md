@@ -60,6 +60,15 @@ The engine skips the planner entirely when **all** of these hold:
 
 When skipped the engine injects `["Reply to the user."]` as the plan — a positive signal that no tools and no memory enrichment are needed. The warm-profile block is still injected, so the chat model sees user identity and preferences. Longer tool-free queries ("what do you know about my dietary preferences") still reach the planner so it can emit a `searchMemory` directive when the warm profile alone is insufficient.
 
+### Generation budget
+
+Planning and LLM step resolution share a bounded 1,024-token generation budget.
+This includes any reasoning emitted by the backend before its plan or JSON
+answer. The configured planner deadline still bounds each request; empty or
+invalid output keeps the existing fail-open behaviour. The five-step plan
+limit, tool allow-list and deterministic concrete-step fast path apply
+independently of the generation budget.
+
 ### Model resolution
 
 The planner runs on the chat tier (`resolve_model(cfg, Tier.CHAT)`).
