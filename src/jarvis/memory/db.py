@@ -156,7 +156,7 @@ class Database:
             safe_q = _normalize_fts_query(fts_query)
 
             # Fuse ranked candidates rather than mixing BM25 and distance scales.
-            if query_vec_json is not None and safe_q and (self.is_vss_enabled or self._python_vector_store):
+            if query_vec_json is not None and safe_q and self.has_vector_store:
                 import json as _json
 
                 search_limit = max(top_k * 3, 50)
