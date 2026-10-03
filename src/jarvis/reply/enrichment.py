@@ -60,33 +60,40 @@ def extract_search_params_for_memory(query: str, cfg, chat_model: str,
         system_prompt = """Extract search parameters from the user's query for conversation memory search.
 
 Extract:
-1. CONTENT KEYWORDS: 3-5 relevant topics/subjects (ignore time words). Include general, high-level category tags that would be suitable for blog-style tagging when applicable (e.g., "cooking", "fitness", "travel", "finance").
-2. TIME RANGE: If mentioned, convert to exact timestamps
-3. QUESTIONS: What implicit personal questions does this query need answered from stored knowledge about the user? These are things the assistant would need to know about the user to give a personalised answer. Omit if the query needs no personal context, OR if the answer is already visible in the ALREADY IN CONTEXT block of the user message.
+1. TIME RANGE: Read the whole request, including its time expressions, before extracting topics. Determine the requested date or period in its original language and convert it to UTC timestamps using the reference clock. For a request without a date or period, from and to are null.
+2. CONTENT KEYWORDS: Extract 3-5 relevant topics/subjects. Time words are excluded only from the keywords, not from the requested time range. Include suitable category tags such as cooking, fitness, travel or finance.
+3. QUESTIONS: What implicit personal questions does this query need answered from stored knowledge about the user? These are things the assistant would need to know about the user to give a personalised answer. Use an empty questions list only if the query needs no personal context, or if all the needed personal facts are already visible in the ALREADY IN CONTEXT block of the user message. Personalised recommendations and news need both preference keywords and questions about missing personal facts.
 
 The user message may include an ALREADY IN CONTEXT block listing facts the assistant can already see (current time/location, recent dialogue). When present, do NOT generate questions whose answers are already there — those facts do not need to be pulled from long-term memory.
 
-Respond ONLY with JSON in this format:
-{"keywords": ["keyword1", "keyword2"], "questions": ["what are the user's food preferences?"], "from": "2025-08-21T00:00:00Z", "to": "2025-08-21T23:59:59Z"}
-
+Respond ONLY with one valid JSON object, without markdown fences. Close every string with a double quote and close every array and object. Always include these four fields:
+{"from": null, "to": null, "keywords": ["keyword1", "keyword2"], "questions": []}
+Resolve the requested time range first. Fill from and to with UTC ISO timestamps for a dated request; use null for both only when the request has no date or period. The reference clock anchors calculation and does not request a filter.
 Rules:
 - keywords: content topics only (no time words like "yesterday", "today"). Include both specific terms and general category tags when applicable (e.g., for recipes or meal prep you could include "cooking" and "nutrition").
 - prefer concise noun phrases; lowercase; no punctuation; deduplicate similar terms
-- questions: short personal questions about the user that this query implies. Omit for factual/utility queries (time, maths, definitions) that need no personal context. Also omit any question whose answer is already present in the ALREADY IN CONTEXT block (e.g. do not ask "where is the user located?" when a location is shown there, and do not ask about topics the user just mentioned in the recent dialogue).
+- questions: short personal questions about the user that this query implies. Use an empty list for factual/utility queries (time, maths, definitions) that need no personal context. Exclude any question whose answer is already present in the ALREADY IN CONTEXT block (e.g. do not ask "where is the user located?" when a location is shown there, and do not ask about topics the user just mentioned in the recent dialogue).
 - from/to: only if time mentioned, convert to exact UTC timestamps
-- omit from/to if no time mentioned
+- from and to are null only for a request without a date or period
 
 Examples:
-"what did we discuss about the warhammer project?" → {"keywords": ["warhammer", "project", "figures", "gaming", "tabletop"]}
-"what did I eat yesterday?" → {"keywords": ["eat", "food", "cooking", "nutrition"], "from": "2025-08-21T00:00:00Z", "to": "2025-08-21T23:59:59Z"}
-"remember that password I mentioned today?" → {"keywords": ["password", "accounts", "security", "credentials"], "from": "2025-08-22T00:00:00Z", "to": "2025-08-22T23:59:59Z"}
-"what news might interest me?" → {"keywords": ["interests", "hobbies", "preferences", "likes", "passionate"], "questions": ["what topics interest the user?", "what are the user's hobbies?"]}
-"news of interest to me" / "news that would interest me" / "news interesting for me" / "recall my interests and search for news on them" → {"keywords": ["interests", "hobbies", "preferences", "likes", "passionate"], "questions": ["what topics interest the user?", "what are the user's hobbies?"]}
-"recommend a restaurant I'd enjoy" (no location in context) → {"keywords": ["food preferences", "restaurants", "cuisine", "dining", "favorites"], "questions": ["what cuisine does the user like?", "where is the user located?"]}
-"recommend a restaurant I'd enjoy" (location already in context) → {"keywords": ["food preferences", "restaurants", "cuisine", "dining", "favorites"], "questions": ["what cuisine does the user like?"]}
-"suggest a movie for me" → {"keywords": ["movies", "films", "entertainment", "preferences", "genres"], "questions": ["what film genres does the user enjoy?", "what movies has the user watched recently?"]}
-"what time is it?" → {"keywords": []}
-"""
+"what did we discuss about the warhammer project?" → {"from": null, "to": null, "keywords": ["warhammer", "project", "figures", "gaming", "tabletop"], "questions": []}
+"what news might interest me?" → {"from": null, "to": null, "keywords": ["interests", "hobbies", "preferences", "likes", "passionate"], "questions": ["what topics interest the user?"]}
+"news of interest to me" / "news that would interest me" / "news interesting for me" / "recall my interests and search for news on them" → {"from": null, "to": null, "keywords": ["interests", "hobbies", "preferences", "likes", "passionate"], "questions": ["what topics interest the user?"]}
+"recommend a restaurant I'd enjoy" (no location in context) → {"from": null, "to": null, "keywords": ["food preferences", "restaurants", "cuisine", "dining", "favourites"], "questions": ["what cuisine does the user like?", "where is the user located?"]}
+"recommend a restaurant I'd enjoy" (location already in context) → {"from": null, "to": null, "keywords": ["food preferences", "restaurants", "cuisine", "dining", "favourites"], "questions": ["what cuisine does the user like?"]}
+"suggest a movie for me" → {"from": null, "to": null, "keywords": ["movies", "films", "entertainment", "preferences", "genres"], "questions": ["what film genres does the user enjoy?", "what movies has the user watched recently?"]}
+"what time is it?" → {"from": null, "to": null, "keywords": [], "questions": []}
+
+Date-scoped example: reference clock = 2030-04-10 12:00 UTC; request = "what did I eat yesterday?"; output = {"from": "2030-04-09T00:00:00Z", "to": "2030-04-09T23:59:59Z", "keywords": ["food", "cooking", "nutrition"], "questions": []}
+Timeless example: reference clock = 2030-04-10 12:00 UTC; request = "what did we discuss about cooking?"; output = {"from": null, "to": null, "keywords": ["cooking"], "questions": []}
+Date-scoped example: reference clock = 2030-04-10 12:00 UTC; request = "which books did I mention today?"; output = {"from": "2030-04-10T00:00:00Z", "to": "2030-04-10T23:59:59Z", "keywords": ["books", "reading"], "questions": []}
+The reference clock supplies the anchor for requested dates. Decide whether a date range is needed from the request itself.
+Resolve time expressions in the language of the request, then express the requested interval in UTC. A non-English request needs the same date range as its English meaning.
+Date-scoped example: reference clock = 2030-04-10 12:00 UTC; request = "dün hangi kitaplardan bahsettim?"; output = {"from": "2030-04-09T00:00:00Z", "to": "2030-04-09T23:59:59Z", "keywords": ["kitap", "okuma"], "questions": []}
+Timeless example: reference clock = 2030-04-10 12:00 UTC; request = "hangi kitaplardan bahsettim?"; output = {"from": null, "to": null, "keywords": ["kitap", "okuma"], "questions": []}
+Date-scoped example: reference clock = 2030-04-10 12:00 UTC; request = "bugün hangi kitaplardan bahsettim?"; output = {"from": "2030-04-10T00:00:00Z", "to": "2030-04-10T23:59:59Z", "keywords": ["kitap", "okuma"], "questions": []}
+For any request about a dated period, both from and to must contain that period, never null. Apply this to the user request using its actual reference clock."""
 
         # Per-call data (the hint or the UTC anchor) rides in the user message
         # so the system prompt above stays byte-static across calls — the

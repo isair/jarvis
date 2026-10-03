@@ -17,8 +17,13 @@ CASES = [
     ('What did I eat yesterday?', ('eat', 'food', 'meal', 'nutrition'), -1, None),
     ('Dün bisiklet hakkında ne konuştuk?', ('bisiklet', 'bike', 'bicycle', 'cycling'), -1, None),
     ('¿Qué comí ayer?', ('comida', 'comer', 'food', 'meal', 'eat', 'nutrition'), -1, None),
+    ('Quel film ai-je mentionné aujourd’hui?', ('film', 'movie', 'cinema'), 0, None),
+    ('Welche Filme haben wir gestern besprochen?', ('film', 'movie', 'cinema'), -1, None),
+    ('Bugün hangi filmlerden konuştuk?', ('film', 'movie', 'cinema'), 0, None),
     ('What did we discuss about cooking today?', ('cooking', 'food'), 0, None),
     ('What did we discuss about cycling on 30 September 2026?', ('cycling', 'bicycle', 'bike'), -3, None),
+    ('Dün bisiklet hakkında ne konuştuk?', ('bisiklet', 'bike', 'bicycle', 'cycling'), -1,
+     'Current date/time: Saturday, 2026-10-03 12:00 UTC'),
     ('Recommend a restaurant I would enjoy.', ('restaurant', 'food', 'dining', 'cuisine'), None,
      'Current date/time: Saturday, 2026-10-03 12:00 UTC. Location: Hackney, London.'),
 ]
@@ -55,7 +60,11 @@ def test_recall_parameters_retain_requested_scope(monkeypatch, query, topics, da
             assert value.tzinfo is not None and value.astimezone(timezone.utc).date() == requested_date, (
                 f'📅 {key} does not cover the requested day: {result}'
             )
+    questions = result.get('questions', [])
+    if query in {'What news might interest me?', 'Recommend a restaurant I would enjoy.'}:
+        assert questions and all(isinstance(question, str) and question.strip() for question in questions), (
+            f'🧠 Personalised recall needs implicit personal questions: {result}'
+        )
     if context:
-        questions = result.get('questions', [])
         assert not any('locat' in question.casefold() or 'where' in question.casefold()
                        for question in questions), f'📍 Location is already available: {result}'
