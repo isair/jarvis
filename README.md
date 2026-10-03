@@ -70,6 +70,7 @@ Budget memory for Whisper and, when different from chat, the fast model used for
 - **Remember beyond one session.** Search your local diary and knowledge graph. Planning requests memory for personal context and distinguishes it from general facts; accuracy depends on the selected model. Jarvis checks graph candidates for lasting value before storing them. Browse what Jarvis has stored in the Memory Viewer.
 - **Get things done.** Built-in tools cover web search, weather, time, screenshot OCR, file access, nutrition tracking and optional location awareness.
 - **Connect your own tools.** MCP servers add browser automation, smart-home controls and other integrations. Tool routing selects a relevant subset for each request.
+- **See when speech was unclear.** The face briefly shows a repeat request when speech recognition rejects a low-confidence segment. It does not speak or interrupt the current assistant state.
 - **Dictate into other apps.** Hold a hotkey, speak, then release to paste locally transcribed text. See the [platform limitations](#known-limitations) first.
 - **Type when you need to.** The companion chat shares your voice conversation and memory. Text replies are silent, and you can rewind a sent message to regenerate from that point.
 

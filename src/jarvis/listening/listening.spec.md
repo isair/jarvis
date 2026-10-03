@@ -376,10 +376,19 @@ them.
 
 Segments rejected by the earlier no-speech gate do not emit low-confidence
 events. Accepted segments and segments without confidence metadata retain their
-existing backend-specific filtering behaviour. These events do not trigger TTS,
-UI updates, transcript-buffer entries, or query dispatch; accepted speech in a
-mixed utterance continues through the normal pipeline. Without a callback, the
-listener filters and logs rejected segments without notifying any consumer.
+existing backend-specific filtering behaviour. The listener does not directly
+trigger TTS, update widgets, add transcript-buffer entries, or dispatch queries
+for these events. Accepted speech in a mixed utterance continues through the
+normal pipeline. Without a callback, the listener filters and logs rejected
+segments without notifying any consumer.
+
+The daemon registers a non-blocking consumer that coalesces notifications and
+wakes a dedicated notification worker. The worker delivers payload-free visual feedback
+independently of synchronous diary and graph processing
+through a bundled callback or desktop IPC. The rejected transcript remains in
+the listener result only and is not forwarded, logged by the feedback consumer
+or persisted. Headless operation emits no desktop protocol, and shutdown drops
+pending feedback.
 
 ## Configuration
 

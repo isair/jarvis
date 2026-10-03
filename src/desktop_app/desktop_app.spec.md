@@ -120,6 +120,25 @@ Window visibility is user-controlled: starting or stopping the assistant never s
 
 **Face state follows the daemon lifecycle**: the face animates from states written by the daemon (`JarvisStateManager`, file-backed for cross-process use). Whenever the daemon goes down — the tray's Stop/Start Listening toggle, an unexpected exit, or the setup wizard pausing it — the tray resets the face to `ASLEEP` so it never looks awake while no daemon is running. Starting the daemon lets the daemon's own state writes take over again.
 
+### Rejected speech feedback
+
+- A rejected low-confidence segment produces a brief "Didn't catch that,
+  please repeat" subtitle in the face window. The subtitle clears after
+  approximately two seconds; another rejection refreshes its lifetime.
+- Subtitle space is reserved, so showing feedback does not compress the
+  face or resize the window. Feedback never opens a hidden window or changes
+  listening, thinking, speaking or dictation state.
+- The daemon coalesces rejection notifications without keeping transcript
+  text. The listener enqueues notifications; a stoppable notification worker
+  delivers them independently of diary processing.
+  Bundled mode uses a callback and a queued Qt signal. Subprocess mode uses
+  `__VOICE__:{"type":"low_confidence","data":null}` and the same Qt signal.
+  Protocol events do not appear in the ordinary log viewer.
+- Stop clears the subtitle immediately and stops notification delivery
+  with a bounded wait, discarding pending feedback. Queued notifications are
+  ignored while the daemon is stopped or stopping. Accepted segments do not
+  produce this feedback. No TTS is triggered.
+
 ### macOS tray event safety
 
 The desktop installs a guard on Qt Cocoa tray activation callbacks after creating `QApplication` and before showing a tray icon. Non-mouse and missing AppKit events do not reach Qt's `clickCount` access. Ordinary mouse events retain the native activation reason and menu handling. Native implementation pointers are captured before replacement so repeated installation cannot recursively call the guard. The guard affects only Qt's tray delegate within the desktop process; it does not modify AppKit event classes, capture keyboard input, or post system events. If native guard installation is unavailable, the desktop records a diagnostic.
