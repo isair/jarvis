@@ -696,6 +696,9 @@ _LOOP_DIGEST_TOOL_RESULT_EXCERPT_CHARS = 300
 # Upper bound on the returned digest text.
 _LOOP_DIGEST_MAX_CHARS = 800
 
+# Includes reasoning and the caveat-prefixed partial reply.
+_LOOP_DIGEST_TOKEN_BUDGET = 1024
+
 _LOOP_DIGEST_SYSTEM_PROMPT = (
     "You are summarising what an AI assistant accomplished in a "
     "multi-step reasoning loop that ran out of turns before finishing.\n\n"
@@ -874,7 +877,7 @@ def digest_loop_for_max_turns(
             user_content=user_content,
             timeout_sec=timeout_sec,
             thinking=thinking,
-            max_tokens=200,
+            max_tokens=_LOOP_DIGEST_TOKEN_BUDGET,
         )
     except Exception as e:
         debug_log(f"max-turn loop digest failed: {e}", "planning")
