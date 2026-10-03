@@ -50,7 +50,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 - **Inputs**: user query (with the planner's `topic` hint appended when present), optional context hint (live-context compact summary) or UTC-now anchor, both carried in the USER message.
 - **System prompt**: inline at [enrichment.py:35-63](src/jarvis/reply/enrichment.py:35). Byte-static — no hint block, no timestamp — so the system prompt is identical across every extractor call and stays cacheable; the per-call hint / UTC anchor rides at the end of the user content.
 - **Output**: `{keywords, from?, to?, questions?}`. Consumed by memory search in the reply engine.
-- **Limits**: up to 2 retries; timeout from `llm_tools_timeout_sec`. `max_tokens: 50`.
+- **Limits**: up to 2 attempts; timeout from `llm_tools_timeout_sec`. `max_tokens: 1024` (`_MEMORY_SEARCH_PARAMETER_TOKEN_BUDGET`), covering reasoning and complete parameter JSON.
 - **Caching**: result cached in `DialogueMemory._hot_cache` under key `enrichment:{redacted_query[+topic_hint]}` for the lifetime of the active conversation. Identical follow-ups within the same conversation reuse the dict and skip the LLM hop. Cleared by `clear_hot_cache()` on the `stop` signal and on new-conversation entry.
 
 ## 3b. Recall Gate (pre-enrichment short-circuit)

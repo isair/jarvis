@@ -6,6 +6,9 @@ from ..llm import get_llm_backend, resolve_model, Tier
 from ..debug import debug_log
 
 
+_MEMORY_SEARCH_PARAMETER_TOKEN_BUDGET = 1024
+
+
 def call_llm_direct(*, cfg, chat_model, system_prompt, user_content,
                     timeout_sec=10.0, thinking=False, num_ctx=4096,
                     temperature=None, max_tokens=None):
@@ -101,7 +104,7 @@ Examples:
                 user_content=user_content,
                 timeout_sec=timeout_sec,
                 thinking=thinking,
-                max_tokens=50,
+                max_tokens=_MEMORY_SEARCH_PARAMETER_TOKEN_BUDGET,
             )
 
             if response:
