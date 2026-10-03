@@ -10,6 +10,8 @@ import pytest
 from jarvis.config import load_settings
 from jarvis.tools.selection import ToolSelectionStrategy, select_tools
 
+pytestmark = pytest.mark.unit
+
 
 @pytest.fixture
 def decision_server():
