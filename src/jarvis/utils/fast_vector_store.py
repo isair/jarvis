@@ -235,7 +235,7 @@ def get_faiss_vector_store(db_path: str, dimension: int = 768) -> Optional[FAISS
         with _faiss_stores_lock:
             store = _faiss_stores.get(key)
             if store is None:
-                store = FAISSVectorStore(db_path, dimension)
+                store = FAISSVectorStore(key[0], dimension)
                 _faiss_stores[key] = store
             return store
     except Exception as e:

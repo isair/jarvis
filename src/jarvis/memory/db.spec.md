@@ -23,8 +23,12 @@ vector mappings remain readable. Callers commit diary text before refreshing
 the optional index.
 
 Python and FAISS indices are shared only by active owners of the same resolved
-database file; FAISS dimensions also belong to the index identity. Distinct
+database file; FAISS dimensions also belong to the in-memory index identity.
+Persistence holds one current vector per summary. Re-embedding a summary with
+a different dimension replaces its persisted vector; an index with another
+dimension cannot load that vector. Distinct
 database files and independent `:memory:` databases never share candidates or
 vector writes. Weak ownership releases an unused index, so a later owner loads
-its persisted file afresh. Factory construction is serialised to prevent two
+its persisted file afresh. File-backed stores retain the resolved absolute path
+for every write, independent of later working-directory changes. Factory construction is serialised to prevent two
 active owners of one file from receiving divergent indices.

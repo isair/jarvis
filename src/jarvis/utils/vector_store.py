@@ -128,7 +128,7 @@ def get_python_vector_store(db_path: str) -> PythonVectorStore:
     with _python_stores_lock:
         store = _python_stores.get(key)
         if store is None:
-            store = PythonVectorStore(db_path)
+            store = PythonVectorStore(key)
             _python_stores[key] = store
         return store
 

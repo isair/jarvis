@@ -82,7 +82,7 @@ def test_python_in_memory_databases_are_independent():
     assert first.search([1., 0.])[0] == pytest.approx((1, 0.))
 
 
-def test_faiss_model_dimensions_are_independent(tmp_path):
+def test_faiss_indices_accept_their_requested_dimensions(tmp_path):
     path = str(tmp_path / 'dimensions.db')
     first_vector, second_vector = [1., 0.], [0., 1., 0.]
     first = fast_vector_store.get_faiss_vector_store(path, len(first_vector))
@@ -92,3 +92,54 @@ def test_faiss_model_dimensions_are_independent(tmp_path):
     second.add_vector(2, second_vector)
     assert first.search(first_vector)[0] == pytest.approx((1, 0.))
     assert second.search(second_vector)[0] == pytest.approx((2, 0.))
+
+
+def test_relative_database_keeps_writing_to_its_resolved_file(tmp_path, monkeypatch, make_store):
+    monkeypatch.chdir(tmp_path)
+    original_path = tmp_path / 'diary.db'
+    store = make_store('diary.db')
+    store.add_vector(1, [1., 0.])
+    other = tmp_path / 'other'
+    other.mkdir()
+    monkeypatch.chdir(other)
+    store.add_vector(2, [0., 1.])
+    reopened = reload_store(store, original_path)
+    assert reopened.search([0., 1.])[0] == pytest.approx((2, 0.))
+    assert not (other / 'diary.db').exists()
+
+
+def test_concurrent_owners_of_one_file_share_updates(tmp_path, make_store):
+    from threading import Barrier
+    path = tmp_path / 'shared.db'
+    ready = Barrier(2)
+    def acquire():
+        ready.wait(timeout=2)
+        return make_store(path)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(acquire), pool.submit(acquire)]
+        first, second = [future.result(timeout=5) for future in futures]
+    second.add_vector(1, [1., 0.])
+    assert first.search([1., 0.])[0] == pytest.approx((1, 0.))
+
+
+def test_symlink_and_resolved_path_share_updates(tmp_path, make_store):
+    path, alias = tmp_path / 'diary.db', tmp_path / 'alias.db'
+    first = make_store(path)
+    alias.symlink_to(path)
+    second = make_store(alias)
+    second.add_vector(1, [1., 0.])
+    assert first.search([1., 0.])[0] == pytest.approx((1, 0.))
+
+
+def test_new_dimension_replaces_a_summarys_persisted_vector(tmp_path):
+    path = str(tmp_path / 'replacement.db')
+    previous, current = [1., 0.], [0., 1., 0.]
+    old_store = fast_vector_store.get_faiss_vector_store(path, len(previous))
+    new_store = fast_vector_store.get_faiss_vector_store(path, len(current))
+    assert old_store is not None and new_store is not None
+    old_store.add_vector(1, previous)
+    new_store.add_vector(1, current)
+    reopened = reload_store(new_store, path)
+    assert reopened.search(current)[0] == pytest.approx((1, 0.))
+    # Persisted summaries have one current vector; older dimensions cannot load it.
+    assert reload_store(old_store, path).search(previous) == []
