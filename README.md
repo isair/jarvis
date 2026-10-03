@@ -129,6 +129,7 @@ Jarvis is actively developed, primarily on macOS. Windows and Linux behaviour ma
 - **Spoken “stop” can be mistaken for echo** while Jarvis is speaking ([#24](https://github.com/isair/jarvis/issues/24)). Use a standalone configured stop phrase; echoed longer instructions containing it are ignored.
 - **No mobile app** is available ([#17](https://github.com/isair/jarvis/issues/17)).
 - **Continuous speech is split at your utterance limit.** The shorter limit during speech playback helps interruption requests reach recognition promptly. Both limits are adjustable in Settings.
+- **GPT-OSS always reasons.** Its Ollama thinking toggle selects low or high reasoning effort; turning it off selects low effort rather than disabling reasoning.
 - **Slow speech recognition produces guidance.** After several utterances decode slower than real time, Logs recommends a smaller Whisper model or checking available acceleration. Smaller models can reduce accuracy.
 - **First-run downloads can take time.** Whisper and language models can be large. Check Logs for progress before assuming startup is stuck.
 - **Apple Silicon desktop bundles include MLX speech recognition.** Windows, Linux and Intel Mac builds use faster-whisper.
