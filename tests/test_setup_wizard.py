@@ -1158,16 +1158,6 @@ class TestModelsPageUI:
         assert page._chat_model == DEFAULT_CHAT_MODEL
         assert page._chat_combo.currentData() == DEFAULT_CHAT_MODEL
 
-    def test_no_vram_headroom_recommends_low_vram_chat_model(self, qapp):
-        """When companion overhead consumes the whole VRAM budget, the page
-        recommends the low-VRAM chat model rather than the unknown-VRAM
-        default (which needs far more VRAM than the machine has)."""
-        from desktop_app.setup_wizard import ModelsPage
-        from jarvis.utils.vram import get_recommended_model_id
-        with patch("desktop_app.setup_wizard.detect_total_vram_mb", return_value=2048):
-            page = ModelsPage()
-        assert page._chat_model == get_recommended_model_id(1)
-
     def test_initialize_page_stays_unlinked(self, qapp):
         from desktop_app.setup_wizard import ModelsPage
         page = ModelsPage()

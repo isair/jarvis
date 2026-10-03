@@ -22,6 +22,7 @@ from urllib.parse import urlsplit
 
 import requests
 
+from jarvis.debug import debug_log
 from jarvis.config import SUPPORTED_CHAT_MODELS, DEFAULT_CHAT_MODEL
 from jarvis.utils.vram import (
     detect_total_vram_mb,
@@ -2322,18 +2323,11 @@ class ModelsPage(ScrollableWizardPage):
             # leaves room for embeddings + whisper alongside the chat model.
             overhead = self._EMBED_VRAM_MB + self._whisper_vram_mb()
             usable_mb = self._detected_vram_mb - overhead
-            rec = get_recommended_model_id(usable_mb if usable_mb > 0 else None)
+            rec = get_recommended_model_id(max(usable_mb, 0))
+            debug_log(f"Chat model memory recommendation: {rec} (available {usable_mb} MB)", "setup")
             if rec in self._ALL_MODELS:
                 self._chat_model = rec
-                # Fast model stays gemma4:e2b unless VRAM constrains it
-                cv = required_vram_mb(rec) or 0
-                fv = required_vram_mb(self._fast_model) or 0
-                if cv + fv + overhead > self._detected_vram_mb:
-                    for c in self._FAST_MODEL_IDS:
-                        rc = required_vram_mb(c) or 0
-                        if rc <= cv and cv + rc + overhead <= self._detected_vram_mb:
-                            self._fast_model = c
-                            break
+                self._constrain_fast_model()
                 self._sync_combo_states()
         self._refresh_vram_display()
         self._update_models_display()
@@ -2383,29 +2377,31 @@ class ModelsPage(ScrollableWizardPage):
             self._fast_model = mid
             self._fast_combo.setCurrentIndex(self._fast_combo.findData(mid))
         else:
-            # Auto-downgrade: if fast model needs more VRAM than chat model,
-            # or the total (chat + fast + embed + whisper) exceeds our GPU,
-            # pick the smallest fast-suitable model that fits.
-            overhead = self._EMBED_VRAM_MB + self._whisper_vram_mb()
-            cv = required_vram_mb(mid) or 0
-            fv = required_vram_mb(self._fast_model) or 0
-            exceeds_vram = (
-                self._detected_vram_mb is not None
-                and cv + fv + overhead > self._detected_vram_mb
-            )
-            if fv > cv or exceeds_vram:
-                for c in self._FAST_MODEL_IDS:
-                    rc = required_vram_mb(c) or 0
-                    fits_vram = (
-                        self._detected_vram_mb is None
-                        or cv + rc + overhead <= self._detected_vram_mb
-                    )
-                    if rc <= cv and fits_vram:
-                        self._fast_model = c
-                        self._fast_combo.setCurrentIndex(self._fast_combo.findData(c))
-                        break
+            self._constrain_fast_model()
+            self._fast_combo.setCurrentIndex(self._fast_combo.findData(self._fast_model))
         self._refresh_vram_display()
         self._update_models_display()
+
+    def _constrain_fast_model(self):
+        """Keep a fitting choice, otherwise select the largest fitting fast model."""
+        overhead = self._EMBED_VRAM_MB + self._whisper_vram_mb()
+        chat_mb = required_vram_mb(self._chat_model) or 0
+
+        def fits(model):
+            fast_mb = required_vram_mb(model) or 0
+            total = chat_mb + overhead
+            if model != self._chat_model:
+                total += fast_mb
+            return (fast_mb <= chat_mb
+                    and (self._detected_vram_mb is None or total <= self._detected_vram_mb))
+
+        if fits(self._fast_model):
+            return
+        candidates = sorted(self._FAST_MODEL_IDS,
+                            key=lambda model: required_vram_mb(model) or 0,
+                            reverse=True)
+        self._fast_model = next((model for model in candidates if fits(model)), candidates[-1])
+        debug_log(f"Fast model memory recommendation: {self._fast_model}", "setup")
 
     def _sync_combo_states(self):
         """Sync combo selections to reflect current model choices."""
@@ -2511,23 +2507,12 @@ class ModelsPage(ScrollableWizardPage):
             pass
         self._chat_model = cc if cc in self._ALL_MODELS else DEFAULT_CHAT_MODEL
         self._fast_model = fc if fc in self._ALL_MODELS else "gemma4:e2b"
-        overhead = self._EMBED_VRAM_MB + self._whisper_vram_mb()
-        cv = required_vram_mb(self._chat_model) or 0
-        fv = required_vram_mb(self._fast_model) or 0
-        exceeds_vram = (
-            self._detected_vram_mb is not None
-            and cv + fv + overhead > self._detected_vram_mb
-        )
-        if fv > cv or exceeds_vram:
-            for c in self._FAST_MODEL_IDS:
-                rc = required_vram_mb(c) or 0
-                fits_vram = (
-                    self._detected_vram_mb is None
-                    or cv + rc + overhead <= self._detected_vram_mb
-                )
-                if rc <= cv and fits_vram:
-                    self._fast_model = c
-                    break
+        if self._detected_vram_mb is not None and cc == DEFAULT_CHAT_MODEL:
+            usable_mb = self._detected_vram_mb - self._EMBED_VRAM_MB - self._whisper_vram_mb()
+            if usable_mb < (required_vram_mb(DEFAULT_CHAT_MODEL) or 0):
+                self._chat_model = get_recommended_model_id(max(usable_mb, 0))
+                debug_log(f"Default chat memory recommendation: {self._chat_model}", "setup")
+        self._constrain_fast_model()
         # Default to unlinked — separate fast model is the recommended layout
         # even when both happen to be the same model ID.
         self._linked = False
