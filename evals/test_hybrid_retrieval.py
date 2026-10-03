@@ -1,7 +1,7 @@
 """Offline recall@3 check with labelled, controlled embeddings (no model download).
 
-This measures fusion, not embedding-model quality. Nine keyword queries and nine
-paraphrases share a 24-summary corpus with semantically weaker distractors.
+This measures fusion and multilingual keyword normalisation, not embedding-model
+quality. Keyword queries and paraphrases share a corpus with weaker distractors.
 """
 
 import json
@@ -14,6 +14,9 @@ from jarvis.utils.vector_store import PythonVectorStore
 pytestmark = pytest.mark.eval
 
 CASES = [
+    ('京都', '日本の古都'), ('велосипед', 'двухколёсный транспорт'),
+    ('θερμόμετρο', 'μέτρηση θερμοκρασίας'), ('قهوة', 'مشروب الصباح'),
+    ('한글', '한국 문자'), ('नमस्ते', 'अभिवादन'),
     ('picnic', 'outdoor lunch'), ('guitar', 'string instrument'),
     ('passport', 'travel document'), ('dentist', 'tooth appointment'),
     ('marathon', 'long distance race'), ('allergy', 'pollen reaction'),
