@@ -36,6 +36,7 @@ Contract:
 from __future__ import annotations
 
 import json
+import math
 import re
 from typing import List, Optional, Sequence, Tuple
 
@@ -615,15 +616,16 @@ _PLAN_STEP_KV_RE = re.compile(
 def _parse_plan_step_concrete(
     next_step_text: str,
     allowed_names: Sequence[str],
-    allowed_props: dict,
+    property_schemas: dict[str, dict],
 ) -> Optional[Tuple[str, dict]]:
     """Deterministically parse ``toolName key='value' key2="value2"`` steps.
 
     Returns ``(name, args)`` when the step is fully concrete — tool name in
     the allow-list, arg keys match the tool's declared properties, and the
     text contains no ``<placeholder>`` that needs entity substitution from
-    prior results. Returns ``None`` otherwise so the caller falls back to
-    the LLM resolver.
+    prior results. Primitive values follow their declared JSON types;
+    strings and untyped values stay literal. Invalid or complex typed
+    values return ``None`` for the LLM resolver.
 
     Why this exists: small models occasionally flake on the resolver LLM
     call (timeout, empty output, spurious ``null``) even for trivially
@@ -649,6 +651,7 @@ def _parse_plan_step_concrete(
     if not rest_stripped:
         return name, {}
     args: dict = {}
+    properties = property_schemas.get(name, {})
     for m in _PLAN_STEP_KV_RE.finditer(rest):
         key = m.group("key")
         value = m.group("sq")
@@ -656,15 +659,34 @@ def _parse_plan_step_concrete(
             value = m.group("dq")
         if value is None:
             value = m.group("bare") or ""
+        property_schema = properties.get(key)
+        kind = property_schema.get("type") if isinstance(property_schema, dict) else None
+        if kind is not None and kind != "string":
+            try:
+                parsed = json.loads(value)
+            except (ValueError, TypeError):
+                debug_log("planner: concrete typed argument needs resolver", "planning")
+                return None
+            valid = (
+                (kind == "boolean" and type(parsed) is bool)
+                or (kind == "integer" and type(parsed) is int)
+                or (kind == "number" and type(parsed) in (int, float)
+                    and (type(parsed) is int or math.isfinite(parsed)))
+                or (kind == "null" and parsed is None)
+            )
+            if not valid:
+                debug_log("planner: concrete typed argument needs resolver", "planning")
+                return None
+            value = parsed
         args[key] = value
     if not args:
         # Rest has content but no parseable key=value pairs — the step is
         # prose-shaped (e.g. `webSearch for the director's latest film`).
         # Defer to the LLM resolver which can infer the right shape.
         return None
-    declared = allowed_props.get(name, set())
+    declared = properties.keys()
     if declared:
-        unknown = set(args.keys()) - declared
+        unknown = args.keys() - declared
         if unknown:
             # The planner used key names that don't match the tool's
             # schema — surface to the LLM resolver which can remap them.
@@ -746,7 +768,7 @@ def resolve_next_tool_call(
 
     # Fast path: fully-concrete plan step parses deterministically.
     fast = _parse_plan_step_concrete(
-        next_step_text, allowed_names, allowed_props,
+        next_step_text, allowed_names, property_schemas,
     )
     if fast is not None and _has_required_arguments(fast[0], fast[1], required_props):
         debug_log(
