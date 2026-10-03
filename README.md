@@ -60,7 +60,7 @@ Memory needs depend on model size, quantisation, context length and speech recog
 | More capable | `gemma4:e4b` |
 | Larger local setup | `qwen3.8:27b` |
 
-Budget memory for Whisper and, when different from chat, the fast model used for voice intent and tool routing. Apple Silicon uses unified memory; other GPUs use dedicated VRAM.
+Budget memory for Whisper and, when different from chat, the fast model used for voice intent and tool routing. Apple Silicon uses unified memory; other GPUs use dedicated VRAM. The wizard recommends smaller models when detected memory is exhausted and warns when CPU fallback is needed.
 
 </details>
 
