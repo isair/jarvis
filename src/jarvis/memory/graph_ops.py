@@ -63,6 +63,9 @@ _LABEL_TO_BRANCH = {v: k for k, v in _BRANCH_LABELS.items()}
 # ── Memory extraction from dialogue ───────────────────────────────────
 
 
+_GRAPH_FACT_TOKEN_BUDGET = 1024
+
+
 _FACT_HYGIENE_PROMPT = (
     "Classify each numbered memory candidate. Use these labels: "
     "TRANSIENT for a weather forecast or current weather/time reading; "
@@ -93,7 +96,7 @@ def _review_graph_facts(
             cfg=cfg, chat_model=chat_model,
             system_prompt=_FACT_HYGIENE_PROMPT, user_content=content,
             timeout_sec=timeout_sec, thinking=thinking, temperature=0.0,
-            max_tokens=min(1024, max(128, 16 * len(facts))),
+            max_tokens=_GRAPH_FACT_TOKEN_BUDGET,
         )
         labels = {}
         for line in (response or "").splitlines():
@@ -264,7 +267,7 @@ def extract_graph_memories(
         timeout_sec=timeout_sec,
         thinking=thinking,
         temperature=0.0,
-        max_tokens=300,
+        max_tokens=_GRAPH_FACT_TOKEN_BUDGET,
     )
 
     if not response:

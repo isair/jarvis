@@ -77,7 +77,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 - **Inputs**: user query, tool name, raw tool result (e.g. webSearch payload inside UNTRUSTED WEB EXTRACT fence).
 - **System prompt**: `_TOOL_DIGEST_SYSTEM_PROMPT`. Teaches attributed fact extraction, `NONE` sentinel, no inference.
 - **Output**: ≤600 chars per batch (`_TOOL_DIGEST_MAX_CHARS`) replacing the raw payload in the messages stream. Falls back to raw on `NONE`.
-- **Limits**: `llm_digest_timeout_sec` (8s, shared). `max_tokens: 300`.
+- **Limits**: `llm_digest_timeout_sec` (8s, shared). `max_tokens: 1024`.
 
 ## 6. Max-Turn Loop Digest
 
@@ -129,7 +129,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 - **Inputs**: summary text + optional date.
 - **System prompt**: inline — asks for JSON array of `{"branch": "USER|DIRECTIVES|WORLD", "fact": "..."}` objects, with a heuristic ("user telling the assistant how to behave → DIRECTIVES; user telling the assistant about themselves → USER; external facts → WORLD"). Unknown branches default to USER. The DO-NOT-EXTRACT block hardens two recurring traps: assistant-generated recommendations (would-a-different-assistant-give-the-same-answer? heuristic separates these from external lookups, which DO count as facts) and transient snapshots like the current weather / time of day (described as "moments not facts" so the model stops conflating ephemera with persistent climate / location knowledge).
 - **Output**: candidate `(branch_id, fact_text)` tuples → semantic hygiene review (#10b) → branch-pinned descent.
-- **Limits**: `max_tokens: 300`, `temperature: 0`, 4096-token context. Extraction and hygiene review share `timeout_sec`. Failures → empty list.
+- **Limits**: `max_tokens: 1024`, `temperature: 0`, 4096-token context. Extraction and hygiene review share `timeout_sec`. Failures → empty list.
 
 ## 10b. Knowledge Graph Fact Hygiene
 
@@ -139,7 +139,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 - **Inputs**: indexed candidate fact text, quoted as untrusted data; no new user data or external endpoint.
 - **System prompt**: `_FACT_HYGIENE_PROMPT` classifies each candidate by meaning as `DURABLE`, `TRANSIENT`, `INTERACTION` or `ADVICE`, in every language. Weather forecasts and conversation descriptions are excluded; personal facts, explicit assistant style rules, business details and enduring climate facts are retained.
 - **Output**: only `DURABLE` candidates, with their original branch and text. The model cannot rewrite candidates or introduce facts. Invalid, duplicate, missing or out-of-range verdicts discard that graph cycle; the diary remains available.
-- **Limits**: the remaining extraction timeout, 4096-token context, `temperature: 0`, `max_tokens: min(1024, max(128, 16 * candidate_count))`. No retries. Empty candidates or an exhausted budget skip review.
+- **Limits**: the remaining extraction timeout, 4096-token context, `temperature: 0`, `max_tokens: 1024`. No retries. Empty candidates or an exhausted budget skip review.
 
 ## 11. Knowledge Graph Best-Child Picker
 
