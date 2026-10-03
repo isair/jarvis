@@ -280,3 +280,19 @@ def test_numeric_fact_matching_accepts_thousands_separators(case):
     case = replace(case, answer_terms=("8849",))
     outcome = result(case, reply="The measured height is 8,849 metres.")
     assert score_result(case, outcome)["answer_correct"] is True
+
+
+@pytest.mark.parametrize("message,finish", [
+    ({"content": "answer"}, None),
+    ({"content": "answer"}, "content_filter"),
+    ({"content": "answer", "tool_calls": [{}]}, "tool_calls"),
+    ({"content": "answer", "tool_calls": {}}, "stop"),
+    ({"content": "answer", "tool_calls": []}, "tool_calls"),
+    ({"content": "answer", "tool_calls": [{"function": {"name": "webSearch", "arguments": "{broken"}}]}, "tool_calls"),
+])
+def test_incomplete_or_malformed_responses_fail_closed(model_server, message, finish):
+    url, handler = model_server
+    handler.response_override = {"choices": [{"message": message, "finish_reason": finish}]}
+    recorder = RequestRecorder(url, no_thinking=False)
+    recorder.post(recorder.endpoint, json={"messages": [{"role": "system", "content": "instruction"}]}, timeout=1)
+    assert recorder.records[-1]["valid"] is False
