@@ -38,7 +38,7 @@ Regardless of strategy, these tools are **always** included:
 
 ### Embedding Strategy
 
-1. Embed the user query using `get_embedding()` (calls Ollama `/api/embeddings` with the configured embed model).
+1. Embed the user query through the supplied `embedding_backend`, resolved by `get_embedding_backend(cfg)`, with the configured embedding model.
 2. For each tool (excluding always-included), build a summary string from the tool name (camelCase split) and description, then embed it.
 3. Compute cosine similarity between the query embedding and each tool embedding.
 4. Select tools using a **relative threshold**: keep tools whose similarity >= `top_score * _RELATIVE_THRESHOLD` (0.97 — nomic-embed-text has a high baseline similarity, so a loose threshold lets the entire catalogue through).
@@ -51,7 +51,7 @@ Note: embedding is **not** the default strategy because nomic-embed-text produce
 ### LLM Strategy (default)
 
 1. Build a catalogue of `- name: description` lines (descriptions truncated to 120 chars) for every registered tool except always-included ones.
-2. Send to `call_llm_direct` with a system prompt asking for the **top 5 most relevant** tool names as a comma-separated list. The prompt instructs the router to prefer 1–3 tools for narrow queries and to return `"none"` for greetings/small talk.
+2. Send through the supplied `llm_backend.direct()` with a system prompt asking for the **top 5 most relevant** tool names as a comma-separated list. The prompt instructs the router to prefer 1–3 tools for narrow queries and to return `"none"` for greetings/small talk.
 3. Parse the response, matching tokens against known tool names (unknowns are dropped silently).
 4. Apply a hard `_LLM_MAX_SELECTED` (5) cap regardless of what the router returned, to guard against chatty routers that echo the whole catalogue.
 5. Append always-included tools.
@@ -75,14 +75,19 @@ def select_tools(
     builtin_tools: Dict[str, Tool],
     mcp_tools: Dict[str, ToolSpec],
     strategy: ToolSelectionStrategy = ToolSelectionStrategy.ALL,
-    llm_base_url: str = "",
+    *,
+    llm_backend: Optional[LLMBackend] = None,
     llm_model: str = "",
     llm_timeout_sec: float = 8.0,
+    embedding_backend: Optional[LLMBackend] = None,
     embed_model: str = "",
     embed_timeout_sec: float = 10.0,
+    context_hint: Optional[str] = None,
 ) -> List[str]:
     """Return list of tool names relevant to the query."""
 ```
+
+Missing embedding backends return all tools. Missing chat backends use keyword selection. Backend factories honour provider and embedding overrides.
 
 ### Integration
 

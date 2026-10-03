@@ -191,3 +191,107 @@ def test_voice_evals_reach_selected_backend(monkeypatch, provider, url, expected
     assert result is not None and result.query == 'weather'
     import os
     assert calls == [(expected, os.environ['EVAL_JUDGE_MODEL'])]
+
+
+@pytest.mark.parametrize('provider,base,route', [
+    ('ollama', 'http://127.0.0.1:11439', '/api/'),
+    ('openai_compatible', 'http://127.0.0.1:8000/v1', '/'),
+    ('embedding_override', 'http://127.0.0.1:8000/v1', '/'),
+])
+@pytest.mark.parametrize('strategy', ['llm', 'embedding', 'context', 'implicit'])
+def test_tool_selection_evals_use_selected_backends(monkeypatch, provider, base, route, strategy):
+    import requests
+    from unittest.mock import MagicMock
+    monkeypatch.setenv('EVAL_JUDGE_PROVIDER', 'openai_compatible' if provider == 'embedding_override' else provider)
+    monkeypatch.setenv('EVAL_JUDGE_BASE_URL', base)
+    monkeypatch.setenv('EVAL_JUDGE_MODEL', 'synthetic-router-model')
+    monkeypatch.setattr(requests, 'get', lambda *args, **kw: SimpleNamespace(
+        status_code=200, raise_for_status=lambda: None, json=lambda: {
+            'models': [{'name': 'synthetic-embedding-model'}],
+            'data': [{'id': 'synthetic-embedding-model'}],
+        },
+    ))
+    calls = []
+    cfg = helpers.MockConfig()
+    cfg.embedding_model = cfg.ollama_embed_model = 'synthetic-embedding-model'
+    if provider == 'embedding_override':
+        cfg.embedding_provider = 'ollama'
+        cfg.embedding_base_url = 'http://127.0.0.1:11440'
+    def post(endpoint, **kwargs):
+        payload = kwargs['json']
+        calls.append((endpoint, payload['model']))
+        response = MagicMock()
+        response.__enter__.return_value = response
+        text = payload.get('prompt', payload.get('input', ''))
+        vector = [1., 0.] if 'weather' in text.lower() else [0., 1.]
+        response.json.return_value = {
+            'message': {'content': 'getWeather'},
+            'choices': [{'message': {'content': 'getWeather'}}],
+            'embedding': vector, 'data': [{'embedding': vector}],
+        }
+        return response
+    monkeypatch.setattr(requests, 'post', post)
+    from evals import test_tool_selection as evaluation
+    if strategy in ('context', 'implicit'):
+        if strategy == 'context':
+            from evals.test_tool_router_context_aware import _route
+        else:
+            from evals.test_tool_router_implicit import _route
+        selected = _route("what's the weather like tomorrow", None)
+        assert 'getWeather' in selected and 'stop' in selected
+    elif strategy == 'llm':
+        evaluation.TestToolSelectionFilteringLLM().test_llm_selects_relevant_tools(
+            cfg, "what's the weather like tomorrow", ['getWeather'], 5,
+        )
+    else:
+        try:
+            evaluation.TestToolSelectionFiltering().test_embedding_selects_relevant_tools(
+                cfg, "what's the weather like tomorrow", ['getWeather'], 5,
+            )
+        except pytest.skip.Exception:
+            pytest.fail('Available embeddings must run independently of the chat model name')
+    suffix = ('chat' if provider == 'ollama' else 'chat/completions') if strategy != 'embedding' else 'embeddings'
+    expected_model = 'synthetic-router-model' if strategy != 'embedding' else cfg.embedding_model
+    expected_endpoint = base + route + suffix
+    if provider == 'embedding_override' and strategy == 'embedding':
+        expected_endpoint = cfg.embedding_base_url + '/api/embeddings'
+    assert calls and set(calls) == {(expected_endpoint, expected_model)}
+
+
+@pytest.mark.parametrize('names', [[], ['a-different-embedding-model']])
+def test_embedding_eval_skips_only_when_selected_model_is_missing(monkeypatch, names):
+    import requests
+    from evals import test_tool_selection as evaluation
+    monkeypatch.setattr(requests, 'get', lambda *args, **kwargs: SimpleNamespace(
+        status_code=200, raise_for_status=lambda: None,
+        json=lambda: {'models': [{'name': name} for name in names]},
+    ))
+    def unexpected_inference(*args, **kwargs):
+        pytest.fail('An unavailable embedding model must not run inference')
+    monkeypatch.setattr(requests, 'post', unexpected_inference)
+    cfg = helpers.MockConfig(llm_provider='ollama')
+    with pytest.raises(pytest.skip.Exception, match='embedding evaluation model is unavailable'):
+        evaluation.TestToolSelectionFiltering().test_embedding_selects_relevant_tools(
+            cfg, 'weather', ['getWeather'], 5,
+        )
+
+
+@pytest.mark.parametrize('response', [None, 'unrecognisedTool'])
+@pytest.mark.parametrize('entry', ['filtering', 'context', 'implicit'])
+def test_router_eval_rejects_fallback_even_when_expected_tool_matches(monkeypatch, response, entry):
+    from evals import test_tool_selection as evaluation
+    from unittest.mock import MagicMock
+    backend = MagicMock()
+    backend.direct.return_value = response
+    monkeypatch.setattr('evals.tool_routing.get_llm_backend', lambda cfg: backend)
+    with pytest.raises(AssertionError, match='router (returned no model response|response did not select)'):
+        if entry == 'filtering':
+            evaluation.TestToolSelectionFilteringLLM().test_llm_selects_relevant_tools(
+                helpers.MockConfig(), 'weather', ['getWeather'], 5,
+            )
+        elif entry == 'context':
+            from evals.test_tool_router_context_aware import _route
+            _route('weather', None)
+        else:
+            from evals.test_tool_router_implicit import _route
+            _route('weather')

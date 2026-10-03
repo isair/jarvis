@@ -19,7 +19,11 @@ judge calls. Without an override, judge calls detect the endpoint; the model
 fixture defaults to Ollama on port 11434 and OpenAI-compatible on other ports.
 Voice intent and listener suites use the selected model and transport, including
 model names exposed by an OpenAI-compatible server. Missing models are skipped;
-available models run their behavioural cases.
+available models run their behavioural cases. Tool routing uses the selected
+chat transport; embedding filtering checks its configured embedding model
+independently of the chat model name. Filtering, context-aware and implicit-intent
+routing evaluations reject empty or irrelevant router answers even if keyword
+fallback selects the expected tool.
 
 Use an explicit provider for custom ports. The results below belong to the dated
 report above; a targeted local run does not refresh the full report.
