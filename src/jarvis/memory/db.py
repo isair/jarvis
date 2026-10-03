@@ -83,8 +83,8 @@ def _normalize_fts_query(raw: str) -> str:
     except ImportError:
         pass
     
-    # Fallback: Extract alphanumeric tokens and join them with spaces (logical AND)
-    tokens = re.findall(r"[A-Za-z0-9_]+", raw)
+    # Fallback: Retain Unicode word characters and the generated FTS operators.
+    tokens = re.findall(r"\w+", raw, flags=re.UNICODE)
     return " ".join(tokens)
 
 

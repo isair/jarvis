@@ -86,3 +86,34 @@ def test_sqlite_vss_keyword_ranking(tmp_path):
         diary.close()
     '''), str(tmp_path / 'vss.db')], capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize('word', ['京都', 'велосипед', 'θερμόμετρο', 'नमस्ते', 'قهوة', 'café', 'cafe\u0301', 'İstanbul', '한글'])
+def test_unicode_keyword_query_finds_the_matching_diary_not_recent_noise(diary, word):
+    target = diary.upsert_conversation_summary('2026-01-01', word)
+    diary.upsert_conversation_summary('2026-02-01', 'Unrelated recent notes')
+    rows = diary.search_hybrid(word, None, top_k=1)
+    assert [row['id'] for row in rows] == [target]
+
+
+@pytest.mark.parametrize('word', ['京都', 'велосипед', 'θερμόμετρο', 'قهوة'])
+def test_unicode_keyword_match_participates_in_hybrid_ranking(diary, word):
+    target = diary.upsert_conversation_summary('2026-01-01', word)
+    noise = diary.upsert_conversation_summary('2026-02-01', 'Unrelated recent notes')
+    diary.upsert_summary_embedding(target, [1., 1.])
+    diary.upsert_summary_embedding(noise, [1., 0.])
+    assert diary.search_hybrid(word, '[1, 0]', top_k=1)[0]['id'] == target
+
+
+def test_multilingual_keywords_keep_or_recall_without_embeddings(diary):
+    from types import SimpleNamespace
+    from jarvis.memory.conversation import search_conversation_memory_by_keywords
+    diary.upsert_conversation_summary('2026-01-01', '京都')
+    diary.upsert_conversation_summary('2026-01-02', 'cycling')
+    diary.upsert_conversation_summary('2026-02-01', 'Unrelated recent notes')
+    contexts = search_conversation_memory_by_keywords(
+        diary, ['京都', 'cycling'], SimpleNamespace(embedding_model=''),
+    )
+    assert len(contexts) == 2
+    assert any('京都' in text for text in contexts)
+    assert any('cycling' in text for text in contexts)

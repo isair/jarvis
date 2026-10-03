@@ -10,6 +10,9 @@ vector candidates. Both Python/FAISS and sqlite-vss use the same fusion routine.
 - A missing source contributes zero. Raw BM25 values and vector distances are
   never added or compared across sources.
 - Only live summaries are returned, ordered by descending fused score then ID.
+- Keyword normalisation retains Unicode word characters across scripts and
+  strips punctuation. Generated FTS operators, including keyword OR queries,
+  retain their meaning. Matching follows the database FTS tokenizer.
 - Without a query vector, keyword results retain ascending BM25 order.
 - Without a usable keyword query, the most recent summaries are returned.
 
