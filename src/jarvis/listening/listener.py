@@ -24,7 +24,7 @@ from .echo_detection import EchoDetector
 from .state_manager import StateManager, ListeningState
 from ..utils.audio_lock import portaudio_lock
 from ..utils.audio_capture import mono_capture, open_input_stream, resolve_input_device
-from .wake_detection import is_wake_word_detected, extract_query_after_wake, is_stop_command
+from .wake_detection import is_wake_word_detected, extract_query_after_wake, is_stop_command, is_stop_command_echo
 from .transcript_buffer import TranscriptBuffer
 from .intent_judge import (
     IntentJudge,
@@ -727,6 +727,10 @@ class VoiceListener(threading.Thread):
             # Stop command detection (fast, text-based)
             stop_commands = getattr(self.cfg, "stop_commands", ["stop", "quiet", "shush", "silence", "enough", "shut up"])
             if is_stop_command(text_lower, stop_commands):
+                if is_stop_command_echo(text_lower, self.echo_detector._last_tts_text, stop_commands):
+                    debug_log("ignored stop command contained in literal TTS echo", "echo")
+                    print(f'  🔇 Heard (echo): "{text_lower[:50]}"', flush=True)
+                    return
                 debug_log(f"stop command detected during TTS: {text_lower} (energy: {utterance_energy:.4f})", "voice")
                 self.tts.interrupt()
                 try:
