@@ -740,3 +740,71 @@ def cached_whisper_files(monkeypatch):
     """Model-loading tests use synthetic local files and never access the Hub."""
     monkeypatch.setattr("jarvis.listening.model_download.prepare_faster_whisper_model",
                         lambda name: name)
+
+
+@pytest.mark.parametrize('frame_ms,tts_speaking,limit_frames,silent_endpoint', [
+    (10, False, 7, False), (20, False, 11, False),
+    (30, False, 5, False), (20, True, 6, False),
+    (20, False, 1, False), (20, False, 11, True),
+])
+def test_speech_reaches_whisper_at_configured_boundary(
+    monkeypatch, frame_ms, tts_speaking, limit_frames, silent_endpoint,
+):
+    from unittest.mock import MagicMock
+    from jarvis.config import load_settings
+
+    from dataclasses import replace
+    cfg = replace(
+        load_settings(), voice_debug=False, vad_enabled=False,
+        vad_frame_ms=frame_ms, vad_pre_roll_ms=0,
+        max_utterance_ms=limit_frames * frame_ms,
+        tts_max_utterance_ms=(limit_frames if tts_speaking else 2) * frame_ms,
+        whisper_backend='faster-whisper', whisper_device='cpu',
+        whisper_min_audio_duration=0, endpoint_silence_ms=3 * frame_ms,
+    )
+    monkeypatch.setattr(capture, 'create_intent_judge', lambda _cfg: None)
+    monkeypatch.setattr(capture, 'FASTER_WHISPER_AVAILABLE', True)
+    monkeypatch.setattr(capture, '_load_faster_whisper_model', lambda *a, **kw: MagicMock())
+    monkeypatch.setattr(VoiceListener, '_decode_faster_whisper', lambda *a: ([], None))
+    monkeypatch.setattr(VoiceListener, '_start_llm_warmup', lambda _self: [])
+    monkeypatch.setattr(VoiceListener, '_start_transcription_worker', lambda _self: None)
+    monkeypatch.setattr('desktop_app.face_widget.get_jarvis_state', lambda: MagicMock())
+    obj = VoiceListener(MagicMock(), cfg, SimpleNamespace(is_speaking=lambda: tts_speaking), None)
+    frame_samples = cfg.sample_rate * frame_ms // 1000
+    speech_frames = limit_frames - 2 if silent_endpoint else limit_frames * 3
+    speech = np.linspace(.05, .2, frame_samples * speech_frames, dtype=np.float32)
+    audio = (np.concatenate([speech, np.zeros(frame_samples * 3, dtype=np.float32)])
+             if silent_endpoint else speech)
+
+    class Feed(queue.Queue):
+        def get(self, *args, **kwargs):
+            if self.empty():
+                obj._should_stop = True
+                raise queue.Empty
+            return super().get(*args, **kwargs)
+
+    obj._audio_q = Feed()
+
+    class Stream:
+        active = True
+        def start(self):
+            obj._on_audio(audio[:, None], len(audio), None, None)
+        def stop(self):
+            pass
+        def close(self):
+            pass
+
+    def devices(device=None, **kwargs):
+        info = {'index': 0, 'name': 'Synthetic input', 'max_input_channels': 1}
+        return info if device is not None or kwargs else [info]
+    monkeypatch.setattr(capture, 'sd', SimpleNamespace(
+        query_devices=devices, InputStream=lambda **kw: Stream(),
+    ))
+    obj.run()
+
+    jobs = list(obj._transcription_jobs_q.queue)
+    expected_count = 1 if silent_endpoint else 3
+    expected_frames = speech_frames if silent_endpoint else limit_frames
+    assert len(jobs) == expected_count, 'Speech must be submitted at its capture boundary'
+    assert all(len(job.audio) == frame_samples * expected_frames for job in jobs)
+    np.testing.assert_array_equal(np.concatenate([job.audio for job in jobs]), speech)

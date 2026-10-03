@@ -36,6 +36,12 @@ Warnings are transition-based; dictation pauses suspend health checks. With
 peak level and capture rate, without saving microphone audio. Linux warnings
 point users to PipeWire/PulseAudio recording-source routing.
 
+Utterance assembly enforces `max_utterance_ms` during continuous speech as
+well as at silent endpoints. While TTS is speaking, `tts_max_utterance_ms`
+applies so interruption audio reaches Whisper promptly. Limits count complete
+native-rate frames, including pre-roll. Reaching a limit queues the captured
+chunk and allows the following frame to start the next utterance.
+
 Audio-frame processing is limited to VAD and utterance assembly. Completed
 utterances are enqueued for a single FIFO Whisper worker. Transcription results
 return to the listener loop in order, where transcript storage and intent
