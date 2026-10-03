@@ -27,7 +27,6 @@ from conftest import requires_judge_llm
 from helpers import (
     MockConfig,
     JUDGE_MODEL,
-    JUDGE_BASE_URL,
     call_judge_llm,
     JudgeVerdict,
 )
@@ -137,7 +136,7 @@ class TestDiaryRecencyOrder:
         db.close()
 
     @pytest.mark.parametrize("db_with_entries", SUPERSEDING_CASES, indirect=True)
-    def test_newer_entry_appears_first(self, db_with_entries):
+    def test_newer_entry_appears_first(self, db_with_entries, mock_config):
         """When two diary entries match the same keywords, the newer one
         should appear before the older one in search results."""
         db, case = db_with_entries
@@ -146,6 +145,7 @@ class TestDiaryRecencyOrder:
 
         results = search_conversation_memory_by_keywords(
             db=db,
+            cfg=mock_config,
             keywords=case.search_keywords,
             max_results=10,
         )
@@ -227,7 +227,7 @@ class TestMergeSupersession:
 
     @requires_judge_llm
     @pytest.mark.parametrize("case", SUPERSEDING_CASES)
-    def test_merge_drops_contradicting_old_line(self, case, graph_store):
+    def test_merge_drops_contradicting_old_line(self, case, graph_store, mock_config):
         case = case.values[0] if hasattr(case, 'values') else case
 
         old_line = (
@@ -250,8 +250,8 @@ class TestMergeSupersession:
             store=graph_store,
             node_id=node.id,
             new_facts=[new_line],
-            ollama_base_url=JUDGE_BASE_URL,
-            ollama_chat_model=JUDGE_MODEL,
+            cfg=mock_config,
+            chat_model=JUDGE_MODEL,
             timeout_sec=30.0,
         )
 
