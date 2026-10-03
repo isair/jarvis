@@ -49,10 +49,12 @@ Design principles enforced by the engine:
 
 4. Conversation Memory Enrichment (gated)
    - Runs only when the planner emitted a `searchMemory` directive OR the planner returned an empty plan (fail-open). Skipped otherwise, along with the keyword-extractor LLM call, the diary and graph queries, and the memory-digest LLM call.
-   - Extract search parameters via `extract_search_params_for_memory(query, base_url, router_model, ..., context_hint=...)`.
+   - Extract search parameters via `extract_search_params_for_memory(query, cfg, router_model, ..., context_hint=...)`.
      - Runs on the fast tier (`resolve_model(cfg, Tier.FAST)`), not the big chat model. The extractor is a small classification-shaped task and rides the already-warm fast model instead of paging in the chat weights.
      - The planner's `topic` hint (when present) is appended to the query the extractor sees, so keyword selection anchors on what the planner actually wanted to look up.
-     - Output fields: `keywords: List[str]`, optional `from`, optional `to`, optional `questions: List[str]`.
+     - A 1024-token generation budget includes reasoning and complete parameter JSON; the configured tools timeout and two-attempt limit bound the wait.
+     - The prompt resolves the requested date/period before extracting topic keywords. The reference clock supplies the anchor and does not create a date filter for a timeless request.
+     - Prompt JSON slots: `from`, `to`, `keywords: List[str]`, `questions: List[str]`. Date slots are null for a timeless request and UTC timestamps for a requested interval. Personal questions cover missing user facts, excluding facts already visible in live context.
      - `context_hint` carries a compact summary of what is already live in the assistant's context (current time, location, short-term dialogue). The extractor uses it to skip implicit personal questions whose answers are already visible — those facts do not need to be pulled from long-term memory.
    - If `keywords` present, call `search_conversation_memory_by_keywords(db, keywords, from_time, to_time, ...)` to retrieve relevant snippets (bounded by configured max results).
    - Join snippets into a `conversation_context` string for inclusion in the system message.

@@ -67,7 +67,7 @@ Budget memory for Whisper and, when different from chat, the fast model used for
 ## What you can do
 
 - **A third person in the room.** Bring Jarvis into an ongoing conversation with friends, talk through a problem aloud, or ask it to weigh in on a decision. “Jarvis, what do you think?” draws on the recent discussion, not just that one sentence.
-- **Remember beyond one session.** Search your local diary and knowledge graph. Diary keyword search supports Unicode text, and semantic search uses local embeddings with the bundled index. Planning requests memory for personal context and distinguishes it from general facts; accuracy depends on the selected model. Jarvis checks graph candidates for lasting value before storing them. Browse what Jarvis has stored in the Memory Viewer.
+- **Remember beyond one session.** Search your local diary and knowledge graph. Diary keyword search supports Unicode text, and semantic search uses local embeddings with the bundled index. Planning requests memory for personal context and distinguishes it from general facts; recall scopes diary searches by requested dates, and accuracy depends on the selected model. Jarvis checks graph candidates for lasting value before storing them. Browse what Jarvis has stored in the Memory Viewer.
 - **Get things done.** Built-in tools cover web search, weather, time, screenshot OCR, file access, nutrition tracking and optional location awareness.
 - **Connect your own tools.** MCP servers add browser automation, smart-home controls and other integrations. Tool routing selects a relevant subset for each request.
 - **See when speech was unclear.** The face briefly shows a repeat request when speech recognition rejects a low-confidence segment. It does not speak or interrupt the current assistant state.
@@ -130,7 +130,7 @@ Jarvis is actively developed, primarily on macOS. Windows and Linux behaviour ma
 - **No mobile app** is available ([#17](https://github.com/isair/jarvis/issues/17)).
 - **Capture continues while Jarvis thinks.** Speech detection and assembly run independently of intent judging and reply generation. Recognition backlogs are bounded; Logs warns when speech arrives faster than it can be processed.
 - **Continuous speech is split at your utterance limit.** The shorter limit during speech playback helps interruption requests reach recognition promptly. Both limits are adjustable in Settings.
-- **Reasoning models can take longer.** Planning, tool-argument resolution, tool selection, meal logging and diary summaries reserve room for reasoning and the final answer, with the configured timeout still limiting the wait.
+- **Reasoning models can take longer.** Planning, tool-argument resolution, tool selection, memory recall, meal logging and diary summaries reserve room for reasoning and the final answer, with the configured timeout still limiting the wait.
 - **GPT-OSS always reasons.** Its Ollama thinking toggle selects low or high reasoning effort; turning it off selects low effort rather than disabling reasoning.
 - **Long conversations feed the complete pending snapshot into the diary.** Bounded batches share the configured generation timeout; interrupted saves resume completed batches privately in memory on the next attempt.
 - **Diary saves remain successful if the optional search index fails.** Saved text stays available through keyword search; semantic search can retain an older embedding.
