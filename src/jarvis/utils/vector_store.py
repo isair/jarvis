@@ -9,6 +9,7 @@ from typing import List, Tuple, Optional, Dict, Any
 import sqlite3
 from pathlib import Path
 import threading
+from weakref import WeakValueDictionary
 
 
 class PythonVectorStore:
@@ -115,16 +116,21 @@ class PythonVectorStore:
                     pass
 
 
-# Global instance
-_python_vector_store: Optional[PythonVectorStore] = None
+_python_stores: WeakValueDictionary[str, PythonVectorStore] = WeakValueDictionary()
+_python_stores_lock = threading.RLock()
 
 
 def get_python_vector_store(db_path: str) -> PythonVectorStore:
-    """Get or create the global Python vector store instance."""
-    global _python_vector_store
-    if _python_vector_store is None:
-        _python_vector_store = PythonVectorStore(db_path)
-    return _python_vector_store
+    """Share an index only between active owners of the same database file."""
+    if str(db_path) == ':memory:':
+        return PythonVectorStore(db_path)
+    key = str(Path(db_path).resolve())
+    with _python_stores_lock:
+        store = _python_stores.get(key)
+        if store is None:
+            store = PythonVectorStore(key)
+            _python_stores[key] = store
+        return store
 
 
 def get_best_vector_store(db_path: str, dimension: int = 768):

@@ -21,7 +21,7 @@ Jarvis is built to be part of the conversation, not another screen to type into.
 
 Say “Jarvis” anywhere in a sentence and follow up naturally. Speech recognition, language models and speech synthesis run on hardware you control. The animated face gives your voice assistant a presence on the desktop; chat is there when you would rather type.
 
-Your conversation memory stays on your computer. Sensitive information is redacted before it reaches model context or the saved diary. Web search, weather and connected tools use the network when you ask for those capabilities; local conversation does not require a cloud AI account.
+Your conversation memory stays on your computer. Separate local databases keep their semantic search indices separate. Sensitive information is redacted before it reaches model context or the saved diary. Web search, weather and connected tools use the network when you ask for those capabilities; local conversation does not require a cloud AI account.
 
 <p align="center">
   <img src="docs/img/face.png" alt="Jarvis's animated amber wireframe face, the desktop presence of your local voice assistant" width="460">

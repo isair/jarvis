@@ -10,6 +10,7 @@ import sqlite3
 from pathlib import Path
 import threading
 import logging
+from weakref import WeakValueDictionary
 
 try:
     import faiss  # type: ignore
@@ -217,22 +218,26 @@ class FAISSVectorStore:
             }
 
 
-# Global instance
-_faiss_vector_store: Optional[FAISSVectorStore] = None
+_faiss_stores: WeakValueDictionary[tuple[str, int], FAISSVectorStore] = WeakValueDictionary()
+_faiss_stores_lock = threading.RLock()
 
 
 def get_faiss_vector_store(db_path: str, dimension: int = 768) -> Optional[FAISSVectorStore]:
-    """Get or create the global FAISS vector store instance."""
-    global _faiss_vector_store
+    """Share an index only for the same database file and vector dimension."""
     
     if not FAISS_AVAILABLE:
         return None
     
-    if _faiss_vector_store is None:
-        try:
-            _faiss_vector_store = FAISSVectorStore(db_path, dimension)
-        except Exception as e:
-            logging.warning(f"Failed to create FAISS vector store: {e}")
-            return None
-    
-    return _faiss_vector_store
+    try:
+        if str(db_path) == ':memory:':
+            return FAISSVectorStore(db_path, dimension)
+        key = (str(Path(db_path).resolve()), dimension)
+        with _faiss_stores_lock:
+            store = _faiss_stores.get(key)
+            if store is None:
+                store = FAISSVectorStore(key[0], dimension)
+                _faiss_stores[key] = store
+            return store
+    except Exception as e:
+        logging.warning(f"Failed to create FAISS vector store: {e}")
+        return None
