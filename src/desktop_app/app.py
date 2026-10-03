@@ -1916,6 +1916,8 @@ class JarvisSystemTray:
         self.log_reader_threads = []
 
         # Create system tray icon
+        from desktop_app.macos_tray import install_macos_tray_event_guard
+        install_macos_tray_event_guard()
         self.tray_icon = QSystemTrayIcon()
         self.update_icon()
 
