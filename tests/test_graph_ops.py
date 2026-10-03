@@ -28,6 +28,13 @@ from src.jarvis.memory.graph_ops import (
 # ── Fixtures ───────────────────────────────────────────────────────────
 
 
+@pytest.fixture(autouse=True)
+def accept_candidate_facts():
+    """Isolate parsing and storage from the separately tested semantic review."""
+    with patch("src.jarvis.memory.graph_ops._review_graph_facts", side_effect=lambda facts, *args: facts):
+        yield
+
+
 @pytest.fixture
 def store(tmp_path):
     """Fresh GraphMemoryStore with temporary database."""

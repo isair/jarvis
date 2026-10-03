@@ -455,3 +455,39 @@ class TestKnowledgeExtractionJudge:
         print(f"Extracted {len(facts)} facts from mixed summary:")
         for f in facts:
             print(f"  - {f}")
+
+
+class TestFieldMemoryHygiene:
+    """Mixed summaries retain enduring facts while dropping diary-shaped noise."""
+
+    @requires_judge_llm
+    @pytest.mark.parametrize('summary,required,forbidden', [
+        (
+            'The weather forecast for London for the week will range from 6.8 to 16.8 degrees Celsius. '
+            'The user follows an 1800 kcal daily meal plan. Trenches Boxing Club in Hackney offers evening classes.',
+            ['1800', 'Trenches'], ['6.8', '16.8', 'forecast'],
+        ),
+        (
+            'Kullanıcı oyunlarda dinamik ve sabit kamera sistemleri arasındaki farkı sordu. '
+            'Kullanıcı her gün 1800 kcal içeren bir beslenme planı uyguluyor.',
+            ['1800'], ['camera', 'kamera', 'dynamic', 'dinamik'],
+        ),
+        (
+            'El pronóstico del tiempo en Londres esta semana oscila entre 6,8 y 16,8 grados Celsius. '
+            'La usuaria adoptó una gata llamada Miso.',
+            ['Miso'], ['6,8', '16,8', 'forecast', 'pronóstico'],
+        ),
+        (
+            'The user prefers cool weather. London has mild winters. '
+            'The user instructed the assistant: always reply briefly.',
+            ['cool', 'mild', 'brief'], [],
+        ),
+    ], ids=['weekly forecast with facts', 'Turkish question with fact',
+            'Spanish forecast with fact', 'climate preference and directive'])
+    def test_only_durable_facts_reach_memory(self, mock_config, summary, required, forbidden):
+        facts = extract_graph_memories(summary, mock_config, JUDGE_MODEL)
+        combined = '\n'.join(fact for _, fact in facts).casefold()
+        for keyword in required:
+            assert keyword.casefold() in combined, facts
+        for keyword in forbidden:
+            assert keyword.casefold() not in combined, facts

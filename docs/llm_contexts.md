@@ -128,8 +128,18 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 - **Model**: `cfg.llm_chat_model` via `get_llm_backend(cfg)`.
 - **Inputs**: summary text + optional date.
 - **System prompt**: inline — asks for JSON array of `{"branch": "USER|DIRECTIVES|WORLD", "fact": "..."}` objects, with a heuristic ("user telling the assistant how to behave → DIRECTIVES; user telling the assistant about themselves → USER; external facts → WORLD"). Unknown branches default to USER. The DO-NOT-EXTRACT block hardens two recurring traps: assistant-generated recommendations (would-a-different-assistant-give-the-same-answer? heuristic separates these from external lookups, which DO count as facts) and transient snapshots like the current weather / time of day (described as "moments not facts" so the model stops conflating ephemera with persistent climate / location knowledge).
-- **Output**: list of `(branch_id, fact_text)` tuples → routed into the tagged branch via branch-pinned descent (no cross-branch contamination).
-- **Limits**: `timeout_sec`. Failures → empty list.
+- **Output**: candidate `(branch_id, fact_text)` tuples → semantic hygiene review (#10b) → branch-pinned descent.
+- **Limits**: `max_tokens: 300`, `temperature: 0`, 4096-token context. Extraction and hygiene review share `timeout_sec`. Failures → empty list.
+
+## 10b. Knowledge Graph Fact Hygiene
+
+- **File**: [src/jarvis/memory/graph_ops.py](src/jarvis/memory/graph_ops.py), `_review_graph_facts()`.
+- **Trigger**: once after a non-empty extraction, before any graph insertion. Background.
+- **Model**: the same `chat_model` and configured backend as extraction (#10).
+- **Inputs**: indexed candidate fact text, quoted as untrusted data; no new user data or external endpoint.
+- **System prompt**: `_FACT_HYGIENE_PROMPT` classifies each candidate by meaning as `DURABLE`, `TRANSIENT`, `INTERACTION` or `ADVICE`, in every language. Weather forecasts and conversation descriptions are excluded; personal facts, explicit assistant style rules, business details and enduring climate facts are retained.
+- **Output**: only `DURABLE` candidates, with their original branch and text. The model cannot rewrite candidates or introduce facts. Invalid, duplicate, missing or out-of-range verdicts discard that graph cycle; the diary remains available.
+- **Limits**: the remaining extraction timeout, 4096-token context, `temperature: 0`, `max_tokens: min(1024, max(128, 16 * candidate_count))`. No retries. Empty candidates or an exhausted budget skip review.
 
 ## 11. Knowledge Graph Best-Child Picker
 
@@ -200,6 +210,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 | 8 | Tool searcher | 0-3 | model-initiated | SMALL (reuses #7) |
 | 9 | Summariser | ~1/session | No (background) | LARGE |
 | 10 | Graph extraction | ~1/session | No (background) | LARGE |
+| 10b | Graph fact hygiene | 0-1/extraction | non-empty candidates and remaining budget | same as #10 |
 | 11 | Graph best-child | 0-N | No (background) | SMALL (FAST tier) |
 | 11b | Graph node merge | 0-N (per node, batched) | No (background) | SMALL (FAST tier) |
 | 12 | Planner (plan_query) | 1 | yes (planner_enabled) | LARGE/SMALL (tracks chat model) |
@@ -256,7 +267,7 @@ user input
                                       └─ content → deliver immediately
                                       └─ if max turns → [6] Max-turn digest
                           └─▶ TTS / output
-                          └─▶ background: [9] summariser → [10] graph extract → [11] best-child
+                          └─▶ background: [9] summariser → [10] graph extract → [10b] fact hygiene → [11] best-child
 ```
 
 ## Optimisation ideas (seed list)
