@@ -2383,7 +2383,7 @@ class ModelsPage(ScrollableWizardPage):
         self._update_models_display()
 
     def _constrain_fast_model(self):
-        """Keep a fitting choice, otherwise select the largest fitting fast model."""
+        """Keep a fitting choice, or select a replacement with the smallest fallback."""
         overhead = self._EMBED_VRAM_MB + self._whisper_vram_mb()
         chat_mb = required_vram_mb(self._chat_model) or 0
 
