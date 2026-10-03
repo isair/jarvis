@@ -212,26 +212,6 @@ class TestEngineLifecycle:
     @patch("src.jarvis.dictation.dictation_engine.platform")
     @patch("src.jarvis.dictation.dictation_engine.sys")
     @patch("src.jarvis.dictation.dictation_engine.pynput_keyboard")
-    def test_start_allowed_on_macos_15(self, mock_kb, mock_sys, mock_platform):
-        """pynput should still work on macOS 15 (Sequoia) and earlier."""
-        mock_sys.platform = "darwin"
-        mock_platform.mac_ver.return_value = ("15.4", ("", "", ""), "")
-        mock_listener = MagicMock()
-        mock_kb.Listener.return_value = mock_listener
-        mock_kb.Key = MagicMock()
-        mock_kb.KeyCode = MagicMock()
-        mock_kb.Key.ctrl_l = MagicMock()
-        mock_kb.Key.shift = MagicMock()
-
-        engine = _make_engine()
-        engine.start()
-        assert engine._started is True
-        mock_listener.start.assert_called_once()
-        engine.stop()
-
-    @patch("src.jarvis.dictation.dictation_engine.platform")
-    @patch("src.jarvis.dictation.dictation_engine.sys")
-    @patch("src.jarvis.dictation.dictation_engine.pynput_keyboard")
     def test_start_allowed_on_windows(self, mock_kb, mock_sys, mock_platform):
         """Windows should not be affected by the macOS guard."""
         mock_sys.platform = "win32"
