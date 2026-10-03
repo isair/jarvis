@@ -83,8 +83,8 @@ Two passes against the chat model (`cfg.llm_chat_model`):
    asking for 2-3 healthy, realistic follow-ups (hydration, protein,
    veggies, sodium/potassium balance, light activity).
 
-Both passes share `cfg.llm_chat_timeout_sec` and the `llm_thinking_enabled`
-flag.
+Both passes share a bounded 1,024-token generation budget, including reasoning
+and the answer, `cfg.llm_chat_timeout_sec` and the `llm_thinking_enabled` flag.
 
 ### Database
 

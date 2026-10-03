@@ -12,6 +12,10 @@ from ...base import Tool, ToolContext
 from ...types import ToolExecutionResult
 
 
+# Shared generation room includes reasoning and the structured or coaching answer.
+_NUTRITION_TOKEN_BUDGET = 1024
+
+
 def call_llm_direct(*, cfg, chat_model, system_prompt, user_content,
                     timeout_sec=10.0, thinking=False, num_ctx=4096,
                     temperature=None, max_tokens=None):
@@ -85,11 +89,7 @@ def extract_and_log_meal(db: Database, cfg: Any, original_text: str, source_app:
         user_content=user_prompt,
         timeout_sec=cfg.llm_chat_timeout_sec,
         thinking=getattr(cfg, 'llm_thinking_enabled', False),
-        # JSON with ~11 fields (description, macros, micros dict, confidence);
-        # a multi-item meal with a filled micros dict can legitimately reach
-        # ~120 tokens. 200 gives margin so the meal is never dropped by a
-        # truncated JSON parse.
-        max_tokens=200,
+        max_tokens=_NUTRITION_TOKEN_BUDGET,
     ) or ""
     text = (raw or "").strip()
     if text.upper() == "NONE":
@@ -160,7 +160,7 @@ def generate_followups_for_meal(cfg: Any, description: str, approx: str) -> str:
         user_content=follow_user,
         timeout_sec=cfg.llm_chat_timeout_sec,
         thinking=getattr(cfg, 'llm_thinking_enabled', False),
-        max_tokens=100,
+        max_tokens=_NUTRITION_TOKEN_BUDGET,
     ) or ""
     return (follow_text or "").strip()
 
