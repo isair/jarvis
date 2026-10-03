@@ -8,9 +8,15 @@ Run: .venv/bin/python -m pytest evals/test_tool_selection.py -v
 """
 
 import pytest
+import re
+from unittest.mock import patch
 
-from conftest import requires_judge_llm
-from helpers import JUDGE_MODEL
+from evals.helpers import is_judge_llm_available
+from jarvis.llm import get_llm_backend, get_embedding_backend
+
+requires_judge_llm = pytest.mark.skipif(
+    not is_judge_llm_available(), reason="🧰 Selected routing model is unavailable",
+)
 
 
 # =============================================================================
@@ -57,7 +63,6 @@ TOOL_SELECTION_CASES = [
 class TestToolSelectionFiltering:
     """Validates that embedding tool selection meaningfully filters tools."""
 
-    @requires_judge_llm
     @pytest.mark.parametrize("query, must_include, max_tools", TOOL_SELECTION_CASES)
     def test_embedding_selects_relevant_tools(
         self,
@@ -66,14 +71,12 @@ class TestToolSelectionFiltering:
         must_include,
         max_tools,
     ):
-        """Embedding strategy should select relevant tools, not all of them.
-
-        Tool selection uses a fixed embed model (nomic-embed-text) regardless of
-        the judge model, so we only run this once per eval run (during the
-        gemma4 phase) to save time.
-        """
-        if "gemma4" not in JUDGE_MODEL:
-            pytest.skip(f"Tool selection uses fixed embed model; only runs in gemma4 phase (current: {JUDGE_MODEL})")
+        """The configured embedding model should rank a relevant subset of tools."""
+        backend = get_embedding_backend(mock_config)
+        model = mock_config.embedding_model or mock_config.ollama_embed_model
+        available = backend.list_models(timeout_sec=2.0)
+        if not any(name == model or name == model + ":latest" for name in available):
+            pytest.skip("🧰 Selected embedding evaluation model is unavailable")
 
         from jarvis.tools.selection import select_tools, ToolSelectionStrategy
         from jarvis.tools.registry import BUILTIN_TOOLS
@@ -83,8 +86,8 @@ class TestToolSelectionFiltering:
             builtin_tools=BUILTIN_TOOLS,
             mcp_tools={},
             strategy=ToolSelectionStrategy.EMBEDDING,
-            llm_base_url=mock_config.ollama_base_url,
-            embed_model=mock_config.ollama_embed_model,
+            embedding_backend=backend,
+            embed_model=model,
             embed_timeout_sec=10.0,
         )
 
@@ -111,7 +114,7 @@ class TestToolSelectionFiltering:
 class TestToolSelectionFilteringLLM:
     """Validates that LLM-router tool selection meaningfully filters tools.
 
-    Unlike the embedding strategy (pinned to nomic-embed-text), this exercises
+    Alongside the configured embedding strategy, this exercises
     the default `llm` strategy against whichever judge model is active, so the
     same cases run once per supported chat model.
     """
@@ -128,19 +131,34 @@ class TestToolSelectionFilteringLLM:
         from jarvis.tools.selection import select_tools, ToolSelectionStrategy
         from jarvis.tools.registry import BUILTIN_TOOLS
 
-        selected = select_tools(
-            query=query,
-            builtin_tools=BUILTIN_TOOLS,
-            mcp_tools={},
-            strategy=ToolSelectionStrategy.LLM,
-            llm_base_url=mock_config.ollama_base_url,
-            llm_model=JUDGE_MODEL,
-            llm_timeout_sec=15.0,
+        backend = get_llm_backend(mock_config)
+        model_reply = None
+        direct = backend.direct
+        def record_reply(*args, **kwargs):
+            nonlocal model_reply
+            model_reply = direct(*args, **kwargs)
+            return model_reply
+
+        with patch.object(backend, 'direct', side_effect=record_reply):
+            selected = select_tools(
+                query=query,
+                builtin_tools=BUILTIN_TOOLS,
+                mcp_tools={},
+                strategy=ToolSelectionStrategy.LLM,
+                llm_backend=backend,
+                llm_model=mock_config.llm_chat_model or mock_config.ollama_chat_model,
+                llm_timeout_sec=15.0,
+            )
+        assert isinstance(model_reply, str) and model_reply.strip(), (
+            "The router returned no model response; keyword fallback is not LLM accuracy"
         )
 
         total_builtin = len(BUILTIN_TOOLS)
 
         for tool in must_include:
+            assert re.search(r"(?<!\w)" + re.escape(tool) + r"(?!\w)", model_reply), (
+                f"The router response did not select '{tool}': {model_reply}"
+            )
             assert tool in selected, (
                 f"Expected '{tool}' in selected tools but got: {selected}"
             )
@@ -151,4 +169,4 @@ class TestToolSelectionFilteringLLM:
             f"Expected at most {max_tools} tools but got {len(selected)}/{total_builtin}: {selected}"
         )
 
-        print(f"  ✅ [{JUDGE_MODEL}] Selected {len(selected)}/{total_builtin} tools: {selected}")
+        print(f"  ✅ [{mock_config.llm_chat_model or mock_config.ollama_chat_model}] Selected {len(selected)}/{total_builtin} tools: {selected}")
