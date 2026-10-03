@@ -126,6 +126,7 @@ Jarvis is actively developed, primarily on macOS. Windows and Linux behaviour ma
 - **macOS 26+ dictation is unavailable** because of a pynput incompatibility ([#172](https://github.com/isair/jarvis/issues/172)). This limitation concerns the global dictation hotkey.
 - **Spoken “stop” can be mistaken for echo** while Jarvis is speaking ([#24](https://github.com/isair/jarvis/issues/24)).
 - **No mobile app** is available ([#17](https://github.com/isair/jarvis/issues/17)).
+- **Slow speech recognition produces guidance.** After several utterances decode slower than real time, Logs recommends a smaller Whisper model or checking available acceleration. Smaller models can reduce accuracy.
 - **First-run downloads can take time.** Whisper and language models can be large. Check Logs for progress before assuming startup is stuck.
 - **CUDA speech failures use a CPU fallback.** If the CUDA runtime fails during decoding, Jarvis makes one recovery attempt on CPU. Speech recognition can be slower in this mode.
 - **Whisper turbo needs a compatible backend.** The wizard hides it when the selected backend cannot load it; an existing unsupported selection uses `medium` instead.
