@@ -77,7 +77,8 @@ Two passes against the chat model (`cfg.llm_chat_model`):
 1. **Extraction** (`extract_and_log_meal` → `NUTRITION_SYS`): returns either
    a JSON object with the nutrition fields above OR the literal string
    `NONE` if no meal is described. Fences (` ```json … ``` `) added by
-   small models are stripped before parsing. Failure to parse returns
+   small models are stripped before parsing. Non-object payloads and failure
+   to parse return
    `None` and the tool retries up to `context.max_retries`.
 2. **Follow-ups** (`generate_followups_for_meal`): a short coach prompt
    asking for 2-3 healthy, realistic follow-ups (hydration, protein,
@@ -91,17 +92,24 @@ and the answer, `cfg.llm_chat_timeout_sec` and the `llm_thinking_enabled` flag.
 Logged via `Database.insert_meal(...)`, which uses parameterised SQL.
 `source_app` is `"stdin"` when `cfg.use_stdin` is true, otherwise
 `"unknown"`. Optional fields (potassium, micros, confidence) are stored as
-NULL when missing.
+NULL when missing. Numeric fields are normalised to finite floats before
+formatting and persistence; invalid or non-finite values are stored as NULL.
+The description and macro confirmation fields are prepared before inserting.
+A successful insert completes
+logging: coaching failures or empty coaching output return that confirmation
+without retrying the write. Extraction and database failures before a successful
+insert retain the configured retry policy.
 
 ### Reply shape
 
 On success the tool returns:
 
 ```
-Logged meal #<id>: <description> — <macro summary>[ (confidence X%)].
+Logged meal #<id>: <description>: <macro summary>[ (confidence X%)].
 Follow-ups: <coach text>
 ```
 
+The follow-up line is present only when coaching returns non-empty text.
 The macro summary is a comma-joined list of present-only fields (kcal,
 protein, carbs, fat, fiber). On failure: `"Failed to log meal"` (extractor
 returned NONE or all retries raised) or `"No meal description provided"`
