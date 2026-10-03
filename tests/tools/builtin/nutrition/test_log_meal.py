@@ -162,12 +162,12 @@ def test_planner_fast_path_accepts_meal_key():
     resolver call, so direct-exec works for small models."""
     tool = LogMealTool()
     allowed_names = ["logMeal"]
-    allowed_props = {"logMeal": set(tool.inputSchema.get("properties", {}).keys())}
+    property_schemas = {"logMeal": tool.inputSchema.get("properties", {})}
 
     result = _parse_plan_step_concrete(
         "logMeal meal='Big Mac'",
         allowed_names,
-        allowed_props,
+        property_schemas,
     )
 
     assert result is not None, (

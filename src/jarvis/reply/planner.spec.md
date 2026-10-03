@@ -208,7 +208,10 @@ The engine consumes the plan in two phases.
 - **Fast path**: the step names an allowed tool, uses `key='value'` or
   `key="value"` pairs matching its declared property keys, supplies every
   required field and has no `<placeholder>`. The resolver parses and
-  returns this concrete call without model inference.
+  returns this concrete call without model inference. String and untyped
+  values stay literal; declared booleans, integers, finite numbers and null
+  values use their JSON types, including values in the planner's quote syntax.
+  Invalid primitive values, complex types and type unions use the LLM resolver.
 - **LLM path**: when the step contains a `<placeholder>`, uses unknown
   argument keys, or doesn't fit the `key=value` shape, the step is
   passed to the LLM resolver which can substitute entities from prior
