@@ -11,7 +11,11 @@ counts or sample rates trigger bounded retries on the same selected input:
 mono, stereo and the device's advertised maximum channel count, at the configured
 and native rates, without duplicate attempts. Access and device-availability
 errors are not retried as format failures. Both the Windows permission probe and
-continuous capture use this negotiation and input selection. Name matching skips
+continuous capture use this negotiation and input selection. The system default
+is resolved to a concrete input index before the permission probe and model
+loading, so changing the default during startup cannot redirect capture. An
+unavailable default produces Settings guidance without choosing another input.
+Name matching skips
 output-only devices; a missing named microphone produces an actionable error
 rather than silently selecting another input. Multichannel samples are averaged
 to mono before framing and speech detection.

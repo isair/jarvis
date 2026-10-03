@@ -163,6 +163,13 @@ Connect MCP servers for browser automation, Home Assistant, GitHub, databases an
 - 🎤 **Whisper cache errors:** Jarvis attempts one clean download recovery per startup. If it fails, check connectivity and free disk space, then follow the printed cache guidance and restart. Device fallbacks retain files downloaded during recovery.
 
 <details>
+<summary><strong>No default microphone found</strong></summary>
+
+Select an available microphone in Jarvis Settings, or set a default recording input in your system Settings, then restart Jarvis. Jarvis keeps the selected input throughout startup and does not choose another microphone automatically when the default is unavailable.
+
+</details>
+
+<details>
 <summary><strong>Bluetooth microphone will not start</strong></summary>
 
 Select the headset's microphone/input profile in Settings, not its playback device. Jarvis uses the selected input for listening and dictation, tries compatible mono, stereo and device-native capture formats, then converts multichannel input to mono for speech recognition. If that input is unavailable, select another microphone in Settings. If capture still fails, check that the microphone works in your system's recorder and share the error from Logs; Bluetooth driver/profile limitations can still prevent capture.

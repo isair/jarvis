@@ -2032,7 +2032,7 @@ class VoiceListener(threading.Thread):
             stream_kwargs = resolve_input_device(sd, self.cfg.voice_device, devices)
         except ValueError as exc:
             print(f'  ❌ {exc}', flush=True)
-            debug_log('configured input device did not match an available microphone', 'voice')
+            debug_log(f'microphone selection failed: {exc}', 'voice')
             return
 
         # Windows 11: Test microphone permission by attempting a brief recording
@@ -2432,20 +2432,12 @@ class VoiceListener(threading.Thread):
             except Exception:
                 pass
 
-        # Log which device will be used
+        # Log the resolved input used by both capture phases.
         try:
-            if "device" in stream_kwargs:
-                dev = sd.query_devices(stream_kwargs["device"])
-                device_name = dev.get('name', 'Unknown')
-                debug_log(f"using input device: {device_name} (index {stream_kwargs['device']})", "voice")
-                print(f"  🎤 Using audio device: {device_name}", flush=True)
-            else:
-                debug_log("using system default input device", "voice")
-                try:
-                    default_dev = sd.query_devices(sd.default.device[0])
-                    print(f"  🎤 Using default device: {default_dev.get('name', 'Unknown')}", flush=True)
-                except Exception:
-                    print("  🎤 Using system default input device", flush=True)
+            dev = sd.query_devices(stream_kwargs["device"])
+            device_name = dev.get('name', 'Unknown')
+            debug_log(f"using input device: {device_name} (index {stream_kwargs['device']})", "voice")
+            print(f"  🎤 Using audio device: {device_name}", flush=True)
         except Exception:
             pass
 

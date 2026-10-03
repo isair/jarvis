@@ -1139,3 +1139,52 @@ class TestLlmCleanDictation:
         assert short_cap == 64
         assert long_cap > short_cap
         assert long_cap >= len(long_text) // 2
+
+
+@pytest.mark.unit
+def test_unavailable_default_ends_dictation_without_recording(capsys):
+    ended = threading.Event()
+    with patch('src.jarvis.dictation.dictation_engine.parse_hotkey',
+               return_value=(frozenset(), None)):
+        engine = _make_engine(on_dictation_end=ended.set)
+    engine._recording = True
+    engine._session = 1
+    with patch('src.jarvis.dictation.dictation_engine.sd') as audio, \
+         patch('src.jarvis.dictation.dictation_engine._play_beep'):
+        audio.query_devices.side_effect = RuntimeError('Error querying device -1')
+        engine._begin_recording(1)
+        audio.InputStream.assert_not_called()
+    assert not engine._recording
+    assert ended.is_set()
+    assert 'default microphone' in capsys.readouterr().out
+
+
+@pytest.mark.unit
+def test_dictation_keeps_default_input_during_native_rate_query():
+    with patch('src.jarvis.dictation.dictation_engine.parse_hotkey',
+               return_value=(frozenset(), None)):
+        engine = _make_engine()
+    engine._recording = True
+    engine._session = 1
+    selected = {'index': 3, 'name': 'Selected microphone', 'max_input_channels': 1,
+                'default_samplerate': 48000}
+    opened = []
+    with patch('src.jarvis.dictation.dictation_engine.sd') as audio, \
+         patch('src.jarvis.dictation.dictation_engine._play_beep'):
+        def query(device=None, *, kind=None):
+            if kind == 'input':
+                return selected.copy()
+            assert device == 3
+            selected['index'] = 7
+            return dict(selected, index=device)
+
+        def open_stream(**kwargs):
+            opened.append((kwargs['device'], kwargs['samplerate']))
+            return MagicMock()
+
+        audio.query_devices.side_effect = query
+        audio.InputStream.side_effect = open_stream
+        engine._begin_recording(1)
+        assert engine._stream is not None
+        assert opened == [(3, selected['default_samplerate'])]
+        engine._stop_recording(discard=True)
