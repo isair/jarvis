@@ -15,3 +15,9 @@ vector candidates. Both Python/FAISS and sqlite-vss use the same fusion routine.
 
 `evals/test_hybrid_retrieval.py` measures lexical and semantic recall@3 on a
 controlled corpus. It exercises ranking, not a particular embedding model.
+
+`upsert_summary_embedding` writes the sqlite-vss vector and its summary mapping
+in one transaction under the database lock. A failed write rolls back the index
+transaction and releases the writer lock; previously committed diary text and
+vector mappings remain readable. Callers commit diary text before refreshing
+the optional index.

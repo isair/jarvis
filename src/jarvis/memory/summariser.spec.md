@@ -36,7 +36,12 @@ The summariser prompt is the only write-time defence. There is no post-process s
   the summary and topics, within the caller's timeout. Streaming retains its
   uncapped generation within that timeout.
 - Storage: one row per `(date_utc, source_app)` in `conversation_summaries`, upserted on each update.
-- Embedding: the concatenation of summary + topics is embedded and stored for vector retrieval.
+- Embedding: when sqlite-vss and an embedding model are configured, the concatenation
+  of summary + topics is embedded and stored for vector retrieval after the diary
+  text commits. Refresh is best-effort: a backend or index failure preserves
+  successful save confirmation, keyword retrieval and graph extraction. Pending
+  messages advance only through the committed snapshot. Index errors log the
+  exception class without its message or diary text.
 - LLM failure is non-fatal — the summariser returns `(None, None)` and the update is skipped entirely. Pending messages remain queued for the next cycle.
 
 ## Hygiene Rules
