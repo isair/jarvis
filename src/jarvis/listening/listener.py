@@ -451,6 +451,8 @@ class VoiceListener(threading.Thread):
         self._whisper_device: Optional[str] = None  # "cpu" or "cuda" (resolved from CTranslate2)
         self._mlx_model_repo: Optional[str] = None  # For MLX backend
         self.model: Optional[Any] = None  # WhisperModel for faster-whisper, None for MLX
+        self._whisper_model_name = getattr(cfg, "whisper_model", "small")
+        self._whisper_cpu_recovery_attempted = False
         self.transcribe_lock = threading.Lock()  # Shared lock for Whisper model access
         self._audio_q: queue.Queue = queue.Queue(maxsize=64)
         self._transcription_jobs_q: queue.Queue = queue.Queue(maxsize=8)
@@ -1776,6 +1778,7 @@ class VoiceListener(threading.Thread):
             "voice",
         )
         self._whisper_device = resolved_device
+        self._whisper_model_name = model_name
 
         if try_device != device and device in ("auto", "cuda"):
             print("     ⚠️  CUDA not available, using CPU (this may be slower)", flush=True)
@@ -2313,21 +2316,9 @@ class VoiceListener(threading.Thread):
             # path are all exercised here instead of on the user's first word.
             if np is not None and self.model is not None:
                 try:
-                    cpu_mode = self._whisper_device == "cpu"
                     rng = np.random.default_rng(0)
                     warmup_audio = rng.standard_normal(self._samplerate).astype(np.float32) * 0.01
-                    try:
-                        segments_iter, _ = self.model.transcribe(
-                            warmup_audio,
-                            language=None,
-                            vad_filter=False,
-                            condition_on_previous_text=not cpu_mode,
-                            without_timestamps=cpu_mode,
-                        )
-                    except TypeError:
-                        segments_iter, _ = self.model.transcribe(warmup_audio, language=None)
-                    for _ in segments_iter:
-                        pass
+                    self._decode_faster_whisper(warmup_audio)
                     debug_log("faster-whisper warmup transcription complete", "voice")
                 except Exception as e:
                     debug_log(f"faster-whisper warmup failed: {e}", "voice")
@@ -2684,6 +2675,49 @@ class VoiceListener(threading.Thread):
             print("  ⚠️  Whisper is behind; this utterance was not transcribed.", flush=True)
             self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
 
+    def _decode_faster_whisper(self, audio):
+        """Decode under the shared lock, recovering once from a CUDA runtime error."""
+        with self.transcribe_lock:
+            try:
+                return self._decode_faster_whisper_locked(audio)
+            except Exception as error:
+                message = str(error).lower()
+                cuda_failure = any(token in message for token in ("cuda", "cublas", "cudnn"))
+                if (self._whisper_device != "cuda" or not cuda_failure
+                        or self._whisper_cpu_recovery_attempted):
+                    raise
+                self._whisper_cpu_recovery_attempted = True
+                debug_log(f"CUDA transcription failed; attempting CPU recovery: {error}", "voice")
+                print("  ⚠️ CUDA speech recognition failed, switching to CPU (this may be slower)", flush=True)
+                compute = getattr(self.cfg, "whisper_compute_type", "int8")
+                cpu_compute = "float32" if compute == "float32" else "int8"
+                cpu_threads = os.cpu_count() or 4
+                # Publish the replacement only after a successful load. Dictation
+                # resolves its shared model reference while holding this lock.
+                model = WhisperModel(
+                    self._whisper_model_name, device="cpu", compute_type=cpu_compute,
+                    cpu_threads=cpu_threads,
+                )
+                self.model = model
+                self._apply_whisper_load_success(
+                    self._whisper_model_name, "cpu", cpu_compute, "cpu", cpu_compute,
+                    cpu_threads, context="runtime recovery",
+                )
+                return self._decode_faster_whisper_locked(audio)
+
+    def _decode_faster_whisper_locked(self, audio):
+        """Consume lazy segments before releasing the shared model lock."""
+        cpu_mode = self._whisper_device == "cpu"
+        try:
+            segments, info = self.model.transcribe(
+                audio, language=None, vad_filter=False,
+                condition_on_previous_text=not cpu_mode,
+                without_timestamps=cpu_mode,
+            )
+        except TypeError:
+            segments, info = self.model.transcribe(audio, language=None)
+        return list(segments), info
+
     def _transcribe_audio(self, audio) -> tuple[str, Optional[str], tuple[LowConfidenceEvent, ...]]:
         """Run Whisper and return filtered text, language and rejection events."""
         detected = None
@@ -2743,19 +2777,7 @@ class VoiceListener(threading.Thread):
                     # Fallback to full text if no segments
                     text = result.get("text", "").strip()
             else:
-                # faster-whisper transcription
-                # CPU mode: skip timestamps and disable context carry-over for speed
-                cpu_mode = self._whisper_device == "cpu"
-                with self.transcribe_lock:
-                    try:
-                        segments, _info = self.model.transcribe(
-                            audio, language=None, vad_filter=False,
-                            condition_on_previous_text=not cpu_mode,
-                            without_timestamps=cpu_mode,
-                        )
-                    except TypeError:
-                        segments, _info = self.model.transcribe(audio, language=None)
-                    segments_list = list(segments)
+                segments_list, _info = self._decode_faster_whisper(audio)
                 # Capture the detected language (faster-whisper exposes it
                 # on the info object). Guard against older API variants
                 # where the attribute may be absent.

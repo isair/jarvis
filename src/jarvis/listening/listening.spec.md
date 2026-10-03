@@ -489,3 +489,11 @@ Currently, echo is handled at the transcript level via fuzzy text matching and t
 - Add 10-50ms latency
 
 **Current recommendation:** The transcript-level echo detection (fuzzy matching + intent judge) is sufficient and simpler. Consider AEC only if transcript-level detection proves inadequate in practice.
+
+### CUDA decode recovery
+
+- A faster-whisper CUDA runtime failure during warmup or transcription triggers one CPU recovery attempt per listener instance. Both eager failures and errors while consuming lazy segments are handled.
+- The loaded model name is retained. CPU decoding uses `float32` when configured, otherwise `int8`, and the CPU decoding optimisations apply immediately.
+- A successful recovery retries the current audio once and serves subsequent audio through the shared CPU model. A failed recovery is not retried for every utterance. CPU and unrelated transcription failures do not trigger model replacement.
+- Model replacement and lazy segment consumption hold the shared transcription lock. Dictation resolves its model reference under that lock.
+- Recovery logs the underlying error and displays a warning that CPU decoding may be slower.

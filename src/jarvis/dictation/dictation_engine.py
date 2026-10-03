@@ -1134,10 +1134,9 @@ class DictationEngine:
 
     def _transcribe(self, audio) -> str:
         """Transcribe audio using the shared Whisper model."""
-        backend = self._whisper_backend_ref()
-        model = self._whisper_model_ref()
-
         with self._transcribe_lock:
+            backend = self._whisper_backend_ref()
+            model = self._whisper_model_ref()
             if backend == "mlx":
                 return self._transcribe_mlx(audio)
             elif model is not None:

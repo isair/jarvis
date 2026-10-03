@@ -125,7 +125,7 @@ After transcription, text passes through these stages in order:
 
 ## Thread Safety
 
-- `threading.Lock` around shared Whisper model transcription calls.
+- `threading.Lock` around shared Whisper model transcription calls. Model references are resolved under the lock so CPU recovery in the voice listener is visible to waiting dictation jobs.
 - Dedicated audio stream; never touches the listener's stream.
 - The `pynput` key handlers (`_on_key_press` / `_on_key_release`) must return
   quickly — Windows silently removes low-level keyboard hooks that take more
