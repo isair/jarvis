@@ -12,6 +12,9 @@ The summariser prompt is the only write-time defence. There is no post-process s
 
 - Input: recent conversation chunks (last 10) plus, if present, the previous summary for the same day.
 - Output: a free-form summary (≤ 200 words) and 3–5 comma-separated topic keywords.
+- Direct generation reserves a bounded 1,024-token allowance, including reasoning,
+  the summary and topics, within the caller's timeout. Streaming retains its
+  uncapped generation within that timeout.
 - Storage: one row per `(date_utc, source_app)` in `conversation_summaries`, upserted on each update.
 - Embedding: the concatenation of summary + topics is embedded and stored for vector retrieval.
 - LLM failure is non-fatal — the summariser returns `(None, None)` and the update is skipped entirely. Pending messages remain queued for the next cycle.

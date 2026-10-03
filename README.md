@@ -130,7 +130,7 @@ Jarvis is actively developed, primarily on macOS. Windows and Linux behaviour ma
 - **No mobile app** is available ([#17](https://github.com/isair/jarvis/issues/17)).
 - **Capture continues while Jarvis thinks.** Speech detection and assembly run independently of intent judging and reply generation. Recognition backlogs are bounded; Logs warns when speech arrives faster than it can be processed.
 - **Continuous speech is split at your utterance limit.** The shorter limit during speech playback helps interruption requests reach recognition promptly. Both limits are adjustable in Settings.
-- **Reasoning models can take longer to plan and choose tools.** Planning, tool-argument resolution, tool selection and meal logging reserve room for reasoning and the final answer, with the configured timeout still limiting the wait.
+- **Reasoning models can take longer.** Planning, tool-argument resolution, tool selection, meal logging and diary summaries reserve room for reasoning and the final answer, with the configured timeout still limiting the wait.
 - **GPT-OSS always reasons.** Its Ollama thinking toggle selects low or high reasoning effort; turning it off selects low effort rather than disabling reasoning.
 - **Meal logging confirms saved meals even if coaching is unavailable.** Optional follow-up advice can fail without logging the meal twice.
 - **Weather place fallback supports abbreviated names.** Names such as Washington D.C. retain internal punctuation when location detection is unavailable.
