@@ -44,7 +44,9 @@ integration in `src/jarvis/reply/engine.py`.
 - The planner sees the **router-narrowed** tool catalogue (name +
   one-line description), not the full 30+ list. It does not see memory
   content — it decides whether memory is needed, via the
-  `searchMemory` directive.
+  `searchMemory` directive. An empty external catalogue still allows
+  private-history preparation. The same personal-history rules apply with
+  or without external tools.
 - Only when the query is at least `MIN_QUERY_CHARS` long (default 4).
   Pure noise like "hi" / "ok" still short-circuits.
 - Only when `cfg.planner_enabled` is True (default).

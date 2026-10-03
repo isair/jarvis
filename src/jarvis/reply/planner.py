@@ -262,7 +262,7 @@ def _build_user_message(
         tool_lines = "\n".join(f"- {name}: {desc}" for name, desc in tools)
         parts.append(f"AVAILABLE TOOLS:\n{tool_lines}")
     else:
-        parts.append("AVAILABLE TOOLS: (none — plan a direct reply)")
+        parts.append("AVAILABLE TOOLS: (none)")
     if dialogue_context.strip():
         parts.append(f"DIALOGUE CONTEXT (most recent last):\n{dialogue_context.strip()}")
     else:

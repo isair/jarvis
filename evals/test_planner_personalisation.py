@@ -116,3 +116,29 @@ class TestPlannerEmitsSearchMemoryForPersonalisedQueries:
             f"knowledge query {query!r}. That wastes a memory-enrichment "
             f"LLM call on every such turn. Plan: {plan}"
         )
+
+
+@pytest.mark.eval
+@requires_judge_llm
+class TestPlannerMemoryPreparationWithoutExternalTools:
+    """Private-history preparation remains available with an empty tool catalogue."""
+
+    @pytest.mark.parametrize(
+        ('query', 'needs_memory'),
+        [
+            ('what did I tell you about my food allergies last week', True),
+            ('please recommend something I would enjoy reading based on my tastes', True),
+            ('Bana geçmişte bahsettiğim ilgi alanlarıma uygun bir film önerir misin', True),
+            ('what are the physical causes of seasonal food allergies in adults', False),
+            ("explain the importance of Marie Curie's discoveries for modern scientific research", False),
+            ('suggest a clear descriptive name for a function that reads configuration files', False),
+        ],
+    )
+    def test_memory_decision_is_independent_of_external_tool_availability(self, query, needs_memory):
+        from jarvis.reply.planner import plan_query, plan_requires_memory, is_search_memory_step
+
+        plan = plan_query(planner_config(), query, '', [], timeout_sec=20.)
+        assert plan, f'No preparation plan for {query!r}'
+        assert plan_requires_memory(plan) is needs_memory, (query, plan)
+        if needs_memory:
+            assert is_search_memory_step(plan[0]), plan
