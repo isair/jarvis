@@ -83,8 +83,9 @@ def test_failed_cpu_recovery_is_not_repeated_for_every_utterance(monkeypatch):
     assert attempted
 
 
-def test_dictation_uses_replacement_published_while_waiting_for_lock():
+def test_dictation_uses_replacement_published_while_waiting_for_lock(monkeypatch):
     from jarvis.dictation.dictation_engine import DictationEngine
+    monkeypatch.setattr("jarvis.dictation.dictation_engine.parse_hotkey", lambda hotkey: (set(), None))
     current = SimpleNamespace(model=SimpleNamespace(transcribe=lambda *a, **k: ([], None)))
     class PublishingLock:
         def __enter__(self):
