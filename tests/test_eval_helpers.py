@@ -76,7 +76,7 @@ class TestFallbackPhrasesAgainstEngineSource:
     """
 
     def test_every_phrase_appears_in_engine_source(self):
-        engine_src = (_ROOT / "src" / "jarvis" / "reply" / "engine.py").read_text()
+        engine_src = (_ROOT / "src" / "jarvis" / "reply" / "engine.py").read_text(encoding="utf-8")
         engine_src_lower = engine_src.lower()
         for phrase in FALLBACK_REPLY_PHRASES:
             assert phrase in engine_src_lower, (
@@ -159,7 +159,7 @@ class TestMaxTurnsPhrasesAgainstEnrichmentSource:
     """
 
     def test_digest_prompt_mentions_fully_finish(self):
-        src = (_ROOT / "src" / "jarvis" / "reply" / "enrichment.py").read_text()
+        src = (_ROOT / "src" / "jarvis" / "reply" / "enrichment.py").read_text(encoding="utf-8")
         # The digest prompt instructs the LLM to open with a caveat about
         # not being able to fully finish; the anchor phrase here is
         # ``fully finish``, which is the semantic core every canonical

@@ -14,8 +14,8 @@ The module detects model size from the model name and selects appropriate prompt
 
 | Model Size | Detection Pattern | Tool Prompts |
 |------------|-------------------|--------------|
-| SMALL | `:1b`, `:3b`, `:7b`, `gemma4` | Conservative — explicit "DO NOT use tools for greetings" + worked negative examples + repetition |
-| LARGE | All others (8b+) | Proactive — "use tools confidently" + short anti-confabulation + auto-derive clause |
+| SMALL | Regex `(\d+(?:\.\d+)?)(?:x(\d+))?b` — any parameter count ≤7.5B (e.g. `:0.8b`, `:3b`, `:7b`, `:2.7b`), plus `gemma4` family fallback when no size tag present | Conservative — explicit "DO NOT use tools for greetings" + worked negative examples + repetition |
+| LARGE | Models >7.5B (e.g. `:8b`, `:14b`, `:70b`, `gemma-4-12b`), MoE models (`8x7b`), or no size/family match | Proactive — "use tools confidently" + short anti-confabulation + auto-derive clause |
 
 ### Architecture
 
@@ -50,7 +50,7 @@ Model-size-specific components:
 - `tool_guidance`: How to handle tool results (both sizes get the anti-confabulation fidelity rule and the "quote Content from top result, don't deflect to links" rule)
 - `tool_constraints`: Explicit behaviour rules. Present on BOTH sizes — the
   large variant is a shorter restatement of the named-entity and tool-
-  auto-derive rules because gpt-oss:20b and similar also confabulate
+  auto-derive rules because qwen3.8:27b and similar also confabulate
   specifics for unfamiliar entities and occasionally ask for arguments
   (e.g. `location` for `getWeather`) the tool already auto-derives.
 

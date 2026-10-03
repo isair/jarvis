@@ -15,6 +15,7 @@ Any code change must either adhere to our spec files perfectly or you should ask
 | `src/desktop_app/desktop_app.spec.md` | System tray app, startup flow, daemon integration, windows, theme, updates | Desktop is separate from core; jarvis has no knowledge of desktop_app |
 | `src/desktop_app/settings_window.spec.md` | Auto-generated settings UI from config metadata | Metadata-driven; only non-default values written; preserves unknown keys |
 | `src/desktop_app/setup_wizard.spec.md` | First-run wizard (Ollama, models, Whisper, location) | Minimal friction; only shown when user action required; doesn't configure everything |
+| `src/desktop_app/chat_window.spec.md` | Text chat interface alongside voice; shared conversation, no TTS, bundled callbacks + subprocess IPC | One conversation for voice + text; text never speaks; redaction shared with voice path |
 | `src/jarvis/dictation/dictation.spec.md` | Hold-to-dictate engine, hotkey, clipboard paste | Independent from assistant pipeline; shared Whisper model; pause flag on listener |
 | `src/jarvis/listening/listening.spec.md` | Voice listener, wake word detection, audio pipeline | — |
 | `src/jarvis/reply/reply.spec.md` | LLM reply generation, tool use, profiles | Tools return raw data; profiles handle formatting |
@@ -87,7 +88,7 @@ Keep sections concise. Use collapsible `<details>` for lengthy content. Avoid do
 
 ---
 
-When the user says "remember" something, add it to CLAUDE.md in the appropriate section (project-specific above the ---, or portable below).
+When the user says "remember" something, add it to AGENTS.md in the appropriate section (project-specific above the ---, or portable below).
 
 Run your changes and test them manually, iterate until everything is good.
 
@@ -125,6 +126,10 @@ Commit messages and PR descriptions are the right place for "what changed and wh
 If you're touching every legacy call site, finish the job. Don't leave compat shims, fallback parameters, `SimpleNamespace` defaults, or `TODO(PR X)` markers for paths you are also rewriting in the same change. The whole point of doing the refactor is that the legacy shape goes away — keeping a half-converted state means future readers have to figure out which version of the contract is canonical, and the reasoning behind the old shape sits in the codebase as dead weight.
 
 The exception is genuinely external boundaries the codebase does not own: on-disk config files written by a previous release, third-party API shapes, persisted database rows. Those need migration paths because users depend on them. Internal function signatures, helper modules, and call patterns inside `src/` are ours to change cleanly.
+
+## Qt Layout: showing hidden widgets compresses existing ones
+
+When toggling widget visibility inside a constrained layout, provide a scroll viewport whose content retains its minimum usable size. Wizard pages use `ScrollableWizardPage` or a dedicated scroll area. Do not grow the wizard with `adjustSize()` or hardcoded heights when revealing controls; the window must stay within the available screen and navigation must remain reachable.
 
 ## Prompt-engineering: denial-template mirroring
 

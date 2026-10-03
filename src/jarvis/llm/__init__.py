@@ -61,6 +61,7 @@ def call_llm_direct(
     thinking: bool = False,
     num_ctx: int = 4096,
     temperature: Optional[float] = None,
+    max_tokens: Optional[int] = None,
 ) -> Optional[str]:
     """Single-shot system+user call against an Ollama instance at
     ``base_url``. Convenience helper for callers that only have a base
@@ -74,6 +75,7 @@ def call_llm_direct(
         thinking=thinking,
         num_ctx=num_ctx,
         temperature=temperature,
+        max_tokens=max_tokens,
     )
 
 

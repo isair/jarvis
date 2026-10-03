@@ -1,0 +1,105 @@
+name: Release Smoke Test
+
+on:
+  workflow_dispatch:
+    # Manually triggered from the Actions tab.
+    # Runs on the develop branch by default.
+
+concurrency:
+  group: release-smoke-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  # Generate a dev version string from the commit SHA
+  generate-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.compute.outputs.version }}
+
+    steps:
+      - id: compute
+        run: echo "version=dev-${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
+
+  # Build + smoke-test all platforms using the reusable workflow
+  build-desktop:
+    needs: [generate-version]
+    uses: ./.github/workflows/build-desktop.yml
+    with:
+      version: ${{ needs.generate-version.outputs.version }}
+      channel: develop
+      smoke_test: true
+
+  # ── Gate: fast-forward main → develop ──────────────────────────────────
+  release:
+    needs: [build-desktop]
+    runs-on: ubuntu-latest
+    if: success()
+    timeout-minutes: 5
+
+    permissions:
+      contents: write
+      actions: write  # needed to dispatch release.yml (workflow_dispatch)
+
+    steps:
+      - name: 📥 Checkout full history
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: develop
+
+      - name: 🔀 Fast-forward main to develop
+        run: |
+          set -euo pipefail
+
+          echo "Current state:"
+          echo "   develop HEAD (tested): ${{ github.sha }}"
+
+          # Fetch main so we can verify the fast-forward is safe
+          git fetch origin main
+
+          MAIN_SHA=$(git rev-parse origin/main)
+          TESTED_SHA="${{ github.sha }}"
+
+          echo "   origin/main:  $MAIN_SHA"
+          echo "   tested SHA:   $TESTED_SHA"
+
+          # Verify the tested commit is a descendant of main (fast-forward possible)
+          if git merge-base --is-ancestor "$MAIN_SHA" "$TESTED_SHA"; then
+            echo "main is an ancestor of the tested commit - fast-forward is safe"
+          else
+            echo "main has diverged - fast-forward is not possible"
+            echo "   This means commits were pushed directly to main."
+            echo "   Please rebase or merge manually."
+            exit 1
+          fi
+
+          echo ""
+          echo "Fast-forwarding main to $TESTED_SHA..."
+
+          git checkout main
+          git merge --ff-only "$TESTED_SHA"
+
+          echo ""
+          echo "Pushing main..."
+          git push origin main
+
+          NEW_MAIN_SHA=$(git rev-parse main)
+          echo ""
+          echo "Release complete!"
+          echo "   main is now at: $NEW_MAIN_SHA"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # GitHub does NOT fire on:push workflows for pushes made with
+      # GITHUB_TOKEN, so release.yml would never run after the fast-forward
+      # above and the release would silently not be published. Dispatch it
+      # explicitly: workflow_dispatch is one of the two event types
+      # GITHUB_TOKEN is allowed to trigger. semantic-release inside
+      # release.yml decides whether a new version is warranted; if not, the
+      # run simply finishes without publishing.
+      - name: 🚀 Trigger release workflow
+        run: |
+          gh workflow run release.yml --ref main --repo "${{ github.repository }}"
+          echo "Dispatched release.yml on main — see https://github.com/${{ github.repository }}/actions/workflows/release.yml"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -5,13 +5,17 @@ on:
     branches:
       - main
       - develop
+  workflow_dispatch:
+    # Dispatched by release-smoke.yml after it fast-forwards main: GitHub
+    # does not fire on:push workflows for pushes made with GITHUB_TOKEN, so
+    # the release would otherwise never be published automatically.
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref_name }}
   cancel-in-progress: true
 
 jobs:
-  # Semantic versioning analysis (main only)
+  # ── Semantic versioning analysis (main only) ────────────────────────────
   semantic-release:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
@@ -45,13 +49,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Run semantic-release and capture output
           npx semantic-release --debug > release_output.log 2>&1 || true
 
-          # Check if a release was created
           if grep -q "Published release" release_output.log; then
             echo "new_release_published=true" >> $GITHUB_OUTPUT
-            # Extract version from the log
             VERSION=$(grep "Published release" release_output.log | sed -n 's/.*Published release \([0-9]\+\.[0-9]\+\.[0-9]\+\).*/\1/p')
             echo "new_release_version=$VERSION" >> $GITHUB_OUTPUT
             echo "new_release_git_tag=v$VERSION" >> $GITHUB_OUTPUT
@@ -61,267 +62,76 @@ jobs:
             echo "ℹ️ No release created (no releasable changes found)"
           fi
 
-          # Show the full log for debugging
           cat release_output.log
 
-  # Build desktop apps for all platforms
-  build-windows:
-    runs-on: windows-latest
+  # ── Build desktop apps (develop only; main builds stable-stamped below) ─
+  build-desktop:
+    if: github.ref == 'refs/heads/develop'
+    uses: ./.github/workflows/build-desktop.yml
+    with:
+      version: dev-${{ github.sha }}
+      channel: develop
+      smoke_test: false
+
+  # ── Build stable-stamped desktop apps (main only) ───────────────────────
+  # The version isn't known until semantic-release runs on main, so the
+  # smoke-tested artifacts (built as dev/develop before the fast-forward)
+  # can't be published as the stable release — they would stamp stable
+  # installs onto the develop channel and get them offered develop builds.
+  # Rebuild the same (already smoke-tested) commit with the real version so
+  # stable installs report channel "stable" and only see stable updates.
+  build-stable:
     needs: [semantic-release]
-    if: always() && (needs.semantic-release.result == 'success' || needs.semantic-release.result == 'skipped')
+    if: always() && needs.semantic-release.result == 'success' && needs.semantic-release.outputs.new_release_published == 'true'
+    uses: ./.github/workflows/build-desktop.yml
+    with:
+      version: ${{ needs.semantic-release.outputs.new_release_version }}
+      channel: stable
+      smoke_test: false
 
-    steps:
-      - name: 📥 Checkout code
-        uses: actions/checkout@v5
-
-      - name: 🐍 Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.11'
-          cache: pip
-          cache-dependency-path: requirements.txt
-
-      - name: 📝 Generate version file
-        id: version
-        shell: pwsh
-        run: |
-          if ("${{ github.ref }}" -eq "refs/heads/main" -and "${{ needs.semantic-release.outputs.new_release_published }}" -eq "true") {
-            $version = "${{ needs.semantic-release.outputs.new_release_version }}"
-            $channel = "stable"
-          } else {
-            $version = "dev-$($env:GITHUB_SHA.Substring(0,7))"
-            $channel = "develop"
-          }
-          @"
-          # Auto-generated at build time
-          VERSION = "$version"
-          RELEASE_CHANNEL = "$channel"
-          "@ | Out-File -FilePath src/jarvis/_version.py -Encoding utf8
-          Write-Host "Generated version file with VERSION=$version, RELEASE_CHANNEL=$channel"
-          echo "app_version=$version" >> $env:GITHUB_OUTPUT
-
-      - name: 📦 Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          # Install requirements but skip heavy optional packages (PyTorch, etc.)
-          # Filter out chatterbox-tts, mlx-whisper, and nvidia-* (CUDA libs are
-          # downloaded by the installer on-demand, not bundled in the build)
-          Get-Content requirements.txt | Where-Object { $_ -notmatch '^(chatterbox-tts|mlx-whisper|nvidia-)' } | Set-Content requirements-desktop.txt
-          pip install -r requirements-desktop.txt
-          pip install pyinstaller
-
-      - name: 🎨 Generate icons
-        run: |
-          python src/desktop_app/desktop_assets/generate_icons.py
-
-      - name: 🔨 Build executable (onedir)
-        run: |
-          pyinstaller jarvis_desktop.spec
-
-      - name: 🛠️ Install Inno Setup
-        run: |
-          choco install innosetup -y
-
-      - name: 📦 Build Windows installer
-        run: |
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion="${{ steps.version.outputs.app_version }}" installer\windows\jarvis_setup.iss
-
-      - name: 📦 Package installer as Jarvis-Windows-x64.zip
-        run: |
-          # Rename installer to Jarvis.exe for backwards compatibility with old updaters
-          Copy-Item dist\Jarvis-Setup-x64.exe dist\Jarvis.exe
-          cd dist
-          Compress-Archive -Path Jarvis.exe -DestinationPath Jarvis-Windows-x64.zip
-
-      - name: 📤 Upload Windows artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: Jarvis-Windows
-          path: dist/Jarvis-Windows-x64.zip
-
-  build-macos:
-    runs-on: ${{ matrix.os }}
-    needs: [semantic-release]
-    if: always() && (needs.semantic-release.result == 'success' || needs.semantic-release.result == 'skipped')
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-latest  # Apple Silicon (arm64)
-            arch: arm64
-          - os: macos-15-intel  # Intel (x64)
-            arch: x64
-
-    steps:
-      - name: 📥 Checkout code
-        uses: actions/checkout@v5
-
-      - name: 🐍 Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.11'
-          cache: pip
-          cache-dependency-path: requirements.txt
-
-      - name: 📝 Generate version file
-        run: |
-          if [ "${{ github.ref }}" = "refs/heads/main" ] && [ "${{ needs.semantic-release.outputs.new_release_published }}" = "true" ]; then
-            VERSION="${{ needs.semantic-release.outputs.new_release_version }}"
-            CHANNEL="stable"
-          else
-            VERSION="dev-${GITHUB_SHA:0:7}"
-            CHANNEL="develop"
-          fi
-          cat > src/jarvis/_version.py << EOF
-          # Auto-generated at build time
-          VERSION = "$VERSION"
-          RELEASE_CHANNEL = "$CHANNEL"
-          EOF
-          echo "Generated version file with VERSION=$VERSION, RELEASE_CHANNEL=$CHANNEL"
-
-      - name: 📦 Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          # Install requirements but skip heavy optional packages (PyTorch/Chatterbox)
-          # MLX Whisper is only included on arm64 - it requires Apple Silicon
-          if [ "${{ matrix.arch }}" = "arm64" ]; then
-            grep -v -E '^chatterbox-tts' requirements.txt > requirements-desktop.txt
-          else
-            grep -v -E '^(chatterbox-tts|mlx-whisper)' requirements.txt > requirements-desktop.txt
-          fi
-          pip install -r requirements-desktop.txt
-          pip install pyinstaller
-
-      - name: 🎨 Generate icons
-        run: |
-          python src/desktop_app/desktop_assets/generate_icons.py
-
-      - name: 🔨 Build application
-        run: |
-          pyinstaller jarvis_desktop.spec
-
-      # Note: Ad-hoc code signing is intentionally skipped
-      # codesign --force --deep breaks Qt WebEngine's symlink structure
-      # causing crashes when QWebEngineView is shown.
-      # See: https://github.com/pyinstaller/pyinstaller/issues/6612
-      # Users can bypass Gatekeeper by right-clicking and selecting "Open"
-
-      - name: 📦 Package macOS build
-        run: |
-          cd dist
-          # `ditto -c -k --keepParent` preserves the symlinks, xattrs, and
-          # permissions that Qt/Qt WebEngine frameworks rely on. Plain
-          # `zip -r` follows symlinks, producing a zip that extracts into a
-          # bundle macOS refuses to launch ("Jarvis.app can't be opened").
-          ditto -c -k --keepParent Jarvis.app Jarvis-macOS-${{ matrix.arch }}.zip
-
-      - name: 📤 Upload macOS artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: Jarvis-macOS-${{ matrix.arch }}
-          path: dist/Jarvis-macOS-${{ matrix.arch }}.zip
-
-  build-linux:
-    runs-on: ubuntu-latest
-    needs: [semantic-release]
-    if: always() && (needs.semantic-release.result == 'success' || needs.semantic-release.result == 'skipped')
-
-    steps:
-      - name: 🧹 Free up disk space
-        run: |
-          # Remove unnecessary large packages to free up disk space
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /usr/local/lib/android
-          sudo rm -rf /opt/ghc
-          sudo rm -rf /opt/hostedtoolcache/CodeQL
-          sudo docker image prune --all --force
-          df -h
-
-      - name: 📥 Checkout code
-        uses: actions/checkout@v5
-
-      - name: 🐍 Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.11'
-          cache: pip
-          cache-dependency-path: requirements.txt
-
-      - name: 📦 Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libxcb-cursor0 libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 portaudio19-dev binutils
-
-      - name: 📝 Generate version file
-        run: |
-          if [ "${{ github.ref }}" = "refs/heads/main" ] && [ "${{ needs.semantic-release.outputs.new_release_published }}" = "true" ]; then
-            VERSION="${{ needs.semantic-release.outputs.new_release_version }}"
-            CHANNEL="stable"
-          else
-            VERSION="dev-${GITHUB_SHA:0:7}"
-            CHANNEL="develop"
-          fi
-          cat > src/jarvis/_version.py << EOF
-          # Auto-generated at build time
-          VERSION = "$VERSION"
-          RELEASE_CHANNEL = "$CHANNEL"
-          EOF
-          echo "Generated version file with VERSION=$VERSION, RELEASE_CHANNEL=$CHANNEL"
-
-      - name: 📦 Install Python dependencies
-        run: |
-          python -m pip install --upgrade pip
-          # Install requirements but skip heavy optional packages (PyTorch, etc.)
-          grep -v -E '^(chatterbox-tts|mlx-whisper)' requirements.txt > requirements-desktop.txt
-          pip install -r requirements-desktop.txt
-          pip install pyinstaller
-
-      - name: 🎨 Generate icons
-        run: |
-          python src/desktop_app/desktop_assets/generate_icons.py
-
-      - name: 🔨 Build executable
-        run: |
-          pyinstaller jarvis_desktop.spec
-
-      - name: 📦 Package Linux build
-        run: |
-          cd dist
-          # Package the Jarvis directory (not a single file anymore)
-          tar -czf Jarvis-Linux-x64.tar.gz Jarvis/
-
-      - name: 📤 Upload Linux artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: Jarvis-Linux
-          path: dist/Jarvis-Linux-x64.tar.gz
-
-  # Create versioned release (main only, if semantic-release published)
+  # ── Create versioned GitHub release (main only, from stable-stamped builds) ─
   release-main:
-    needs: [semantic-release, build-windows, build-macos, build-linux]
+    needs: [semantic-release, build-stable]
     runs-on: ubuntu-latest
-    # Run even if some builds failed - upload whatever succeeded
     if: always() && needs.semantic-release.result == 'success' && needs.semantic-release.outputs.new_release_published == 'true'
 
     permissions:
       contents: write
+      actions: read  # gh run download reads this run's artifacts
 
     steps:
-      - name: 📥 Download all artifacts
-        uses: actions/download-artifact@v8
-        with:
-          path: artifacts
+      - name: 📥 Download artifacts from build-stable
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Download every platform artifact that build-stable produced in
+          # this run. Fail loudly if any are missing — publishing a release
+          # without its binaries is worse than a failed job.
+          set -euo pipefail
+          missing=0
+          for name in Jarvis-Windows Jarvis-macOS-arm64 Jarvis-macOS-x64 Jarvis-Linux; do
+            echo "Downloading $name..."
+            if ! gh run download ${{ github.run_id }} --repo ${{ github.repository }} \
+              --name "$name" \
+              --dir artifacts; then
+              echo "::error::Missing artifact $name"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "::error::One or more build artifacts are missing; not publishing a release without binaries."
+            exit 1
+          fi
 
       - name: 📋 List available artifacts
         run: |
           echo "Available artifacts:"
-          find artifacts -type f \( -name "*.zip" -o -name "*.tar.gz" \) | sort
+          find artifacts -type f \( -name "*.zip" -o -name "*.tar.gz" \) | sort || echo "(none)"
 
       - name: 📎 Attach binaries to release
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.semantic-release.outputs.new_release_git_tag }}
-          # Use glob to upload only artifacts that exist
           files: |
             artifacts/**/*.zip
             artifacts/**/*.tar.gz
@@ -344,11 +154,27 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # Create/update latest pre-release (develop only)
+      - name: 🧭 Mirror stable build to the develop "latest" channel
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Serve the stable build through the "latest" (develop) channel so
+          # develop builds, and installs mis-stamped as develop (e.g. v2.2.1),
+          # can update to stable through their normal update flow. The next
+          # develop push re-publishes "latest" with a fresh develop build, so
+          # the window closes by itself.
+          FILES=$(find artifacts -type f \( -name "*.zip" -o -name "*.tar.gz" \) | tr '\n' ' ')
+          if [ -z "$FILES" ]; then
+            echo "::warning::No artifacts to mirror to 'latest'"
+            exit 0
+          fi
+          gh release upload latest $FILES --clobber --repo ${{ github.repository }}
+
+  # ── Create/update "latest" pre-release (develop only) ──────────────────
   release-develop:
-    needs: [build-windows, build-macos, build-linux]
+    needs: [build-desktop]
     runs-on: ubuntu-latest
-    # Run even if some builds failed - upload whatever succeeded
     if: always() && github.ref == 'refs/heads/develop'
 
     permissions:
@@ -358,13 +184,12 @@ jobs:
       - name: 📥 Checkout code
         uses: actions/checkout@v5
         with:
-          fetch-depth: 0  # Full history for changelog generation
-          fetch-tags: true  # Ensure all tags are fetched
+          fetch-depth: 0
+          fetch-tags: true
 
       - name: 📝 Generate changelog from main
         id: changelog
         run: |
-          # Get the latest tag on main (most recent stable release)
           LATEST_TAG=$(git describe --tags --abbrev=0 origin/main 2>/dev/null || echo "")
 
           if [ -z "$LATEST_TAG" ]; then
@@ -378,14 +203,12 @@ jobs:
 
           echo "Generating changelog comparing to: $COMPARE_REF"
 
-          # Generate changelog grouped by type
           {
             echo "CHANGELOG<<CHANGELOG_EOF"
             echo ""
             echo "## 📋 Changelog (since $SINCE_TEXT)"
             echo ""
 
-            # Features
             FEATURES=$(git log "$COMPARE_REF"..HEAD --pretty=format:"* %s ([%h](https://github.com/${{ github.repository }}/commit/%H))" --grep="^feat" --regexp-ignore-case 2>/dev/null || true)
             if [ -n "$FEATURES" ]; then
               echo "### ✨ Features"
@@ -394,7 +217,6 @@ jobs:
               echo ""
             fi
 
-            # Bug fixes
             FIXES=$(git log "$COMPARE_REF"..HEAD --pretty=format:"* %s ([%h](https://github.com/${{ github.repository }}/commit/%H))" --grep="^fix" --regexp-ignore-case 2>/dev/null || true)
             if [ -n "$FIXES" ]; then
               echo "### 🐛 Bug Fixes"
@@ -403,7 +225,6 @@ jobs:
               echo ""
             fi
 
-            # Refactoring
             REFACTOR=$(git log "$COMPARE_REF"..HEAD --pretty=format:"* %s ([%h](https://github.com/${{ github.repository }}/commit/%H))" --grep="^refactor" --regexp-ignore-case 2>/dev/null || true)
             if [ -n "$REFACTOR" ]; then
               echo "### ♻️ Code Refactoring"
@@ -412,7 +233,6 @@ jobs:
               echo ""
             fi
 
-            # Documentation
             DOCS=$(git log "$COMPARE_REF"..HEAD --pretty=format:"* %s ([%h](https://github.com/${{ github.repository }}/commit/%H))" --grep="^docs" --regexp-ignore-case 2>/dev/null || true)
             if [ -n "$DOCS" ]; then
               echo "### 📝 Documentation"
@@ -421,8 +241,6 @@ jobs:
               echo ""
             fi
 
-            # Other changes (chore, style, test, etc.)
-            # Get all commits, then exclude the ones we already captured
             OTHER=$(git log "$COMPARE_REF"..HEAD --pretty=format:"%s|%h|%H" 2>/dev/null | grep -v -i -E "^(feat|fix|refactor|docs)" | while IFS='|' read -r subject short full; do
               if [ -n "$subject" ]; then
                 echo "* $subject ([$short](https://github.com/${{ github.repository }}/commit/$full))"
@@ -446,14 +264,13 @@ jobs:
       - name: 📋 List available artifacts
         run: |
           echo "Available artifacts:"
-          find artifacts -type f \( -name "*.zip" -o -name "*.tar.gz" \) | sort
+          find artifacts -type f \( -name "*.zip" -o -name "*.tar.gz" \) | sort || echo "(none)"
 
       - name: 📝 Create/Update Latest Release
         uses: softprops/action-gh-release@v3
         with:
           tag_name: latest
           name: Latest Development Build
-          # Use glob to upload only artifacts that exist
           files: |
             artifacts/**/*.zip
             artifacts/**/*.tar.gz
@@ -486,4 +303,3 @@ jobs:
             **Date**: ${{ github.event.head_commit.timestamp }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-

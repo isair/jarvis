@@ -1,18 +1,21 @@
 ---
-name: review-pr
+name: review-pr-ultra
 description: >
-  Multi-agent adversarial PR review. Spawns parallel specialist agents
-  (correctness, security, performance, maintainability, completeness) then
-  a verifier agent that challenges every finding. Only verified issues survive.
-  Accepts an optional PR number or URL; defaults to the current branch's open PR.
+  Heavyweight multi-agent adversarial PR review. Spawns 5 parallel specialist
+  agents (correctness, security, performance, maintainability, completeness)
+  then a verifier agent that challenges every finding. Only verified issues
+  survive. Use for high-risk changes, security-sensitive areas, large diffs,
+  or when the user asks for a deep/thorough/ultra review. For routine reviews,
+  prefer `/review-pr` — it's cheaper and faster.
 argument-hint: "[PR number or URL]"
 ---
 
 # Multi-Agent Adversarial PR Review
 
 You are an orchestrator for a thorough, multi-perspective pull request review.
-Your job is to gather PR context, spawn specialist review agents in parallel,
-then run a verification pass to filter out false positives.
+Spawn specialist review agents in parallel, then run a verification pass to
+filter out false positives. Higher token cost than `/review-pr` — use
+intentionally.
 
 ## Step 1 — Gather PR Context
 
@@ -20,20 +23,17 @@ Determine the PR to review:
 - If `$ARGUMENTS` is provided, use it (a PR number, URL, or branch name).
 - Otherwise, detect the current branch and find its open PR.
 
-Use the GitHub MCP tools (or `gh` CLI if MCP is unavailable) to fetch:
-1. **PR metadata**: title, body, author, base branch, labels
-2. **Full diff**: the complete code diff
-3. **Changed file list**: just the filenames for targeted exploration
-4. **PR comments/reviews**: any existing review feedback
-5. **CI status**: check if CI is passing or failing
+```bash
+gh pr view <PR> --json title,body,author,baseRefName,headRefOid,labels,files,additions,deletions,commits,reviews,comments,statusCheckRollup
+gh pr diff <PR>
+```
 
-Also read the project's `CLAUDE.md` for coding conventions the review should enforce.
-
-Store all this context — you will include it in each specialist agent's prompt.
+Read the project's `AGENTS.md` for coding conventions the review should enforce.
+Store all context — include it in each specialist agent's prompt.
 
 ## Step 2 — Spawn Specialist Agents (Parallel)
 
-Launch **all five** specialist agents simultaneously using the Agent tool.
+Launch **all five** specialist agents simultaneously using the task tool.
 Each agent receives the full diff, changed file list, PR description, and
 project conventions. Each must output a structured list of findings.
 
@@ -62,14 +62,18 @@ Focus: Efficiency and scalability.
 - Memory leaks, unbounded growth (queues, buffers, caches)
 - Unnecessary I/O, redundant network calls
 
-### Agent 4: Maintainability Reviewer
-Focus: Design quality and readability.
-- SOLID principle violations, excessive coupling
+### Agent 4: Maintainability & Simplicity Reviewer
+Focus: Design quality, readability, and simplicity.
+- SOLID principle violations, excessive coupling, low cohesion
 - Code duplication (DRY violations)
 - Naming clarity (variables, functions, classes)
 - Missing or misleading comments/docstrings
-- Overly complex logic that could be simplified
-- Inconsistency with project conventions (from CLAUDE.md)
+- Overly complex logic: nested control flow, cleverness that obscures intent,
+  or high cognitive load where a more direct expression would do
+- Unnecessary abstraction, indirection, or over-engineering (e.g. frameworks,
+  generics, or extra layers a straightforward implementation would avoid)
+- Dead code, unused parameters/imports, leftover debug statements
+- Inconsistency with project conventions (from AGENTS.md)
 
 ### Agent 5: Completeness Reviewer
 Focus: What's missing.
@@ -86,7 +90,7 @@ Each agent's prompt MUST include:
 1. The full diff
 2. The changed file list
 3. The PR description
-4. Relevant project conventions from CLAUDE.md
+4. Relevant project conventions from AGENTS.md
 5. Instruction to READ the surrounding code in changed files (not just the diff lines) for full context
 6. Instruction to output findings as a structured list:
 
@@ -159,7 +163,15 @@ Collect all VERIFIED and DOWNGRADED findings. Produce a final review report:
 <Brief justification>
 ```
 
-### Rules for the Final Report
+### Verdict rules
+
+| State | Verdict |
+|-------|---------|
+| ≥ 1 VERIFIED critical or high | **REQUEST_CHANGES** |
+| All highs downgraded; only mediums verified | **COMMENT** |
+| No verified ≥ medium | **APPROVE** |
+
+### Report rules
 - Lead with the most important issues
 - Be specific: include file paths, line numbers, and code snippets
 - Be constructive: every criticism must include a concrete suggestion
@@ -167,12 +179,58 @@ Collect all VERIFIED and DOWNGRADED findings. Produce a final review report:
 - If no critical/high issues exist, lean towards APPROVE
 - Use the project's conventions (British English, emojis for emphasis)
 
+## Step 5 — Present and Ask for Go-Ahead
+
+After the report is ready, offer to post it to GitHub as inline comments. Use
+the `ask` tool:
+
+```markdown
+**Review complete for #{pr_number}.** Ready to post to GitHub?
+
+I can post the verified findings as inline comments (one review, anchored to
+specific lines) with a brief summary body. The full report is above.
+```
+
+Only proceed after user confirmation. Do not post automatically.
+
+## Step 6 — Post to GitHub (on confirmation)
+
+Post a single review with all inline comments in one API call:
+
+```bash
+gh pr view <PR> --json headRefOid
+```
+
+```bash
+gh api repos/<owner>/<repo>/pulls/<PR>/reviews --input - <<'EOF'
+{
+  "commit_id": "<HEAD_SHA>",
+  "event": "APPROVE",
+  "body": "<2-3 line summary>",
+  "comments": [
+    { "path": "src/file.py", "line": 42, "body": "<terse note>" }
+  ]
+}
+EOF
+```
+
+| Verdict | `event` |
+|---------|---------|
+| APPROVE | `APPROVE` |
+| REQUEST_CHANGES | `REQUEST_CHANGES` |
+| COMMENT | `COMMENT` |
+
+- `line` is the 1-indexed line in the post-change file (right side), must fall within a changed hunk.
+- `commit_id` — set to the PR head SHA to avoid resolution issues.
+- `body` — keep it to 2–3 lines; the full report is already in-thread.
+- Do NOT post individual comments via `POST /pulls/{number}/comments` — that creates separate threads. The `reviews` endpoint with a `comments` array keeps them together.
+- Only include VERIFIED findings (severity >= medium). Write each as a terse, conversational dev note — one point, fix implied.
+- Lead with the highest-severity finding first.
+- Confirm the PR URL and verdict once posted.
+
 ## Important Guidelines
 
 - **Do NOT make changes to code** — this is a read-only review
-- **Do NOT post the review to GitHub** unless explicitly asked
 - **Be thorough but not noisy** — quality over quantity
 - **Respect the author's intent** — understand why before criticising what
-- Each specialist agent should use `subagent_type: "Explore"` for efficient codebase reading
-- The verifier agent should use `subagent_type: "general-purpose"` for deeper reasoning
 - When spawning agents, always include the full diff and context in the prompt — agents have no memory of this conversation

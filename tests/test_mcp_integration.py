@@ -120,3 +120,44 @@ def test_mcp_error_handling_in_context():
         
         assert result.success is False
         assert result.error_message == "Tool failed"
+
+
+@pytest.mark.integration
+def test_mcp_exception_with_empty_message_still_yields_diagnosable_error():
+    """A bare exception (e.g. ``concurrent.futures.TimeoutError()``) with an
+    empty ``str(e)`` must not collapse the error message down to a bare
+    trailing colon — callers need at least the exception type name to
+    diagnose the failure from the log line alone.
+    """
+    from jarvis.tools.registry import run_tool_with_retries
+
+    class MockDB:
+        pass
+
+    class MockConfig:
+        def __init__(self):
+            self.mcps = {"test-server": {"command": "fake"}}
+            self.voice_debug = False
+
+    class TimingOutMCPClient:
+        def __init__(self, config):
+            pass
+
+        def invoke_tool(self, server_name, tool_name, arguments):
+            raise TimeoutError()  # empty str(e), as raised on a bare invoke timeout
+
+    with patch('jarvis.tools.registry.MCPClient', TimingOutMCPClient):
+        result = run_tool_with_retries(
+            db=MockDB(),
+            cfg=MockConfig(),
+            tool_name="test-server__slow_tool",
+            tool_args={},
+            system_prompt="test",
+            original_prompt="test",
+            redacted_text="test",
+            max_retries=0
+        )
+
+        assert result.success is False
+        assert result.error_message.strip().endswith(":") is False
+        assert "TimeoutError" in result.error_message

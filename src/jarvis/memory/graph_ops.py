@@ -35,7 +35,7 @@ from .graph import (
 
 def call_llm_direct(*, cfg, chat_model, system_prompt, user_content,
                     timeout_sec=10.0, thinking=False, num_ctx=4096,
-                    temperature=None):
+                    temperature=None, max_tokens=None):
     """Local indirection: route graph-ops LLM calls through the backend
     configured by ``cfg.llm_provider``. Tests patch this single symbol
     to intercept every LLM round-trip in this module."""
@@ -43,6 +43,7 @@ def call_llm_direct(*, cfg, chat_model, system_prompt, user_content,
         chat_model, system_prompt, user_content,
         timeout_sec=timeout_sec, thinking=thinking,
         num_ctx=num_ctx, temperature=temperature,
+        max_tokens=max_tokens,
     )
 
 
@@ -207,6 +208,7 @@ def extract_graph_memories(
         timeout_sec=timeout_sec,
         thinking=thinking,
         temperature=0.0,
+        max_tokens=300,
     )
 
     if not response:
@@ -302,6 +304,7 @@ def _llm_pick_best_child(
         user_content=user_content,
         timeout_sec=timeout_sec,
         thinking=thinking,
+        max_tokens=50,
     )
 
     if not response:
@@ -634,6 +637,7 @@ def merge_node_data(
         timeout_sec=timeout_sec,
         thinking=thinking,
         temperature=0.0,
+        max_tokens=300,
     )
 
     if not response:
@@ -760,6 +764,7 @@ def auto_split_node(
         user_content=user_content,
         timeout_sec=timeout_sec,
         thinking=thinking,
+        max_tokens=200,
     )
 
     if not response:

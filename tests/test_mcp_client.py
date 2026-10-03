@@ -302,6 +302,182 @@ def test_list_tools_uses_persistent_session(
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("raw", ["soon", "nan", "-5", "0", [], {}])
+def test_resolve_invoke_timeout_rejects_invalid_values(raw):
+    """Non-numeric, non-finite, or non-positive ``timeout_sec`` values must
+    fall back to the safe default rather than being passed through to
+    ``Future.result(timeout=...)``, whose wait semantics are undefined for
+    values like ``nan`` or non-positive numbers.
+    """
+    from jarvis.tools.external.mcp_runtime import (
+        _resolve_invoke_timeout,
+        _DEFAULT_INVOKE_TIMEOUT_SEC,
+    )
+
+    assert _resolve_invoke_timeout({"timeout_sec": raw}) == _DEFAULT_INVOKE_TIMEOUT_SEC
+
+
+@pytest.mark.unit
+def test_list_tools_honours_per_server_timeout_sec(
+    monkeypatch, shutdown_persistent_runtime
+):
+    """Discovery (``list_tools``) must respect the same ``timeout_sec``
+    override as ``invoke_tool`` — a server configured with a long budget
+    because its subprocess is slow to spin up needs that same budget for
+    the first discovery call, not just subsequent tool invocations.
+    """
+    import asyncio
+    import concurrent.futures
+    from jarvis.tools.external.mcp_client import MCPClient
+
+    class SlowConn:
+        async def __aenter__(self_):
+            return object(), object()
+
+        async def __aexit__(self_, *a):
+            return False
+
+    class SlowSession:
+        def __init__(self_, read, write):
+            pass
+
+        async def __aenter__(self_):
+            class _S:
+                async def initialize(_self):
+                    return None
+
+                async def list_tools(_self):
+                    await asyncio.sleep(0.5)
+                    return type("LR", (), {"tools": []})()
+
+            return _S()
+
+        async def __aexit__(self_, *a):
+            return False
+
+    _patch_mcp_doubles(monkeypatch, SlowConn, SlowSession)
+
+    client = MCPClient(
+        {
+            "slow": {
+                "transport": "stdio",
+                "command": "/bin/true",
+                "args": [],
+                "timeout_sec": 0.05,
+            }
+        }
+    )
+
+    with pytest.raises(concurrent.futures.TimeoutError):
+        client.list_tools("slow")
+
+
+@pytest.mark.unit
+def test_invoke_tool_honours_per_server_timeout_sec(
+    monkeypatch, shutdown_persistent_runtime
+):
+    """A server config's ``timeout_sec`` must bound how long ``invoke_tool``
+    waits for a slow tool, overriding the runtime's 120s default. Without
+    this, servers whose tools legitimately run long (e.g. delegating a
+    dev task to an external agent) cannot opt into a longer budget, and
+    fast servers cannot opt into a shorter one to fail fast.
+    """
+    import asyncio
+    import concurrent.futures
+    from jarvis.tools.external.mcp_client import MCPClient
+
+    class SlowConn:
+        async def __aenter__(self_):
+            return object(), object()
+
+        async def __aexit__(self_, *a):
+            return False
+
+    class SlowSession:
+        def __init__(self_, read, write):
+            pass
+
+        async def __aenter__(self_):
+            class _S:
+                async def initialize(_self):
+                    return None
+
+                async def call_tool(_self, name, arguments):
+                    await asyncio.sleep(0.5)
+                    return type("R", (), {"content": "done", "isError": False, "meta": None})()
+
+            return _S()
+
+        async def __aexit__(self_, *a):
+            return False
+
+    _patch_mcp_doubles(monkeypatch, SlowConn, SlowSession)
+
+    client = MCPClient(
+        {
+            "slow": {
+                "transport": "stdio",
+                "command": "/bin/true",
+                "args": [],
+                "timeout_sec": 0.05,
+            }
+        }
+    )
+
+    with pytest.raises(concurrent.futures.TimeoutError):
+        client.invoke_tool("slow", "alpha", {})
+
+
+@pytest.mark.unit
+def test_invoke_tool_defaults_timeout_when_unset(
+    monkeypatch, shutdown_persistent_runtime
+):
+    """When a server config has no ``timeout_sec``, the runtime must still
+    fall back to its module-level default rather than waiting forever.
+    """
+    import asyncio
+    import concurrent.futures
+    from jarvis.tools.external.mcp_client import MCPClient
+    from jarvis.tools.external import mcp_runtime as _runtime_mod
+
+    monkeypatch.setattr(_runtime_mod, "_DEFAULT_INVOKE_TIMEOUT_SEC", 0.05)
+
+    class SlowConn:
+        async def __aenter__(self_):
+            return object(), object()
+
+        async def __aexit__(self_, *a):
+            return False
+
+    class SlowSession:
+        def __init__(self_, read, write):
+            pass
+
+        async def __aenter__(self_):
+            class _S:
+                async def initialize(_self):
+                    return None
+
+                async def call_tool(_self, name, arguments):
+                    await asyncio.sleep(0.5)
+                    return type("R", (), {"content": "done", "isError": False, "meta": None})()
+
+            return _S()
+
+        async def __aexit__(self_, *a):
+            return False
+
+    _patch_mcp_doubles(monkeypatch, SlowConn, SlowSession)
+
+    client = MCPClient(
+        {"nolimit": {"transport": "stdio", "command": "/bin/true", "args": []}}
+    )
+
+    with pytest.raises(concurrent.futures.TimeoutError):
+        client.invoke_tool("nolimit", "alpha", {})
+
+
+@pytest.mark.unit
 def test_absolute_path_command_skips_which(monkeypatch, tmp_path):
     """Absolute paths to executables should use os.path.isfile, not shutil.which."""
     from jarvis.tools.external.mcp_client import MCPClient
@@ -457,6 +633,58 @@ def test_mcp_client_list_and_invoke(monkeypatch):
     res = asyncio.run(client.invoke_tool_async("fake", "alpha", {"x": 1}))
     assert res["content"] == "called:alpha:{'x': 1}"
     assert res.get("isError") is False
+    assert res["text"] == "called:alpha:{'x': 1}"
+
+
+@pytest.mark.unit
+class TestFlattenContent:
+    """_flatten_content must extract usable text from real MCP SDK content
+    blocks (mcp.types.TextContent etc.), which are pydantic models, not
+    plain dicts. Reproduces a live-observed bug: a real stdio server's
+    response content fell through to ``str(pydantic_model)``, producing a
+    repr string like "type='text' text='...' annotations=None meta=None"
+    instead of the actual text — silently corrupting every downstream
+    consumer of ``invoke_tool``'s "text" field."""
+
+    def test_extracts_text_from_real_sdk_text_content(self):
+        from mcp.types import TextContent
+        from jarvis.tools.external.mcp_client import _flatten_content
+
+        block = TextContent(type="text", text="hello world")
+        assert _flatten_content([block]) == "hello world"
+
+    def test_extracts_text_from_multiple_real_sdk_text_content_blocks(self):
+        from mcp.types import TextContent
+        from jarvis.tools.external.mcp_client import _flatten_content
+
+        blocks = [
+            TextContent(type="text", text="first"),
+            TextContent(type="text", text="second"),
+        ]
+        assert _flatten_content(blocks) == "first\nsecond"
+
+    def test_still_handles_plain_dict_content(self):
+        from jarvis.tools.external.mcp_client import _flatten_content
+
+        assert _flatten_content([{"type": "text", "text": "plain dict"}]) == "plain dict"
+
+    def test_still_handles_plain_string_content(self):
+        from jarvis.tools.external.mcp_client import _flatten_content
+
+        assert _flatten_content("already a string") == "already a string"
+
+    def test_result_to_dict_uses_real_text_not_repr(self):
+        from mcp.types import TextContent
+        from jarvis.tools.external.mcp_client import _result_to_dict
+
+        class FakeResponse:
+            def __init__(self):
+                self.content = [TextContent(type="text", text='{"content": "note body"}')]
+                self.isError = False
+                self.meta = None
+
+        result = _result_to_dict(FakeResponse())
+        assert result["text"] == '{"content": "note body"}'
 
 
 @pytest.mark.unit

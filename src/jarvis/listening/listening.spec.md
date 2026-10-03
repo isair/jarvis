@@ -4,6 +4,49 @@ This document outlines the voice listening architecture. The system uses a **tra
 
 ## Architecture Overview
 
+### Capture format and health
+
+The input stream tries mono at the configured sample rate. Unsupported channel
+counts or sample rates trigger bounded retries on the same selected input:
+mono, stereo and the device's advertised maximum channel count, at the configured
+and native rates, without duplicate attempts. Access and device-availability
+errors are not retried as format failures. Both the Windows permission probe and
+continuous capture use this negotiation and input selection. Name matching skips
+output-only devices; a missing named microphone produces an actionable error
+rather than silently selecting another input. Multichannel samples are averaged
+to mono before framing and speech detection.
+
+Frames always span the configured 10, 20 or
+30 ms at the actual capture rate; unsupported frame durations use 20 ms. Partial
+callback blocks are retained until a complete frame is available and discarded
+on audio-state resets. WebRTC VAD receives a 16 kHz mono PCM copy, including when
+the hardware captures at 44.1 or 48 kHz. Utterances retain native-rate samples
+until resampling for Whisper, preserving their duration.
+
+VAD errors emit a single warning and use the configured energy threshold instead
+of silently discarding speech. Capture health is checked every five seconds with
+a monotonic clock. Missing callbacks, silent samples, callback errors, PortAudio
+status flags and dropped queue blocks are reported outside the audio callback.
+Warnings are transition-based; dictation pauses suspend health checks. With
+`voice_debug`, diagnostics include callback/frame counts, speech-frame counts,
+peak level and capture rate, without saving microphone audio. Linux warnings
+point users to PipeWire/PulseAudio recording-source routing.
+
+Audio-frame processing is limited to VAD and utterance assembly. Completed
+utterances are enqueued for a single FIFO Whisper worker. Transcription results
+return to the listener loop in order, where transcript storage and intent
+processing remain serialised. The bounded transcription backlog reports an
+explicit warning when full rather than blocking microphone-frame consumption
+or silently losing an utterance. A dictation pause clears captured audio and
+invalidates transcription work started before the pause, including a decode
+that finishes after dictation resumes. Listener shutdown discards pending
+transcriptions and results; an in-progress Whisper call is given a bounded
+grace period and cannot dispatch a late transcript. Transcript echo flags use
+the utterance capture interval against TTS timing. The job carries that
+capture-time context through Whisper to echo rejection, stop-command handling
+and intent processing, so later TTS playback cannot reclassify an older
+utterance.
+
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                         Audio Stream                            │
@@ -105,7 +148,7 @@ The intent judge receives full context and makes intelligent decisions:
 
 **Wake-word removal in the extracted query:** The wake word is addressed TO the assistant, never part of the query content. The judge prompt explicitly instructs removing every occurrence of the wake word from the extracted `query` — at the start, end, or middle of the sentence, including when it sits next to a named entity (e.g. "movie called Possessor Jarvis" → film is "Possessor", not "Possessor Jarvis"). The only exception is when the user is literally talking *about* the assistant as a subject ("tell me about Jarvis"). This is enforced by prompt rule + example rather than post-hoc string stripping, because the LLM already understands the semantic distinction and can handle cases a regex would mishandle (e.g. proper names that contain the wake word, like "Jarvis Cocker").
 
-**Model residency (`keep_alive: 30m`):** Each intent-judge request asks Ollama to keep the model resident for 30 minutes after the call. This avoids cold reloads between utterances — without it, Ollama evicts the model after its default 5-minute idle window and the next judge call pays the full reload cost (seconds of extra latency), which is long enough to hit `intent_judge_timeout_sec` and abort. The trade-off is memory: the judge model (default `gemma4:e2b`, ~2 GB) stays resident in RAM/VRAM during active voice sessions. On memory-constrained devices the user can switch to a smaller judge model or override `keep_alive` via a custom Ollama setup.
+**Model residency (`keep_alive`):** Each intent-judge request asks Ollama to keep the model resident after the call. The default duration is 30 minutes, which avoids cold reloads between utterances. When `cfg.low_power_mode` is true, the duration is 1 minute so the model can unload soon after an active exchange. The trade-off is latency: low-power sessions can pay a cold-load cost after idle periods, while default sessions keep the judge model (default `gemma4:e2b`, ~2 GB) in RAM/VRAM during active voice use.
 
 ## Startup & Model Warmup
 
@@ -130,8 +173,12 @@ On small models, a caveat line is appended above a more involved example to set 
 
 **What gets warmed:**
 - **Whisper** — loading the model; additionally a silent-audio transcribe so the first real utterance doesn't pay the cold-decode cost. Both the MLX and faster-whisper backends do this.
-- **Chat model** (`cfg.llm_chat_model`) — verifies the server is actually Ollama via `GET /api/version`, then issues a minimal `/api/generate` request with `keep_alive=30m` so the weights stay resident.
+- **Chat model** (`cfg.llm_chat_model`) — verifies the server is actually Ollama via `GET /api/version`, then issues a minimal `/api/generate` request with the power-mode `keep_alive` (`30m` normally, `1m` in low-power mode) so the weights stay resident.
 - **Intent judge model** (the fast tier: `resolve_model(cfg, Tier.FAST)`) — same pattern. If it points at the same Ollama model as the chat model, a single warmup covers both roles (Ollama loads the weights once).
+
+**Whisper backend/model capability:** Auto mode prefers MLX on Apple Silicon only when `mlx-whisper` imports successfully. An explicit `faster-whisper` preference disables MLX, and an explicit `mlx` preference falls back to faster-whisper when MLX is unavailable. `large-v3-turbo` is supported by MLX or by faster-whisper 1.1.0 and newer. If the configuration selects turbo on an unsupported faster-whisper backend, startup loads `medium` instead and prints a warning pointing to Whisper settings or the setup wizard.
+
+**Low-power mode:** When `cfg.low_power_mode` is true, the listener skips chat and intent-judge warmup threads and prints `🌱 Low power mode: LLM warmup skipped`. Whisper still warms because speech recognition needs to be ready before the listener can accept input. The first LLM-backed engagement after startup or idle loads models on demand.
 
 **Concurrency:** LLM warmups run in daemon threads started before Whisper loads, so they overlap with Whisper initialisation. After Whisper finishes, the listener joins the warmup threads with a **single 60 s budget** shared across them all. If the budget is exhausted, the listener continues (with a `⏳ Some models still warming — continuing anyway` notice) and the first engagement pays the cold-load cost on demand.
 
@@ -300,6 +347,35 @@ If the intent judge later rejects the query (and no hot window override applies)
 
 **Face state is not set during TTS** — the beep is suppressed while TTS is playing to avoid self-triggering.
 
+## Low-Confidence Rejection Events
+
+`VoiceListener` accepts an optional keyword-only `on_low_confidence` callback.
+Both faster-whisper and MLX emit one immutable `LowConfidenceEvent` per segment
+discarded because its confidence is below `whisper_min_confidence`, including
+very low-confidence segments that only appear in debug logs. The event contains:
+
+- `confidence`: the same score used by the rejection check.
+- `transcript`: the full raw segment text, without trimming or truncation.
+- `reason`: `"low_confidence"`.
+
+The event is available from `jarvis.listening`. Rejection events travel with
+their transcription result and are emitted in segment order on the listener
+thread after the result passes shutdown and dictation-generation checks. An
+invalidated result emits no events, and invalidation during a callback stops
+further event delivery and transcript processing. The callback runs
+synchronously and must not block. Consumers that need to update another thread
+must enqueue their own work. Callback exceptions are logged by exception type,
+without payloads, and do not interrupt voice processing. Events are held only
+until their transcription result is processed; the listener does not persist
+them.
+
+Segments rejected by the earlier no-speech gate do not emit low-confidence
+events. Accepted segments and segments without confidence metadata retain their
+existing backend-specific filtering behaviour. These events do not trigger TTS,
+UI updates, transcript-buffer entries, or query dispatch; accepted speech in a
+mixed utterance continues through the normal pipeline. Without a callback, the
+listener filters and logs rejected segments without notifying any consumer.
+
 ## Configuration
 
 ```json
@@ -307,7 +383,7 @@ If the intent judge later rejects the query (and no hot window override applies)
   "transcript_buffer_duration_sec": 120,
 
   "fast_model": "gemma4:e2b",
-  "intent_judge_timeout_sec": 15.0,
+  "intent_judge_timeout_sec": 6.0,
 
   "hot_window_seconds": 3.0,
   "echo_tolerance": 0.3
@@ -353,7 +429,11 @@ Main Loop: Get Frames → VAD Check
     ↓
 Speech Detected → Accumulate Frames
     ↓
-Silence Timeout → Whisper Transcription
+Silence Timeout → Bounded FIFO Transcription Jobs
+    ↓
+Serial Whisper Worker → Transcription Results
+    ↓
+Main Loop: Transcript and Intent Processing
     ↓
 Add to Transcript Buffer (with timestamps)
     ↓
@@ -378,12 +458,20 @@ When components are unavailable, the system degrades gracefully:
 | Component | Unavailable Behaviour |
 |-----------|---------------------|
 | Intent Judge | Simple text-based wake word + query extraction; hot window override still applies |
-| 16 kHz sample rate | Stream at device native rate, resample to 16 kHz for Whisper |
+| Unsupported input format | Retry channel count and native sample rate on the selected device, then convert to 16 kHz mono for Whisper |
 | Transcript Buffer | Process each utterance independently |
 
 ## Download Recovery
 
 Whisper model loading handles transient download failures automatically:
+
+### Download and loading visibility
+
+LLM startup messages report warmup probe results, not role readiness. Chat, judge and router roles sharing one model share one reported probe; the configured intent deadline is displayed separately, with an explicit notice that the full intent request was not tested. Embeddings always use their own embedding-endpoint probe, even when configured with the same model name. Failure directs users to model availability/settings rather than promising success on first use.
+
+MLX Whisper prepares files through Hugging Face's snapshot cache before loading the model. The desktop displays the Hub's native per-file byte progress rather than an outer file-count bar. Existing caching, authentication, offline cache fallback and transfer resume remain owned by the Hub. The resulting local path is used for both warmup and subsequent transcription so the in-memory MLX model is reused.
+
+Startup distinguishes checking/downloading model files, loading into memory and warming up, and model readiness. Starting the listener thread is not reported as voice readiness. A failed download does not emit a loading or ready message.
 
 ### Corrupted Cache Recovery
 

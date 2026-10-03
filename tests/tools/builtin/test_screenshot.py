@@ -29,7 +29,11 @@ class TestScreenshotTool:
     @patch('subprocess.run')
     def test_run_success(self, mock_run, mock_which):
         """Test successful screenshot capture with inlined OCR logic."""
-        # Lightweight stubs so dynamic imports succeed without heavy deps
+        # Lightweight stubs so dynamic imports succeed without heavy deps.
+        # Saved and restored so the stubs don't leak into later tests that
+        # import the real pytesseract / PIL modules.
+        _saved_modules = {name: sys.modules.get(name) for name in
+                          ("pytesseract", "PIL", "PIL.Image")}
         class _StubImgCtx:
             def __enter__(self):
                 return self
@@ -55,11 +59,18 @@ class TestScreenshotTool:
         mock_proc.returncode = 0
         mock_run.return_value = mock_proc
 
-        with patch('tempfile.mkdtemp', return_value='/tmp/jarvis_ocr_test'), \
-             patch('os.path.exists', return_value=True), \
-             patch('os.remove'), \
-             patch('os.rmdir'):
-            result = self.tool.run({}, self.context)
+        try:
+            with patch('tempfile.mkdtemp', return_value='/tmp/jarvis_ocr_test'), \
+                 patch('os.path.exists', return_value=True), \
+                 patch('os.remove'), \
+                 patch('os.rmdir'):
+                result = self.tool.run({}, self.context)
+        finally:
+            for _name, _saved in _saved_modules.items():
+                if _saved is None:
+                    sys.modules.pop(_name, None)
+                else:
+                    sys.modules[_name] = _saved
 
         assert isinstance(result, ToolExecutionResult)
         assert result.success is True

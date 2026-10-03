@@ -39,7 +39,7 @@ def _cfg(**overrides):
         "ollama_chat_model": "gemma4:e2b",
         "fast_model": "",
         "planner_enabled": True,
-        "planner_timeout_sec": 6.0,
+        "planner_timeout_sec": 3.0,
     }
     base.update(overrides)
     # Mirror config load: Settings always carries the resolved active chat
@@ -641,11 +641,12 @@ class TestToolStepsOf:
     def test_multi_step_drops_final_synthesis_step(self):
         assert tool_steps_of(["a", "b", "reply"]) == ["a", "b"]
 
-    def test_single_step_has_no_tool_steps(self):
-        """A 1-step plan is reply-only by contract (rule 9), so it
-        contributes no tool steps. Engine uses this to skip the
-        direct-exec path and the progress nudge for pure-reply plans."""
-        assert tool_steps_of(["only"]) == []
+    def test_single_reply_step_has_no_tool_steps(self):
+        """A 1-step 'Reply to the user.' plan has no tool steps.
+        A 1-step tool plan like 'webSearch query='foo'' IS a tool step."""
+        assert tool_steps_of(["Reply to the user."]) == []
+        assert tool_steps_of(["Synthesis complete."]) == []
+        assert tool_steps_of(["webSearch query='foo'"]) == ["webSearch query='foo'"]
 
     def test_empty_plan(self):
         assert tool_steps_of([]) == []
@@ -791,3 +792,86 @@ class TestPlanHasUnresolvedToolSteps:
         assert plan_has_unresolved_tool_steps(
             plan, ["chrome-devtools__navigate_page"]
         ) is False
+
+
+class TestStopOnlyPlanGuard:
+    """Post-plan guard in plan_query rejects stop-only plans."""
+
+    def test_stop_only_plan_returns_empty(self):
+        cfg = _cfg()
+        with patch.object(planner_mod, "call_llm_direct", return_value="stop"):
+            steps = plan_query(
+                cfg,
+                "why haven't you answered me",
+                "user: how's the weather?\nassistant: I can check that for you.",
+                [("getWeather", "Weather tool"), ("stop", "Stop tool")],
+            )
+        assert steps == [], (
+            "stop-only plan should be rejected and return empty list, "
+            "so the engine falls through to the tool router + chat model"
+        )
+
+    def test_case_variants_rejected(self):
+        """Guard handles case-insensitive stop variants."""
+        cfg = _cfg()
+        for variant in ["Stop", "STOP", "  stop  "]:
+            with patch.object(planner_mod, "call_llm_direct",
+                              return_value=variant):
+                steps = plan_query(
+                    cfg, "go away", "",
+                    [("stop", "Stop tool")],
+                )
+            assert steps == [], f"'{variant}' should be rejected"
+
+    def test_punctuated_stop_rejected(self):
+        """Guard strips trailing punctuation like 'stop.' or 'stop!'."""
+        cfg = _cfg()
+        for variant in ["stop.", "stop!", "stop?", "Stop."]:
+            with patch.object(planner_mod, "call_llm_direct",
+                              return_value=variant):
+                steps = plan_query(
+                    cfg, "go away", "",
+                    [("stop", "Stop tool")],
+                )
+            assert steps == [], f"'{variant}' should be rejected"
+
+    def test_multiple_stop_steps_also_rejected(self):
+        cfg = _cfg()
+        with patch.object(planner_mod, "call_llm_direct",
+                          return_value="stop\nstop"):
+            steps = plan_query(
+                cfg,
+                "just go away",
+                "",
+                [("stop", "Stop tool")],
+            )
+        assert steps == []
+
+    def test_stop_as_part_of_multi_step_plan_preserved(self):
+        """stop as one step among others is not rejected — the guard
+        only fires when EVERY step is a stop."""
+        cfg = _cfg()
+        with patch.object(planner_mod, "call_llm_direct",
+                          return_value="webSearch query='weather'\nstop"):
+            steps = plan_query(
+                cfg,
+                "check the weather",
+                "",
+                [("webSearch", "Web search"), ("stop", "Stop tool")],
+            )
+        assert len(steps) == 2
+
+
+class TestPlannerPromptRule13:
+    """Rule 13 forbids emitting 'stop' as a plan step."""
+
+    def test_prompt_contains_stop_rule(self):
+        prompt = planner_mod._PROMPT_TEMPLATE.lower()
+        assert "never emit `stop`" in prompt, (
+            "Planner prompt must explicitly forbid emitting 'stop' "
+            "as a plan step (rule 13)."
+        )
+        assert "main assistant decides when to stop" in prompt, (
+            "Rule 13 must explain that the main assistant handles "
+            "termination at runtime."
+        )

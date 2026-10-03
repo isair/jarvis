@@ -108,42 +108,56 @@ class TestBuildEnrichmentContextHint:
 
 
 class TestExtractorPromptRendering:
-    """Prompt construction should not crash on tricky context_hint inputs."""
+    """Prompt construction should not crash on tricky context_hint inputs,
+    and must keep the system prompt byte-static for KV prefix reuse."""
 
-    def _run_and_capture_prompt(self, **kwargs) -> str:
+    def _run_and_capture_prompt(self, **kwargs) -> dict:
         captured = {}
 
         def fake_call(**call_kwargs):
             captured["system_prompt"] = call_kwargs["system_prompt"]
+            captured["user_content"] = call_kwargs["user_content"]
             return '{"keywords": []}'
 
         with patch("jarvis.reply.enrichment.call_llm_direct", side_effect=fake_call):
             extract_search_params_for_memory(
                 "dummy query", _cfg(), "m", timeout_sec=1.0, **kwargs
             )
-        return captured["system_prompt"]
+        return captured
 
     def test_no_hint_falls_back_to_utc_timestamp(self):
         # Behaviour: with no hint, the extractor still gets a current-time anchor
         # (UTC fallback) so it can resolve relative time phrases.
-        prompt = self._run_and_capture_prompt()
-        assert "UTC" in prompt
+        captured = self._run_and_capture_prompt()
+        assert "UTC" in captured["user_content"]
 
     def test_hint_is_injected_and_utc_fallback_dropped(self):
         # Use a value that can only have come from the hint, so the assertion
         # survives prompt rewording as long as the hint is actually threaded in.
         hint_marker = "Tbilisi, Georgia"
-        fallback_marker = "fallback-sentinel-utc"
-        hint_prompt = self._run_and_capture_prompt(
+        hint_captured = self._run_and_capture_prompt(
             context_hint=f"Current local time: ... . Location: {hint_marker}."
         )
-        no_hint_prompt = self._run_and_capture_prompt()
-        assert hint_marker in hint_prompt
+        no_hint_captured = self._run_and_capture_prompt()
+        assert hint_marker in hint_captured["user_content"]
         # The UTC fallback injects a marker that is present in the no-hint case;
         # that same marker must NOT appear when a hint is supplied (dedup).
         fallback_signature = "Current date/time:"
-        assert fallback_signature in no_hint_prompt
-        assert fallback_signature not in hint_prompt
+        assert fallback_signature in no_hint_captured["user_content"]
+        assert fallback_signature not in hint_captured["user_content"]
+
+    def test_system_prompt_is_static_across_calls(self):
+        # KV-cache discipline: the system prompt must not change between calls
+        # (no hint block, no live timestamp) so the server's prefix cache can
+        # reuse it. Per-call data lives in the user message.
+        no_hint = self._run_and_capture_prompt()
+        with_hint = self._run_and_capture_prompt(
+            context_hint="Current local time: ... . Location: Tbilisi, Georgia."
+        )
+        assert no_hint["system_prompt"] == with_hint["system_prompt"]
+        assert "{hint_block}" not in no_hint["system_prompt"]
+        assert "Current date/time:" not in no_hint["system_prompt"]
+        assert "Tbilisi" in with_hint["user_content"]
 
     def test_extract_returns_empty_dict_when_no_usable_response(self):
         with patch("jarvis.reply.enrichment.call_llm_direct", return_value=""):
@@ -176,12 +190,13 @@ class TestExtractorPromptRendering:
         mock_call.assert_not_called()
 
     def test_braces_in_hint_do_not_break_format(self):
-        # User dialogue could contain literal '{' or '}'. The outer .format must
-        # treat the hint as a literal string, not re-interpret placeholders.
+        # User dialogue could contain literal '{' or '}'. The hint must flow
+        # through verbatim into the user message, never through a .format
+        # template that would re-interpret the braces.
         hint = "Recent dialogue:\n- user: try running {env.HOME} or {{notathing}}"
-        prompt = self._run_and_capture_prompt(context_hint=hint)
-        assert "{env.HOME}" in prompt
-        assert "{{notathing}}" in prompt
+        captured = self._run_and_capture_prompt(context_hint=hint)
+        assert "{env.HOME}" in captured["user_content"]
+        assert "{{notathing}}" in captured["user_content"]
 
 
 class TestGraphEnrichmentGating:

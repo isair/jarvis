@@ -71,6 +71,7 @@ Each server entry in `config.mcps` is a dict consumed by
 | Key | Type | Default | Effect |
 |-----|------|---------|--------|
 | `idle_timeout_sec` | float \| null | null | If set, the worker self-terminates after that many seconds with an empty queue. Stateful servers (browser automation) must leave this unset. |
+| `timeout_sec` | float \| null | 120 (`_DEFAULT_INVOKE_TIMEOUT_SEC`) | Bounds a single `call_tool` round trip and `list_tools` discovery. Servers whose tools legitimately run long (e.g. delegating a task to an external CLI agent) should raise this; a bare `concurrent.futures.TimeoutError` propagates on expiry. Non-finite or non-positive values fall back to the default. |
 
 ## Test contract
 
@@ -85,6 +86,14 @@ verified there:
 - A failure during subprocess spawn propagates to the caller rather
   than hanging.
 - Distinct servers do not share workers.
+- `timeout_sec` overrides the default for `invoke_tool` and `list_tools`.
+- Invalid `timeout_sec` values (non-finite, non-positive, `bool`, or
+  unparseable) fall back to the default and log a diagnostic.
+- `invoke_tool` accepts an optional per-call ``timeout`` override.
+- `list_tools` accepts an optional per-call ``timeout`` override,
+  mirroring `invoke_tool`.
+- An exception with an empty `str(e)` (e.g. bare `TimeoutError`)
+  produces a diagnosable error message via type-name fallback.
 
 ## Non-goals
 

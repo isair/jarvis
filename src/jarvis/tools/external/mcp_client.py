@@ -319,8 +319,7 @@ def _flatten_content(content: Any) -> str:
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        parts = [_flatten_content(item) for item in content]
-        return "\n".join([p for p in parts if p])
+        return "\n".join(filter(None, (_flatten_content(item) for item in content)))
     if isinstance(content, dict):
         if "text" in content:
             return str(content.get("text") or "")
@@ -330,6 +329,13 @@ def _flatten_content(content: Any) -> str:
             return str(content)
         except Exception:
             return ""
+    # Real MCP SDK content blocks (mcp.types.TextContent models) are
+    # pydantic models, not dicts — pull `.text` directly. Falling through to
+    # str(model) instead produces a repr like "type='text' text='...'
+    # annotations=None meta=None" rather than the actual text.
+    text_attr = getattr(content, "text", None)
+    if isinstance(text_attr, str):
+        return text_attr
     try:
         return str(content)
     except Exception:

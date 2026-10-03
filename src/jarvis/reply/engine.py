@@ -534,6 +534,7 @@ _HINT_MESSAGE_CHAR_LIMIT = 200
 # than a fact note.
 _DIGEST_SKIP_TOOLS = frozenset({
     "getWeather",
+    "getTime",
 })
 
 
@@ -778,7 +779,8 @@ def _build_enrichment_context_hint(cfg, recent_messages: list) -> Optional[str]:
 
 def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     text: str, dialogue_memory: "DialogueMemory",
-                    language: Optional[str] = None) -> Optional[str]:
+                    language: Optional[str] = None,
+                    quiet: bool = False) -> Optional[str]:
     """
     Main entry point for reply generation.
 
@@ -793,6 +795,11 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             web_search can pick locale-appropriate resources (e.g. the
             right Wikipedia host). None when invoked outside the voice
             path — tools then fall back to their own default.
+        quiet: When True, the reply is not printed to stdout. The text-chat
+            path sets this so chat replies never land in the daemon's
+            stdout, which subprocess mode forwards to the desktop app's
+            general log viewer (a surface outside the chat redaction
+            invariant). Voice replies keep printing for terminal UX.
 
     Returns:
         Generated reply text or None
@@ -991,16 +998,54 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 _planner_tool_catalog.append((str(_nm), _first[:120]))
 
     action_plan: list[str] = []
-    try:
-        action_plan = plan_query(
-            cfg=cfg,
-            query=redacted,
-            dialogue_context=_dialogue_ctx,
-            tools=_planner_tool_catalog,
+
+    # Fast-path: skip the planner when the tool router found no real tools
+    # AND the query is short. The planner's main job is decomposing multi-step
+    # tool queries and gating memory enrichment; for short, tool-free queries
+    # like "hello" / "how are you" / "tell me a joke", it adds a CHAT-tier
+    # LLM round-trip whose only output is "Reply to the user." — pure overhead.
+    #
+    # Gate: the router returned only system tools (just "stop"), meaning it
+    # positively decided no tools are needed. The router's "fall open to all
+    # tools" path (timeout / empty / no-match) is NOT treated as tool-free
+    # because it carries no signal — the router gave up rather than ruling
+    # tools out. We also require the query to be short (< 8 words) so
+    # longer tool-free queries that might need memory still reach the
+    # planner for a `searchMemory` directive. Language-agnostic: word count
+    # splits on whitespace, which works for every script-separated language.
+    _router_said_no_tools = (
+        routed_tools is not None
+        and len(routed_tools) <= 1
+        and ("stop" in routed_tools or not routed_tools)
+    )
+    _query_word_count = len(redacted.split()) if redacted else 0
+    _skip_planner = (
+        _router_said_no_tools
+        and _query_word_count <= 8
+        and getattr(cfg, "planner_enabled", True)
+    )
+    if _skip_planner:
+        # Positive signal: no tools, no memory needed. The warm profile
+        # (injected unconditionally below) provides user-context for the
+        # chat model; memory enrichment is skipped as if the planner had
+        # emitted a single "Reply to the user." step.
+        action_plan = ["Reply to the user."]
+        debug_log(
+            f"planner skipped: router returned no tools, query is "
+            f"{_query_word_count} words — using reply-only plan",
+            "planning",
         )
-    except Exception as _plan_exc:  # pragma: no cover — defensive
-        debug_log(f"planner step failed (non-fatal): {_plan_exc}", "planning")
-        action_plan = []
+    else:
+        try:
+            action_plan = plan_query(
+                cfg=cfg,
+                query=redacted,
+                dialogue_context=_dialogue_ctx,
+                tools=_planner_tool_catalog,
+            )
+        except Exception as _plan_exc:  # pragma: no cover — defensive
+            debug_log(f"planner step failed (non-fatal): {_plan_exc}", "planning")
+            action_plan = []
     if action_plan:
         _plan_preview = " | ".join(s[:50] for s in action_plan)
         print(
@@ -1492,10 +1537,20 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 + memory_digest_text
             )
 
-        if len(action_plan) > 1:
-            # A single "Reply to the user." plan is the planner's
-            # positive no-op: memory/tools not needed. Injecting an
-            # ACTION PLAN block for it would just add noise.
+        # Inject the ACTION PLAN block when the plan has meaningful
+        # tool steps — i.e. more than 1 step OR a single step that
+        # references a known tool. The only case we skip is a single
+        # "Reply to the user." step (the planner's positive no-op for
+        # pure-direct-reply queries), which is noise to the chat model.
+        _plan_has_tool_step = (
+            len(action_plan) == 1
+            and action_plan[0].strip()
+            and any(
+                action_plan[0].strip().lower().startswith(t.lower())
+                for t in allowed_tools
+            )
+        )
+        if len(action_plan) > 1 or _plan_has_tool_step:
             guidance.append(format_plan_block(action_plan))
 
         if use_text_tools and tools_desc:
@@ -1533,6 +1588,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     # don't run it again. Lets us call _maybe_record_tool_carryover from any
     # exit path safely.
     _carryover_state = {"recorded": False}
+
+    # Per-reply memo for the time/location context line (see _get_context_string).
+    _context_cache: Optional[str] = None
 
     def _maybe_record_tool_carryover() -> None:
         if _carryover_state["recorded"]:
@@ -1621,8 +1679,18 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         return None, None, None
 
     def _get_context_string() -> str:
-        """Get current time and location context as a string."""
-        return _live_time_location_string(cfg)
+        """Get current time and location context as a string.
+
+        Computed once per reply and memoised: the agentic loop calls this
+        before every LLM call, and a byte-stable context line is what lets
+        the server's KV/prefix cache reuse the whole prompt head across
+        in-loop calls. Refreshing per call would change the system-message
+        tail mid-reply and invalidate the cache on every iteration.
+        """
+        nonlocal _context_cache
+        if _context_cache is None:
+            _context_cache = _live_time_location_string(cfg)
+        return _context_cache
 
     def _update_system_message_with_context(messages_list):
         """Update the first system message with fresh time/location context.
@@ -1630,6 +1698,16 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         Note: Adding a separate system message AFTER the user message
         breaks native tool calling in models like Llama 3.2. Instead, we
         mutate the first system message.
+
+        KV-cache discipline: the block is placed at the END of the
+        system message's dynamic region (never the head) so the
+        persona/guidance head stays byte-identical across calls, and it
+        is injected at most once per reply (the ``_is_context_injected``
+        flag marks it; a rebuilt system message loses the flag and gets
+        the block re-injected). In text-tools mode the block is inserted
+        just BEFORE the tool-call syntax guidance so the instruction
+        block remains the final system tokens for small models — the
+        guidance is per-reply dynamic, so the stable head is unaffected.
         """
         context_str = _get_context_string()
 
@@ -1637,17 +1715,28 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         for msg in messages_list:
             if (msg.get("role") == "system" and
                 not msg.get("_is_tool_guidance")):
+                if msg.get("_is_context_injected"):
+                    break
                 content = msg.get("content", "")
-                # Strip any previous context line.
-                if content.startswith("[Context:"):
-                    lines = content.split("\n", 1)
-                    content = lines[1] if len(lines) > 1 else ""
-                    if content.startswith("\n"):
-                        content = content.lstrip("\n")
-
-                new_content = content
-                if context_str:
-                    new_content = f"[Context: {context_str}]\n\n{new_content}"
+                if content and context_str:
+                    # In text-tools mode the tool-call syntax guidance is the
+                    # final instruction block; small models weight the last
+                    # system tokens most, and the context line is data, not
+                    # instruction — insert it just before the guidance instead
+                    # of after it. The guidance is per-reply dynamic anyway,
+                    # so this keeps the byte-stable head intact either way.
+                    head, marker, tail = content.partition("\nExact tool-call syntax")
+                    if marker:
+                        new_content = (
+                            f"{head.rstrip()}\n\n[Context: {context_str}]\n\n"
+                            f"{marker}{tail}"
+                        )
+                    else:
+                        new_content = f"{content}\n\n[Context: {context_str}]"
+                elif context_str:
+                    new_content = f"[Context: {context_str}]"
+                else:
+                    new_content = content
                 msg["content"] = new_content
                 msg["_is_context_injected"] = True
                 break
@@ -1749,12 +1838,12 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         # all plan tool steps are exhausted, at which point it synthesises
         # a final reply from the accumulated results.
         # See planner.spec.md.
+        _plan_tool_steps = tool_steps_of(action_plan)
         if (
             use_text_tools
-            and len(action_plan) > 1
+            and _plan_tool_steps
             and not _plan_under_specified
         ):
-            _plan_tool_steps = tool_steps_of(action_plan)
             _tool_results_so_far = (
                 sum(1 for m in messages if m.get("tool_name"))
                 - _plan_steps_baseline
@@ -1903,7 +1992,10 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 if _plan_exec_handled:
                     continue
 
-        # Update the system message with fresh context (time/location) before each LLM call
+        # Update the system message with fresh context (time/location) before each LLM call.
+        # The block sits at the END of the system message's dynamic region (computed once per
+        # reply), so every in-loop call sends a byte-identical system message and the
+        # server's KV/prefix cache can reuse the whole prompt head.
         # Note: We update the first system message rather than appending a new one because
         # adding a system message AFTER the user message breaks native tool calling
         _update_system_message_with_context(messages)
@@ -2353,8 +2445,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             malformed_fallback = False
         elif _is_malformed_json_response(content):
             debug_log(f"  ⚠️ Malformed content — delivering error reply: '{content[:80]}...'", "planning")
-            model_name = cfg.llm_chat_model.lower()
-            is_small = any(s in model_name for s in [":1b", ":3b", ":7b", "-1b", "-3b", "-7b"])
+            is_small = detect_model_size(cfg.llm_chat_model) == ModelSize.SMALL
             candidate_reply = (
                 "I had trouble understanding that request. "
                 "This can happen with smaller AI models. "
@@ -2408,7 +2499,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
         # Print error message
         try:
-            print(f"\n⚠️ Jarvis\n  {_indent_text(reply)}\n", flush=True)
+            if not quiet:
+                print(f"\n⚠️ Jarvis\n  {_indent_text(reply)}\n", flush=True)
         except Exception as e:
             debug_log(f"error reply formatting failed: {e}", "planning")
 
@@ -2430,11 +2522,13 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         safe_reply = "Sorry, I had trouble processing that. Could you try again?"
         reply = safe_reply
     if safe_reply:
-        # Print reply with appropriate header
+        # Print reply with appropriate header. Quiet mode (text chat) skips
+        # this entirely so the reply never reaches the daemon stdout that
+        # the desktop app forwards to the general log viewer.
         try:
-            if not getattr(cfg, "voice_debug", False):
+            if not quiet and not getattr(cfg, "voice_debug", False):
                 print(f"\n🤖 Jarvis\n  {_indent_text(safe_reply)}\n", flush=True)
-            else:
+            elif not quiet:
                 print(f"\n[jarvis]\n  {_indent_text(safe_reply)}\n", flush=True)
         except Exception as e:
             debug_log(f"reply formatting failed: {e}", "planning")

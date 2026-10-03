@@ -97,10 +97,14 @@ After transcription, text passes through these stages in order:
 ### Audio Device Handling
 
 - The engine accepts an optional `voice_device` parameter, passed through from
-  the daemon's configured device.
-- The stream first attempts the target Whisper sample rate (16 kHz).
-- On failure (e.g. PortAudio error -50 on macOS), it falls back to the
-  device's native sample rate and stores it in `_stream_sample_rate`.
+  the daemon's configured device. Numeric indices and input-device names select
+  that device; a missing named input fails instead of recording another device.
+- The stream tries the selected device's native sample rate and mono input first.
+  Unsupported formats trigger bounded channel-count and rate retries on the
+  same input, including the Whisper target rate. Access and unavailable-device
+  errors fail immediately.
+- Multichannel samples are averaged to mono before transcription. The accepted
+  sample rate is stored in `_stream_sample_rate`.
 - If the stream rate differs from the Whisper target rate, audio is resampled
   via linear interpolation before transcription.
 
@@ -109,7 +113,7 @@ After transcription, text passes through these stages in order:
 | Case                      | Behaviour                                         |
 |---------------------------|----------------------------------------------------|
 | Whisper not yet loaded    | Play "not ready" beep, skip                        |
-| Max recording duration    | 60 s cap to prevent memory exhaustion              |
+| Max recording duration    | No cap — the user controls when to stop by releasing the hotkey. A cap would paste prematurely mid-dictation and restart recording |
 | Empty transcription       | No paste occurs                                    |
 | Concurrent with assistant | Dictation works independently; pauses listener     |
 | macOS permissions         | `pynput` requires Accessibility permissions        |
