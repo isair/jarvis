@@ -12,6 +12,9 @@ from ..debug import debug_log
 from ..utils.redact import redact, scrub_secrets
 
 
+_DIARY_SUMMARY_TOKEN_BUDGET = 1024
+
+
 def _direct_llm(cfg, system_prompt: str, user_content: str, *,
                 timeout_sec: float = 30.0, thinking: bool = False,
                 max_tokens: Optional[int] = None) -> Optional[str]:
@@ -1335,11 +1338,8 @@ TOPICS: [topic1, topic2, topic3]"""
             response = _direct_llm(
                 cfg, system_prompt, user_prompt,
                 timeout_sec=timeout_sec, thinking=thinking,
-                # Prompt allows a 200-word summary (≈260 tokens) plus the
-                # SUMMARY:/TOPICS: labels and 3-5 topics. 400 gives headroom
-                # so a full-length summary is never truncated — a cut here
-                # would persist a partial summary or skip the day entirely.
-                max_tokens=400,
+                # Bounded room includes reasoning, the summary and its topics.
+                max_tokens=_DIARY_SUMMARY_TOKEN_BUDGET,
             )
 
         if not response:
