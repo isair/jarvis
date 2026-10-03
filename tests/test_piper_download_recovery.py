@@ -86,10 +86,11 @@ def test_persistent_transport_failure_is_bounded_and_cleans_partial_files(monkey
 
 
 def test_certificate_failure_is_not_retried(monkeypatch, download):
-    get = Mock(side_effect=requests.exceptions.SSLError('untrusted certificate'))
-    monkeypatch.setattr(requests, 'get', get)
+    def certificate_error(*args, **kwargs):
+        raise requests.exceptions.SSLError('untrusted certificate')
+    monkeypatch.setattr(requests, 'get', certificate_error)
+    monkeypatch.setattr(tts.time, 'sleep', lambda seconds: pytest.fail('certificate failures must not back off'))
     assert download() is None
-    get.assert_called_once()
 
 
 def test_completed_model_is_retained_when_configuration_download_fails(monkeypatch, tmp_path, download):
