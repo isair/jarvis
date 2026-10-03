@@ -497,3 +497,10 @@ Currently, echo is handled at the transcript level via fuzzy text matching and t
 - A successful recovery retries the current audio once and serves subsequent audio through the shared CPU model. A failed recovery is not retried for every utterance. CPU and unrelated transcription failures do not trigger model replacement.
 - Model replacement and lazy segment consumption hold the shared transcription lock. Dictation resolves its model reference under that lock.
 - Recovery logs the underlying error and displays a warning that CPU decoding may be slower.
+
+### Speech performance guidance
+
+- The serial transcription worker measures decode elapsed time with a monotonic clock, excluding queue waiting and startup warmup. Stale or empty results do not trigger guidance.
+- Three consecutive usable utterances of at least one second that each take at least two seconds and longer than their audio duration produce one warning per listener instance. Fast or short eligible samples reset the streak.
+- The warning recommends a smaller supported model while preserving English-only selection, states the accuracy trade-off, and points to the Setup Wizard or Whisper settings. The smallest or an unknown model gets hardware/load guidance instead. User configuration is never changed automatically.
+- Debug diagnostics record audio duration, decode duration and the loaded model while gathering samples.

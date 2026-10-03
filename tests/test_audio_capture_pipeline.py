@@ -28,6 +28,9 @@ def listener(rate=48000):
     obj._dictation_is_active = False
     obj._dictation_generation = 0
     obj._transcription_worker_thread = None
+    obj._slow_transcription_streak = 0
+    obj._slow_transcription_warned = False
+    obj._whisper_model_name = "small"
     obj._callback_count = 0
     obj._audio_q = queue.Queue(maxsize=2)
     obj._reset_audio_health(now=0)
