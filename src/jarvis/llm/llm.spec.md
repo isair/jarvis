@@ -106,6 +106,7 @@ The migration in `_migrate_config` runs once when `_config_version < 2`:
 ### Ollama (`OllamaBackend`)
 
 - Endpoints: `POST /api/chat`, `POST /api/embeddings`, `GET /api/tags`, `POST /api/generate` (used by `warm_up`).
+- GPT-OSS Ollama requests use named reasoning levels: boolean `thinking=False` selects `low`, and `True` selects `high`. Reasoning cannot be disabled for this model. Explicit named levels are preserved, including `extra_options["think"]` overrides applied before translation. Canonical `gpt-oss` names may include namespace prefixes and size tags; other model names retain their own controls.
 - Streaming: JSON-lines (`{...}\n`).
 - Tool calls: native `tools` parameter (Ollama 0.4+); arguments returned as a Python dict.
 - Prompt caching: every chat payload (`chat()`, `direct()`, `streaming()`) sets `cache_prompt: true` explicitly so the server retains the request's KV state and reuses it when the next request shares the same prefix. Callers keep prefixes cacheable by keeping system prompts byte-static and pushing per-call data (time, hints) to the tail of the prompt (see `docs/llm_contexts.md` "KV-cache discipline").

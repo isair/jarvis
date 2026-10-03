@@ -4,6 +4,8 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 
 > **Backend abstraction.** Every context below routes through `jarvis.llm` ([spec](../src/jarvis/llm/llm.spec.md)) via `get_llm_backend(cfg)` / `get_embedding_backend(cfg)`. Picking `llm_provider: openai_compatible` swaps the wire shape end-to-end without touching call sites. The active chat model is read directly from `cfg.llm_chat_model` (the `Settings` field that always carries the resolved value, populated by config-load from `ollama_chat_model` when the provider-aware key is left empty).
 
+**Ollama reasoning controls.** Across direct, streaming and agentic chat contexts, canonical GPT-OSS models receive `think: "low"` for a false thinking flag and `think: "high"` for a true flag. Explicit named `think` overrides are preserved. GPT-OSS reasoning cannot be switched off. Other models retain their boolean controls; context prompts, tiers, deadlines and token caps are unchanged by this translation.
+
 ---
 
 ## 1. Main Reply Loop (agentic messages loop)
