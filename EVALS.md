@@ -17,6 +17,10 @@ EVAL_JUDGE_MODEL=gemma4:e2b python -m pytest evals/test_graph_branch_routing.py 
 An explicit provider selects that transport for both availability checks and
 judge calls. Without an override, judge calls detect the endpoint; the model
 fixture defaults to Ollama on port 11434 and OpenAI-compatible on other ports.
+Voice intent and listener suites use the selected model and transport, including
+model names exposed by an OpenAI-compatible server. Missing models are skipped;
+available models run their behavioural cases.
+
 Use an explicit provider for custom ports. The results below belong to the dated
 report above; a targeted local run does not refresh the full report.
 
