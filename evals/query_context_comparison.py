@@ -118,6 +118,26 @@ def _arguments_match(case: ComparisonCase, args: dict) -> bool:
     return all(term.casefold() in text for term in case.argument_terms)
 
 
+def _valid_tool_calls(calls) -> bool:
+    if not isinstance(calls, list) or not calls:
+        return False
+    for call in calls:
+        if not isinstance(call, dict) or not isinstance(call.get("function"), dict):
+            return False
+        function = call["function"]
+        if not isinstance(function.get("name"), str) or not function["name"].strip():
+            return False
+        arguments = function.get("arguments")
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments)
+            except ValueError:
+                return False
+        if not isinstance(arguments, dict):
+            return False
+    return True
+
+
 def score_result(case: ComparisonCase, result: ComparisonResult) -> dict:
     selected = set(result.selected_tools) - {"stop", "toolSearchTool"}
     routing = case.expected_tool in selected if case.expected_tool else not selected
@@ -236,15 +256,23 @@ class RequestRecorder:
             data = response.json()
             choice = data["choices"][0]
             message = choice["message"]
+            content = (message.get("content") or "").strip()
+            calls = message.get("tool_calls")
+            structure_valid = calls is None or (
+                isinstance(calls, list) and (not calls or _valid_tool_calls(calls))
+            )
+            complete = choice.get("finish_reason") == "stop" or (
+                choice.get("finish_reason") == "tool_calls" and bool(calls) and structure_valid
+            )
             record.update(
                 content=message.get("content") or "",
+                tool_calls=calls or [],
                 finish_reason=choice.get("finish_reason"),
-                valid=bool((message.get("content") or "").strip() or message.get("tool_calls"))
-                and choice.get("finish_reason") != "length",
+                valid=bool(content or calls) and complete and structure_valid,
             )
             if self.phase == "rewrite" and message.get("reasoning_content"):
                 # The production judge can recover a complete JSON verdict from reasoning.
-                record["valid"] = bool((message.get("content") or "").strip() or message.get("reasoning_content", "").strip()) and choice.get("finish_reason") != "length"
+                record["valid"] = bool(content or message.get("reasoning_content", "").strip()) and complete and structure_valid
             usage = data.get("usage")
             if usage is None:
                 usage = {}
