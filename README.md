@@ -159,6 +159,8 @@ Connect MCP servers for browser automation, Home Assistant, GitHub, databases an
 
 ## Troubleshooting
 
+- 🎤 **Whisper cache errors:** Jarvis attempts one clean download recovery per startup. If it fails, check connectivity and free disk space, then follow the printed cache guidance and restart. Device fallbacks retain files downloaded during recovery.
+
 <details>
 <summary><strong>Bluetooth microphone will not start</strong></summary>
 
