@@ -36,8 +36,9 @@ The summariser prompt is the only write-time defence. There is no post-process s
   the summary and topics, within the caller's timeout. Streaming retains its
   uncapped generation within that timeout.
 - Storage: one row per `(date_utc, source_app)` in `conversation_summaries`, upserted on each update.
-- Embedding: when sqlite-vss and an embedding model are configured, the concatenation
-  of summary + topics is embedded and stored for vector retrieval after the diary
+- Embedding: when a local vector index and an embedding model are configured, the concatenation
+  of summary + topics is embedded and stored for vector retrieval through
+  sqlite-vss, FAISS or Python after the diary
   text commits. Refresh is best-effort: a backend or index failure preserves
   successful save confirmation, keyword retrieval and graph extraction. Pending
   messages advance only through the committed snapshot. Index errors log the
@@ -71,7 +72,7 @@ All three rules apply in any language, not only English. The prompt states this 
 
 ## LLM Rewrite Sweep
 
-`rewrite_all_diary_summaries(db, ollama_base_url, ollama_chat_model, ...)` is a user-triggered bulk operation that walks every row in `conversation_summaries` and asks the chat model to remove deflection narration from each. It exists for cleaning **historical** poisoning from rows written before the summariser prompt was tightened. There is no equivalent on the write path — new writes rely on the prompt alone.
+`rewrite_all_diary_summaries(db, cfg, ...)` is a user-triggered bulk operation that walks every row in `conversation_summaries` and asks the chat model to remove deflection narration. New writes use the summariser prompt; the sweep cleans existing entries on request.
 
 **Why an LLM rather than regex:** the leak shows up in any language the user speaks, in any phrasing the model invents. A regex set is English-first by definition (you can only enumerate the patterns you can think of) and grows into a whack-a-mole. A small instruction-following model handles the semantic check in one shot, in any language, and improves automatically as the user's chat model upgrades. Mirrors `optimise_diary_topics` in shape and privacy guarantees.
 
@@ -91,7 +92,7 @@ All three rules apply in any language, not only English. The prompt states this 
 
 **Audit trail:** preserves each row's original `ts_utc` on rewrite. A maintenance pass that stomped `ts_utc` would make every cleaned row look as though it had been written today, destroying the only signal users have to verify when each diary entry was actually authored.
 
-**Vector embedding:** when a row is rewritten, the embedding stored alongside the summary is regenerated inline from the cleaned text if the caller passes both an `ollama_base_url` and an `ollama_embed_model`. Without an embed model the rewrite still happens (FTS stays consistent via SQLite triggers); the vector embedding stays anchored to the pre-rewrite text until the next user-driven write to that date. Per-row embedding refresh is best-effort: an embedding-service failure is logged but does not roll back the summary write.
+**Vector embedding:** when a row is rewritten, the embedding stored alongside the summary is regenerated inline from the cleaned text when `cfg.embedding_model` is configured and `db.has_vector_store` reports an available sqlite-vss, FAISS or Python index. Without an embed model the rewrite still happens (FTS stays consistent via SQLite triggers); the vector embedding stays anchored to the pre-rewrite text until the next user-driven write to that date. Per-row embedding refresh is best-effort: an embedding-service failure is logged but does not roll back the summary write.
 
 **Fail-open at every layer:**
 - LLM call failure on a row → row is left untouched and reported with `error` set to the exception class name.

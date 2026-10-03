@@ -233,7 +233,7 @@ class TestDiaryRedaction:
             llm_chat_model="test",
             ollama_base_url="http://localhost:11434",
             ollama_chat_model="test",
-            embedding_model="test",
+            embedding_model="",
             ollama_embed_model="test",
         )
         result = update_daily_conversation_summary(
@@ -278,7 +278,7 @@ class TestDiaryRedaction:
             llm_chat_model="test",
             ollama_base_url="http://localhost:11434",
             ollama_chat_model="test",
-            embedding_model="test",
+            embedding_model="",
             ollama_embed_model="test",
         )
         result = update_daily_conversation_summary(
@@ -600,7 +600,7 @@ class TestDialogueMemoryEdgeCases:
             llm_chat_model="test",
             ollama_base_url="http://localhost",
             ollama_chat_model="test",
-            embedding_model="test",
+            embedding_model="",
             ollama_embed_model="test",
         )
         result = update_diary_from_dialogue_memory(

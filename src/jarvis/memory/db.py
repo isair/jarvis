@@ -135,6 +135,11 @@ class Database:
         
         self._init_schema()
 
+    @property
+    def has_vector_store(self) -> bool:
+        """Whether sqlite-vss or a local fallback index is available."""
+        return bool(self.is_vss_enabled or self._python_vector_store)
+
     def _init_schema(self) -> None:
         with self._lock:
             cur = self.conn.cursor()

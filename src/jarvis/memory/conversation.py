@@ -211,8 +211,8 @@ def rewrite_all_diary_summaries(
     of when each summary was *originally* written must survive a
     maintenance pass.
 
-    Regenerates the row's vector embedding inline when the DB has VSS
-    enabled. Embedding regeneration is *best-effort*: if the embedding
+    Regenerates the row's vector embedding inline when an embedding model
+    and any local vector index are available. Embedding regeneration is *best-effort*: if the embedding
     service fails we still keep the cleaned summary, since the FTS index
     stays consistent via SQLite triggers regardless.
 
@@ -233,7 +233,7 @@ def rewrite_all_diary_summaries(
 
     Mirrors ``optimise_diary_topics`` for shape and privacy guarantees.
     """
-    can_reembed = bool(cfg.embedding_model and db.is_vss_enabled)
+    can_reembed = bool(cfg.embedding_model and db.has_vector_store)
 
     rows = db.get_all_conversation_summaries()
     for row in rows:
@@ -523,7 +523,7 @@ def optimise_diary_topics(
         return
 
     # Apply the mapping to each row.
-    can_reembed = bool(cfg.embedding_model and db.is_vss_enabled)
+    can_reembed = bool(cfg.embedding_model and db.has_vector_store)
     for row in rows:
         date_utc = row["date_utc"]
         original_topics = row["topics"] or ""
@@ -1535,7 +1535,7 @@ def update_daily_conversation_summary(
         # Generate and store embedding for semantic search. Gate on a
         # configured embedding model too (matching the search paths) so an
         # empty model never burns a doomed embed round-trip.
-        if db.is_vss_enabled and cfg.embedding_model:
+        if db.has_vector_store and cfg.embedding_model:
             try:
                 text_for_embedding = f"{summary} {topics}"
                 vec = _embed_text(text_for_embedding, cfg, timeout_sec=15.0)
