@@ -26,6 +26,22 @@ JUDGE_MODEL = os.environ.get("EVAL_JUDGE_MODEL", "gemma4:e2b")
 JUDGE_BASE_URL = os.environ.get("EVAL_JUDGE_BASE_URL", "http://localhost:11434")
 
 
+def _judge_urls(base_url: str) -> tuple[str, str]:
+    """Return canonical native Ollama and versioned OpenAI-compatible bases."""
+    base = base_url.rstrip('/')
+    native = base[:-3] if base.endswith('/v1') else base
+    openai = base if base.endswith('/v1') else base + '/v1'
+    return native, openai
+
+
+def _requested_judge_provider() -> str:
+    """Read and validate an optional evaluation transport override."""
+    provider = os.environ.get("EVAL_JUDGE_PROVIDER", "").strip().lower()
+    if provider not in ("", "ollama", "openai_compatible"):
+        raise ValueError("EVAL_JUDGE_PROVIDER must be ollama or openai_compatible")
+    return provider
+
+
 # =============================================================================
 # Tool Call Capture
 # =============================================================================
@@ -252,21 +268,20 @@ class MockConfig:
     embedding_model: Optional[str] = None
 
     def __post_init__(self):
-        """Auto-configure provider from EVAL_JUDGE_BASE_URL when set."""
-        import os as _os
-        judge_url = _os.environ.get("EVAL_JUDGE_BASE_URL", "").strip()
-        if judge_url and "11434" not in judge_url:
-            # Non-default judge URL (e.g. LM Studio) → switch to
-            # OpenAI-compatible provider. The backend appends
-            # ``/chat/completions``, so the base URL must include ``/v1``
-            # for servers that require the versioned path (LM Studio,
-            # oMLX, etc.).
-            self.llm_provider = "openai_compatible"
-            self.llm_base_url = judge_url.rstrip("/") + "/v1"
-            judge_model = _os.environ.get("EVAL_JUDGE_MODEL", "").strip()
-            if judge_model:
-                self.llm_chat_model = judge_model
-                self.ollama_chat_model = judge_model
+        """Apply the model and transport selected for the evaluation run."""
+        judge_url = os.environ.get("EVAL_JUDGE_BASE_URL", "").strip()
+        judge_model = os.environ.get("EVAL_JUDGE_MODEL", "").strip()
+        if judge_model:
+            self.llm_chat_model = self.ollama_chat_model = judge_model
+        provider = _requested_judge_provider()
+        if judge_url or provider:
+            native, openai = _judge_urls(judge_url or JUDGE_BASE_URL)
+            if not provider:
+                provider = "ollama" if "11434" in native else "openai_compatible"
+            self.llm_provider = provider
+            self.llm_base_url = native if provider == "ollama" else openai
+            if provider == "ollama":
+                self.ollama_base_url = native
     db_path: str = ":memory:"
     sqlite_vss_path: Optional[str] = None
     voice_debug: bool = True
@@ -421,15 +436,15 @@ def is_judge_llm_available() -> bool:
     """Check if the judge LLM is available and the model exists.
 
     Supports both Ollama (``/api/tags``) and OpenAI-compatible (``/v1/models``)
-    providers. The provider is inferred from the base URL's response.
+    providers. An explicit provider override takes precedence over detection.
     """
     import requests
 
-    base = JUDGE_BASE_URL.rstrip("/")
+    native_base, openai_base = _judge_urls(JUDGE_BASE_URL)
 
     def _check_ollama() -> bool:
         try:
-            resp = requests.get(f"{base}/api/tags", timeout=2)
+            resp = requests.get(f"{native_base}/api/tags", timeout=2)
             if resp.status_code != 200:
                 return False
             data = resp.json()
@@ -442,7 +457,7 @@ def is_judge_llm_available() -> bool:
 
     def _check_openai() -> bool:
         try:
-            resp = requests.get(f"{base}/v1/models", timeout=2)
+            resp = requests.get(f"{openai_base}/models", timeout=2)
             if resp.status_code != 200:
                 return False
             data = resp.json()
@@ -452,7 +467,11 @@ def is_judge_llm_available() -> bool:
         except Exception:
             return False
 
-    # Try Ollama first, then OpenAI-compatible
+    provider = _requested_judge_provider()
+    if provider == "ollama":
+        return _check_ollama()
+    if provider == "openai_compatible":
+        return _check_openai()
     if _check_ollama():
         return True
     return _check_openai()
@@ -462,16 +481,16 @@ def call_judge_llm(system_prompt: str, user_prompt: str, timeout_sec: float = 12
     """Call the judge LLM with a prompt.
 
     Supports both Ollama (``/api/chat``) and OpenAI-compatible (``/v1/chat/completions``)
-    endpoints. The provider is inferred from the base URL's response.
+    endpoints. An explicit provider override takes precedence over detection.
     """
     import requests
 
-    base = JUDGE_BASE_URL.rstrip("/")
+    native_base, openai_base = _judge_urls(JUDGE_BASE_URL)
 
     # Detect provider
     def _is_ollama() -> bool:
         try:
-            return requests.get(f"{base}/api/tags", timeout=2).status_code == 200
+            return requests.get(f"{native_base}/api/tags", timeout=2).status_code == 200
         except Exception:
             return False
 
@@ -487,9 +506,10 @@ def call_judge_llm(system_prompt: str, user_prompt: str, timeout_sec: float = 12
     ollama_payload = {**openai_payload, "options": {"num_ctx": 4096}}
 
     try:
-        if _is_ollama():
+        provider = _requested_judge_provider()
+        if provider == "ollama" or (not provider and _is_ollama()):
             resp = requests.post(
-                f"{base}/api/chat",
+                f"{native_base}/api/chat",
                 json=ollama_payload,
                 timeout=timeout_sec
             )
@@ -499,7 +519,7 @@ def call_judge_llm(system_prompt: str, user_prompt: str, timeout_sec: float = 12
                 return data["message"].get("content", "")
         else:
             resp = requests.post(
-                f"{base}/v1/chat/completions",
+                f"{openai_base}/chat/completions",
                 json=openai_payload,
                 timeout=timeout_sec
             )

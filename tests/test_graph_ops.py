@@ -5,18 +5,9 @@ All LLM calls are mocked to test the logic independently.
 
 import json
 import re
-import sys
-import types
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 import pytest
-
-# Mock 'requests' before importing graph_ops (which imports llm which needs requests)
-if "requests" not in sys.modules:
-    sys.modules["requests"] = types.ModuleType("requests")
-    sys.modules["requests"].post = MagicMock()
-    sys.modules["requests"].exceptions = types.ModuleType("requests.exceptions")
-    sys.modules["requests"].exceptions.Timeout = type("Timeout", (Exception,), {})
 
 from src.jarvis.memory.graph import GraphMemoryStore, SPLIT_THRESHOLD
 from src.jarvis.memory.graph import BRANCH_USER, BRANCH_DIRECTIVES, BRANCH_WORLD
@@ -83,18 +74,18 @@ class TestExtractGraphMemories:
     """
 
     @patch("src.jarvis.memory.graph_ops.call_llm_direct")
-    def test_extracts_facts(self, mock_llm):
+    def test_extracts_facts(self, mock_llm, mock_config):
         mock_llm.return_value = (
             '[{"branch": "USER", "fact": "Prefers dark roast coffee"},'
             ' {"branch": "WORLD", "fact": "Acme Corp is based in London"}]'
         )
-        facts = extract_graph_memories("summary text", "http://localhost", "model")
+        facts = extract_graph_memories("summary text", mock_config, "model")
         assert len(facts) == 2
         assert facts[0] == ("user", "Prefers dark roast coffee")
         assert facts[1] == ("world", "Acme Corp is based in London")
 
     @patch("src.jarvis.memory.graph_ops.call_llm_direct")
-    def test_classifies_directive_branch(self, mock_llm):
+    def test_classifies_directive_branch(self, mock_llm, mock_config):
         """A user-issued behavioural rule must land in the DIRECTIVES
         branch so it survives verbatim into the warm system-prompt
         blob, rather than being summarised alongside descriptive user
@@ -102,32 +93,32 @@ class TestExtractGraphMemories:
         mock_llm.return_value = (
             '[{"branch": "DIRECTIVES", "fact": "Always answer in British English"}]'
         )
-        facts = extract_graph_memories("summary", "http://localhost", "model")
+        facts = extract_graph_memories("summary", mock_config, "model")
         assert facts == [("directives", "Always answer in British English")]
 
     @patch("src.jarvis.memory.graph_ops.call_llm_direct")
-    def test_returns_empty_when_nothing_worth_storing(self, mock_llm):
+    def test_returns_empty_when_nothing_worth_storing(self, mock_llm, mock_config):
 
         mock_llm.return_value = "[]"
-        facts = extract_graph_memories("just small talk", "http://localhost", "model")
+        facts = extract_graph_memories("just small talk", mock_config, "model")
         assert facts == []
 
     @patch("src.jarvis.memory.graph_ops.call_llm_direct")
-    def test_handles_llm_returning_none(self, mock_llm):
+    def test_handles_llm_returning_none(self, mock_llm, mock_config):
 
         mock_llm.return_value = None
-        facts = extract_graph_memories("summary", "http://localhost", "model")
+        facts = extract_graph_memories("summary", mock_config, "model")
         assert facts == []
 
     @patch("src.jarvis.memory.graph_ops.call_llm_direct")
-    def test_handles_malformed_json(self, mock_llm):
+    def test_handles_malformed_json(self, mock_llm, mock_config):
 
         mock_llm.return_value = "Here are some facts: not valid json"
-        facts = extract_graph_memories("summary", "http://localhost", "model")
+        facts = extract_graph_memories("summary", mock_config, "model")
         assert facts == []
 
     @patch("src.jarvis.memory.graph_ops.call_llm_direct")
-    def test_handles_json_embedded_in_text(self, mock_llm):
+    def test_handles_json_embedded_in_text(self, mock_llm, mock_config):
 
         mock_llm.return_value = (
             'Sure! Here are the facts:\n'
@@ -135,11 +126,11 @@ class TestExtractGraphMemories:
             ' {"branch": "USER", "fact": "Has a cat named Luna"}]\n'
             'Hope that helps!'
         )
-        facts = extract_graph_memories("summary", "http://localhost", "model")
+        facts = extract_graph_memories("summary", mock_config, "model")
         assert len(facts) == 2
 
     @patch("src.jarvis.memory.graph_ops.call_llm_direct")
-    def test_filters_empty_strings(self, mock_llm):
+    def test_filters_empty_strings(self, mock_llm, mock_config):
 
         mock_llm.return_value = (
             '[{"branch": "USER", "fact": "Valid fact"},'
@@ -147,11 +138,11 @@ class TestExtractGraphMemories:
             ' {"branch": "USER", "fact": "   "},'
             ' {"branch": "USER", "fact": "Another fact"}]'
         )
-        facts = extract_graph_memories("summary", "http://localhost", "model")
+        facts = extract_graph_memories("summary", mock_config, "model")
         assert len(facts) == 2
 
     @patch("src.jarvis.memory.graph_ops.call_llm_direct")
-    def test_unknown_branch_defaults_to_user(self, mock_llm):
+    def test_unknown_branch_defaults_to_user(self, mock_llm, mock_config):
         """When the model emits a branch label we don't recognise, the
         fact still gets stored — under USER — rather than silently
         dropping a potentially useful piece of information. The
@@ -160,7 +151,7 @@ class TestExtractGraphMemories:
         mock_llm.return_value = (
             '[{"branch": "MISC", "fact": "Some useful fact"}]'
         )
-        facts = extract_graph_memories("summary", "http://localhost", "model")
+        facts = extract_graph_memories("summary", mock_config, "model")
         assert facts == [("user", "Some useful fact")]
 
 
@@ -172,59 +163,59 @@ class TestLLMPickBestChild:
     """Tests for the LLM child-picking logic."""
 
     @patch("src.jarvis.memory.graph_ops.call_llm_direct")
-    def test_picks_numbered_child(self, mock_llm, populated_store):
+    def test_picks_numbered_child(self, mock_llm, populated_store, mock_config):
 
         children = populated_store.get_children("root")
         mock_llm.return_value = "2"
 
-        result = _llm_pick_best_child("fact", children, "http://localhost", "model")
+        result = _llm_pick_best_child("fact", children, mock_config, "model")
         assert result == children[1].id
 
     @patch("src.jarvis.memory.graph_ops.call_llm_direct")
-    def test_returns_none_for_NONE(self, mock_llm, populated_store):
+    def test_returns_none_for_NONE(self, mock_llm, populated_store, mock_config):
 
         children = populated_store.get_children("root")
         mock_llm.return_value = "NONE"
 
-        result = _llm_pick_best_child("unrelated fact", children, "http://localhost", "model")
+        result = _llm_pick_best_child("unrelated fact", children, mock_config, "model")
         assert result is None
 
     @patch("src.jarvis.memory.graph_ops.call_llm_direct")
-    def test_returns_none_for_empty_children(self, mock_llm):
+    def test_returns_none_for_empty_children(self, mock_llm, mock_config):
 
-        result = _llm_pick_best_child("fact", [], "http://localhost", "model")
+        result = _llm_pick_best_child("fact", [], mock_config, "model")
         assert result is None
         mock_llm.assert_not_called()
 
     @patch("src.jarvis.memory.graph_ops.call_llm_direct")
-    def test_returns_none_for_llm_failure(self, mock_llm, populated_store):
+    def test_returns_none_for_llm_failure(self, mock_llm, populated_store, mock_config):
 
         children = populated_store.get_children("root")
         mock_llm.return_value = None
 
-        result = _llm_pick_best_child("fact", children, "http://localhost", "model")
+        result = _llm_pick_best_child("fact", children, mock_config, "model")
         assert result is None
 
     @patch("src.jarvis.memory.graph_ops.call_llm_direct")
-    def test_handles_number_in_text(self, mock_llm, populated_store):
+    def test_handles_number_in_text(self, mock_llm, populated_store, mock_config):
 
         children = populated_store.get_children("root")
         mock_llm.return_value = "I think option 1 is the best fit."
 
-        result = _llm_pick_best_child("fact", children, "http://localhost", "model")
+        result = _llm_pick_best_child("fact", children, mock_config, "model")
         assert result == children[0].id
 
     @patch("src.jarvis.memory.graph_ops.call_llm_direct")
-    def test_handles_out_of_range_number(self, mock_llm, populated_store):
+    def test_handles_out_of_range_number(self, mock_llm, populated_store, mock_config):
 
         children = populated_store.get_children("root")
         mock_llm.return_value = "99"
 
-        result = _llm_pick_best_child("fact", children, "http://localhost", "model")
+        result = _llm_pick_best_child("fact", children, mock_config, "model")
         assert result is None
 
     @patch("src.jarvis.memory.graph_ops.call_llm_direct")
-    def test_uses_picker_model_when_provided(self, mock_llm, populated_store):
+    def test_uses_picker_model_when_provided(self, mock_llm, populated_store, mock_config):
         # Behaviour: picker_model overrides the chat model for this classification-
         # shaped call, so placement runs on the small model without paging in the
         # big chat model. When absent, the chat model is used (backwards-compatible).
@@ -232,11 +223,11 @@ class TestLLMPickBestChild:
         mock_llm.return_value = "1"
 
         _llm_pick_best_child(
-            "fact", children, "http://localhost", "big-chat", picker_model="small-judge"
+            "fact", children, mock_config, "big-chat", picker_model="small-judge"
         )
         assert mock_llm.call_args.kwargs["chat_model"] == "small-judge"
 
-        _llm_pick_best_child("fact", children, "http://localhost", "big-chat")
+        _llm_pick_best_child("fact", children, mock_config, "big-chat")
         assert mock_llm.call_args.kwargs["chat_model"] == "big-chat"
 
 
@@ -248,7 +239,7 @@ class TestFindBestNode:
     """Tests for the three-entry-point traversal."""
 
     @patch("src.jarvis.memory.graph_ops._llm_pick_best_child")
-    def test_matches_recent_node_first(self, mock_pick, populated_store):
+    def test_matches_recent_node_first(self, mock_pick, populated_store, mock_config):
 
         children = populated_store.get_children("root")
         music_node = [c for c in children if c.name == "Music"][0]
@@ -258,13 +249,13 @@ class TestFindBestNode:
         # First call (recent nodes): return the music node
         mock_pick.return_value = music_node.id
 
-        result = find_best_node(populated_store, "Likes jazz", "http://localhost", "model")
+        result = find_best_node(populated_store, "Likes jazz", mock_config, "model")
         assert result == music_node.id
         # Should only call once (matched on recent nodes)
         assert mock_pick.call_count == 1
 
     @patch("src.jarvis.memory.graph_ops._llm_pick_best_child")
-    def test_falls_through_to_top_nodes(self, mock_pick, populated_store):
+    def test_falls_through_to_top_nodes(self, mock_pick, populated_store, mock_config):
 
         children = populated_store.get_children("root")
         work_node = [c for c in children if c.name == "Work"][0]
@@ -275,11 +266,11 @@ class TestFindBestNode:
         # First call (recent): None. Second call (top): match work.
         mock_pick.side_effect = [None, work_node.id]
 
-        result = find_best_node(populated_store, "Uses TypeScript", "http://localhost", "model")
+        result = find_best_node(populated_store, "Uses TypeScript", mock_config, "model")
         assert result == work_node.id
 
     @patch("src.jarvis.memory.graph_ops._llm_pick_best_child")
-    def test_falls_through_to_root_traversal(self, mock_pick, populated_store):
+    def test_falls_through_to_root_traversal(self, mock_pick, populated_store, mock_config):
 
         children = populated_store.get_children("root")
         health_node = [c for c in children if c.name == "Health"][0]
@@ -287,31 +278,31 @@ class TestFindBestNode:
         # Recent: None, Top: skipped (all recent_ids overlap), Root children: pick Health
         mock_pick.side_effect = [None, health_node.id]
 
-        result = find_best_node(populated_store, "Allergic to peanuts", "http://localhost", "model")
+        result = find_best_node(populated_store, "Allergic to peanuts", mock_config, "model")
         assert result == health_node.id
 
     @patch("src.jarvis.memory.graph_ops._llm_pick_best_child")
-    def test_writes_to_root_when_nothing_matches(self, mock_pick, populated_store):
+    def test_writes_to_root_when_nothing_matches(self, mock_pick, populated_store, mock_config):
 
         # Everything returns None — no match anywhere
         mock_pick.return_value = None
 
-        result = find_best_node(populated_store, "Completely unrelated fact", "http://localhost", "model")
+        result = find_best_node(populated_store, "Completely unrelated fact", mock_config, "model")
         assert result == "root"
 
     @patch("src.jarvis.memory.graph_ops._llm_pick_best_child")
-    def test_empty_graph_writes_to_root(self, mock_pick, store):
+    def test_empty_graph_writes_to_root(self, mock_pick, store, mock_config):
         """With seeded branches under root but nothing else, an
         unclassified fact with no branch pin will try to pick among
         the seeded branches. If the picker declines all of them
         (returns None), traversal halts at root."""
         # Picker declines at every level so traversal breaks at root.
         mock_pick.return_value = None
-        result = find_best_node(store, "First ever fact", "http://localhost", "model")
+        result = find_best_node(store, "First ever fact", mock_config, "model")
         assert result == "root"
 
     @patch("src.jarvis.memory.graph_ops._llm_pick_best_child")
-    def test_branch_pin_skips_shortcut_entry_points(self, mock_pick, store):
+    def test_branch_pin_skips_shortcut_entry_points(self, mock_pick, store, mock_config):
         """When a branch is pinned, the recent / top shortcut entry
         points are skipped entirely — the fact descends only through
         the pinned branch's subtree. With an empty branch, that means
@@ -319,7 +310,7 @@ class TestFindBestNode:
         never consulted."""
         mock_pick.return_value = None
         result = find_best_node(
-            store, "Likes jazz music", "http://localhost", "model",
+            store, "Likes jazz music", mock_config, "model",
             branch_root_id="user",
         )
         assert result == "user"
@@ -348,7 +339,7 @@ class TestAutoSplitNode:
         return node
 
     @patch("src.jarvis.memory.graph_ops.call_llm_direct")
-    def test_successful_split(self, mock_llm, store):
+    def test_successful_split(self, mock_llm, store, mock_config):
 
         node = self._make_large_node(store)
         assert node.data_token_count > SPLIT_THRESHOLD
@@ -361,7 +352,7 @@ class TestAutoSplitNode:
             "summary": "A topic covering categories A and B"
         })
 
-        result = auto_split_node(store, node.id, "http://localhost", "model")
+        result = auto_split_node(store, node.id, mock_config, "model")
         assert result is True
 
         # Verify children were created
@@ -377,7 +368,7 @@ class TestAutoSplitNode:
         assert "categories A and B" in updated_parent.description
 
     @patch("src.jarvis.memory.graph_ops.call_llm_direct")
-    def test_split_aborts_with_fewer_than_2_categories(self, mock_llm, store):
+    def test_split_aborts_with_fewer_than_2_categories(self, mock_llm, store, mock_config):
 
         node = self._make_large_node(store)
 
@@ -388,7 +379,7 @@ class TestAutoSplitNode:
             "summary": "Everything"
         })
 
-        result = auto_split_node(store, node.id, "http://localhost", "model")
+        result = auto_split_node(store, node.id, mock_config, "model")
         assert result is False
 
         # Data should still be on the parent
@@ -396,31 +387,31 @@ class TestAutoSplitNode:
         assert parent.data != ""
 
     @patch("src.jarvis.memory.graph_ops.call_llm_direct")
-    def test_split_aborts_on_llm_failure(self, mock_llm, store):
+    def test_split_aborts_on_llm_failure(self, mock_llm, store, mock_config):
 
         node = self._make_large_node(store)
         mock_llm.return_value = None
 
-        result = auto_split_node(store, node.id, "http://localhost", "model")
+        result = auto_split_node(store, node.id, mock_config, "model")
         assert result is False
 
     @patch("src.jarvis.memory.graph_ops.call_llm_direct")
-    def test_split_aborts_on_malformed_json(self, mock_llm, store):
+    def test_split_aborts_on_malformed_json(self, mock_llm, store, mock_config):
 
         node = self._make_large_node(store)
         mock_llm.return_value = "This is not JSON at all"
 
-        result = auto_split_node(store, node.id, "http://localhost", "model")
+        result = auto_split_node(store, node.id, mock_config, "model")
         assert result is False
 
-    def test_split_skips_below_threshold(self, store):
+    def test_split_skips_below_threshold(self, store, mock_config):
 
         node = store.create_node(name="Small", description="Tiny", data="Short data", parent_id="root")
-        result = auto_split_node(store, node.id, "http://localhost", "model")
+        result = auto_split_node(store, node.id, mock_config, "model")
         assert result is False
 
     @patch("src.jarvis.memory.graph_ops.call_llm_direct")
-    def test_split_aborts_on_category_missing_facts(self, mock_llm, store):
+    def test_split_aborts_on_category_missing_facts(self, mock_llm, store, mock_config):
 
         node = self._make_large_node(store)
         mock_llm.return_value = json.dumps({
@@ -431,7 +422,7 @@ class TestAutoSplitNode:
             "summary": "Summary"
         })
 
-        result = auto_split_node(store, node.id, "http://localhost", "model")
+        result = auto_split_node(store, node.id, mock_config, "model")
         assert result is False
 
 

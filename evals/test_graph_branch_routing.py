@@ -29,7 +29,7 @@ from typing import List, Optional, Tuple, Union
 import pytest
 
 from conftest import requires_judge_llm
-from helpers import MockConfig
+from helpers import JUDGE_MODEL, MockConfig
 
 from jarvis.memory.graph import BRANCH_DIRECTIVES, BRANCH_USER, BRANCH_WORLD
 from jarvis.memory.graph_ops import extract_graph_memories
@@ -167,8 +167,8 @@ ROUTING_CASES = [
 def _run_extraction(case: RoutingCase, config: MockConfig) -> list[tuple[str, str]]:
     return extract_graph_memories(
         summary=case.summary,
-        ollama_base_url=config.ollama_base_url,
-        ollama_chat_model=config.ollama_chat_model,
+        cfg=config,
+        chat_model=JUDGE_MODEL,
         timeout_sec=config.llm_chat_timeout_sec,
         thinking=False,
         date_utc=case.date_utc,
