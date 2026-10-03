@@ -2,6 +2,7 @@
 
 from typing import List, Optional
 import difflib
+import unicodedata
 
 from ..debug import debug_log
 
@@ -115,3 +116,22 @@ def is_stop_command(text_lower: str, stop_commands: List[str], fuzzy_ratio: floa
         return True
     
     return False
+
+
+def is_stop_command_echo(text: str, tts_text: str, stop_commands: List[str], fuzzy_ratio: float = 0.8) -> bool:
+    """Recognise literal TTS echo while preserving standalone control priority."""
+    def normalise(value: str) -> str:
+        value = unicodedata.normalize("NFC", value).casefold()
+        value = "".join(" " if unicodedata.category(char).startswith("P") else char
+                        for char in value)
+        return " ".join(value.split())
+
+    heard = normalise(text)
+    spoken = normalise(tts_text)
+    if not heard or not spoken:
+        return False
+    for command in stop_commands:
+        control = normalise(command)
+        if control and difflib.SequenceMatcher(a=heard, b=control).ratio() >= fuzzy_ratio:
+            return False
+    return heard in spoken
