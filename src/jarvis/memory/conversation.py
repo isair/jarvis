@@ -13,6 +13,7 @@ from ..utils.redact import redact, scrub_secrets
 
 
 _DIARY_SUMMARY_TOKEN_BUDGET = 1024
+_DIARY_SUMMARY_CHUNK_LIMIT = 10
 
 
 def _direct_llm(cfg, system_prompt: str, user_content: str, *,
@@ -1225,7 +1226,7 @@ def generate_conversation_summary(
     Returns:
         Tuple of (summary, topics) where topics is comma-separated
     """
-    chunks_text = "\n".join(recent_chunks[-10:])  # Last 10 chunks to keep context manageable
+    chunks_text = "\n".join(recent_chunks[-_DIARY_SUMMARY_CHUNK_LIMIT:])  # Last 10 chunks to keep context manageable
 
     system_prompt = """You are a conversation summariser for a personal AI assistant. Your job is to create concise daily summaries of conversations that will be stored in a diary for future reference.
 
@@ -1308,7 +1309,7 @@ Also extract 3-5 main topics as comma-separated keywords."""
 Recent conversation chunks:
 {chunks_text}
 
-Update the summary to include the new information. Provide:
+Combine the earlier and recent conversation into one summary. Retain the earlier user-stated facts, preferences, plans and attributed claims as well as the new information. A fact does not become irrelevant merely because it is absent from the recent chunks. Preserve correction chains. Provide:
 1. Updated summary (max 200 words)
 2. Main topics (comma-separated)
 
@@ -1407,16 +1408,32 @@ def update_daily_conversation_summary(
         existing = db.get_conversation_summary(today, source_app)
         previous_summary = existing['summary'] if existing else None
 
-        # Generate updated summary using redacted chunks
-        summary, topics = generate_conversation_summary(
-            redacted_chunks, previous_summary, cfg,
-            timeout_sec=timeout_sec, on_token=on_token, thinking=thinking,
-        )
-
-        # Skip summarization if LLM failed
-        if summary is None or topics is None:
-            debug_log("conversation summary skipped - LLM failed to generate summary", "memory")
-            return  # Skip summarization entirely
+        # Build the complete pending snapshot through bounded inputs. Keep
+        # intermediate summaries local until every batch has succeeded.
+        deadline = time.monotonic() + float(timeout_sec)
+        summary = previous_summary
+        topics = None
+        for offset in range(0, len(redacted_chunks), _DIARY_SUMMARY_CHUNK_LIMIT):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                debug_log("⚠️ diary generation deadline exhausted; no write", "memory")
+                return None
+            batch = redacted_chunks[offset:offset + _DIARY_SUMMARY_CHUNK_LIMIT]
+            debug_log(f"📔 diary summary batch: {len(batch)} chunks, {remaining:.1f}s remaining", "memory")
+            # Stream only the final pass to the UI; earlier drafts stay local.
+            batch_on_token = on_token
+            if on_token and offset + len(batch) < len(redacted_chunks):
+                batch_on_token = lambda token: None
+            summary, topics = generate_conversation_summary(
+                batch, summary, cfg,
+                timeout_sec=remaining, on_token=batch_on_token, thinking=thinking,
+            )
+            if summary is None or topics is None:
+                debug_log("⚠️ diary summary batch incomplete; no write", "memory")
+                return None
+            if time.monotonic() >= deadline:
+                debug_log("⚠️ diary generation deadline exhausted; no write", "memory")
+                return None
 
         # Debug: Log the generated summary and topics
         summary_preview = summary[:200] + "..." if len(summary) > 200 else summary

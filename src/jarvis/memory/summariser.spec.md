@@ -10,7 +10,16 @@ The summariser prompt is the only write-time defence. There is no post-process s
 
 ## Core Behaviour
 
-- Input: recent conversation chunks (last 10) plus, if present, the previous summary for the same day.
+- Input per generation pass: up to 10 conversation chunks plus the previous summary.
+  A diary flush processes the complete pending snapshot in chronological batches,
+  feeding each intermediate summary into the next pass. Intermediate results stay
+  in memory; only the completed snapshot is written. All passes share the caller's
+  generation deadline. A failed/incomplete pass or exhausted deadline preserves
+  the existing diary and leaves the snapshot pending. Messages arriving during
+  generation remain pending beyond the captured save watermark.
+  Earlier user-stated facts, preferences, plans and attributed claims remain
+  relevant even when absent from the current batch; correction chains are retained.
+  Live diary tokens show only the final pass, keeping intermediate drafts private.
 - Output: a free-form summary (≤ 200 words) and 3–5 comma-separated topic keywords.
 - Direct generation reserves a bounded 1,024-token allowance, including reasoning,
   the summary and topics, within the caller's timeout. Streaming retains its
@@ -103,6 +112,8 @@ Idempotent once the mapping has been applied: a second run finds no tags to chan
 
 | Test | Location | Guards |
 |------|----------|--------|
+| Pending snapshot cases | `tests/test_diary_pending_batches.py` | Complete input coverage, atomic failure, shared deadline, retry, concurrent arrivals and final-pass streaming |
+| English and Turkish pending conversations | `evals/test_diary_pending_snapshot.py` | Early, middle and late facts retained through real direct and streaming generation |
 | `test_omits_deflection_narration_for_unknown_entity` | `evals/test_diary_summariser_hygiene.py` | Rule 1, resolved case |
 | `test_omits_deflection_when_topic_never_resolved` | `evals/test_diary_summariser_hygiene.py` | Rule 1, unresolved case |
 | `test_unrelated_topics_are_not_welded_into_one_clause` | `evals/test_diary_summariser_hygiene.py` | Rule 3 |

@@ -132,6 +132,7 @@ Jarvis is actively developed, primarily on macOS. Windows and Linux behaviour ma
 - **Continuous speech is split at your utterance limit.** The shorter limit during speech playback helps interruption requests reach recognition promptly. Both limits are adjustable in Settings.
 - **Reasoning models can take longer.** Planning, tool-argument resolution, tool selection, meal logging and diary summaries reserve room for reasoning and the final answer, with the configured timeout still limiting the wait.
 - **GPT-OSS always reasons.** Its Ollama thinking toggle selects low or high reasoning effort; turning it off selects low effort rather than disabling reasoning.
+- **Long conversations feed the complete pending snapshot into the diary.** Bounded batches share the configured generation timeout; incomplete saves keep the dialogue pending for a retry.
 - **Meal logging confirms saved meals even if coaching is unavailable.** Optional follow-up advice can fail without logging the meal twice.
 - **Weather place fallback supports abbreviated names.** Names such as Washington D.C. retain internal punctuation when location detection is unavailable.
 - **Slow speech recognition produces guidance.** After several utterances decode slower than real time, Logs recommends a smaller Whisper model or checking available acceleration. Smaller models can reduce accuracy.
