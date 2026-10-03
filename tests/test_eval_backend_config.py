@@ -198,7 +198,7 @@ def test_voice_evals_reach_selected_backend(monkeypatch, provider, url, expected
     ('openai_compatible', 'http://127.0.0.1:8000/v1', '/'),
     ('embedding_override', 'http://127.0.0.1:8000/v1', '/'),
 ])
-@pytest.mark.parametrize('strategy', ['llm', 'embedding'])
+@pytest.mark.parametrize('strategy', ['llm', 'embedding', 'context', 'implicit'])
 def test_tool_selection_evals_use_selected_backends(monkeypatch, provider, base, route, strategy):
     import requests
     from unittest.mock import MagicMock
@@ -232,7 +232,14 @@ def test_tool_selection_evals_use_selected_backends(monkeypatch, provider, base,
         return response
     monkeypatch.setattr(requests, 'post', post)
     from evals import test_tool_selection as evaluation
-    if strategy == 'llm':
+    if strategy in ('context', 'implicit'):
+        if strategy == 'context':
+            from evals.test_tool_router_context_aware import _route
+        else:
+            from evals.test_tool_router_implicit import _route
+        selected = _route("what's the weather like tomorrow", None)
+        assert 'getWeather' in selected and 'stop' in selected
+    elif strategy == 'llm':
         evaluation.TestToolSelectionFilteringLLM().test_llm_selects_relevant_tools(
             cfg, "what's the weather like tomorrow", ['getWeather'], 5,
         )
@@ -243,8 +250,8 @@ def test_tool_selection_evals_use_selected_backends(monkeypatch, provider, base,
             )
         except pytest.skip.Exception:
             pytest.fail('Available embeddings must run independently of the chat model name')
-    suffix = ('chat' if provider == 'ollama' else 'chat/completions') if strategy == 'llm' else 'embeddings'
-    expected_model = 'synthetic-router-model' if strategy == 'llm' else cfg.embedding_model
+    suffix = ('chat' if provider == 'ollama' else 'chat/completions') if strategy != 'embedding' else 'embeddings'
+    expected_model = 'synthetic-router-model' if strategy != 'embedding' else cfg.embedding_model
     expected_endpoint = base + route + suffix
     if provider == 'embedding_override' and strategy == 'embedding':
         expected_endpoint = cfg.embedding_base_url + '/api/embeddings'
@@ -270,13 +277,21 @@ def test_embedding_eval_skips_only_when_selected_model_is_missing(monkeypatch, n
 
 
 @pytest.mark.parametrize('response', [None, 'unrecognisedTool'])
-def test_router_eval_rejects_fallback_even_when_expected_tool_matches(monkeypatch, response):
+@pytest.mark.parametrize('entry', ['filtering', 'context', 'implicit'])
+def test_router_eval_rejects_fallback_even_when_expected_tool_matches(monkeypatch, response, entry):
     from evals import test_tool_selection as evaluation
     from unittest.mock import MagicMock
     backend = MagicMock()
     backend.direct.return_value = response
-    monkeypatch.setattr(evaluation, 'get_llm_backend', lambda cfg: backend)
+    monkeypatch.setattr('evals.tool_routing.get_llm_backend', lambda cfg: backend)
     with pytest.raises(AssertionError, match='router (returned no model response|response did not select)'):
-        evaluation.TestToolSelectionFilteringLLM().test_llm_selects_relevant_tools(
-            helpers.MockConfig(), 'weather', ['getWeather'], 5,
-        )
+        if entry == 'filtering':
+            evaluation.TestToolSelectionFilteringLLM().test_llm_selects_relevant_tools(
+                helpers.MockConfig(), 'weather', ['getWeather'], 5,
+            )
+        elif entry == 'context':
+            from evals.test_tool_router_context_aware import _route
+            _route('weather', None)
+        else:
+            from evals.test_tool_router_implicit import _route
+            _route('weather')

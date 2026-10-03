@@ -9,14 +9,9 @@ Run: .venv/bin/python -m pytest evals/test_tool_selection.py -v
 
 import pytest
 import re
-from unittest.mock import patch
 
-from evals.helpers import is_judge_llm_available
-from jarvis.llm import get_llm_backend, get_embedding_backend
-
-requires_judge_llm = pytest.mark.skipif(
-    not is_judge_llm_available(), reason="🧰 Selected routing model is unavailable",
-)
+from evals.tool_routing import requires_judge_llm, route_tools
+from jarvis.llm import get_embedding_backend
 
 
 # =============================================================================
@@ -128,30 +123,9 @@ class TestToolSelectionFilteringLLM:
         must_include,
         max_tools,
     ):
-        from jarvis.tools.selection import select_tools, ToolSelectionStrategy
         from jarvis.tools.registry import BUILTIN_TOOLS
 
-        backend = get_llm_backend(mock_config)
-        model_reply = None
-        direct = backend.direct
-        def record_reply(*args, **kwargs):
-            nonlocal model_reply
-            model_reply = direct(*args, **kwargs)
-            return model_reply
-
-        with patch.object(backend, 'direct', side_effect=record_reply):
-            selected = select_tools(
-                query=query,
-                builtin_tools=BUILTIN_TOOLS,
-                mcp_tools={},
-                strategy=ToolSelectionStrategy.LLM,
-                llm_backend=backend,
-                llm_model=mock_config.llm_chat_model or mock_config.ollama_chat_model,
-                llm_timeout_sec=15.0,
-            )
-        assert isinstance(model_reply, str) and model_reply.strip(), (
-            "The router returned no model response; keyword fallback is not LLM accuracy"
-        )
+        selected, model_reply = route_tools(mock_config, query)
 
         total_builtin = len(BUILTIN_TOOLS)
 
