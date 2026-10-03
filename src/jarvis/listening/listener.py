@@ -472,8 +472,11 @@ class VoiceListener(threading.Thread):
         self.transcribe_lock = threading.Lock()  # Shared lock for Whisper model access
         self._audio_q: queue.Queue = queue.Queue(maxsize=64)
         self._transcription_jobs_q: queue.Queue = queue.Queue(maxsize=8)
-        self._transcription_results_q: queue.Queue = queue.Queue()
+        self._transcription_results_q: queue.Queue = queue.Queue(maxsize=8)
         self._transcription_worker_thread: Optional[threading.Thread] = None
+        self._audio_worker_thread: Optional[threading.Thread] = None
+        self._audio_state_lock = threading.RLock()
+        self._audio_generation = 0
         self._pre_roll: deque = deque()
 
         # Audio callback monitoring (for debugging)
@@ -545,9 +548,13 @@ class VoiceListener(threading.Thread):
 
     @_dictation_active.setter
     def _dictation_active(self, active: bool) -> None:
-        if active and not self._dictation_is_active:
-            self._dictation_generation += 1
-        self._dictation_is_active = active
+        with self._audio_state_lock:
+            if active and not self._dictation_is_active:
+                self._dictation_generation += 1
+                self._dictation_is_active = active
+                self._clear_audio_buffers()
+            else:
+                self._dictation_is_active = active
 
     def _start_thinking_tune(self) -> None:
         """Start the thinking tune when processing a query."""
@@ -618,6 +625,9 @@ class VoiceListener(threading.Thread):
             text: Transcribed text from audio
             utterance_energy: Pre-calculated energy from the utterance frames
         """
+        generation = self._dictation_generation
+        if not self._transcription_is_current(generation):
+            return
         if not text or not text.strip():
             # Check for timeouts
             if self.state_manager.check_collection_timeout():
@@ -879,6 +889,10 @@ class VoiceListener(threading.Thread):
                 in_hot_window=could_be_hot_window,
                 current_text=text_lower,
             )
+
+            if not self._transcription_is_current(generation):
+                debug_log("discarded intent result after voice generation invalidation", "voice")
+                return
 
             if intent_judgment is not None:
                 # Log intent judge decision for user visibility
@@ -1302,6 +1316,9 @@ class VoiceListener(threading.Thread):
         Args:
             query: Complete user query to process
         """
+        generation = self._dictation_generation
+        if not self._transcription_is_current(generation):
+            return
         debug_log(f"dispatching query: '{query}'", "voice")
 
         # Clear audio buffers to prevent stale audio from next query
@@ -1327,6 +1344,9 @@ class VoiceListener(threading.Thread):
         # rather than being dropped (see daemon.query_lock).
         try:
             with query_lock():
+                if not self._transcription_is_current(generation):
+                    debug_log("discarded voice dispatch after waiting for query lock", "voice")
+                    return
                 reply = run_reply_engine(
                     self.db, self.cfg, None, query, self.dialogue_memory,
                     language=self._last_detected_language,
@@ -1337,8 +1357,12 @@ class VoiceListener(threading.Thread):
             debug_log(f"reply engine exception: {e}", "voice")
             self._stop_thinking_tune()
             # Provide user feedback via TTS
-            if self.tts and self.tts.enabled:
+            if self._transcription_is_current(generation) and self.tts and self.tts.enabled:
                 self.tts.speak("Sorry, I encountered an error processing your request.")
+            return
+
+        if not self._transcription_is_current(generation):
+            debug_log("discarded voice reply after voice generation invalidation", "voice")
             return
 
         # Handle TTS with proper callbacks
@@ -1386,23 +1410,25 @@ class VoiceListener(threading.Thread):
         Call this on state transitions to prevent old audio from being
         incorrectly concatenated with new input.
         """
-        self._utterance_frames = []
-        self._pre_roll.clear()
-        self._pending_audio = None
-        self.is_speech_active = False
-        self._silence_frames = 0
+        with self._audio_state_lock:
+            self._audio_generation += 1
+            self._utterance_frames = []
+            self._pre_roll.clear()
+            self._pending_audio = None
+            self.is_speech_active = False
+            self._silence_frames = 0
 
-        # Clear wake detection state
-        self._wake_timestamp = None
+            # Clear wake detection state
+            self._wake_timestamp = None
 
-        # Drain the audio queue
-        try:
-            while not self._audio_q.empty():
-                self._audio_q.get_nowait()
-        except Exception:
-            pass
+            # Drain the audio queue
+            try:
+                while not self._audio_q.empty():
+                    self._audio_q.get_nowait()
+            except Exception:
+                pass
 
-        debug_log("audio buffers cleared", "voice")
+            debug_log("audio buffers cleared", "voice")
 
     def _is_speech_frame(self, frame) -> bool:
         """Determine if audio frame contains speech."""
@@ -1662,19 +1688,19 @@ class VoiceListener(threading.Thread):
                 self._report_transcription_performance(
                     len(job.audio) / self._samplerate, time.monotonic() - decode_started,
                 )
-            self._transcription_results_q.put(
-                _TranscriptionResult(
-                    text=text,
-                    language=language,
-                    low_confidence_events=low_confidence_events,
-                    start_time=job.start_time,
-                    end_time=job.end_time,
-                    energy=job.energy,
-                    dictation_generation=job.dictation_generation,
-                    captured_during_tts=job.captured_during_tts,
-                    captured_tts_start_time=job.captured_tts_start_time,
-                )
+            result = _TranscriptionResult(
+                text=text, language=language, low_confidence_events=low_confidence_events,
+                start_time=job.start_time, end_time=job.end_time, energy=job.energy,
+                dictation_generation=job.dictation_generation,
+                captured_during_tts=job.captured_during_tts,
+                captured_tts_start_time=job.captured_tts_start_time,
             )
+            while self._transcription_is_current(job.dictation_generation):
+                try:
+                    self._transcription_results_q.put(result, timeout=0.1)
+                    break
+                except queue.Full:
+                    continue
 
     def _report_transcription_performance(self, audio_seconds: float, decode_seconds: float) -> None:
         """Warn once when several usable speech samples decode slower than real time."""
@@ -2012,6 +2038,7 @@ class VoiceListener(threading.Thread):
         try:
             self._run()
         finally:
+            self._finish_audio_worker()
             if self._transcription_worker_thread is not None:
                 self._finish_transcription_worker()
 
@@ -2429,17 +2456,6 @@ class VoiceListener(threading.Thread):
             debug_log(f"Unsupported VAD frame duration {frame_ms}; using 20 ms", "voice")
             frame_ms = 20
         self._frame_samples = max(1, int(self._samplerate * frame_ms / 1000))
-        pre_roll_ms = int(getattr(self.cfg, "vad_pre_roll_ms", 240))
-        endpoint_silence_ms = int(getattr(self.cfg, "endpoint_silence_ms", 800))
-        max_utt_ms = int(getattr(self.cfg, "max_utterance_ms", 12000))
-        tts_max_utt_ms = int(getattr(self.cfg, "tts_max_utterance_ms", 3000))
-
-        pre_roll_max_frames = max(1, int(pre_roll_ms / frame_ms))
-        endpoint_silence_frames = max(1, int(endpoint_silence_ms / frame_ms))
-        # max_utt_frames will be calculated dynamically based on TTS state
-        normal_max_utt_frames = max(1, int(max_utt_ms / frame_ms))
-        tts_max_utt_frames = max(1, int(tts_max_utt_ms / frame_ms))
-
         debug_log(f"audio params: sample_rate={self._samplerate}, frame_ms={frame_ms}, frame_samples={self._frame_samples}", "voice")
         debug_log(f"VAD: enabled={bool(self._vad is not None)}, aggressiveness={getattr(self.cfg, 'vad_aggressiveness', 2)}", "voice")
 
@@ -2573,44 +2589,80 @@ class VoiceListener(threading.Thread):
             except Exception:
                 pass
 
-            dictation_paused = False
+            self._start_audio_worker(frame_ms)
             while not self._should_stop:
                 if self._dictation_active:
-                    if not dictation_paused:
-                        self._clear_audio_buffers()
-                        dictation_paused = True
                     while True:
                         try:
                             self._transcription_results_q.get_nowait()
                         except queue.Empty:
                             break
-                    self._check_audio_health()
                     time.sleep(0.05)
                     continue
-                dictation_paused = False
                 try:
-                    result = self._transcription_results_q.get_nowait()
+                    result = self._transcription_results_q.get(timeout=0.2)
                 except queue.Empty:
                     pass
                 else:
                     self._handle_transcription_result(result)
-
-                if self._should_stop or self._dictation_active:
-                    continue
-
-                self._check_audio_health()
-
-                try:
-                    item = self._audio_q.get(timeout=0.2)
-                except queue.Empty:
-                    # Critical: Check timeouts even when no audio is being received
-                    # This ensures hot window expiry fires reliably
+                if not self._should_stop and not self._dictation_active:
                     self._check_query_timeout()
-                    continue
 
-                if self._should_stop or self._dictation_active:
-                    continue
+    def _start_audio_worker(self, frame_ms: int) -> None:
+        if self._should_stop or self._audio_worker_thread is not None:
+            return
+        self._audio_worker_thread = threading.Thread(
+            target=self._run_audio_worker, args=(frame_ms,), daemon=True,
+            name="jarvis-audio-frames",
+        )
+        self._audio_worker_thread.start()
+        debug_log("started serial audio-frame worker", "voice")
 
+    def _run_audio_worker(self, frame_ms: int) -> None:
+        try:
+            self._consume_audio_frames(frame_ms)
+        except Exception as exc:
+            debug_log(f"audio-frame worker failed ({type(exc).__name__})", "voice")
+            print("  ❌ Audio-frame processing stopped. Restart Jarvis to resume listening.", flush=True)
+            self.stop()
+
+    def _finish_audio_worker(self) -> None:
+        self._should_stop = True
+        worker = self._audio_worker_thread
+        if worker is None:
+            return
+        worker.join(timeout=0.5)
+        self._audio_worker_thread = None
+        if worker.is_alive():
+            debug_log("audio-frame worker still finishing after listener shutdown", "voice")
+        else:
+            debug_log("finished audio-frame processing", "voice")
+
+    def _consume_audio_frames(self, frame_ms: int) -> None:
+        pre_roll_ms = int(getattr(self.cfg, "vad_pre_roll_ms", 240))
+        endpoint_silence_ms = int(getattr(self.cfg, "endpoint_silence_ms", 800))
+        max_utt_ms = int(getattr(self.cfg, "max_utterance_ms", 12000))
+        tts_max_utt_ms = int(getattr(self.cfg, "tts_max_utterance_ms", 3000))
+        pre_roll_max_frames = max(1, int(pre_roll_ms / frame_ms))
+        endpoint_silence_frames = max(1, int(endpoint_silence_ms / frame_ms))
+        normal_max_utt_frames = max(1, int(max_utt_ms / frame_ms))
+        tts_max_utt_frames = max(1, int(tts_max_utt_ms / frame_ms))
+        while not self._should_stop:
+            if self._dictation_active:
+                self._check_audio_health()
+                time.sleep(0.05)
+                continue
+            self._check_audio_health()
+
+            try:
+                item = self._audio_q.get(timeout=0.2)
+            except queue.Empty:
+                continue
+
+            if self._should_stop or self._dictation_active:
+                continue
+
+            with self._audio_state_lock:
                 if item is None:
                     # Reset marker
                     self._pending_audio = None
@@ -2623,8 +2675,13 @@ class VoiceListener(threading.Thread):
                 if np is None:
                     continue
 
-                frame_timestamp = time.time()  # Timestamp for this batch of frames
-                for frame in self._audio_frames(item):
+                frames = self._audio_frames(item)
+                audio_generation = self._audio_generation
+            for frame in frames:
+                with self._audio_state_lock:
+                    if (self._should_stop or self._dictation_active
+                            or audio_generation != self._audio_generation):
+                        break
                     # VAD decision
                     is_voice = self._is_speech_frame(frame)
                     self._speech_frames_seen += int(is_voice)
@@ -2669,8 +2726,6 @@ class VoiceListener(threading.Thread):
                             self._finalize_utterance()
                             self._pre_roll.clear()
 
-                    # Check for query timeouts
-                    self._check_query_timeout()
 
     def _finalize_utterance(self) -> None:
         """Queue a completed utterance for serial transcription."""

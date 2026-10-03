@@ -128,6 +128,7 @@ Jarvis is actively developed, primarily on macOS. Windows and Linux behaviour ma
 - **macOS 26+ dictation is unavailable** because of a pynput incompatibility ([#172](https://github.com/isair/jarvis/issues/172)). This limitation concerns the global dictation hotkey.
 - **Spoken “stop” can be mistaken for echo** while Jarvis is speaking ([#24](https://github.com/isair/jarvis/issues/24)). Use a standalone configured stop phrase; echoed longer instructions containing it are ignored.
 - **No mobile app** is available ([#17](https://github.com/isair/jarvis/issues/17)).
+- **Capture continues while Jarvis thinks.** Speech detection and assembly run independently of intent judging and reply generation. Recognition backlogs are bounded; Logs warns when speech arrives faster than it can be processed.
 - **Continuous speech is split at your utterance limit.** The shorter limit during speech playback helps interruption requests reach recognition promptly. Both limits are adjustable in Settings.
 - **Reasoning models can take longer to choose tools.** Tool selection reserves room for reasoning and the final answer, with the configured timeout still limiting the wait.
 - **GPT-OSS always reasons.** Its Ollama thinking toggle selects low or high reasoning effort; turning it off selects low effort rather than disabling reasoning.
