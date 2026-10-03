@@ -223,7 +223,10 @@ class Settings:
 
     # Agentic Loop
     agentic_max_turns: int
-    tool_selection_strategy: str  # "all", "keyword", "embedding", or "llm"
+    tool_selection_strategy: str  # "all", "keyword", "embedding", "llm", or "decision"
+    tool_decision_base_url: str
+    tool_decision_model: str
+    tool_decision_threshold: float
     # None = auto (on for SMALL models, off for LARGE). Explicit true/false forces.
     evaluator_enabled: Optional[bool]
     # Upper bound on toolSearchTool invocations per reply turn. The cap
@@ -631,6 +634,9 @@ def get_default_config() -> Dict[str, Any]:
         # Agentic Loop
         "agentic_max_turns": 8,
         "tool_selection_strategy": "llm",
+        "tool_decision_base_url": "http://127.0.0.1:8000",
+        "tool_decision_model": "multilingual",
+        "tool_decision_threshold": 0.7,
         # None = auto (on for small models, off for large). Set true/false to force.
         "evaluator_enabled": None,
         # Cap the number of toolSearchTool invocations per reply.
@@ -851,7 +857,7 @@ def load_settings() -> Settings:
         tool_result_digest_enabled = bool(_tool_digest_raw)
     agentic_max_turns = int(merged.get("agentic_max_turns", 8))
     tool_selection_strategy = str(merged.get("tool_selection_strategy", "llm")).lower()
-    if tool_selection_strategy not in ("all", "keyword", "embedding", "llm"):
+    if tool_selection_strategy not in ("all", "keyword", "embedding", "llm", "decision"):
         tool_selection_strategy = "llm"
     _eval_raw = merged.get("evaluator_enabled", None)
     evaluator_enabled: Optional[bool]
@@ -1009,6 +1015,9 @@ def load_settings() -> Settings:
         tool_result_digest_enabled=tool_result_digest_enabled,
         agentic_max_turns=agentic_max_turns,
         tool_selection_strategy=tool_selection_strategy,
+        tool_decision_base_url=str(merged["tool_decision_base_url"]).strip().rstrip("/"),
+        tool_decision_model=str(merged["tool_decision_model"]).strip(),
+        tool_decision_threshold=float(merged["tool_decision_threshold"]),
         evaluator_enabled=evaluator_enabled,
         tool_search_max_calls=tool_search_max_calls,
         evaluator_nudge_max=evaluator_nudge_max,

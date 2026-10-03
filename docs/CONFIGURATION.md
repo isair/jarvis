@@ -129,6 +129,42 @@ Both thresholds are exposed in the Settings window under *Whisper*.
 
 **Tool Router** - When `"tool_selection_strategy": "llm"` (the default), Jarvis asks the fast model to pick which tools are relevant for each query, shrinking the tool catalogue the chat model sees. It's already warm and small enough not to stall the turn. Other strategies: `"keyword"` (fast, no LLM), `"embedding"` (nomic-embed-text), `"all"` (no filtering).
 
+<details>
+<summary>🧪 Experimental local decision classifier</summary>
+
+The `"decision"` strategy uses a self-hosted System One-compatible server to score tool relevance, without generating text. Both initial routing and `toolSearchTool` use it. It falls back to the fast model, then keyword routing, when classification is uncertain or the server is unavailable. It does not execute tools.
+
+Keep the default router unless your classifier passes the live routing evals. Typed probabilities alone do not establish routing accuracy. No hosted Jev integration is included.
+
+A locally runnable server is [Laya](https://github.com/NandhaKishorM/laya). Install it in a **separate Python environment** to keep its dependencies separate from Jarvis's speech models:
+
+```bash
+python -m venv /path/to/classifier-env
+/path/to/classifier-env/bin/python -m pip install 'laya[serve]==0.3.24'
+LAYA_HOST=127.0.0.1 LAYA_MODELS=multilingual LAYA_DEVICE=cpu /path/to/classifier-env/bin/laya-serve
+```
+
+The first server startup downloads its checkpoint; inference runs on your machine. The multilingual checkpoint is approximately 647 MiB on disk. Run these evals before enabling it:
+
+```bash
+EVAL_DECISION_BASE_URL=http://127.0.0.1:8000 python -m pytest evals/test_decision_tool_selection.py -v
+```
+
+Configure the server and threshold in **Settings → Memory & Dialogue**, or in `config.json`:
+
+```json
+{
+  "tool_selection_strategy": "decision",
+  "tool_decision_base_url": "http://127.0.0.1:8000",
+  "tool_decision_model": "multilingual",
+  "tool_decision_threshold": 0.7
+}
+```
+
+The checkpoint name is server-specific. A threshold above `0.5` and at most `1` determines which probabilities count as decisions. The router rejects incomplete or truncated answers, limits selection to five tools and always retains `stop`. Classifier requests bypass environment HTTP proxies and do not follow redirects. The client uses `llm_tools_timeout_sec` as its request timeout. Keep your server resident to avoid loading a checkpoint on each turn.
+
+</details>
+
 **Task-list Planner** - Before the agentic loop, Jarvis runs a short planning pass that decomposes multi-step queries into an ordered list of sub-tasks. For small models (`gemma4:e2b` class), each planned step is directly resolved to a concrete tool call without relying on the chat model to re-plan turn-by-turn. This significantly improves multi-step reliability. Config options:
 
 ```json

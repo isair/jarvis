@@ -91,6 +91,11 @@ class ToolSearchTool(Tool):
                 embedding_backend=get_embedding_backend(cfg),
                 embed_model=cfg.embedding_model,
                 embed_timeout_sec=float(getattr(cfg, "llm_embedding_timeout_sec", 10.0)),
+                **({
+                    "decision_base_url": cfg.tool_decision_base_url,
+                    "decision_model": cfg.tool_decision_model,
+                    "decision_threshold": cfg.tool_decision_threshold,
+                } if strategy == ToolSelectionStrategy.DECISION else {}),
             )
         except Exception as e:
             debug_log(f"toolSearchTool: select_tools failed: {e}", "tools")

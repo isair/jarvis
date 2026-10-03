@@ -18,6 +18,8 @@ allow-list = <router's picks> + stop + toolSearchTool
 
 When the model invokes `toolSearchTool(query=...)`, the tool re-runs the same routing logic (`select_tools` from `src/jarvis/tools/selection.py`) against the new query, and the returned tool names are merged into the loop's allow-list for subsequent turns. `stop` and `toolSearchTool` itself always remain in the allow-list.
 
+The experimental `decision` strategy uses the same self-hosted classifier URL, checkpoint and relevance threshold as initial routing. Its query is self-contained; it does not inject recent dialogue independently. Uncertain or unavailable classification uses the existing LLM/keyword fallback. Tool discovery returns names and descriptions, without executing the selected tools.
+
 ### Contract
 
 - **Name**: `toolSearchTool`
@@ -42,7 +44,7 @@ The engine caps invocations per reply via `tool_search_max_calls` (default 3). B
 
 - Not a free-form tool discovery surface: it uses the same routing pipeline as the pre-loop call, not a raw "list every tool" dump. The router already applies allow/deny logic and MCP-awareness; reusing it keeps semantics consistent.
 - Not a way to bypass authorisation: if the router would not have picked a tool pre-loop, `toolSearchTool` will not surface it either.
-- Not free: each call is an LLM round-trip. The model is told to use it only when none of the currently-available tools fit.
+- Each call runs the configured routing strategy. The model is told to use it only when none of the currently-available tools fit.
 
 ### Testing
 

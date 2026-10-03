@@ -10,6 +10,7 @@ class ToolSelectionStrategy(Enum):
     KEYWORD = "keyword"
     EMBEDDING = "embedding"
     LLM = "llm"
+    DECISION = "decision"
 ```
 
 ### Strategies
@@ -22,6 +23,20 @@ Controlled by `tool_selection_strategy` in config:
 | `"keyword"`   | Score tools by keyword overlap with the query; return top matches.  | No        | None             |
 | `"embedding"` | Rank tools by cosine similarity of embeddings via nomic-embed-text. | No        | numpy            |
 | `"llm"`       | Ask a lightweight LLM call to pick the top 3–5 relevant tool names (default). | Yes | None |
+| `"decision"`  | Experimental typed relevance classification through a self-hosted System One server, with LLM/keyword fallback. | Only on fallback | Separate local classifier server |
+
+### Typed decision strategy (experimental)
+
+1. Send one `POST /v1/systemone` request to `tool_decision_base_url`, naming `tool_decision_model`.
+2. Supply the query and optional context hint as structured state. Each actionable builtin/MCP tool has an independent `noul` relevance question containing its complete description. `stop` and `toolSearchTool` are excluded from classification. A separate question asks whether the query needs no tools; its ID cannot collide with an MCP tool name.
+3. Require a finite probability in `[0, 1]` for every requested question. Missing, malformed, truncated or contradictory answers are unknown decisions.
+4. Select up to five tools above `tool_decision_threshold`, ranked by probability, then append `stop`. An above-threshold no-tools decision returns only `stop` if no tool also passes the threshold.
+5. Uncertain, incomplete, invalid or unavailable decisions use the existing LLM router. If no chat backend is available, its keyword fallback applies.
+6. Disable environment HTTP proxies and redirects for classifier requests. The client sends no hosted-provider credentials and has no vendor endpoint or hosted-provider dependency.
+
+The default strategy is `llm`. The decision strategy requires a model that passes the live tool-routing evals against its configured catalogue; providing a typed probability does not guarantee correct routing.
+
+Configuration: `tool_decision_base_url` defaults to `http://127.0.0.1:8000`, `tool_decision_model` to `multilingual`, and `tool_decision_threshold` to `0.7`. Thresholds must be finite, greater than `0.5` and at most `1`; invalid thresholds use the fallback router. Requests use `llm_tools_timeout_sec` and an 8,192-token state budget. The local server remains responsible for loading and retaining its checkpoint.
 
 ### Always-included Tools
 
@@ -75,11 +90,17 @@ def select_tools(
     builtin_tools: Dict[str, Tool],
     mcp_tools: Dict[str, ToolSpec],
     strategy: ToolSelectionStrategy = ToolSelectionStrategy.ALL,
-    llm_base_url: str = "",
+    *,
+    llm_backend: Optional[LLMBackend] = None,
     llm_model: str = "",
     llm_timeout_sec: float = 8.0,
     embed_model: str = "",
     embed_timeout_sec: float = 10.0,
+    embedding_backend: Optional[LLMBackend] = None,
+    context_hint: Optional[str] = None,
+    decision_base_url: str = "http://127.0.0.1:8000",
+    decision_model: str = "multilingual",
+    decision_threshold: float = 0.7,
 ) -> List[str]:
     """Return list of tool names relevant to the query."""
 ```
@@ -93,7 +114,7 @@ Called from the reply engine (Step 6) before `generate_tools_json_schema()` and 
 - Key: `tool_selection_strategy`
 - Type: `str` (validated against `ToolSelectionStrategy` enum values)
 - Default: `"llm"`
-- Valid values: `"all"`, `"keyword"`, `"embedding"`, `"llm"`
+- Valid values: `"all"`, `"keyword"`, `"embedding"`, `"llm"`, `"decision"`
 
 - Key: `fast_model` (the shared fast tier)
 - Type: `str`

@@ -136,7 +136,7 @@ Most people can use **Settings** from the tray. Advanced setups can edit `~/.con
 
 [**Open the configuration guide →**](docs/CONFIGURATION.md)
 
-The guide covers local model servers, speech recognition, Low Power Mode, voices, dictation, location, MCP integrations and troubleshooting.
+The guide covers local model servers, speech recognition, Low Power Mode, voices, dictation, location, MCP integrations, experimental local tool classifiers and troubleshooting.
 
 ### Dictation at a glance
 

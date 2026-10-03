@@ -326,6 +326,19 @@ def _build_field_metadata() -> List[FieldMeta]:
     f("agentic_max_turns", "Agentic Max Turns",
       "Maximum turns in agentic tool-use loops",
       "memory", "int", min_val=1, max_val=30)
+    f("tool_selection_strategy", "Tool Router",
+      "Choose how Jarvis finds relevant tools",
+      "memory", "choice", choices=[("llm", "Fast model"), ("decision", "Local classifier (experimental)"),
+                                    ("keyword", "Keywords"), ("embedding", "Embeddings"), ("all", "All tools")])
+    f("tool_decision_base_url", "Decision Server URL",
+      "Your self-hosted typed-decision server, used by the decision router",
+      "memory", "str")
+    f("tool_decision_model", "Decision Model",
+      "Checkpoint served by your decision server",
+      "memory", "str")
+    f("tool_decision_threshold", "Decision Threshold",
+      "Minimum relevance probability; uncertain decisions use the fast model",
+      "memory", "float", min_val=0.51, max_val=1.0, step=0.01)
 
     # --- Location ---
     f("location_enabled", "Enable Location",
