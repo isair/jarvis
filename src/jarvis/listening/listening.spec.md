@@ -228,6 +228,15 @@ After TTS finishes, allow wake-word-free follow-up.
 
 **Duration:** Configurable (default: 3 seconds)
 
+**Timer ownership:** Activation and expiry callbacks belong to the current
+scheduled window. Cancelled or superseded callbacks cannot clear a newer
+pending activation, open a cancelled window or expire a replacement window.
+State changes, timer replacement and shutdown are serialised under one
+reentrant lock. Expiry uses the remaining duration from activation, including
+notification time. Shutdown rejects further activation/reset scheduling and
+hot-window admission; manual expiry also cancels pending activation.
+
+
 **Behaviour:** Speech first passes through an early fuzzy echo check (rapidfuzz `partial_ratio`, threshold 70, with word-count guard to avoid catching mixed echo+speech). Pure echo is silently rejected **without calling the intent judge** — this keeps echo rejection instant and prevents it from blocking the audio loop. The hot window timer is **not** reset on echo rejection. Non-echo speech is sent to the intent judge, but if the judge rejects it, the rejection is overridden — all non-echo speech in the hot window is accepted as a follow-up query.
 
 **Mixed echo+speech handling:** When Whisper merges TTS echo and user speech into one chunk (e.g. mic picks up TTS then user speaks), the word-count guard detects the extra content and lets it through to the intent judge. The judge extracts the user's actual query from the mixed transcript. Post-judge echo checks also use the word-count guard and verify the judge's extracted query isn't itself echo before rejecting.
