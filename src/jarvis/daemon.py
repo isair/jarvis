@@ -113,6 +113,41 @@ CHAT_NEW_SESSION_IPC_PREFIX = "__CHAT_NEW_SESSION__"
 CHAT_REWIND_IPC_PREFIX = "__CHAT_REWIND__:"
 CHAT_RESTORE_IPC_PREFIX = "__CHAT_RESTORE__:"
 
+# Rejection feedback carries no transcript or confidence payload.
+VOICE_IPC_PREFIX = "__VOICE__:"
+_voice_feedback_pending = threading.Event()
+_voice_feedback_callback = None
+
+
+def set_voice_feedback_callback(callback=None) -> None:
+    """Register a non-blocking rejection notification consumer."""
+    global _voice_feedback_callback
+    _voice_feedback_callback = callback
+    _voice_feedback_pending.clear()
+
+
+def _queue_low_confidence(_event) -> None:
+    """Coalesce listener notifications without retaining rejected speech."""
+    if not _global_stop_requested:
+        _voice_feedback_pending.set()
+
+
+def _dispatch_voice_feedback() -> None:
+    """Deliver pending feedback from the daemon controller thread."""
+    if not _voice_feedback_pending.is_set():
+        return
+    _voice_feedback_pending.clear()
+    if _global_stop_requested:
+        return
+    callback = _voice_feedback_callback
+    if callback is not None:
+        try:
+            callback()
+        except Exception as exc:
+            debug_log(f"voice feedback callback failed ({type(exc).__name__})", "voice")
+    elif os.environ.get("JARVIS_STDIN_IPC") == "1":
+        _emit_ipc_event(VOICE_IPC_PREFIX, "low_confidence", None, "voice")
+
 
 def request_stop() -> None:
     """Request the daemon to stop gracefully."""
@@ -764,6 +799,7 @@ def main(smoke_test: bool = False) -> None:
 
     # Reset stop flag at start (in case of restart)
     _global_stop_requested = False
+    _voice_feedback_pending.clear()
 
     _install_signal_handlers()
 
@@ -937,7 +973,10 @@ def main(smoke_test: bool = False) -> None:
     # Initialize voice listening (only if dependencies available)
     print("🎤 Preparing speech recognition in the background...", flush=True)
     voice_thread: Optional[threading.Thread] = None
-    voice_thread = VoiceListener(db, cfg, tts, _global_dialogue_memory)
+    voice_thread = VoiceListener(
+        db, cfg, tts, _global_dialogue_memory,
+        on_low_confidence=_queue_low_confidence,
+    )
     voice_thread.start()
 
     # Initialize dictation engine (hold-to-dictate)
@@ -1111,7 +1150,8 @@ def main(smoke_test: bool = False) -> None:
     try:
         # Main daemon loop
         while not _global_stop_requested:
-            time.sleep(1.0)
+            _voice_feedback_pending.wait(timeout=1.0)
+            _dispatch_voice_feedback()
             now = time.time()
 
             # Periodically check if diary should be updated
