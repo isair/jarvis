@@ -320,6 +320,15 @@ class MockConfig:
     use_stdin: bool = True
 
 
+def planner_config() -> MockConfig:
+    """Use the selected evaluation model with canonical planner settings."""
+    return MockConfig(
+        llm_provider="ollama",
+        llm_base_url=JUDGE_BASE_URL,
+        llm_chat_model=JUDGE_MODEL,
+    )
+
+
 @dataclass
 class EvalResult:
     """Result of a single eval test case."""
