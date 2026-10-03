@@ -114,7 +114,18 @@ def prepare_query(case: ComparisonCase, arm: str, *, judgment=None) -> tuple[str
 
 
 def _arguments_match(case: ComparisonCase, args: dict) -> bool:
-    text = json.dumps(args, ensure_ascii=False).casefold()
+    from jarvis.tools.registry import BUILTIN_TOOLS
+    if not isinstance(args, dict) or case.expected_tool not in BUILTIN_TOOLS:
+        return False
+    schema = BUILTIN_TOOLS[case.expected_tool].inputSchema
+    if any(key not in args for key in schema.get("required", [])):
+        return False
+    properties = schema.get("properties", {})
+    used = {key: value for key, value in args.items() if key in properties}
+    if any(properties[key].get("type") == "string" and not isinstance(value, str)
+           for key, value in used.items()):
+        return False
+    text = json.dumps(list(used.values()), ensure_ascii=False).casefold()
     return all(term.casefold() in text for term in case.argument_terms)
 
 
@@ -278,10 +289,15 @@ class RequestRecorder:
                 usage = {}
             if not isinstance(usage, dict):
                 raise ValueError("Invalid model token usage")
+            details = usage.get("prompt_tokens_details")
+            if details is None:
+                details = {}
+            if not isinstance(details, dict):
+                raise ValueError("Invalid model cache usage")
             record.update(
                 input_tokens=usage.get("prompt_tokens"),
                 output_tokens=usage.get("completion_tokens"),
-                cached_tokens=usage.get("prompt_tokens_details", {}).get("cached_tokens", 0),
+                cached_tokens=details.get("cached_tokens"),
             )
             return response
         except Exception as exc:

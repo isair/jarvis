@@ -63,7 +63,7 @@ def result(case, **kwargs):
         case=case.name, category=case.category, arm="raw_context", repeat=0,
         query=case.transcript[-1][0], reply="The lantern costs £843.",
         selected_tools=[case.expected_tool],
-        tool_calls=[{"name": case.expected_tool, "args": {"query": "copper lantern price"}}],
+        tool_calls=[{"name": case.expected_tool, "args": {"search_query": "copper lantern price"}}],
         requests=[{"phase": "reply", "valid": True, "latency_ms": 10,
                    "input_tokens": 5, "output_tokens": 3, "cached_tokens": 0}],
         latency_ms=15,
@@ -88,10 +88,28 @@ def test_routing_alone_does_not_count_as_success(case):
 
 def test_wrong_referent_fails_despite_a_plausible_answer(case):
     scored = score_result(case, result(case, tool_calls=[
-        {"name": case.expected_tool, "args": {"query": "football score"}},
+        {"name": case.expected_tool, "args": {"search_query": "football score"}},
     ]))
     assert scored["arguments_correct"] is False
     assert scored["passed"] is False
+
+
+def test_referent_in_an_unused_argument_does_not_pass(case):
+    outcome = result(case, tool_calls=[{"name": case.expected_tool,
+                    "args": {"search_query": "football price", "unused": "copper lantern"}}])
+    assert score_result(case, outcome)["arguments_correct"] is False
+
+
+def test_missing_required_argument_does_not_pass(case):
+    outcome = result(case, tool_calls=[{"name": case.expected_tool,
+                    "args": {"unused": "copper lantern"}}])
+    assert score_result(case, outcome)["arguments_correct"] is False
+
+
+def test_incorrect_argument_type_does_not_pass(case):
+    outcome = result(case, tool_calls=[{"name": case.expected_tool,
+                    "args": {"search_query": ["copper", "lantern"]}}])
+    assert score_result(case, outcome)["arguments_correct"] is False
 
 
 @pytest.mark.parametrize("reply", ["", "Sorry, I had trouble processing that.", "The price is £12."])
@@ -153,12 +171,12 @@ def model_server():
             elif "You are a tool router" in system:
                 message["content"] = "webSearch" if has_entity else "none"
             elif "You are a planning assistant" in system:
-                message["content"] = "webSearch query='copper lantern price'\nReply to the user."
+                message["content"] = "webSearch search_query='copper lantern price'\nReply to the user."
             elif any(m["role"] == "tool" for m in messages):
                 message["content"] = "The copper lantern costs £843."
             elif has_entity:
                 message.update(content=None, tool_calls=[dict(id="fixture-call", type="function",
-                    function=dict(name="webSearch", arguments=json.dumps(dict(query="copper lantern price"))))])
+                    function=dict(name="webSearch", arguments=json.dumps(dict(search_query="copper lantern price"))))])
             data = self.response_override or {"choices": [{"message": message, "finish_reason": "stop"}],
                     "usage": {"prompt_tokens": 10, "completion_tokens": 5}}
             self.send_response(200)
@@ -273,6 +291,17 @@ def test_null_usage_is_unknown_not_a_failed_answer(model_server):
     recorder.post(recorder.endpoint, json={"messages": [{"role": "system", "content": "instruction"}]}, timeout=1)
     assert recorder.records[-1]["valid"] is True
     assert recorder.records[-1]["input_tokens"] is None
+    assert recorder.records[-1]["cached_tokens"] is None
+
+
+def test_null_cache_usage_is_unknown(model_server):
+    url, handler = model_server
+    handler.response_override = {"choices": [{"message": {"content": "answer"}, "finish_reason": "stop"}],
+                                 "usage": {"prompt_tokens": 10, "completion_tokens": 2, "prompt_tokens_details": None}}
+    recorder = RequestRecorder(url, no_thinking=False)
+    recorder.post(recorder.endpoint, json={"messages": [{"role": "system", "content": "instruction"}]}, timeout=1)
+    assert recorder.records[-1]["valid"] is True
+    assert recorder.records[-1]["cached_tokens"] is None
 
 
 def test_numeric_fact_matching_accepts_thousands_separators(case):
