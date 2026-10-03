@@ -139,3 +139,55 @@ def test_planner_eval_reaches_the_selected_backend(monkeypatch, provider, url, e
     assert plan_query(helpers.planner_config(), 'What is two plus two?', '', []) == [
         'Reply to the user.',
     ]
+
+
+@pytest.mark.parametrize('provider,url,expected', [
+    ('ollama', 'http://127.0.0.1:11439', 'http://127.0.0.1:11439/api/chat'),
+    ('openai_compatible', 'http://127.0.0.1:8000/v1', 'http://127.0.0.1:8000/v1/chat/completions'),
+])
+@pytest.mark.parametrize('entry', ['single', 'multi', 'listener', 'processed'])
+def test_voice_evals_reach_selected_backend(monkeypatch, provider, url, expected, entry):
+    import requests
+    import json
+    from unittest.mock import MagicMock
+    monkeypatch.setenv('EVAL_JUDGE_PROVIDER', provider)
+    monkeypatch.setenv('EVAL_JUDGE_BASE_URL', url)
+    monkeypatch.setenv('EVAL_JUDGE_MODEL', 'synthetic-voice-model')
+    monkeypatch.setattr(requests, 'get', lambda *args, **kw: SimpleNamespace(status_code=404))
+    monkeypatch.setattr('desktop_app.face_widget.get_jarvis_state', lambda: MagicMock())
+    calls = []
+    content = json.dumps(dict(directed=True, query=('random topic' if entry == 'processed' else 'weather'), stop=False,
+                             confidence='high', reasoning='Addressed to the assistant'))
+    def post(endpoint, **kwargs):
+        calls.append((endpoint, kwargs['json']['model']))
+        response = MagicMock()
+        response.__enter__.return_value = response
+        response.json.return_value = {
+            'message': {'content': content},
+            'choices': [{'message': {'content': content}}],
+        }
+        return response
+    monkeypatch.setattr(requests, 'post', post)
+    from evals import test_intent_judge as intent, test_listener_integration as listener_eval
+    if entry == 'processed':
+        monkeypatch.setattr(intent, 'is_intent_judge_available', lambda: True)
+        try:
+            intent.TestProcessedSegmentFiltering().test_processed_segment_not_reextracted()
+        except pytest.skip.Exception:
+            pytest.fail('An available selected voice model must be evaluated')
+        import os
+        assert calls == [(expected, os.environ['EVAL_JUDGE_MODEL'])]
+        return
+    if entry == 'single':
+        result = intent.run_intent_judge(intent.INTENT_JUDGE_TEST_CASES[0])
+    elif entry == 'multi':
+        result = intent.run_intent_judge_multi_segment(intent.MULTI_SEGMENT_TEST_CASES[0])
+    else:
+        obj, _ = listener_eval._create_listener()
+        try:
+            result = obj._intent_judge.judge([intent.create_transcript_segment('Jarvis weather')])
+        finally:
+            obj.state_manager.stop()
+    assert result is not None and result.query == 'weather'
+    import os
+    assert calls == [(expected, os.environ['EVAL_JUDGE_MODEL'])]

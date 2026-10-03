@@ -1,8 +1,8 @@
 """
 Evals for the Intent Judge LLM.
 
-Deduplicated suite: 22 cases covering all behaviour axes from the original 59.
-See PR description / commit message for the dedup rationale.
+Single-utterance and transcript-context cases cover engagement, echo,
+interruption and query extraction through the selected evaluation backend.
 """
 
 import pytest
@@ -10,7 +10,7 @@ from unittest.mock import patch, MagicMock
 from dataclasses import dataclass
 from typing import Optional, List, Union
 
-from helpers import JUDGE_MODEL, JUDGE_BASE_URL, is_judge_llm_available
+from evals.helpers import is_judge_llm_available, voice_config
 
 
 # =============================================================================
@@ -662,9 +662,11 @@ def run_intent_judge(case: IntentJudgeTestCase):
     """Run the intent judge on a test case."""
     from jarvis.listening.intent_judge import IntentJudge, IntentJudgeConfig
 
+    cfg = voice_config()
     judge = IntentJudge(IntentJudgeConfig(
         assistant_name="Jarvis",
-        model="gemma4:e2b",
+        cfg=cfg,
+        model=cfg.fast_model,
         timeout_sec=10.0,
     ))
 
@@ -687,10 +689,12 @@ def run_intent_judge_multi_segment(case: "MultiSegmentTestCase"):
     """Run the intent judge on a multi-segment test case."""
     from jarvis.listening.intent_judge import IntentJudge, IntentJudgeConfig
 
+    cfg = voice_config()
     judge = IntentJudge(IntentJudgeConfig(
         assistant_name="Jarvis",
         aliases=list(case.aliases or []),
-        model="gemma4:e2b",
+        model=cfg.fast_model,
+        cfg=cfg,
         timeout_sec=10.0,
     ))
 
@@ -723,25 +727,8 @@ def run_intent_judge_multi_segment(case: "MultiSegmentTestCase"):
 
 
 def is_intent_judge_available() -> bool:
-    """Check if the intent judge model is available."""
-    import requests
-    try:
-        resp = requests.get("http://127.0.0.1:11434/api/tags", timeout=2)
-        if resp.status_code != 200:
-            return False
-        data = resp.json()
-        models = [m.get("name", "") for m in data.get("models", [])]
-        return any("gemma4" in m for m in models)
-    except Exception:
-        return False
-
-
-def _skip_if_not_intent_judge_phase():
-    """Intent judge tests are fixed to gemma4:e2b and would run twice under the
-    multi-model eval matrix. Skip during the large-model phase to keep runtime
-    down; they still run once during the small-model (gemma4) phase."""
-    if "gemma4" not in JUDGE_MODEL:
-        pytest.skip(f"Intent judge tests only run in the gemma4 phase (current: {JUDGE_MODEL})")
+    """Check the selected evaluation model through its configured transport."""
+    return is_judge_llm_available()
 
 
 # =============================================================================
@@ -753,9 +740,8 @@ class TestIntentJudgeAccuracy:
 
     @pytest.mark.parametrize("case", INTENT_JUDGE_TEST_CASES, ids=lambda c: c.name)
     def test_intent_judge_case(self, case: IntentJudgeTestCase):
-        _skip_if_not_intent_judge_phase()
         if not is_intent_judge_available():
-            pytest.skip("Intent judge model (gemma4) not available")
+            pytest.skip("🎤 Selected voice evaluation model is unavailable")
 
         if case.name in KNOWN_FAILING_CASES:
             pytest.xfail(f"Known issue: {case.name} needs prompt improvement")
@@ -849,10 +835,10 @@ class TestIntentJudgeFallback:
     def test_returns_none_when_ollama_unavailable(self):
         from jarvis.listening.intent_judge import IntentJudge, IntentJudgeConfig
 
-        judge = IntentJudge(IntentJudgeConfig(
-            ollama_base_url="http://127.0.0.1:99999",
-            timeout_sec=1.0,
-        ))
+        cfg = voice_config()
+        cfg.llm_provider = "ollama"
+        cfg.ollama_base_url = "http://127.0.0.1:1"
+        judge = IntentJudge(IntentJudgeConfig(cfg=cfg, timeout_sec=1.0))
 
         segments = [create_transcript_segment("test")]
         result = judge.judge(segments)
@@ -865,9 +851,8 @@ class TestIntentJudgeMultiSegment:
 
     @pytest.mark.parametrize("case", MULTI_SEGMENT_TEST_CASES, ids=lambda c: c.name)
     def test_multi_segment_case(self, case: MultiSegmentTestCase):
-        _skip_if_not_intent_judge_phase()
         if not is_intent_judge_available():
-            pytest.skip("Intent judge model (gemma4) not available")
+            pytest.skip("🎤 Selected voice evaluation model is unavailable")
 
         if case.name in KNOWN_FAILING_CASES:
             pytest.xfail(f"Known issue: {case.name} needs prompt improvement")
@@ -916,15 +901,14 @@ class TestProcessedSegmentFiltering:
     """Tests for processed segment filtering in intent judge."""
 
     def test_processed_segment_not_reextracted(self):
-        _skip_if_not_intent_judge_phase()
         if not is_intent_judge_available():
-            pytest.skip("Intent judge model (gemma4) not available")
+            pytest.skip("🎤 Selected voice evaluation model is unavailable")
 
         from jarvis.listening.intent_judge import IntentJudge, IntentJudgeConfig
 
+        cfg = voice_config()
         judge = IntentJudge(IntentJudgeConfig(
-            assistant_name="Jarvis",
-            model="gemma4:e2b",
+            assistant_name="Jarvis", cfg=cfg, model=cfg.fast_model,
             timeout_sec=10.0,
         ))
 

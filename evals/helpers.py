@@ -265,6 +265,7 @@ class MockConfig:
     llm_provider: str = ""
     llm_base_url: str = ""
     llm_chat_model: str = ""
+    fast_model: str = ""
     embedding_model: Optional[str] = None
 
     def __post_init__(self):
@@ -327,6 +328,16 @@ def planner_config() -> MockConfig:
         llm_base_url=JUDGE_BASE_URL,
         llm_chat_model=JUDGE_MODEL,
     )
+
+
+def voice_config() -> MockConfig:
+    """Bind voice evaluation calls to the selected model and transport."""
+    cfg = MockConfig(
+        llm_provider="ollama", llm_base_url=JUDGE_BASE_URL,
+        ollama_base_url=JUDGE_BASE_URL, llm_chat_model=JUDGE_MODEL,
+    )
+    cfg.fast_model = cfg.llm_chat_model
+    return cfg
 
 
 @dataclass
