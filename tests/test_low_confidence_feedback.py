@@ -152,3 +152,63 @@ def test_callback_failure_does_not_interrupt_the_daemon(daemon):
     daemon._queue_low_confidence(rejection())
     daemon._dispatch_voice_feedback()
     daemon._dispatch_voice_feedback()
+
+
+def test_feedback_arrives_while_diary_controller_is_busy(daemon, monkeypatch):
+    import threading
+    diary_started = threading.Event()
+    release_diary = threading.Event()
+    received = threading.Event()
+    def diary(*args, **kwargs):
+        diary_started.set()
+        release_diary.wait(timeout=3)
+    monkeypatch.setattr(daemon, '_check_and_update_diary', diary)
+    daemon.set_voice_feedback_callback(received.set)
+    controller = threading.Thread(target=daemon._check_and_update_diary)
+    controller.start()
+    try:
+        assert diary_started.wait(timeout=1)
+        daemon._start_voice_feedback_worker()
+        daemon._queue_low_confidence(rejection())
+        assert received.wait(timeout=1), 'Diary work must not delay speech feedback'
+        assert not release_diary.is_set()
+    finally:
+        release_diary.set()
+        controller.join(timeout=1)
+        if hasattr(daemon, '_stop_voice_feedback_worker'):
+            daemon._stop_voice_feedback_worker()
+
+
+def test_stop_dismisses_feedback_before_waiting_for_daemon(face, daemon):
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+    from desktop_app.app import JarvisSystemTray, LogSignals
+    tray = object.__new__(JarvisSystemTray)
+    tray.face_window = face
+    tray.log_signals = LogSignals()
+    tray.is_bundled = True
+    tray.is_listening = True
+    tray._daemon_stop_expected = False
+    observed = []
+    def wait(_timeout):
+        observed.append(face.feedback_label.text())
+        return True
+    tray.daemon_thread = SimpleNamespace(wait=wait)
+    tray._set_chat_daemon_status = lambda _status: None
+    tray.toggle_action = MagicMock()
+    tray.status_action = MagicMock()
+    tray.tray_icon = MagicMock()
+    tray.update_icon = lambda: None
+    face.show_low_confidence()
+    tray.stop_daemon(show_diary_dialog=False)
+    assert observed == ['']
+
+
+def test_feedback_worker_failure_does_not_prevent_voice_startup(daemon, monkeypatch):
+    import threading
+    def unavailable(_self):
+        raise RuntimeError('Cannot create a notification thread')
+    monkeypatch.setattr(threading.Thread, 'start', unavailable)
+    daemon._start_voice_feedback_worker()
+    daemon._queue_low_confidence(rejection())
+    daemon._stop_voice_feedback_worker()

@@ -129,11 +129,13 @@ Window visibility is user-controlled: starting or stopping the assistant never s
   face or resize the window. Feedback never opens a hidden window or changes
   listening, thinking, speaking or dictation state.
 - The daemon coalesces rejection notifications without keeping transcript
-  text. The listener enqueues notifications; the controller delivers them.
+  text. The listener enqueues notifications; a stoppable notification worker
+  delivers them independently of diary processing.
   Bundled mode uses a callback and a queued Qt signal. Subprocess mode uses
   `__VOICE__:{"type":"low_confidence","data":null}` and the same Qt signal.
   Protocol events do not appear in the ordinary log viewer.
-- Stop clears the subtitle and pending feedback. Queued notifications are
+- Stop clears the subtitle immediately and stops notification delivery
+  with a bounded wait, discarding pending feedback. Queued notifications are
   ignored while the daemon is stopped or stopping. Accepted segments do not
   produce this feedback. No TTS is triggered.
 

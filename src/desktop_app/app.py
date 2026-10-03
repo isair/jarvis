@@ -2758,6 +2758,7 @@ class JarvisSystemTray:
 
         try:
             self._daemon_stop_expected = True
+            self.face_window.clear_voice_feedback()
             self._set_chat_daemon_status("stopping")
             if self.is_bundled and self.daemon_thread:
                 # When running in a QThread, use the stop flag for graceful shutdown
