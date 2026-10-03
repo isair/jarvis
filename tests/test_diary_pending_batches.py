@@ -294,3 +294,32 @@ def test_cached_final_summary_is_displayed_when_the_retry_commits(monkeypatch, d
     assert ''.join(retry_tokens) == ''.join(first_tokens)
     assert 'Pip' in stored_diary(diary_db)['summary']
     assert memory.get_pending_chunks() == []
+
+
+def test_streaming_shutdown_resumes_background_progress_with_a_shorter_budget(monkeypatch, diary_db, diary_cfg):
+    clock = SimpleNamespace(now=100.)
+    monkeypatch.setattr(conversation.time, 'monotonic', lambda: clock.now)
+    memory = conversation.DialogueMemory()
+    for chunk in pending_conversation():
+        memory.add_message('user', chunk.removeprefix('User: '))
+    def direct(cfg, system, user, **kwargs):
+        clock.now += 4.
+        return synthetic_summary(user)
+    def streaming(cfg, system, user, *, on_token, **kwargs):
+        answer = direct(cfg, system, user, **kwargs)
+        on_token(answer)
+        return answer
+    monkeypatch.setattr(conversation, '_direct_llm', direct)
+    monkeypatch.setattr(conversation, '_stream_llm', streaming)
+    monkeypatch.setattr('jarvis.memory.graph_ops.update_graph_from_dialogue',
+                        lambda **kwargs: SimpleNamespace(stored=0, skipped=0))
+    assert conversation.update_diary_from_dialogue_memory(diary_db, memory, diary_cfg, force=True, timeout_sec=8.) is None
+    assert stored_diary(diary_db) is None
+    tokens = []
+    assert conversation.update_diary_from_dialogue_memory(
+        diary_db, memory, diary_cfg, force=True, timeout_sec=5., on_token=tokens.append,
+    )
+    row = stored_diary(diary_db)
+    assert all(fact in row['summary'] for fact in ('Pip', 'Kyoto'))
+    assert ''.join(tokens) == f"SUMMARY: {row['summary']}\nTOPICS: {row['topics']}"
+    assert memory.get_pending_chunks() == []

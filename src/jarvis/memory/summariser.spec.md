@@ -19,7 +19,9 @@ The summariser prompt is the only write-time defence. There is no post-process s
   generation remain pending beyond the captured save watermark.
   Completed passes remain in private dialogue memory so a later flush can resume
   the same frozen snapshot at the same timeout. A changed starting diary row,
-  day, source, model, endpoint, thinking or streaming mode restarts generation.
+  day, source, model, endpoint or thinking mode restarts generation. Switching
+  between background direct generation and a streaming shutdown retains completed
+  passes so the shorter shutdown budget can finish the remaining work.
   Clearing, restoring, rewinding or explicitly marking dialogue saved discards
   resumable work; an in-flight superseded snapshot cannot commit. Flushes on the
   same dialogue memory do not overlap. The final write and watermark advance

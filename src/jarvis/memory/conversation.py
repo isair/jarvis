@@ -1464,7 +1464,7 @@ def update_daily_conversation_summary(
                 debug_log("⚠️ diary snapshot replaced; no write", "memory")
                 return None
             context = (
-                db, today, source_app, existing, tuple(redacted_chunks), thinking, bool(on_token),
+                db, today, source_app, existing, tuple(redacted_chunks), thinking,
                 tuple(getattr(cfg, name, None) for name in (
                     'llm_provider', 'llm_base_url', 'ollama_base_url', 'llm_chat_model', 'llm_api_key',
                 )),
