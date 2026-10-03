@@ -8,7 +8,7 @@ Run with specific model:
     EVAL_JUDGE_MODEL=gemma4 ./scripts/run_evals.sh nutrition
     EVAL_JUDGE_MODEL=gpt-oss:20b ./scripts/run_evals.sh nutrition
 
-For EVALS.md generation (always use gpt-oss:20b):
+For EVALS.md generation:
     ./scripts/run_evals.sh
 """
 
@@ -18,11 +18,11 @@ from typing import Dict, Any, Optional, List, Tuple
 
 import pytest
 
-from conftest import requires_judge_llm
-from helpers import (
+from evals.conftest import requires_judge_llm
+from evals.helpers import (
     MockConfig,
     JUDGE_MODEL,
-    JUDGE_BASE_URL,
+    voice_config,
 )
 
 
@@ -87,47 +87,42 @@ def call_nutrition_extraction(
     meal_text: str
 ) -> Optional[Dict[str, Any]]:
     """
-    Call the nutrition extraction prompt directly and parse the response.
-    Returns the parsed JSON or None if extraction failed.
+    Exercise production extraction and capture its stored nutrition fields.
+    Returns stored nutrition fields or None for an explicit no-meal answer.
     """
-    from jarvis.tools.builtin.nutrition.log_meal import NUTRITION_SYS
-    from jarvis.llm import call_llm_direct
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    from jarvis.tools.builtin.nutrition import log_meal
 
-    user_prompt = (
-        "User said (redacted):\n" + meal_text[:1200] + "\n\n"
-        "Return ONLY JSON or the exact string NONE."
-    )
+    rows = []
+    answers = []
+    direct = log_meal.call_llm_direct
+    def capture_answer(**kwargs):
+        answer = direct(**kwargs)
+        answers.append(answer)
+        return answer
+    def insert_meal(**fields):
+        rows.append(fields)
+        return len(rows)
 
-    raw = call_llm_direct(
-        cfg.ollama_base_url,
-        cfg.ollama_chat_model,
-        NUTRITION_SYS,
-        user_prompt,
-        timeout_sec=cfg.llm_chat_timeout_sec
-    ) or ""
-
-    text = raw.strip()
-    if text.upper() == "NONE":
+    # Extraction cases exercise the production fence, cap, parser and insert
+    # boundary. Coaching has its own live case, independent of meal accuracy.
+    with patch.object(log_meal, 'call_llm_direct', side_effect=capture_answer), \
+         patch.object(log_meal, 'generate_followups_for_meal', return_value=''):
+        log_meal.extract_and_log_meal(
+            SimpleNamespace(insert_meal=insert_meal), cfg, meal_text, 'stdin',
+        )
+    assert answers and isinstance(answers[0], str) and answers[0].strip(), 'Empty inference is not a non-food answer'
+    if not rows:
+        assert answers[0].strip().upper() == 'NONE', 'Invalid extraction is not a non-food answer'
         return None
-
-    try:
-        # Handle markdown code blocks
-        if "```" in text:
-            # Extract JSON from code block
-            start = text.find("```")
-            end = text.rfind("```")
-            if start != end:
-                inner = text[start:end]
-                # Remove ```json or ``` prefix
-                if inner.startswith("```json"):
-                    inner = inner[7:]
-                elif inner.startswith("```"):
-                    inner = inner[3:]
-                text = inner.strip()
-
-        return json.loads(text)
-    except json.JSONDecodeError:
-        return None
+    data = dict(rows[0])
+    for field in ('ts_utc', 'source_app'):
+        data.pop(field)
+    micros = data.pop('micros_json')
+    if micros is not None:
+        data['micros'] = json.loads(micros)
+    return data
 
 
 def validate_nutrition_data(
@@ -209,55 +204,51 @@ class TestNutritionExtraction:
     @pytest.mark.eval
     @requires_judge_llm
     @pytest.mark.parametrize("case", MEAL_TEST_CASES)
-    def test_meal_extraction_accuracy(self, case: MealTestCase, mock_config):
+    def test_meal_extraction_accuracy(self, case: MealTestCase):
         """
         Test that the model extracts reasonable nutrition data for common meals.
         """
-        mock_config.ollama_base_url = JUDGE_BASE_URL
-        mock_config.ollama_chat_model = JUDGE_MODEL
-        mock_config.llm_chat_timeout_sec = 120.0
+        mock_config = voice_config()
 
-        print(f"\n[MEAL] Testing meal: {case.description}")
-        print(f"   Model: {JUDGE_MODEL}")
+        print(f"\n🥗 [MEAL] Testing meal: {case.description}")
+        print(f"   🤖 Model: {JUDGE_MODEL}")
 
         # Call the extraction
         data = call_nutrition_extraction(mock_config, f"I had {case.description}")
 
-        print(f"   Extracted: {json.dumps(data, indent=2) if data else 'None'}")
+        print(f"   🥗 Extracted: {json.dumps(data, indent=2) if data else 'None'}")
 
         # Validate
         passed, issues = validate_nutrition_data(data, case)
 
         if data:
-            print(f"   Calories: {data.get('calories_kcal')} (expected {case.calories_range[0]}-{case.calories_range[1]})")
-            print(f"   Protein: {data.get('protein_g')}g (expected {case.protein_range[0]}-{case.protein_range[1]})")
-            print(f"   Carbs: {data.get('carbs_g')}g (expected {case.carbs_range[0]}-{case.carbs_range[1]})")
-            print(f"   Fat: {data.get('fat_g')}g (expected {case.fat_range[0]}-{case.fat_range[1]})")
-            print(f"   Confidence: {data.get('confidence')}")
+            print(f"   🥗 Calories: {data.get('calories_kcal')} (expected {case.calories_range[0]}-{case.calories_range[1]})")
+            print(f"   🥗 Protein: {data.get('protein_g')}g (expected {case.protein_range[0]}-{case.protein_range[1]})")
+            print(f"   🥗 Carbs: {data.get('carbs_g')}g (expected {case.carbs_range[0]}-{case.carbs_range[1]})")
+            print(f"   🥗 Fat: {data.get('fat_g')}g (expected {case.fat_range[0]}-{case.fat_range[1]})")
+            print(f"   🥗 Confidence: {data.get('confidence')}")
 
         if issues:
-            print(f"   FAIL Issues: {issues}")
+            print(f"   🥗 FAIL Issues: {issues}")
         else:
-            print(f"   PASS All values within expected ranges")
+            print(f"   🥗 PASS All values within expected ranges")
 
         assert passed, f"Nutrition extraction failed: {issues}"
 
     @pytest.mark.eval
     @requires_judge_llm
-    def test_extraction_returns_valid_json_structure(self, mock_config):
+    def test_extraction_returns_valid_json_structure(self):
         """
         Test that extraction returns properly structured JSON with all expected fields.
         """
-        mock_config.ollama_base_url = JUDGE_BASE_URL
-        mock_config.ollama_chat_model = JUDGE_MODEL
-        mock_config.llm_chat_timeout_sec = 120.0
+        mock_config = voice_config()
 
-        print(f"\n[JSON] Testing JSON structure")
-        print(f"   Model: {JUDGE_MODEL}")
+        print(f"\n🥗 [JSON] Testing JSON structure")
+        print(f"   🤖 Model: {JUDGE_MODEL}")
 
         data = call_nutrition_extraction(mock_config, "I ate a sandwich for lunch")
 
-        print(f"   Response: {json.dumps(data, indent=2) if data else 'None'}")
+        print(f"   🥗 Response: {json.dumps(data, indent=2) if data else 'None'}")
 
         assert data is not None, "Should return valid JSON, not None"
 
@@ -268,66 +259,62 @@ class TestNutritionExtraction:
         ]
 
         missing = [f for f in expected_fields if f not in data]
-        print(f"   Missing fields: {missing if missing else 'None'}")
+        print(f"   🥗 Missing fields: {missing if missing else 'None'}")
 
         # Core fields are mandatory
         core_fields = ["description", "calories_kcal", "protein_g", "carbs_g", "fat_g", "confidence"]
         core_missing = [f for f in core_fields if f not in data]
 
         assert not core_missing, f"Missing core fields: {core_missing}"
-        print(f"   PASS All core fields present")
+        print(f"   🥗 PASS All core fields present")
 
     @pytest.mark.eval
     @requires_judge_llm
-    def test_extraction_handles_ambiguous_portions(self, mock_config):
+    def test_extraction_handles_ambiguous_portions(self):
         """
         Test that model provides reasonable estimates for ambiguous portion descriptions.
         """
-        mock_config.ollama_base_url = JUDGE_BASE_URL
-        mock_config.ollama_chat_model = JUDGE_MODEL
-        mock_config.llm_chat_timeout_sec = 120.0
+        mock_config = voice_config()
 
-        print(f"\n[AMBIGUOUS] Testing ambiguous portions")
-        print(f"   Model: {JUDGE_MODEL}")
+        print(f"\n🥗 [AMBIGUOUS] Testing ambiguous portions")
+        print(f"   🤖 Model: {JUDGE_MODEL}")
 
         # Ambiguous description - should still get reasonable defaults
         data = call_nutrition_extraction(mock_config, "I had some rice with chicken")
 
-        print(f"   Response: {json.dumps(data, indent=2) if data else 'None'}")
+        print(f"   🥗 Response: {json.dumps(data, indent=2) if data else 'None'}")
 
         assert data is not None, "Should handle ambiguous portions"
 
         # Should have a lower confidence for ambiguous descriptions
         confidence = data.get("confidence")
-        print(f"   Confidence: {confidence}")
+        print(f"   🥗 Confidence: {confidence}")
 
         # Calories should be reasonable for rice + chicken (300-800 typical)
         calories = data.get("calories_kcal")
         if calories:
             assert 150 <= float(calories) <= 1200, f"Calories {calories} outside reasonable range"
-            print(f"   PASS Calories {calories} within reasonable range")
+            print(f"   🥗 PASS Calories {calories} within reasonable range")
 
     @pytest.mark.eval
     @requires_judge_llm
-    def test_extraction_rejects_non_food(self, mock_config):
+    def test_extraction_rejects_non_food(self):
         """
         Test that extraction returns NONE for non-food inputs.
         """
-        mock_config.ollama_base_url = JUDGE_BASE_URL
-        mock_config.ollama_chat_model = JUDGE_MODEL
-        mock_config.llm_chat_timeout_sec = 120.0
+        mock_config = voice_config()
 
-        print(f"\n[NON-FOOD] Testing non-food rejection")
-        print(f"   Model: {JUDGE_MODEL}")
+        print(f"\n🥗 [NON-FOOD] Testing non-food rejection")
+        print(f"   🤖 Model: {JUDGE_MODEL}")
 
         # Non-food input
         data = call_nutrition_extraction(mock_config, "I went for a walk in the park")
 
-        print(f"   Response: {data}")
+        print(f"   🥗 Response: {data}")
 
         # Should return None (NONE response)
         assert data is None, f"Should return None for non-food input, got: {data}"
-        print(f"   PASS Correctly returned None")
+        print(f"   🥗 PASS Correctly returned None")
 
 
 class TestNutritionToolIntegration:
@@ -339,86 +326,64 @@ class TestNutritionToolIntegration:
 
     @pytest.mark.eval
     @requires_judge_llm
-    def test_log_meal_tool_extracts_macros(self, mock_config, eval_db):
+    def test_log_meal_tool_extracts_macros(self, eval_db):
         """
         Test that LogMealTool properly extracts and stores macros.
         """
         from jarvis.tools.builtin.nutrition.log_meal import LogMealTool
         from jarvis.tools.base import ToolContext
-        from jarvis.memory.db import Database
 
-        mock_config.ollama_base_url = JUDGE_BASE_URL
-        mock_config.ollama_chat_model = JUDGE_MODEL
-        mock_config.llm_chat_timeout_sec = 120.0
+        mock_config = voice_config()
         mock_config.use_stdin = True
 
-        print(f"\n[TOOL] Testing LogMealTool integration")
-        print(f"   Model: {JUDGE_MODEL}")
+        print(f"\n🥗 [TOOL] Testing LogMealTool integration")
+        print(f"   🤖 Model: {JUDGE_MODEL}")
 
         tool = LogMealTool()
 
-        # Retry up to 3 times since smaller models can be flaky
-        result = None
-        for attempt in range(3):
-            # Fresh DB for each attempt
-            test_db = Database(":memory:", sqlite_vss_path=None)
+        context = ToolContext(
+            db=eval_db, cfg=mock_config,
+            system_prompt="You are a helpful assistant.",
+            original_prompt="I had a grilled chicken salad for lunch",
+            redacted_text="I had a grilled chicken salad for lunch",
+            max_retries=0, user_print=lambda message: None,
+        )
+        result = tool.run({}, context)
 
-            messages_printed = []
+        print(f"   🥗 Success: {result.success}")
+        print(f"   🥗 Reply: {result.reply_text[:200] if result.reply_text else 'None'}...")
 
-            def capture_print(msg):
-                messages_printed.append(msg)
-
-            context = ToolContext(
-                db=test_db,
-                cfg=mock_config,
-                system_prompt="You are a helpful assistant.",
-                original_prompt="I had a grilled chicken salad for lunch",
-                redacted_text="I had a grilled chicken salad for lunch",
-                max_retries=0,
-                user_print=capture_print,
-            )
-
-            # Run with incomplete args to trigger extraction
-            result = tool.run({}, context)
-            if result.success:
-                eval_db = test_db  # Use the successful DB for assertions
-                break
-            print(f"   Attempt {attempt + 1} failed, retrying...")
-
-        print(f"   Success: {result.success}")
-        print(f"   Reply: {result.reply_text[:200] if result.reply_text else 'None'}...")
-
-        assert result.success, f"Tool should succeed after retries, got: {result.reply_text}"
+        assert result.success, f"Tool should log the meal, got: {result.reply_text}"
 
         # Check that macros are in the reply
         reply_lower = result.reply_text.lower() if result.reply_text else ""
         has_macros = any(term in reply_lower for term in ["kcal", "protein", "carb", "fat"])
 
-        print(f"   Has macros in reply: {has_macros}")
+        print(f"   🥗 Has macros in reply: {has_macros}")
         assert has_macros, "Reply should include macro information"
 
         # Verify meal was stored in DB
         from datetime import datetime, timezone, timedelta
         now = datetime.now(timezone.utc)
-        meals = test_db.get_meals_between(
+        meals = eval_db.get_meals_between(
             (now - timedelta(minutes=5)).isoformat(),
             (now + timedelta(minutes=5)).isoformat()
         )
 
-        print(f"   Meals in DB: {len(meals)}")
-        assert len(meals) >= 1, "Should have stored at least one meal"
+        print(f"   🥗 Meals in DB: {len(meals)}")
+        assert len(meals) == 1, "Should store exactly one meal"
 
         # Check the stored meal has nutrition data
         meal = meals[0]
         # sqlite3.Row needs index or column name access
         calories = meal["calories_kcal"] if "calories_kcal" in meal.keys() else None
-        print(f"   Stored meal calories: {calories}")
+        print(f"   🥗 Stored meal calories: {calories}")
 
         has_stored_macros = calories is not None
-        print(f"   Has stored macros: {has_stored_macros}")
+        print(f"   🥗 Has stored macros: {has_stored_macros}")
 
         assert has_stored_macros, f"Stored meal should have macros"
-        print(f"   PASS Meal logged with macros: {calories} kcal")
+        print(f"   🥗 PASS Meal logged with macros: {calories} kcal")
 
 
 # =============================================================================
@@ -434,21 +399,19 @@ class TestNutritionModelComparison:
 
     @pytest.mark.eval
     @requires_judge_llm
-    def test_simple_meal_extraction(self, mock_config):
+    def test_simple_meal_extraction(self):
         """
         Simple meal that any model should handle correctly.
         """
-        mock_config.ollama_base_url = JUDGE_BASE_URL
-        mock_config.ollama_chat_model = JUDGE_MODEL
-        mock_config.llm_chat_timeout_sec = 120.0
+        mock_config = voice_config()
 
-        print(f"\n[SIMPLE] Simple meal test (baseline)")
-        print(f"   Model: {JUDGE_MODEL}")
+        print(f"\n🥗 [SIMPLE] Simple meal test (baseline)")
+        print(f"   🤖 Model: {JUDGE_MODEL}")
 
         # Very simple, common meal
         data = call_nutrition_extraction(mock_config, "I had 2 boiled eggs")
 
-        print(f"   Response: {json.dumps(data, indent=2) if data else 'None'}")
+        print(f"   🥗 Response: {json.dumps(data, indent=2) if data else 'None'}")
 
         assert data is not None, "Should extract simple meal"
 
@@ -464,20 +427,18 @@ class TestNutritionModelComparison:
         if protein:
             assert 5 <= float(protein) <= 20, f"Protein {protein}g way off for eggs"
 
-        print(f"   PASS Simple extraction succeeded")
+        print(f"   🥗 PASS Simple extraction succeeded")
 
     @pytest.mark.eval
     @requires_judge_llm
-    def test_extraction_with_quantities(self, mock_config):
+    def test_extraction_with_quantities(self):
         """
         Test extraction with explicit quantities (should improve accuracy).
         """
-        mock_config.ollama_base_url = JUDGE_BASE_URL
-        mock_config.ollama_chat_model = JUDGE_MODEL
-        mock_config.llm_chat_timeout_sec = 120.0
+        mock_config = voice_config()
 
-        print(f"\n[QUANTITY] Quantity extraction test")
-        print(f"   Model: {JUDGE_MODEL}")
+        print(f"\n🥗 [QUANTITY] Quantity extraction test")
+        print(f"   🤖 Model: {JUDGE_MODEL}")
 
         # Explicit quantities should help smaller models
         data = call_nutrition_extraction(
@@ -485,7 +446,7 @@ class TestNutritionModelComparison:
             "I had 100g of cooked white rice and 150g of grilled chicken breast"
         )
 
-        print(f"   Response: {json.dumps(data, indent=2) if data else 'None'}")
+        print(f"   🥗 Response: {json.dumps(data, indent=2) if data else 'None'}")
 
         assert data is not None, "Should extract meal with quantities"
 
@@ -504,4 +465,15 @@ class TestNutritionModelComparison:
             # Wider range to accommodate model variance (some assume larger chicken portions)
             assert 20 <= float(protein) <= 120, f"Protein {protein}g off for rice+chicken"
 
-        print(f"   PASS Quantity-based extraction succeeded")
+        print(f"   🥗 PASS Quantity-based extraction succeeded")
+
+
+@pytest.mark.eval
+@requires_judge_llm
+def test_logged_meal_has_non_empty_follow_ups():
+    """Coaching must emit useful text after its reasoning budget."""
+    from jarvis.tools.builtin.nutrition.log_meal import generate_followups_for_meal
+    followups = generate_followups_for_meal(
+        voice_config(), 'grilled chicken with broccoli', '~300 kcal, 35g protein',
+    )
+    assert followups.strip(), 'Empty inference is not successful coaching'
