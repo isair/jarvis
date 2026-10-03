@@ -32,3 +32,9 @@ vector writes. Weak ownership releases an unused index, so a later owner loads
 its persisted file afresh. File-backed stores retain the resolved absolute path
 for every write, independent of later working-directory changes. Factory construction is serialised to prevent two
 active owners of one file from receiving divergent indices.
+
+`has_vector_store` reports availability of sqlite-vss or a local FAISS/Python
+index. Diary saves, summary rewrites and topic optimisation use this capability
+alongside the configured embedding model to refresh semantic candidates. An
+unavailable model or index skips embedding inference and preserves keyword
+retrieval.
