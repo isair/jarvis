@@ -21,3 +21,10 @@ in one transaction under the database lock. A failed write rolls back the index
 transaction and releases the writer lock; previously committed diary text and
 vector mappings remain readable. Callers commit diary text before refreshing
 the optional index.
+
+Python and FAISS indices are shared only by active owners of the same resolved
+database file; FAISS dimensions also belong to the index identity. Distinct
+database files and independent `:memory:` databases never share candidates or
+vector writes. Weak ownership releases an unused index, so a later owner loads
+its persisted file afresh. Factory construction is serialised to prevent two
+active owners of one file from receiving divergent indices.
