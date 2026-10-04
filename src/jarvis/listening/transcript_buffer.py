@@ -271,7 +271,7 @@ class TranscriptBuffer:
         return True
 
     def mark_segment_processed(self, text: str) -> bool:
-        """Mark a segment as processed after query extraction.
+        """Mark a segment as processed after accepting its speech.
 
         Used to prevent the intent judge from re-extracting queries from
         segments that have already been processed. This is critical for

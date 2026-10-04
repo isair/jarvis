@@ -49,8 +49,9 @@ probabilities, and reported input truncation fail the case.
 The 54 cases comprise 42 existing single- and multi-segment intent cases and 12
 additional cases covering Spanish, Turkish, French and Japanese speech,
 quoted stops, the word "stop" in ordinary questions and pure TTS echo. The
-suite asserts both decisions on every case. The existing LLM intent evals
-remain responsible for reference resolution and tool-argument composition using the original speech and transcript context.
+suite asserts both decisions on every case. LLM intent evals verify the same
+decision contract. The query/context replay separately measures reference
+resolution and tool-argument composition.
 
 ## Candidate evidence
 
@@ -65,8 +66,14 @@ classified as directed. Median request latency is 72.0 ms, with a maximum of
 126.4 ms across these 54
 cases. These measurements cover local HTTP inference with cached weights;
 they exclude server startup and downloading. The candidate does not qualify
-for runtime use. There is no measured accuracy comparison with the FAST-tier
-LLM, and these classification results do not establish end-to-end query quality.
+for runtime use. This dated candidate run uses the plain speech-state prompt;
+the current judge wraps that state in a redacted data fence. Its negative
+qualification result does not establish end-to-end query quality.
+
+The [Qwen decision-prompt evaluation](evaluation_results/intent_decisions_qwen_2026-10-04.jsonl)
+passes 54/54 cases at the six-second production deadline with reasoning
+disabled. This is a separately measured LLM configuration, not a paired
+classifier comparison or evidence that Jev cannot qualify.
 
 Qualification requires every declared case to pass without fallback, followed
 by the listener and transcript-context evals for any runtime integration. Passing
