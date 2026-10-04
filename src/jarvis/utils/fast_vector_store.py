@@ -11,6 +11,8 @@ from pathlib import Path
 import threading
 import logging
 from weakref import WeakValueDictionary
+from .embedding_vector import normalise_embedding
+from ..debug import debug_log
 
 try:
     import faiss  # type: ignore
@@ -40,6 +42,7 @@ class FAISSVectorStore:
     
     def _load_vectors(self) -> None:
         """Load vectors from SQLite database and build FAISS index."""
+        conn = None
         try:
             conn = sqlite3.connect(self.db_path)
             cur = conn.cursor()
@@ -60,21 +63,27 @@ class FAISSVectorStore:
                 summary_ids = []
                 
                 for summary_id, vector_blob in rows:
-                    # Convert blob back to numpy array
-                    vector = np.frombuffer(vector_blob, dtype=np.float32)
-                    if len(vector) == self.dimension:
-                        vectors.append(vector)
-                        summary_ids.append(summary_id)
+                    try:
+                        vector = normalise_embedding(
+                            np.frombuffer(vector_blob, dtype=np.float32), self.dimension,
+                        )
+                    except (TypeError, ValueError, OverflowError):
+                        debug_log('Skipping an unusable persisted FAISS embedding', 'memory')
+                        continue
+                    vectors.append(vector)
+                    summary_ids.append(summary_id)
                 
                 if vectors:
                     # Build FAISS index
                     self._build_index(np.array(vectors), summary_ids)
             
-            conn.close()
         except Exception as e:
             logging.warning(f"Failed to load FAISS vectors: {e}")
             # Start with empty index
             self._build_empty_index()
+        finally:
+            if conn is not None:
+                conn.close()
     
     def _build_empty_index(self) -> None:
         """Build an empty FAISS index."""
@@ -127,12 +136,7 @@ class FAISSVectorStore:
     def add_vector(self, summary_id: int, vector: List[float]) -> None:
         """Add or update a vector for a summary."""
         with self._lock:
-            vec_array = np.array(vector, dtype=np.float32)
-            
-            # Normalize vector for cosine similarity
-            norm = np.linalg.norm(vec_array)
-            if norm > 0:
-                vec_array = vec_array / norm
+            vec_array = normalise_embedding(vector, self.dimension)
             
             # If summary already exists, mark for rebuild
             if summary_id in self.summary_id_to_index:
@@ -164,8 +168,11 @@ class FAISSVectorStore:
             if self.index is None or self.index.ntotal == 0:
                 return []
             
-            # Prepare query vector
-            query_array = np.array(query_vector, dtype=np.float32).reshape(1, -1)
+            try:
+                query_array = normalise_embedding(query_vector, self.dimension).reshape(1, -1)
+            except ValueError:
+                debug_log('Skipping semantic search for an unusable query embedding', 'memory')
+                return []
             
             # Normalize query vector
             faiss.normalize_L2(query_array)

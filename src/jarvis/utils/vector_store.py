@@ -10,6 +10,8 @@ import sqlite3
 from pathlib import Path
 import threading
 from weakref import WeakValueDictionary
+from .embedding_vector import normalise_embedding
+from ..debug import debug_log
 
 
 class PythonVectorStore:
@@ -24,6 +26,7 @@ class PythonVectorStore:
     
     def _load_vectors(self) -> None:
         """Load vectors from SQLite database."""
+        conn = None
         try:
             conn = sqlite3.connect(self.db_path)
             cur = conn.cursor()
@@ -39,12 +42,16 @@ class PythonVectorStore:
             # Load existing vectors
             rows = cur.execute("SELECT summary_id, vector_json FROM python_vector_store").fetchall()
             for summary_id, vector_json in rows:
-                self.vectors[summary_id] = np.array(json.loads(vector_json), dtype=np.float32)
-            
-            conn.close()
+                try:
+                    self.vectors[summary_id] = normalise_embedding(json.loads(vector_json))
+                except (TypeError, ValueError, OverflowError):
+                    debug_log('Skipping an unusable persisted Python embedding', 'memory')
         except Exception:
             # If anything fails, just start with empty vectors
             pass
+        finally:
+            if conn is not None:
+                conn.close()
     
     def _save_vector(self, summary_id: int, vector: np.ndarray) -> None:
         """Persist a single vector to SQLite."""
@@ -65,11 +72,7 @@ class PythonVectorStore:
     def add_vector(self, summary_id: int, vector: List[float]) -> None:
         """Add or update a vector for a summary."""
         with self._lock:
-            vec_array = np.array(vector, dtype=np.float32)
-            # Normalize vector for cosine similarity
-            norm = np.linalg.norm(vec_array)
-            if norm > 0:
-                vec_array = vec_array / norm
+            vec_array = normalise_embedding(vector)
             self.vectors[summary_id] = vec_array
             self._save_vector(summary_id, vec_array)
     
@@ -82,15 +85,17 @@ class PythonVectorStore:
             if not self.vectors:
                 return []
             
-            # Normalize query vector
-            query_array = np.array(query_vector, dtype=np.float32)
-            query_norm = np.linalg.norm(query_array)
-            if query_norm > 0:
-                query_array = query_array / query_norm
+            try:
+                query_array = normalise_embedding(query_vector)
+            except ValueError:
+                debug_log('Skipping semantic search for an unusable query embedding', 'memory')
+                return []
             
             # Calculate cosine similarities
             similarities = []
             for summary_id, vector in self.vectors.items():
+                if vector.size != query_array.size:
+                    continue
                 # Cosine similarity = dot product of normalized vectors
                 similarity = np.dot(query_array, vector)
                 # Convert to distance (lower is better, like sqlite-vss)

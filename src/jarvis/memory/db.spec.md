@@ -36,6 +36,15 @@ its persisted file afresh. File-backed stores retain the resolved absolute path
 for every write, independent of later working-directory changes. Factory construction is serialised to prevent two
 active owners of one file from receiving divergent indices.
 
+Local Python and FAISS indices accept non-empty, finite, one-dimensional
+embeddings with a non-zero direction. Validation precedes replacement and
+persistence, so an invalid refresh preserves the current memory vector.
+Normalisation retains the direction of large and small finite values without
+overflow or underflow. FAISS writes must match the index dimension. Python
+search considers only stored vectors matching the query dimension. Unusable
+queries contribute no semantic candidates, preserving keyword retrieval.
+Loading skips individual malformed persisted vectors and retains valid rows.
+
 `has_vector_store` reports availability of sqlite-vss or a local FAISS/Python
 index. Diary saves, summary rewrites and topic optimisation use this capability
 alongside the configured embedding model to refresh semantic candidates. An
