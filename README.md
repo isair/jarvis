@@ -19,7 +19,7 @@ Talk naturally, as if Jarvis were a third person in the room.
 
 Jarvis is built to be part of the conversation, not another screen to type into. Talk through an idea, discuss plans with a friend, then ask “Jarvis, what do you think?” While listening, it keeps a short, temporary rolling transcript of nearby speech so it can join an ongoing conversation using what was just discussed, without you having to repeat the background.
 
-Say “Jarvis” anywhere in a sentence and follow up naturally. Speech recognition, language models and speech synthesis run on hardware you control. The animated face gives your voice assistant a presence on the desktop; chat is there when you would rather type.
+Address Jarvis by name anywhere in a sentence and follow up naturally. Mentions while speaking to someone else are not invitations to reply. Speech recognition, language models and speech synthesis run on hardware you control. The animated face gives your voice assistant a presence on the desktop; chat is there when you would rather type.
 
 Your conversation memory stays on your computer. Separate local databases keep their semantic search indices separate. Sensitive information is redacted before it reaches model context or the saved diary. Web search, weather and connected tools use the network when you ask for those capabilities; local conversation does not require a cloud AI account.
 

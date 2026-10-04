@@ -1237,27 +1237,11 @@ class VoiceListener(threading.Thread):
                                 pass
                             return
 
-                        # Outside hot window — check if wake word is actually present
-                        # before trusting the rejection. Small models sometimes
-                        # classify wake-worded statements ("the light is bright,
-                        # Jarvis") as "not directed" despite the prompt instructing
-                        # otherwise. When the wake word is present, fall through to
-                        # Priority 4 wake word detection as a safety net.
-                        ww_wake = getattr(self.cfg, "wake_word", "jarvis")
-                        ww_aliases = set(getattr(self.cfg, "wake_aliases", [])) | {ww_wake}
-                        has_real_wake = is_wake_word_detected(text_lower, ww_wake, list(ww_aliases))
-                        if has_real_wake:
-                            debug_log(
-                                f"⚠️ Intent judge rejected wake-worded utterance "
-                                f"(reasoning: {intent_judgment.reasoning}) — "
-                                f"falling through to wake word detection",
-                                "voice"
-                            )
-                            # Fall through to Priority 4: wake word detection
-                        else:
-                            debug_log(f"🚫 Intent judge rejected (not directed, high confidence): \"{text_lower}\"", "voice")
-                            self._stop_thinking_tune()
-                            return
+                        # A detected name can be a mention addressed to someone else.
+                        # Outside the hot window, a confident rejection takes priority.
+                        debug_log("intent judge rejected directedness in wake-word mode", "voice")
+                        self._stop_thinking_tune()
+                        return
                 else:
                     # For inconclusive results, fall through to wake word detection
                     debug_log(f"⏭️ Intent judge inconclusive ({intent_judgment.confidence}), checking wake word", "voice")
