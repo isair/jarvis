@@ -1577,3 +1577,22 @@ class TestIntentJudgeGating:
 
         assert mock_judge.judge.call_count == 1
         listener.state_manager.stop()
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize('heard', ['What the fuck?', 'being described. What the fuck?'])
+def test_hot_window_does_not_collect_an_earlier_tts_fragment_as_new_query(heard):
+    listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=3.0)
+    spoken = ("I am afraid I don't quite grasp what you mean by that statement; "
+              "perhaps you could rephrase it for me? It sounds as though some "
+              "rather complex hierarchical dynamic is being described.")
+    listener.echo_detector.track_tts_start(spoken)
+    _simulate_tts_finish(listener)
+    assert _wait_for_hot_window_active(listener)
+    _install_intent_judge(listener, _make_judgment(directed=True,
+        query='grasp what you mean by that statement', confidence='high'))
+    try:
+        _process_transcript(listener, heard, utterance_energy=0.01)
+        assert _accepted_query(listener) == '', 'Earlier assistant speech became a new query'
+    finally:
+        listener.state_manager.stop()

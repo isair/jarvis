@@ -1022,6 +1022,12 @@ class VoiceListener(threading.Thread):
                         # song?" reaching webSearch verbatim). If the judge
                         # returns an empty query (rare), fall back to raw text.
                         judge_query = (intent_judgment.query or "").strip()
+                        if judge_query and self.echo_detector.query_is_prior_echo(
+                            judge_query, text_lower, last_tts_text
+                        ):
+                            debug_log("rejected prior TTS query absent from current hot-window speech", "voice")
+                            self._stop_thinking_tune()
+                            return
                         hot_query = judge_query or text_lower
                         if judge_query and judge_query.lower() != text_lower:
                             debug_log(
