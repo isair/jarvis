@@ -1276,7 +1276,13 @@ Create a summary that:
 1. Captures the key topics discussed and important information shared
 2. Is concise but informative (max 200 words)
 3. Focuses on facts, decisions, and context that would be useful for future conversations
-4. Includes any personal information, preferences, or important events mentioned
+4. Preserves explicit USER FACTS separately from the task or question that contains them. A user may state their identity, residence, preferences, constraints, plans or circumstances as a reason for asking something. Retain the declaration as a standalone factual sentence, then summarise the request/result separately. Do not reduce the declaration to a task parameter or topic.
+   - First identify what the user explicitly asserted about themselves; preserve that subject, relationship and status. Prioritise these facts over incidental assistant wording within the word budget.
+   - Example: "I am vegetarian, suggest dinner" means "The user is vegetarian. They requested dinner suggestions", not merely "The user requested vegetarian dinner suggestions".
+   - A requested option or destination alone does NOT establish a personal fact. "Suggest a vegetarian dinner" does not establish that the user is vegetarian. Asking for weather in a city does not establish that they live there.
+   - Preserve who a statement is about. Facts about relatives, quoted speakers or hypothetical people must not become facts about the user.
+   - Preserve temporal status: residence is distinct from a current visit or future plan. A current visit must not become a home. Keep current and former facts in separate sentences when recording a correction, clearly marking which is former and which is current.
+   - Apply this to declarations embedded anywhere in a request, in every language, and retain those relationships when combining with an earlier summary.
 5. Maintains a neutral, factual tone
 6. CRITICAL — never narrate the assistant's own failures, deflections, hesitations, or limitations. The diary records what the user shared and what was established as true. The assistant's own missteps are conversational noise. If preserved, they are retrieved by future sessions as "history" and prime the model to repeat the same failure.
 
