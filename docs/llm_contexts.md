@@ -2,6 +2,16 @@
 
 Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it is gated. This is the reference for optimising the app's main bottleneck (LLM latency). Keep it in sync with the code — see the note at the bottom.
 
+**Evaluation replay.** [Query/context comparison](query_context_comparison.md)
+runs synthetic directed speech through the intent judge, router, planner and
+reply contexts. Its `raw_context` arm uses production `SpeechContext` transport;
+`rewrite` runs the frozen full-context rewrite baseline and
+passes its generated query, while `raw_only` omits ambient context. The replay
+uses isolated Settings, fresh memory and synthetic tool results. Its request
+profile fixes temperature at zero, controls the reasoning template uniformly,
+retains output caps and records explicit timeout overrides. The rewrite
+control is evaluation-only; raw-context data flow matches the reply path.
+
 > **Backend abstraction.** Every context below routes through `jarvis.llm` ([spec](../src/jarvis/llm/llm.spec.md)) via `get_llm_backend(cfg)` / `get_embedding_backend(cfg)`. Picking `llm_provider: openai_compatible` swaps the wire shape end-to-end without touching call sites. The active chat model is read directly from `cfg.llm_chat_model` (the `Settings` field that always carries the resolved value, populated by config-load from `ollama_chat_model` when the provider-aware key is left empty).
 
 **Ollama reasoning controls.** Across direct, streaming and agentic chat contexts, canonical GPT-OSS models receive `think: "low"` for a false thinking flag and `think: "high"` for a true flag. Explicit named `think` overrides are preserved. GPT-OSS reasoning cannot be switched off. Other models retain their boolean controls; context prompts, tiers, deadlines and token caps are unchanged by this translation.
@@ -19,11 +29,12 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
   - Unified system prompt from [src/jarvis/system_prompt.py](src/jarvis/system_prompt.py) + ASR note + tool-protocol guidance
   - **Warm profile block** (query-agnostic User + Directives excerpt from the knowledge graph, composed by `build_warm_profile()` / `format_warm_profile_block()` in [src/jarvis/memory/graph_ops.py](src/jarvis/memory/graph_ops.py) at Step 3.5 of `reply()`; no LLM call, pure SQLite read; injected unconditionally so personalisation is the default; result cached in `DialogueMemory._hot_cache` under `DialogueMemory.WARM_PROFILE_CACHE_KEY` for the lifetime of the active conversation. Invalidated on `stop`, on new-conversation entry, AND on User/Directives graph mutations via the listener registered in [src/jarvis/daemon.py](src/jarvis/daemon.py) against `register_graph_mutation_listener` in [src/jarvis/memory/graph.py](src/jarvis/memory/graph.py); World-branch writes are ignored)
   - Digested memory enrichment (optional, see #4)
+  - Request-scoped `SpeechContext`: immutable ambient transcript snapshot captured before the shared query lock, with segment timing, TTS overlap, processed markers and last assistant speech. Redacted and fenced as reference data, never persisted as ambient dialogue. The original recognised speech is the current user message.
   - Time + location context (computed once per reply, placed at the END of the system message's dynamic region — never the head — so every in-loop call sends a byte-identical system message and the server's KV/prefix cache can reuse the whole prompt head; in text-tools mode it sits just before the tool-call syntax guidance so the instruction block stays final)
   - Tool schema: native via `generate_tools_json_schema()` ([src/jarvis/tools/registry.py](src/jarvis/tools/registry.py)) or text fallback via `_text_tool_call_guidance()` ([engine.py:68](src/jarvis/reply/engine.py:68))
   - Tool results from prior turns (raw or digested — see #5)
 - **Output**: OpenAI-style `{content, tool_calls, thinking}`. Consumed by the tool orchestrator and TTS pipeline. Natural-language content is delivered immediately; no post-turn evaluator runs.
-- **Limits**: `num_ctx: 8192` (explicit). Timeout `llm_chat_timeout_sec` (45s). Auto-fallback from native to text tool-calls on HTTP 400 (`ToolsNotSupportedError`), sticky for the session. Risk: `fetch_web_page` truncates at 50,000 chars (~37k tokens) — mitigated for SMALL models by tool-result digest (#5) which compresses the payload before it enters the messages history. LARGE models receive the raw payload and may silently see a truncated context.
+- **Limits**: `num_ctx: 8192` (explicit). Timeout `llm_chat_timeout_sec` (180s). Auto-fallback from native to text tool-calls on HTTP 400 (`ToolsNotSupportedError`), sticky for the session. Risk: `fetch_web_page` truncates at 50,000 chars (~37k tokens) — mitigated for SMALL models by tool-result digest (#5) which compresses the payload before it enters the messages history. LARGE models receive the raw payload and may silently see a truncated context.
 - **Voice entry**: FIFO transcription results are processed serially on the listener thread. VAD and utterance assembly run on a separate worker, so this context does not block microphone-frame consumption. Voice dispatch checks its dictation generation before and after waiting for the shared query lock. Shutdown or a dictation pause suppresses speech from a reply that finishes afterwards; an in-flight reply retains its existing model deadline.
 - **Text-chat entry**: The desktop `ChatWindow` (see `src/desktop_app/chat_window.spec.md`) submits via `jarvis.daemon.submit_text_query`, which calls this same context on a worker thread with `tts=None` and `language=None` (no Whisper-detected language for typed input). Voice and text share the global `DialogueMemory` so they are one conversation. No new LLM context is introduced — the planner, router, enrichment, and digests all run unchanged. Text chat never speaks; the reply is returned to the UI via callbacks (bundled) or `__CHAT__:` IPC events (subprocess).
 
@@ -34,13 +45,13 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 - **Execution / cancellation**: Runs serially on the listener thread, independently of the audio-frame worker. Shutdown or a dictation pause invalidates an outstanding decision before it can start query collection or dispatch. Model deadlines and capture-time echo metadata remain unchanged.
 - **Model / gating**: FAST tier — `resolve_model(cfg, Tier.FAST)` via `get_llm_backend(cfg).chat(...)`. Provider-aware default at config load: `gemma4:e2b` (~2B) on the Ollama chat path; on an OpenAI-compatible chat provider an unset `fast_model` resolves to the active `llm_chat_model` (the Ollama pull-name does not exist on the user's server). An explicit `fast_model` in config.json wins on both paths. The backend re-raises `ConnectionError` so the judge can apply a 30s cooldown after the server actively refuses; falls back to text-based wake detection while the cooldown is active.
 - **Inputs**:
-  - Rolling transcript buffer (last 120s, with timestamps)
+  - Redacted rolling transcript buffer (last 120s, with timestamps), JSON-quoted in a reference-data fence
   - Wake-word timestamp (if any), normalised aliases
   - Last TTS text + finish time (echo rejection)
   - State flags (wake_word_mode, hot_window_mode, during_tts)
-- **System prompt**: `SYSTEM_PROMPT_TEMPLATE` at [intent_judge.py:135](src/jarvis/listening/intent_judge.py:135). Teaches query extraction, echo detection, stop commands, pronoun/topic disambiguation, imperative re-addressing, declaratives to the wake word.
-- **Output**: strict JSON `IntentJudgment{directed, query, stop, confidence, reasoning}` ([intent_judge.py:94](src/jarvis/listening/intent_judge.py:94)). Consumed by the listening state machine which dispatches to the reply engine. When `content` is empty **or truncated mid-JSON** (reasoning models count thinking tokens against the generation cap), the judge also recovers the JSON answer from `reasoning_content` — reasoning models typically end their thinking with the full structured answer.
-- **Limits**: `intent_judge_timeout_sec` (6s). `num_ctx: 8192` (explicit; the system prompt is ~2k tokens and the rolling transcript buffer at default `transcript_buffer_duration_sec=120` can reach ~1.5k tokens in chatty multi-speaker scenes; the larger window gives the few-shot examples and TRANSCRIPT NOISE block at the tail of the prompt enough headroom on Ollama). `max_tokens: 1500` (canonical cap — covers reasoning + answer on reasoning models; OpenAI-compatible backends get it at the payload root; Ollama maps it to `num_predict`). Ollama-only knobs (`keep_alive`, `num_ctx`, `num_predict`) flow via `extra_options`; OpenAI-compatible backends silently drop them. `keep_alive` is `"30m"` by default and `"1m"` when `low_power_mode` is true.
+- **System prompt**: `SYSTEM_PROMPT_TEMPLATE` at [intent_judge.py:135](src/jarvis/listening/intent_judge.py:135). Classifies directedness, echo and cancellation without generating a query.
+- **Output**: strict JSON `IntentJudgment{directed, stop, confidence, reasoning}` ([intent_judge.py:94](src/jarvis/listening/intent_judge.py:94)). Consumed by the listening state machine which dispatches to the reply engine. When `content` is empty **or truncated mid-JSON** (reasoning models count thinking tokens against the generation cap), the judge also recovers the JSON answer from `reasoning_content` — reasoning models typically end their thinking with the full structured answer.
+- **Limits**: `intent_judge_timeout_sec` (6s). `num_ctx: 8192` (explicit, accommodates the classification prompt and rolling transcript). `max_tokens: 1500` (canonical cap — covers reasoning + answer on reasoning models; OpenAI-compatible backends get it at the payload root; Ollama maps it to `num_predict`). Ollama-only knobs (`keep_alive`, `num_ctx`, `num_predict`) flow via `extra_options`; OpenAI-compatible backends silently drop them. `keep_alive` is `"30m"` by default and `"1m"` when `low_power_mode` is true.
 
 ## 3. Memory Enrichment Extractor
 
@@ -51,7 +62,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 - **System prompt**: inline at [enrichment.py:60](src/jarvis/reply/enrichment.py:60). Byte-static — no hint block, no timestamp — so the system prompt is identical across every extractor call and stays cacheable; the per-call hint / UTC anchor rides at the end of the user content.
 - **Output**: `{from, to, keywords, questions}`. The static prompt resolves the requested period before removing time words from keyword output. Date fields are null for timeless requests; dated requests use the reference clock and UTC timestamps. Parallel English/Turkish examples distinguish dated and timeless lookup; personal questions cover missing facts and exclude facts already visible in live context. A single valid JSON object supplies all four fields. Consumed by memory search in the reply engine.
 - **Limits**: up to 2 attempts; timeout from `llm_tools_timeout_sec`. `max_tokens: 1024` (`_MEMORY_SEARCH_PARAMETER_TOKEN_BUDGET`), covering reasoning and complete parameter JSON.
-- **Caching**: result cached in `DialogueMemory._hot_cache` under key `enrichment:{redacted_query[+topic_hint]}` for the lifetime of the active conversation. Identical follow-ups within the same conversation reuse the dict and skip the LLM hop. Cleared by `clear_hot_cache()` on the `stop` signal and on new-conversation entry.
+- **Caching**: result cached in `DialogueMemory._hot_cache` under key `enrichment:{redacted_query[+topic_hint]}|{speech-context-fingerprint}` for the lifetime of the active conversation. Identical follow-ups within the same conversation reuse the dict and skip the LLM hop. Cleared by `clear_hot_cache()` on the `stop` signal and on new-conversation entry.
 
 ## 3b. Recall Gate (pre-enrichment short-circuit)
 
@@ -68,7 +79,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 - **File**: [src/jarvis/reply/enrichment.py](src/jarvis/reply/enrichment.py) — `digest_memory_for_query()` + `_distil_batch()`.
 - **Trigger**: once per reply when enrichment returns hits AND `memory_digest_enabled` (default `null` = auto-ON for SMALL ≤7.5B / OFF for LARGE). Skipped if raw < `_DIGEST_MIN_CHARS` (400). Batched if raw > `_DIGEST_BATCH_MAX_CHARS` (2000).
 - **Model / gating**: `cfg.llm_chat_model` via `get_llm_backend(cfg)`. Gated by `memory_digest_enabled`; the auto-on path reads the same chat model so model-size detection follows the active provider.
-- **Inputs**: user query, raw diary entries, raw graph nodes.
+- **Inputs**: original user query, separate redacted transcript reference, raw diary entries and graph nodes.
 - **System prompt**: `_DIGEST_SYSTEM_PROMPT` at [enrichment.py:161](src/jarvis/reply/enrichment.py:161). Teaches relevance filtering, preference-signal detection, attribution preservation, `NONE` sentinel, identity queries.
 - **Output**: ≤500 chars text per batch, plus a truncation ellipsis (`_DIGEST_MAX_CHARS`) injected as reference-only memory context into the main loop's system message. Empty on failure.
 - **Limits**: `llm_digest_timeout_sec` (8s, shared). `max_tokens: 1024` (`_MEMORY_DIGEST_TOKEN_BUDGET`) per batch, including reasoning and the final relevance note.
@@ -78,7 +89,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 - **File**: [src/jarvis/reply/enrichment.py](src/jarvis/reply/enrichment.py) — `digest_tool_result_for_query()` + `_distil_tool_batch()`.
 - **Trigger**: after each tool result in the loop, if `tool_result_digest_enabled` (default `null` = auto-ON for SMALL ≤7.5B, OFF for LARGE). Primary motivation on small models: prevents `fetch_web_page`'s 50k-char payloads from filling the 8192 num_ctx window. Skipped if raw < 400 chars (`_TOOL_DIGEST_MIN_CHARS`); batched if > 2500 (`_TOOL_DIGEST_BATCH_MAX_CHARS`).
 - **Model / gating**: `cfg.llm_chat_model` via `get_llm_backend(cfg)`. Gated by `tool_result_digest_enabled` — auto-on for SMALL via `detect_model_size(cfg.llm_chat_model)`.
-- **Inputs**: user query, tool name, raw tool result (e.g. webSearch payload inside UNTRUSTED WEB EXTRACT fence).
+- **Inputs**: original user query, separate redacted transcript reference, tool name, raw tool result (e.g. webSearch payload inside UNTRUSTED WEB EXTRACT fence).
 - **System prompt**: `_TOOL_DIGEST_SYSTEM_PROMPT`. Teaches attributed fact extraction, `NONE` sentinel, no inference.
 - **Output**: ≤600 chars per batch (`_TOOL_DIGEST_MAX_CHARS`) replacing the raw payload in the messages stream. Falls back to raw on `NONE`.
 - **Limits**: `llm_digest_timeout_sec` (8s, shared). `max_tokens: 300`.
@@ -88,7 +99,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 - **File**: [src/jarvis/reply/enrichment.py](src/jarvis/reply/enrichment.py) — `digest_loop_for_max_turns()` (~line 847).
 - **Trigger**: when the loop exhausts `agentic_max_turns` without producing a natural-language reply (e.g. pure tool-call loop). The evaluator no longer drives this — termination on content is immediate.
 - **Model / gating**: FAST tier — `resolve_model(cfg, Tier.FAST)`. Factory-dispatched.
-- **Inputs**: user query + loop activity (tool calls, results summaries, any prose).
+- **Inputs**: original user query + separate redacted transcript reference + loop activity (tool calls, results summaries, any prose).
 - **System prompt**: `_LOOP_DIGEST_SYSTEM_PROMPT` — caveat-prefixed, user-language, concise.
 - **Output**: caveat-prefixed final reply. Fails open to the last raw candidate or generic error.
 - **Limits**: `llm_digest_timeout_sec` (8s, shared). `max_tokens: 1024` (`_LOOP_DIGEST_TOKEN_BUDGET`), including reasoning and the final partial reply.
@@ -98,7 +109,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 - **File**: [src/jarvis/tools/selection.py](src/jarvis/tools/selection.py) — `_select_llm()`.
 - **Trigger**: once per reply, **at the very front of the flow before the planner (#12)**. Always runs — the router is the authoritative tool picker, and its narrowed catalogue is what the planner sees. When the planner later references tools, those names are unioned into the router's allow-list but never replace it; small models tend to default to `webSearch` where a dedicated tool like `getWeather` should win, and the router is tuned for that classification. `tool_selection_strategy == "llm"` is the default; other strategies (`all`, `keyword`, `embedding`) also run here.
 - **Model / gating**: FAST tier — `resolve_model(cfg, Tier.FAST)`. Factory-dispatched.
-- **Inputs**: user query, tool catalogue (builtin + MCP with descriptions), optional narrow-down hint. User-prompt order is KV-cache-disciplined: the mostly-static catalogue opens, the dynamic hint (time + dialogue) follows, the query is the final token — consecutive router calls in one conversation share the full catalogue as prefix.
+- **Inputs**: original user query, tool catalogue (builtin + MCP with descriptions), optional narrow-down hint, and separate redacted transcript context. Router cache keys include its fingerprint. User-prompt order is KV-cache-disciplined: the mostly-static catalogue opens, the dynamic hint (time + dialogue) follows, the query is the final token — consecutive router calls in one conversation share the full catalogue as prefix.
 - **System prompt**: inline (~lines 260-315). Teaches pick up-to-5 tools or `none`.
 - **Output**: comma-separated tool names or `none`. Capped at `_LLM_MAX_SELECTED` (5). Always-included tools (`stop`, `toolSearchTool`) are unioned in regardless.
 - **Limits**: `llm_timeout_sec`. `max_tokens: 1024` (`_ROUTER_TOKEN_BUDGET`), covering reasoning plus the tool-name answer on every backend. On failure → keyword strategy.
@@ -110,7 +121,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 - **File**: [src/jarvis/tools/builtin/tool_search.py](src/jarvis/tools/builtin/tool_search.py) — `toolSearchTool`.
 - **Trigger**: when the model explicitly invokes `toolSearchTool` during the loop. Capped at `tool_search_max_calls` (3) per reply.
 - **Model**: reuses the tool router (#7) — no separate LLM call here.
-- **Inputs**: self-contained query from the model.
+- **Inputs**: self-contained query from the model plus the same redacted speech snapshot as the initial router.
 - **Output**: newline-separated tool names + one-liners, merged into the allow-list for the next turn.
 
 ## 9. Conversation Summariser
@@ -169,7 +180,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 - **File**: [src/jarvis/reply/planner.py](src/jarvis/reply/planner.py) — `plan_query()`.
 - **Trigger**: once per reply, **after the tool router and before memory search**. Skipped when `cfg.planner_enabled = False`, when the query is shorter than `MIN_QUERY_CHARS` (4), when no model / base URL is available, or when the **engine-level fast-path skip** fires (the tool router returned no real tools AND the query is ≤ 8 words — the engine injects `["Reply to the user."]` as the plan without calling the LLM).
 - **Model / gating**: CHAT tier — `resolve_model(cfg, Tier.CHAT)`. Factory-dispatched. The planner tracks the active chat model so upgrading it (via setup wizard, config, or provider switch) automatically upgrades plan quality.
-- **Inputs**: user query, the latest six non-empty user/assistant dialogue messages (200 characters each, chronological; other roles and empty messages do not consume this budget), **router-narrowed** tool catalogue (names + one-line descriptions) — not the full 30+ list. When the carry-over guard from #7 fires, the previous turn's failed tool name is unioned into this catalogue before the planner sees it, so the planner can plan a re-call without `toolSearchTool` round-tripping. **No** memory context: the planner decides *whether* memory is needed. `_build_user_message()` reports an empty external catalogue without choosing the plan; the same private-history rules apply with or without external tools.
+- **Inputs**: original user query, separate redacted speech snapshot, the latest six non-empty user/assistant dialogue messages (200 characters each, chronological; other roles and empty messages do not consume this budget), **router-narrowed** tool catalogue (names + one-line descriptions) — not the full 30+ list. When the carry-over guard from #7 fires, the previous turn's failed tool name is unioned into this catalogue before the planner sees it, so the planner can plan a re-call without `toolSearchTool` round-tripping. **No** memory context: the planner decides *whether* memory is needed. `_build_user_message()` reports an empty external catalogue without choosing the plan; the same private-history rules apply with or without external tools.
 - **System prompt**: `_PROMPT_TEMPLATE` in `planner.py`. Teaches the `searchMemory topic='...'` directive for prior-conversation lookups and personalised recommendations. Private user history is distinguished from public facts about named entities and utility requests. Also teaches short imperative tool steps, angle-bracket entity placeholders, final synthesis step, same-language output, no numbering.
 - **Output**: list of plan steps (max `MAX_STEPS` = 5). Gates memory enrichment (#3 / #4) and augments the tool router (#7 — planner's picks are unioned in, not replacing). Single-step `["Reply to the user."]` plans are the planner's positive "no memory, no tools" signal. An empty list is fail-open — the engine reverts to running #3 unconditionally. A **stop-only plan** (every step is `stop`) is also rejected by a deterministic post-plan guard and returns `[]` — same fail-open path as an LLM failure — so the engine falls through to the tool router and chat model rather than silently dismissing the conversation. Consumed further by the engine to build the `ACTION PLAN:` system-message block and drive the direct-exec loop (#13) for small models.
 - **Limits**: `planner_timeout_sec` (3s). `max_tokens: 1024` (shared `_PLANNER_TOKEN_BUDGET`, including reasoning and answer), `temperature: 0.0`. Fail-open → `[]`.
@@ -179,7 +190,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 - **File**: [src/jarvis/reply/planner.py](src/jarvis/reply/planner.py) — `resolve_next_tool_call()`.
 - **Trigger**: top of each agentic-loop iteration when `use_text_tools` is True, the plan from #12 still has unexecuted tool steps, AND the plan is not under-specified (`plan_has_unresolved_tool_steps` returns False — steps that paraphrase tools without naming them skip direct-exec so the resolver doesn't guess arguments). Runs instead of the chat model for that turn. **Fast path skips the LLM entirely** when the step is fully concrete (tool name + `key='value'` args, no `<placeholder>`); the LLM call fires when entity substitution, key remapping or completion of required fields is needed. Concrete parsing consumes the full argument text and rejects repeated keys or incomplete quoting; ambiguous steps use the LLM resolver. Concrete primitive arguments use declared JSON types; invalid or complex typed values use the LLM resolver. Both paths preserve literal place/address fields and normalise explicit URL keys or URI-formatted properties. Both require all schema-required fields before dispatch; malformed argument objects and incomplete LLM output return control to the normal chat turn.
 - **Model**: same chain as #12.
-- **Inputs**: next planned step text, prior tool calls (name + args + result excerpt), per-turn tool schema.
+- **Inputs**: next planned step text, separate redacted speech snapshot, prior tool calls (name + args + result excerpt), per-turn tool schema.
 - **System prompt**: `_STEP_RESOLVER_SYSTEM` at [planner.py:563](src/jarvis/reply/planner.py:563). Teaches one-JSON-object output, placeholder substitution from prior results, `null` for synthesis steps.
 - **Output**: `(tool_name, arguments)` tuple or `None`. Unknown tool names are rejected via the allow-list guard.
 - **Limits**: `planner_timeout_sec` (3s). `max_tokens: 1024` (shared `_PLANNER_TOKEN_BUDGET`, including reasoning and answer). Fail-open → `None` (engine falls back to the chat-model turn).
@@ -236,7 +247,7 @@ Driven by `detect_model_size(model_name) → SMALL (≤7.5B) | LARGE (>7.5B)` �
 
 - Models: `llm_chat_model` (CHAT tier), `fast_model` (FAST tier). Every context resolves via `resolve_model(cfg, tier)`. Legacy on-disk keys (`ollama_chat_model` as a v1 → v2 alias; `intent_judge_model` / `tool_router_model` / `evaluator_model` / `planner_model` folded into `fast_model` by the v2 → v3 migration) are readable but no longer part of `Settings`.
 - Flags: `memory_digest_enabled`, `tool_result_digest_enabled`, `llm_thinking_enabled`, `intent_judge_thinking_enabled`, `tool_selection_strategy`, `low_power_mode`
-- Timeouts: `llm_chat_timeout_sec` (45s), `llm_digest_timeout_sec` (8s, shared across #4/#5/#6), `llm_tools_timeout_sec`, `intent_judge_timeout_sec` (6s), `planner_timeout_sec` (3s)
+- Timeouts: `llm_chat_timeout_sec` (180s), `llm_digest_timeout_sec` (8s, shared across #4/#5/#6), `llm_tools_timeout_sec`, `intent_judge_timeout_sec` (6s), `planner_timeout_sec` (3s)
 - Caps: `agentic_max_turns` (8), `tool_search_max_calls` (3), `_LLM_MAX_SELECTED` (5), `_DIGEST_MAX_CHARS` (400), `_TOOL_DIGEST_MAX_CHARS` (600). Per-context `max_tokens` caps are listed above; classification budgets include reasoning plus the answer, and rewrite tasks scale with input length.
 - Runtime residency: `low_power_mode` skips startup LLM warmups and shortens Ollama `keep_alive` for intent judge and warmup calls from `"30m"` to `"1m"`. It does not change prompts, model selection, timeouts, or context limits.
 
@@ -256,9 +267,10 @@ Anything that reorders messages between calls, injects a changing value at the h
 
 ```
 user input
-  └─▶ [2] Intent Judge            (voice only, SMALL)
-        └─▶ [7] Tool router (narrows catalogue for the planner)
-              └─▶ [12] Planner (gates memory; advisory for the router allow-list)
+  └─▶ [2] Intent Judge            (voice only, directedness/stop decisions)
+        └─▶ original speech + immutable redacted SpeechContext
+              └─▶ [7] Tool router (narrows catalogue for the planner)
+                    └─▶ [12] Planner (gates memory; advisory for the router allow-list)
                     ├─ plan requests searchMemory  → [3] Enrichment extract → [4] Memory digest (optional)
                     ├─ plan empty (fail-open)      → [3] Enrichment extract → [4] Memory digest
                     └─ plan reply-only             → skip #3 and #4 entirely
@@ -318,3 +330,7 @@ When you add or change a context, update `_CALLER_TO_CONTEXT` so it shows up in 
 ## Keep this doc in sync
 
 This graph is the reference for LLM-latency optimisation. Treat it as authoritative: whenever code changes affect an LLM call — a new context, a removed one, a changed model/timeout/cap/gating/prompt source, or a new data-flow edge — update this file in the same PR. If the update would be more than a one-line tweak, reflect it in the relevant `*.spec.md` too.
+
+## Request-scoped speech reference flow
+
+`VoiceListener._dispatch_query` captures `SpeechContext` before waiting for the shared query lock. The reply engine renders it as redacted JSON inside a data fence. Initial routing, `plan_query`, `resolve_next_tool_call`, the memory-search parameter extractor, memory/tool-result/max-turn relevance digests, every native/text reply turn and `toolSearchTool` receive the same snapshot. Router and extractor caches include its fingerprint. The current request takes priority over earlier speech; TTS and unrelated instructions remain reference data. Text submission supplies no ambient snapshot. The intent judge emits decisions only and does not synthesise text for the reply engine.

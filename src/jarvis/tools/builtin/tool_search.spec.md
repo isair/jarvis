@@ -26,6 +26,10 @@ When the model invokes `toolSearchTool(query=...)`, the tool re-runs the same ro
   - `query` (string, required): a self-contained natural-language description of the subtask needing a tool. Subject to the same `SELF-CONTAINED TOOL ARGUMENTS` rule as every other tool (pronouns and ellipsis resolved from conversation).
 - **Output**: a newline-separated list of tool names and one-line descriptions for everything routing surfaced for `query`. On no matches: a short honest note saying no additional tools were found.
 
+### Speech context
+
+The engine supplies the current reply's redacted transcript context through `ToolContext`. Mid-loop routing receives it separately from the tool's query and uses it as reference data. The tool does not consult mutable listener state or append ambient speech to persisted dialogue.
+
 ### Loop integration
 
 The reply engine:

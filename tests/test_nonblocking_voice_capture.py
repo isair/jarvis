@@ -137,7 +137,7 @@ def test_invalidated_intent_result_does_not_start_query(synthetic_listener, inva
         else:
             obj._dictation_active = True
             obj._dictation_active = False
-        return IntentJudgment(directed=True, query='weather', stop=False,
+        return IntentJudgment(directed=True, stop=False,
                               confidence='high', reasoning='Addressed to Jarvis')
     obj._intent_judge = SimpleNamespace(available=True, judge=judge)
     obj._process_transcript('Jarvis weather', captured_during_tts=False,
@@ -376,7 +376,7 @@ def test_transcript_keeps_capture_generation_across_buffer_storage(synthetic_lis
         obj._dictation_active = False
     obj._transcript_buffer.add = add
     obj._intent_judge = SimpleNamespace(available=True, judge=lambda **kw:
-        IntentJudgment(directed=True, query='weather', stop=False,
+        IntentJudgment(directed=True, stop=False,
                       confidence='high', reasoning='Addressed to Jarvis'))
     result = _TranscriptionResult('Jarvis weather', 'en', (), 1., 2., .1,
                                    obj._dictation_generation, False, 0.)

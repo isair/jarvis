@@ -90,6 +90,10 @@ Note: the planner pays a cache miss relative to the tool router, which
 plan quality drives everything downstream, router quality only narrows
 one turn's allow-list.
 
+### Speech context
+
+Voice requests supply a separate redacted, fenced `transcript_context` to planning and step resolution. It contains the current request and timestamped ambient references, including processed and TTS markers. The current request takes priority; previous instructions are reference data. The planner resolves named entities, pronouns, parent brands and unanswered-question references without rewriting the user request. Text requests leave this context empty.
+
 ### Prompt contract (plan_query)
 
 The planner prompt instructs the model to emit:

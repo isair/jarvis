@@ -316,6 +316,7 @@ def run_tool_with_retries(
     redacted_text: str,
     max_retries: int = 1,
     language: Optional[str] = None,
+    transcript_context: str = "",
 ) -> ToolExecutionResult:
     # Normalize tool name to canonical camelCase
     raw_name = (tool_name or "").strip()
@@ -363,6 +364,7 @@ def run_tool_with_retries(
             max_retries=max_retries,
             user_print=_user_print,
             language=language,
+            transcript_context=transcript_context,
         )
 
     # Unknown tool

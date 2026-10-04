@@ -1,6 +1,6 @@
 # Listening Flow Specification v2
 
-This document outlines the voice listening architecture. The system uses a **transcript-first** approach where speech is continuously transcribed, and an LLM intent judge extracts queries with full context.
+This document outlines the voice listening architecture. The system uses a **transcript-first** approach where speech is continuously transcribed, and an intent judge classifies engagement using transcript context.
 
 ## Architecture Overview
 
@@ -109,7 +109,6 @@ playback cannot reclassify an older utterance.
 │                                       │
 │  Outputs:                             │
 │  - directed: bool                     │
-│  - query: "extracted clean query"     │
 │  - stop: bool                         │
 │  - confidence: high/medium/low        │
 │  - reasoning: "brief explanation"     │
@@ -144,10 +143,11 @@ on it, and a cross-thread close is a native use-after-free.
 Instead of extracting post-wake-word audio, we:
 - Continuously transcribe all speech (VAD-gated)
 - Store transcripts with timestamps in a rolling buffer
-- Let the intent judge extract the relevant query
+- Let the intent judge classify directedness and cancellation
+- Send recognised speech and a separate transcript snapshot to the reply engine
 
 **Benefits:**
-- Pre-wake-word chatter naturally filtered: "blah blah Jarvis what time is it" → "what time is it"
+- Downstream models distinguish the current request from reference speech and unrelated chatter
 - Full context available for intent understanding
 - Echo detection via multi-layer approach (fuzzy text matching + LLM intent judge)
 
@@ -160,13 +160,13 @@ Wake word detection operates on the rolling transcript buffer. When Whisper prod
 The intent judge receives full context and makes intelligent decisions:
 - Knows what TTS said → can identify echo vs real speech
 - Sees pre-wake-word context → can understand "...what do YOU think, Jarvis?"
-- Extracts clean query → removes filler words, false starts
+- Classifies current speech without rewriting it
 
 **Gating:** The judge is called only when there is an engagement signal — (a) a wake word was detected in the current utterance, (b) the utterance falls inside (or pending) a hot window, or (c) TTS is currently speaking. Pure ambient speech skips the judge entirely. This keeps the synchronous audio loop from blocking up to `intent_judge_timeout_sec` on every background utterance, which would otherwise freeze the UI when Ollama is slow or contended.
 
 **Alias normalisation:** Before the transcript is sent to the judge, every configured wake-word alias in each segment is replaced with the primary assistant name (case-insensitive, word-boundary-aware). Aliases are Whisper mishearings of the wake word (e.g. "Jervis", "Jaivis" for "Jarvis"); without this step the small judge model sees the alias, doesn't know it refers to the assistant, and can decide the user is addressing a different person. Normalisation happens at prompt-build time only — the raw transcript buffer is untouched.
 
-**Wake-word removal in the extracted query:** The wake word is addressed TO the assistant, never part of the query content. The judge prompt explicitly instructs removing every occurrence of the wake word from the extracted `query` — at the start, end, or middle of the sentence, including when it sits next to a named entity (e.g. "movie called Possessor Jarvis" → film is "Possessor", not "Possessor Jarvis"). The only exception is when the user is literally talking *about* the assistant as a subject ("tell me about Jarvis"). This is enforced by prompt rule + example rather than post-hoc string stripping, because the LLM already understands the semantic distinction and can handle cases a regex would mishandle (e.g. proper names that contain the wake word, like "Jarvis Cocker").
+**Request preservation:** Accepted speech retains its words and casing, including wake words and ASR errors. The intent decision contains no query. Tool arguments are composed by the planner or chat model using the original request and separate transcript context, where the wake word is an address rather than a search term. Names such as "Jarvis Cocker" retain their meaning.
 
 **Model residency (`keep_alive`):** Each intent-judge request asks Ollama to keep the model resident after the call. The default duration is 30 minutes, which avoids cold reloads between utterances. When `cfg.low_power_mode` is true, the duration is 1 minute so the model can unload soon after an active exchange. The trade-off is latency: low-power sessions can pay a cold-load cost after idle periods, while default sessions keep the judge model (default `gemma4:e2b`, ~2 GB) in RAM/VRAM during active voice use.
 
@@ -217,7 +217,7 @@ System is waiting for wake word activation.
 1. Start thinking beep immediately and set face state to LISTENING
 2. Wait for utterance to complete (user finishes speaking)
 3. Send transcript buffer + wake timestamp to intent judge
-4. If `directed=true` and `query` exists, dispatch to reply engine
+4. If `directed=true` and the current engagement signal is valid, reject pure hot-window TTS echo even while thinking, then collect the original speech for the reply engine
 5. If rejected, stop the beep and revert face state to IDLE
 
 ### 2. Hot Window Mode
@@ -239,7 +239,7 @@ hot-window admission; manual expiry also cancels pending activation.
 
 **Behaviour:** Speech first passes through an early fuzzy echo check (rapidfuzz `partial_ratio`, threshold 70, with word-count guard to avoid catching mixed echo+speech). Pure echo is silently rejected **without calling the intent judge** — this keeps echo rejection instant and prevents it from blocking the audio loop. The hot window timer is **not** reset on echo rejection. Non-echo speech is sent to the intent judge, but if the judge rejects it, the rejection is overridden — all non-echo speech in the hot window is accepted as a follow-up query.
 
-**Mixed echo+speech handling:** When Whisper merges TTS echo and user speech into one chunk (e.g. mic picks up TTS then user speaks), the word-count guard detects the extra content and lets it through to the intent judge. The judge extracts the user's actual query from the mixed transcript. Post-judge echo checks also use the word-count guard and verify the judge's extracted query isn't itself echo before rejecting.
+**Mixed echo+speech handling:** The early fuzzy echo check and deterministic echo salvage distinguish pure echo from speech that includes a user follow-up. The judge classifies engagement in mixed speech. Accepted text stays separate from the full transcript and last TTS text so downstream models can ignore echo when composing tool arguments.
 
 **Early salvage for echo-prefixed follow-ups:** Before the early fuzzy check rejects a chunk as pure echo, the listener calls `cleanup_leading_echo` to strip any TTS-tail prefix. If exact-word cleanup fails (for example because Whisper mis-transcribed the first echo word — *"explores"* → *"laws"* — breaking the word-level comparison), the listener falls back to `salvage_after_echo_tail`, which scans heard-text word boundaries right-to-left looking for the rightmost 5-word window that fuzzy-matches the TTS tail (`partial_ratio >= 85`) and keeps everything after it. This preserves short follow-ups (*"Who made it?"*) that the existing fuzzy-prefix salvage would otherwise truncate by one word because it prefers the shortest suffix. If the surviving remainder has at least `EchoDetector.min_salvage_words` words (default 3), it replaces the transcript segment text and is treated as the user's follow-up. The same minimum-word threshold is shared by the during-TTS and post-TTS merged-chunk salvage paths so the policy is consistent across all three sites.
 
@@ -281,7 +281,7 @@ class TranscriptBuffer:
 
 ### Memory Alignment
 
-- **Transcript buffer** (`transcript_buffer_duration_sec`): Rolling raw ambient speech. Separate and potentially longer — in group conversations, 2+ minutes of context lets the intent judge synthesise a complete query with relevant information when someone decides to involve Jarvis later in the conversation.
+- **Transcript buffer** (`transcript_buffer_duration_sec`): Rolling raw ambient speech. Separate and potentially longer — in group conversations, 2+ minutes of context lets downstream models resolve references when someone decides to involve Jarvis later in the conversation.
 - **Short-term memory** (`dialogue_memory_timeout`): Processed Jarvis interactions (user queries + assistant responses). This window also drives the forced diary update interval.
 - **Long-term memory (diary):** Forced update when unsaved messages reach `dialogue_memory_timeout` age. Enrichment retrieves any relevant earlier context from the diary.
 
@@ -297,73 +297,15 @@ class TranscriptBuffer:
 
 ### Context Duration & Query Synthesis
 
-The intent judge receives the full transcript buffer (default: 120 seconds / 2 minutes) and **synthesizes a complete query** using conversation context.
+The intent judge receives the timestamped rolling buffer and decides `directed`, `stop`, `confidence` and `reasoning`. It never generates a replacement query. Declaratives addressing the assistant and hot-window follow-ups remain directed; quoted stop commands, narration and pure TTS echo are not cancellation requests.
 
-This enables Jarvis to **chime into ongoing conversations** between people. When someone asks "Jarvis, what do you think?", the judge uses context to understand what they were discussing and creates a complete, actionable query. Vague references like "that", "it", "this", "they" in the current segment are resolved using previous segments in the buffer (e.g. "I think dinosaurs are cool" + "What do you think about that Jarvis?" → "what do you think about dinosaurs being cool").
+A voice reply receives the original collected speech and an immutable `SpeechContext` snapshot, captured before waiting for the shared voice/text query lock. The snapshot copies the whole retained buffer, segment timing, TTS overlap, processed markers and last assistant speech. It is request-scoped reference data, redacted before model use, JSON-quoted with escaped fence delimiters, and is not persisted in dialogue or diary memory. Text-chat requests have no ambient transcript snapshot.
 
-**Multi-topic disambiguation.** Real buffers often contain interleaved threads from ambient chatter — e.g. a sports conversation running alongside a purchase discussion. When the wake-word segment uses a vague reference or a topic-less question ("what's the price", "how much does it cost"), the judge must pick the thread whose subject fits the question's grammar (a purchasable thing for "price", a release for "when did it come out") and ignore unrelated threads. When resolving to a sub-item ("pro model", "the red one"), the query must include the parent noun/brand so it remains answerable without the transcript. The grammar-matching behaviour lives entirely in the judge's system prompt (no runtime code branch) and is exercised by the `buried_target_*` eval cases in `evals/test_intent_judge.py` — if the small model regresses on this behaviour, those evals catch it.
+The router, planner, step resolver, relevance digests and every reply turn receive this reference context. `toolSearchTool` receives the same context when widening the allow-list. These consumers resolve pronouns, topic-less questions, parent brands, and requests such as "answer that" against relevant earlier speech. The current request takes priority over prior instructions and unrelated threads. Pure echo is rejected by the listener; mixed echo is excluded when composing arguments. Router and memory-extractor caches include a fingerprint of the redacted snapshot, so identical words with different referents cannot reuse an earlier decision.
 
-**Hot-window override.** In hot-window mode the user is always treated as directed; the topic-less / vague-reference heuristics above are subordinate. Short follow-ups like "tell me more", "and?", or "what else" stay directed rather than being rejected as undirected chatter, because the hot window only opens after a completed Jarvis exchange.
+`evals/test_intent_classifier.py` qualifies local typed classifiers against directedness and cancellation cases, including multilingual speech, quoted stops and echo. Abstentions, malformed answers, truncation and unavailable models count as failures. A classifier replacement must pass this contract independently of downstream query handling.
 
-**Declarative statements addressed to the wake word.** Segments where the user shares information, feelings, or an action with the assistant — e.g. "Jarvis, I just ate a burger from McDonald's", "I'm feeling a bit tired today, Jarvis", "my flight got cancelled, Jarvis" — are directed and must be extracted verbatim (wake word removed) as the query. The wake word can appear at the start, middle, or end of the segment; position does not affect directedness. The judge must not reject these as "not a command or question": any segment where the wake word is used to address the assistant (as opposed to a narrative mention like "I told my friend about Jarvis") is directed, regardless of sentence mood.
-
-**Imperative resolution.** The same mechanism covers imperatives that refer to a prior unanswered question. If a prior segment contains a question and the wake-word segment is an instruction like "answer that", "respond to that", "reply to that", "address that", "answer my question", or "go ahead and answer", the query is the prior question itself — not the literal imperative. Whisper tense variants of these imperatives ("answered that", "answers that", "answering that") are treated the same. If the current segment contains both an imperative and a new explicit question, the new question takes priority.
-
-**Multi-person conversation example:**
-```
-[12:28:30] Person A: "I wonder what the weather will be like tomorrow"
-[12:28:45] Person B: "Yeah, we should check before planning the picnic"
-[12:29:00] Person A: "Jarvis, what do you think?"
-```
-
-The intent judge synthesizes: `"what do you think about the weather tomorrow for the picnic"`
-
-### Input Format
-
-```
-Transcript (last 120 seconds):
-[12:28:30] "I wonder what the weather will be like tomorrow"
-[12:28:45] "Yeah, we should check before planning the picnic"
-[12:29:00] "Jarvis what do you think"
-
-Wake word detected at: 12:29:00.8 (text-based)
-Last TTS: "The weather is sunny and 72 degrees"
-TTS finished at: 12:28:02
-Current state: wake_word_mode
-```
-
-### Output Format
-
-```json
-{
-  "directed": true,
-  "query": "what do you think about the weather tomorrow for the picnic",
-  "stop": false,
-  "confidence": "high",
-  "reasoning": "synthesized context from conversation about weather and picnic"
-}
-```
-
-### Multi-Layer Echo Detection
-
-Echo detection uses a layered approach for reliability:
-
-1. **Fuzzy text matching (safety net):** `rapidfuzz.fuzz.partial_ratio` compares transcript against last TTS text. Score ≥ 70 = echo. This runs before the intent judge and catches obvious echoes quickly, including in the hot window directed path.
-2. **Intent judge (contextual):** Receives `last_tts_text` and timing context. Can identify echo even when fuzzy matching misses subtle cases, and can extract real user speech from mixed echo+speech chunks.
-
-The fuzzy check acts as a fast, reliable safety net. The intent judge provides deeper understanding but may be unreliable with smaller models (e.g. gemma4).
-
-Example:
-```
-TTS: "The weather is sunny and 72 degrees"
-TTS finished: 12:30:14
-
-Transcript:
-[12:30:15] "The weather is sunny and 72 degrees" ← Echo (fuzzy score 100, rejected)
-[12:30:18] "Ni hao" ← Real speech (fuzzy score < 70, sent to judge)
-
-Judge output: {"directed": true, "query": "Ni hao", "reasoning": "New speech directed at assistant"}
-```
+`evals/run_query_context_comparison.py` replays known-directed synthetic speech through the real router, planner and reply engine. Its rewrite control uses an evaluation-only frozen prompt; its raw-context arm uses production `SpeechContext` transport. Synthetic tools make argument and grounded-answer scoring reproducible. This replay measures downstream accuracy and does not certify listener or classifier safety.
 
 ## Early Feedback (Beep & Face State)
 
@@ -431,7 +373,7 @@ pending feedback.
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `transcript_buffer_duration_sec` | 120 | Duration (seconds) for rolling ambient speech transcript. Provides conversation context so the intent judge can synthesise a complete query when someone involves Jarvis. Separate from dialogue memory. |
+| `transcript_buffer_duration_sec` | 120 | Duration (seconds) for rolling ambient speech transcript. Provides reference speech for classification, routing, planning and replies when someone involves Jarvis. Separate from dialogue memory. |
 | `whisper_min_confidence` | 0.3 | Minimum `avg_logprob`-derived confidence score for a transcribed segment. Segments below this are discarded before the intent judge sees them. |
 | `whisper_no_speech_threshold` | 0.5 | Hard cutoff on Whisper's `no_speech_prob` field. Any segment at or above this value is discarded **regardless of `avg_logprob`** — Whisper can be confident about a hallucinated phrase even when no real speech is present (e.g. the "MBC 뉴스" hallucination on background noise). This filter runs before the `avg_logprob` check so it catches high-confidence hallucinations that would otherwise survive. Applies to both the faster-whisper and MLX backends. |
 
@@ -450,7 +392,7 @@ stateDiagram-v2
 
     WakeWord --> IntentJudge: Wake detected (text-based)
     IntentJudge --> DuringTTS: Query dispatched, TTS starts
-    IntentJudge --> WakeWord: Not directed / no query
+    IntentJudge --> WakeWord: Not directed
     DuringTTS --> HotWindow: TTS ends + echo_tolerance
     HotWindow --> IntentJudge: Speech detected
     HotWindow --> WakeWord: Timer expires
@@ -483,9 +425,9 @@ If wake detected OR in hot window:
     → Fuzzy echo check (partial_ratio ≥ 70 = echo → reject + reset timer)
     → Send buffer + context to Intent Judge
     ↓
-If judge.directed and judge.query:
+If judge.directed and a current engagement signal exists:
     → Verify wake word present (wake word mode) or non-echo (hot window)
-    → Dispatch query to Reply Engine
+    → Collect original speech, then dispatch with a transcript snapshot
 If judge rejects but in hot window and non-echo:
     → Override rejection, dispatch as query
 ```
@@ -496,7 +438,7 @@ When components are unavailable, the system degrades gracefully:
 
 | Component | Unavailable Behaviour |
 |-----------|---------------------|
-| Intent Judge | Simple text-based wake word + query extraction; hot window override still applies |
+| Intent Judge | Text-based wake detection with original speech; hot window override still applies |
 | Unsupported input format | Retry channel count and native sample rate on the selected device, then convert to 16 kHz mono for Whisper |
 | Transcript Buffer | Process each utterance independently |
 
