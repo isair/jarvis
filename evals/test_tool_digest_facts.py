@@ -25,8 +25,10 @@ CASES = [
 
 @pytest.mark.parametrize('query, fact, required, forbidden, irrelevant', CASES)
 def test_tool_digest_retains_grounded_facts(query, fact, required, forbidden, irrelevant):
-    filler = '\n'.join(f'Archive fixture note {i}: this page also lists neutral layout information.'
-                       for i in range(8))
+    neutral = 'Archive fixture note {index}: this page also lists neutral layout information.'
+    line_length = len(neutral.format(index=0))
+    padding_lines = (_TOOL_DIGEST_MIN_CHARS + line_length - 1) // line_length + 2
+    filler = '\n'.join(neutral.format(index=i) for i in range(padding_lines))
     payload = f'**URL:** https://fixture.example/page\n\n**Content:**\n{fact}\n{filler}'
     assert len(payload) >= _TOOL_DIGEST_MIN_CHARS
     cfg = voice_config()
