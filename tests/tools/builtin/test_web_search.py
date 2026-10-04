@@ -1158,11 +1158,15 @@ class TestLanguagePlumbingEndToEnd:
         listener.cfg = object()
         listener.dialogue_memory = object()
         listener.tts = None
+        listener._dictation_generation = 0
+        listener._dictation_is_active = False
+        listener._should_stop = False
         listener._last_detected_language = "tr"
         listener._clear_audio_buffers = Mock()
         listener._stop_thinking_tune = Mock()
 
-        with patch("src.jarvis.reply.engine.run_reply_engine", return_value="") as run_reply:
+        with patch("desktop_app.face_widget.get_jarvis_state", return_value=Mock()), \
+                patch("src.jarvis.reply.engine.run_reply_engine", return_value="") as run_reply:
             with patch("src.jarvis.daemon.query_lock", return_value=nullcontext()):
                 listener._dispatch_query("istanbul")
 

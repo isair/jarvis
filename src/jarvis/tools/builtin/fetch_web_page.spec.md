@@ -1,6 +1,6 @@
 # Fetch web page tool
 
-`fetchWebPage` fetches a supplied HTTP or HTTPS URL and returns extracted page text without an LLM call. Scheme-less URLs use HTTPS. Requests use a 15-second network timeout and follow redirects. Redirect bodies are closed before reading; Requests retains its redirect header and cookie handling.
+`fetchWebPage` fetches a supplied HTTP or HTTPS URL and returns extracted page text without an LLM call. Scheme-less URLs use HTTPS. Requests use a 15-second network timeout and follow redirects. The shared `tools/http_response.py` hook closes redirect bodies before reading; Requests retains its redirect header and cookie handling.
 
 - Responses are streamed in 64 KiB chunks using urllib3 2.8 or later for bounded decompression. The retained decoded body is limited to 2 MiB, including decompressed gzip content and responses without a content length. An oversized body returns an unsuccessful tool result without partial page content. The response context closes on success, download errors and size rejection.
 - BeautifulSoup removes script, style, metadata, stylesheet and noscript elements. Text extraction keeps the first 500 distinct non-empty lines longer than three characters, with an optional title.
