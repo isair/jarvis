@@ -1,34 +1,36 @@
-"""A real planner resolves a meal follow-up to a deletable record."""
+"""Real reply generation deletes the named meal through direct or fallback calls."""
 from datetime import datetime, timedelta, timezone
-from types import SimpleNamespace
+from contextlib import nullcontext
+from unittest.mock import patch
 
 import pytest
 
 from evals.helpers import voice_config
 from evals.tool_routing import requires_judge_llm
-from jarvis.reply.planner import plan_query, resolve_next_tool_call
-from jarvis.tools.builtin.nutrition.delete_meal import DeleteMealTool
+from jarvis.reply import engine
 
 pytestmark = [pytest.mark.eval, requires_judge_llm]
 
 
-def test_delete_recent_named_meal(eval_db):
+@pytest.mark.parametrize('resolver_available', [True, False])
+def test_delete_recent_named_meal(eval_db, eval_dialogue_memory, resolver_available):
     now = datetime.now(timezone.utc)
+    keep_before = eval_db.insert_meal(now.isoformat(), 'eval', 'Other meal')
     meal_id = eval_db.insert_meal(now.isoformat(), 'eval', 'Big Mac')
-    keep = eval_db.insert_meal(now.isoformat(), 'eval', 'Soup')
-    tool = DeleteMealTool()
+    keep_after = eval_db.insert_meal(now.isoformat(), 'eval', 'Soup')
     cfg = voice_config()
-    dialogue = 'user: I just ate a Big Mac.\nassistant: I have recorded the Big Mac, about 550 calories.'
-    plan = plan_query(cfg, 'Delete that meal.', dialogue,
-                      [(tool.name, tool.description)], timeout_sec=60)
-    step = next((step for step in plan if tool.name in step), None)
-    assert step, f'🗑️ Missing deletion step: {plan}'
-    schema = [{'type': 'function', 'function': {'name': tool.name,
-               'description': tool.description, 'parameters': tool.inputSchema}}]
-    call = resolve_next_tool_call(cfg, step, [], schema, timeout_sec=60)
-    assert call, f'🗑️ Unresolved meal deletion: {step}'
-    result = tool.run(call[1], SimpleNamespace(db=eval_db, user_print=lambda *args: None))
-    assert result.success, f'🗑️ Meal deletion failed: {call}, {result.reply_text}'
+    cfg.location_enabled = False
+    cfg.planner_timeout_sec = 60
+    cfg.llm_chat_timeout_sec = 60
+    cfg.tool_result_digest_enabled = False
+    eval_dialogue_memory.add_message('user', 'I just ate a Big Mac.')
+    eval_dialogue_memory.add_message('assistant', 'I have recorded the Big Mac, about 550 calories.')
+    # The resolver can fail open. Measure the stored records after the complete
+    # reply rather than requiring a particular intermediate plan or tool call.
+    fallback = nullcontext() if resolver_available else patch.object(engine, '_resolve_plan_step', return_value=None)
+    with patch.object(engine, 'select_tools', return_value=['deleteMeal', 'fetchMeals', 'stop']), fallback:
+        reply = engine.run_reply_engine(eval_db, cfg, None, 'Delete that meal.', eval_dialogue_memory)
+    assert reply, '🗑️ Deletion must produce a reply'
     rows = eval_db.get_meals_between((now - timedelta(minutes=1)).isoformat(),
                                     (now + timedelta(minutes=1)).isoformat())
-    assert [row['id'] for row in rows] == [keep], f'🗑️ Incorrect remaining records after deleting #{meal_id}'
+    assert [row['id'] for row in rows] == [keep_before, keep_after], f'🗑️ Incorrect records after deleting #{meal_id}: {[(r["id"], r["description"]) for r in rows]}'

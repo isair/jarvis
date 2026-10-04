@@ -1,8 +1,11 @@
 # Meal deletion
 
-`deleteMeal` accepts the required `id` property as a positive integer record ID
-or a string containing an exact stored meal description. ASCII decimal strings
-represent IDs. Booleans, fractional numbers and empty references are rejected.
+`deleteMeal` accepts exactly one reference: `id` as a positive integer record ID
+or an exact description string, or `meal_description` as an exact description
+string. The latter supports the planner's literal concrete-step path without
+model resolution. Supplying both reference fields is rejected. ASCII decimal
+strings in `id` represent IDs; numeric descriptions use `meal_description`.
+Booleans, fractional IDs, non-string descriptions and empty references are rejected.
 
 Description matching is literal and case-sensitive across languages. A single
 SQL statement deletes only when exactly one record has that description.

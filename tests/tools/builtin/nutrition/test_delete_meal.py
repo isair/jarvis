@@ -24,7 +24,7 @@ class TestDeleteMealTool:
         assert self.tool.name == "deleteMeal"
         assert "delete" in self.tool.description.lower()
         assert self.tool.inputSchema["type"] == "object"
-        assert "id" in self.tool.inputSchema["required"]
+        assert any("id" in option["required"] for option in self.tool.inputSchema["oneOf"])
     
     def test_run_success(self):
         """Test successful meal deletion."""

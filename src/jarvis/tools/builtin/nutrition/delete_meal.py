@@ -16,27 +16,34 @@ class DeleteMealTool(Tool):
     
     @property
     def description(self) -> str:
-        return "Delete one meal by its recorded ID or an exact, unique meal description. Use fetchMeals to find IDs when the description is ambiguous."
+        return "Delete one meal using id (recorded ID) or meal_description (exact, unique description). Use fetchMeals for ambiguous meals."
     
     @property
     def inputSchema(self) -> Dict[str, Any]:
         return {
             "type": "object",
             "properties": {
-                "id": {"type": ["integer", "string"], "description": "Recorded meal ID, or exact meal description when it identifies only one record"}
+                "id": {"type": ["integer", "string"], "description": "Recorded meal ID, or exact meal description when it identifies only one record"},
+                "meal_description": {"type": "string", "description": "Exact stored description identifying only one meal"},
             },
-            "required": ["id"]
+            "oneOf": [{"required": ["id"]}, {"required": ["meal_description"]}],
         }
     
     def run(self, args: Optional[Dict[str, Any]], context: ToolContext) -> ToolExecutionResult:
         """Execute the delete meal tool."""
         context.user_print("🗑️ Deleting the meal…")
-        reference = args.get("id") if isinstance(args, dict) else None
+        fields = args if isinstance(args, dict) else {}
+        by_description = "meal_description" in fields
+        reference = None
+        if ("id" in fields) != by_description:
+            reference = fields.get("meal_description" if by_description else "id")
+            if by_description and not isinstance(reference, str):
+                reference = None
         is_deleted = False
         try:
             if isinstance(reference, str):
                 reference = reference.strip()
-                if reference.isascii() and reference.isdecimal():
+                if not by_description and reference.isascii() and reference.isdecimal():
                     reference = int(reference)
             if type(reference) is int and reference > 0:
                 is_deleted = context.db.delete_meal(reference)
