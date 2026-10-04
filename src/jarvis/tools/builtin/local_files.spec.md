@@ -6,5 +6,6 @@
 - Write and append require string `content`, which is stored literally as UTF-8. Write creates parent directories.
 - Listings use `glob` (default `*`). `recursive` defaults to false and must be a JSON boolean when supplied. Strings, numbers, null, arrays and objects return a correctable tool error without producing a listing.
 - False and omitted recursion apply the supplied glob to the target directory. True recursion applies the pattern recursively. Listings show at most 50 sorted entries and report the count of additional entries.
+- Listing directory prefixes and each matched entry's parent must resolve within the home directory. Patterns cannot expose filenames through external parents or directory links. Symbolic link entries in directory listings are labelled `LINK` without inspecting their targets. In-home parent selectors and directory links retain their matching behaviour. Listing failures return a generic correction hint without external filenames or resolved paths.
 - Reads return at most 10,000 characters, with an explicit truncation marker for longer text. Invalid UTF-8 is replaced.
 - Errors return unsuccessful tool results. The reply engine decides how to explain errors or request corrected arguments.
