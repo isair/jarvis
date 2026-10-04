@@ -412,3 +412,20 @@ def test_direct_address_and_inconclusive_fallback_remain_usable(synthetic_listen
     obj._process_transcript('Jarvis I am tired', captured_during_tts=False,
                             captured_tts_start_time=0., generation=obj._dictation_generation)
     assert obj.state_manager.get_pending_query(), 'Direct address or fail-open fallback was lost'
+
+
+@pytest.mark.parametrize('text,accepted', [
+    ("Doesn't matter if her oppresses A, first joins", False),
+    ('the first person joins the game', False),
+    ('Jairus what time is it', True),
+    ('Jarvas what time is it', True),
+])
+def test_whole_alias_gate_keeps_ambient_words_out_of_reply_collection(synthetic_listener, text, accepted):
+    from jarvis.listening.intent_judge import IntentJudgment
+    obj = synthetic_listener
+    obj._intent_judge = SimpleNamespace(available=True, judge=lambda **kwargs:
+        IntentJudgment(directed=True, query='what time is it', stop=False,
+                       confidence='high', reasoning='Synthetic directed decision'))
+    obj._process_transcript(text, captured_during_tts=False,
+                            captured_tts_start_time=0., generation=obj._dictation_generation)
+    assert bool(obj.state_manager.get_pending_query()) is accepted

@@ -153,7 +153,7 @@ Instead of extracting post-wake-word audio, we:
 
 ### 2. Text-Based Wake Detection
 
-Wake word detection operates on the rolling transcript buffer. When Whisper produces text, it is checked for the configured wake word and aliases using fuzzy matching (`rapidfuzz`). This supports arbitrary wake words in any language.
+Wake detection checks the current transcript for case-insensitive, literal primary-name and alias matches at Unicode word boundaries. Empty names are ignored. Configured aliases represent known mishearings and require exact whole-name matches; their approximate neighbours are not wake signals. Only a single-word primary name participates in fuzzy token matching, using `wake_fuzzy_ratio`. Tokens may extend the primary name by at most one character; shorter forms use the configured similarity threshold. Fallback query extraction removes the same complete configured names while preserving names embedded inside other words. These rules use configured names without language-specific exclusions.
 
 ### 3. Context-Aware Intent Judge
 
