@@ -308,6 +308,22 @@ class Database:
             self.conn.commit()
             return cur.rowcount > 0
 
+    def delete_meal_by_description(self, description: str) -> bool:
+        """Delete only a single exact description match, atomically."""
+        with self._lock:
+            cur = self.conn.cursor()
+            try:
+                cur.execute(
+                    """DELETE FROM meals WHERE description = ?
+                    AND (SELECT COUNT(*) FROM meals WHERE description = ?) = 1""",
+                    (description, description),
+                )
+                self.conn.commit()
+                return cur.rowcount == 1
+            except Exception:
+                self.conn.rollback()
+                raise
+
     # --- Conversation Summaries API ---
     def upsert_conversation_summary(
         self,
