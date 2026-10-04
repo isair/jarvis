@@ -12,6 +12,12 @@ pytestmark = [pytest.mark.eval, requires_judge_llm]
 
 @pytest.mark.parametrize(('evidence', 'expected'), [
     ('The user lives in London.', 'London'),
+    ('The user stated that they live in Ankara. They asked for a forecast.', 'Ankara'),
+    ('The user lives in Bristol. Previously they asked about the weather.', 'Bristol'),
+    ('The user said, "I live in Bristol."', 'Bristol'),
+    ('The user requested a translation of "I live in Bristol."', None),
+    ('The user asked what "I live in Bristol" means.', None),
+    ('The user currently lives in York and previously lived in Bristol.', 'York'),
     ('Kullanıcı Ankara şehrinde yaşıyor.', 'Ankara'),
     ('The user used to live in London but moved away.', None),
     ('The user visited London last summer.', None),

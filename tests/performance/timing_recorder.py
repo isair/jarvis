@@ -67,6 +67,7 @@ _CALLER_TO_CONTEXT: dict[str, str] = {
     # Context 13 — tool-specific LLM calls
     "_extract_place_from_user_text": "tool_weather",
     "resolve_missing_context": "personal_context",
+    "_review_location_candidates": "personal_context_verify",
     "extract_and_log_meal": "tool_nutrition",
     "generate_followups_for_meal": "tool_nutrition",
 }
