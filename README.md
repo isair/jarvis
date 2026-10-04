@@ -56,11 +56,11 @@ Memory needs depend on model size, quantisation, context length and speech recog
 | Starting point | Chat model |
 | :--- | :--- |
 | Smaller hardware | `qwen3.5:0.8b` |
-| Default | `gemma4:e2b` |
-| More capable | `gemma4:e4b` |
+| Constrained memory | `gemma4:e2b` |
+| Default | `gemma4:e4b` |
 | Larger local setup | `qwen3.8:27b` |
 
-Budget memory for Whisper and, when different from chat, the fast model used for voice intent and tool routing. Apple Silicon uses unified memory; other GPUs use dedicated VRAM. The wizard recommends smaller models when detected memory is exhausted and warns when CPU fallback is needed.
+Budget memory for Whisper and, when different from chat, the fast model used for voice intent and tool routing. Apple Silicon uses unified memory; other GPUs use dedicated VRAM. Setup adapts chat to the available memory and selected Whisper model, using E2B for fast tasks when it fits or sharing E4B across both roles to save memory. Apple Silicon estimates reserve memory for macOS. Saved model choices are preserved, and insufficient memory shows CPU fallback guidance.
 
 </details>
 

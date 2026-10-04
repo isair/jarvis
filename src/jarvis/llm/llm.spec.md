@@ -83,7 +83,9 @@ Every LLM context runs on one of two models, resolved through `resolve_model(cfg
 | Tier | Field | Contexts | Default |
 |------|-------|----------|---------|
 | `Tier.FAST` | `cfg.fast_model` | intent judge, tool router, tool searcher, enrichment extractor, graph placement, max-turn digest, evaluator | `gemma4:e2b` on the Ollama chat path; the active chat model on an OpenAI-compatible provider (the Ollama pull-name does not exist there) |
-| `Tier.CHAT` | `cfg.llm_chat_model` | main reply loop, planner + plan-step resolver, summariser, graph extraction, tool-specific calls, memory/tool-result digests (size-gated passes on the chat model) | the model picked at setup |
+| `Tier.CHAT` | `cfg.llm_chat_model` | main reply loop, planner + plan-step resolver, summariser, graph extraction, tool-specific calls, memory/tool-result digests (size-gated passes on the chat model) | `gemma4:e4b`, adapted to detected memory at setup |
+
+Ollama setup counts shared models once. It retains E2B fast when it fits and can select E4B for both tiers when a separate E2B exceeds the budget. Explicit saved model choices take precedence over automatic chat recommendations.
 
 Fast-tier contexts take a few thousand tokens in and emit tiny strict-JSON answers, so latency dominates; chat-tier contexts produce long-form output, so quality dominates. Contexts state their tier instead of defining a per-context fallback chain, and any future routing logic lands in exactly one place.
 

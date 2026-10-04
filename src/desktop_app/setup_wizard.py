@@ -23,7 +23,7 @@ from urllib.parse import urlsplit
 import requests
 
 from jarvis.debug import debug_log
-from jarvis.config import SUPPORTED_CHAT_MODELS, DEFAULT_CHAT_MODEL
+from jarvis.config import SUPPORTED_CHAT_MODELS, DEFAULT_CHAT_MODEL, DEFAULT_FAST_MODEL
 from jarvis.utils.vram import (
     detect_total_vram_mb,
     get_recommended_model_id,
@@ -213,18 +213,16 @@ def get_required_models() -> List[str]:
         # real-time passes, but is only an Ollama pull when the chat
         # provider is Ollama (config load resolves it per provider).
         if llm_provider != "openai_compatible":
-            fast_model = getattr(cfg, "fast_model", "gemma4:e2b")
+            fast_model = getattr(cfg, "fast_model", DEFAULT_FAST_MODEL)
             if fast_model and fast_model not in models:
                 models.append(fast_model)
 
         return models
     except Exception:
         # Default models if config can't be loaded
-        # Note: DEFAULT_CHAT_MODEL is gemma4:e2b which is also the intent judge model,
-        # so the default list is effectively just 2 unique models
         defaults = [DEFAULT_CHAT_MODEL, "nomic-embed-text"]
-        if "gemma4:e2b" not in defaults:
-            defaults.append("gemma4:e2b")
+        if DEFAULT_FAST_MODEL not in defaults:
+            defaults.append(DEFAULT_FAST_MODEL)
         return defaults
 
 
@@ -2138,7 +2136,7 @@ class ModelsPage(ScrollableWizardPage):
 
     MODEL_OPTIONS = SUPPORTED_CHAT_MODELS
     _ALL_MODELS = MODEL_OPTIONS
-    _FAST_MODEL_IDS = ["qwen3.5:0.8b", "gemma4:e2b"]
+    _FAST_MODEL_IDS = ["qwen3.5:0.8b", "gemma4:e2b", "gemma4:e4b"]
 
     # VRAM overhead for always-running companion models (MB).
     # nomic-embed-text: ~1 GB for ~1.5K dim semantic search.
@@ -2167,7 +2165,7 @@ class ModelsPage(ScrollableWizardPage):
         self.setTitle("")
         self._linked = False
         self._chat_model = DEFAULT_CHAT_MODEL
-        self._fast_model = "gemma4:e2b"
+        self._fast_model = DEFAULT_FAST_MODEL
         self._detected_vram_mb = None
 
         layout = QVBoxLayout()
@@ -2498,20 +2496,21 @@ class ModelsPage(ScrollableWizardPage):
 
     def initializePage(self):
         cc = DEFAULT_CHAT_MODEL
-        fc = "gemma4:e2b"
+        fc = DEFAULT_FAST_MODEL
         try:
             c = load_settings()
             cc = c.ollama_chat_model
-            fc = getattr(c, "fast_model", "gemma4:e2b")
+            fc = getattr(c, "fast_model", DEFAULT_FAST_MODEL)
         except Exception:
             pass
         self._chat_model = cc if cc in self._ALL_MODELS else DEFAULT_CHAT_MODEL
-        self._fast_model = fc if fc in self._ALL_MODELS else "gemma4:e2b"
-        if self._detected_vram_mb is not None and cc == DEFAULT_CHAT_MODEL:
+        self._fast_model = fc if fc in self._ALL_MODELS else DEFAULT_FAST_MODEL
+        from jarvis.config import _load_json, default_config_path
+        saved = _load_json(default_config_path())
+        if self._detected_vram_mb is not None and cc == DEFAULT_CHAT_MODEL and "ollama_chat_model" not in saved:
             usable_mb = self._detected_vram_mb - self._EMBED_VRAM_MB - self._whisper_vram_mb()
-            if usable_mb < (required_vram_mb(DEFAULT_CHAT_MODEL) or 0):
-                self._chat_model = get_recommended_model_id(max(usable_mb, 0))
-                debug_log(f"Default chat memory recommendation: {self._chat_model}", "setup")
+            self._chat_model = get_recommended_model_id(max(usable_mb, 0))
+            debug_log(f"Default chat memory recommendation: {self._chat_model}", "setup")
         self._constrain_fast_model()
         # Default to unlinked — separate fast model is the recommended layout
         # even when both happen to be the same model ID.
