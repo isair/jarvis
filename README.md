@@ -124,6 +124,8 @@ When speaking is inconvenient, open Chat from the tray. It picks up the same con
 
 Jarvis is actively developed, primarily on macOS. Windows and Linux behaviour may differ. Model choice and hardware affect response quality and speed; [automated evaluation results](EVALS.md) show what is being measured.
 
+- **Large web pages:** page downloads are limited to 2 MiB of decoded content. Oversized pages return a download-limit error.
+
 - **macOS menu-bar activation handles non-mouse events safely.** The tray avoids a native `clickCount` assertion when AppKit reports an event without mouse click data.
 - **macOS 26+ dictation is unavailable** because of a pynput incompatibility ([#172](https://github.com/isair/jarvis/issues/172)). This limitation concerns the global dictation hotkey.
 - **Spoken “stop” can be mistaken for echo** while Jarvis is speaking ([#24](https://github.com/isair/jarvis/issues/24)). Use a standalone configured stop phrase; echoed longer instructions containing it are ignored.

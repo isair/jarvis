@@ -1,10 +1,15 @@
 """Fetch web page tool implementation for extracting content from URLs."""
 
 import requests
+from requests.compat import chardet
 from typing import Dict, Any, Optional
 from ...debug import debug_log
 from ..base import Tool, ToolContext
 from ..types import ToolExecutionResult
+
+
+_MAX_FETCH_BYTES = 2 * 1024 * 1024
+_READ_CHUNK_BYTES = 64 * 1024
 
 
 class FetchWebPageTool(Tool):
@@ -50,12 +55,26 @@ class FetchWebPageTool(Tool):
                 'Connection': 'keep-alive',
                 'Upgrade-Insecure-Requests': '1',
             }
+            def discard_redirect_body(response, *args, **kwargs):
+                if response.is_redirect:
+                    debug_log("fetchWebPage: following redirect without reading its body", "web")
+                    response.close()
+                return response
+
             # ``with`` releases the connection back to the pool deterministically
             # even if BeautifulSoup or the link extraction raises midway.
-            with requests.get(url, headers=headers, timeout=15, allow_redirects=True) as response:
+            with requests.get(url, headers=headers, timeout=15, allow_redirects=True, stream=True,
+                              hooks={"response": discard_redirect_body}) as response:
                 response.raise_for_status()
-                response_content = response.content
-                response_text = response.text
+                body = bytearray()
+                for chunk in response.iter_content(chunk_size=_READ_CHUNK_BYTES):
+                    if len(body) + len(chunk) > _MAX_FETCH_BYTES:
+                        debug_log("fetchWebPage: decoded page exceeds the download limit", "web")
+                        context.user_print("⚠️ Page exceeds the download limit.")
+                        return ToolExecutionResult(success=False, reply_text=f"Page too large to read: decoded content exceeds the {_MAX_FETCH_BYTES:,}-byte download limit.")
+                    body.extend(chunk)
+                response_content = bytes(body)
+                response_encoding = response.encoding
             try:
                 from bs4 import BeautifulSoup
                 soup = BeautifulSoup(response_content, 'html.parser')
@@ -108,6 +127,13 @@ class FetchWebPageTool(Tool):
                 context.user_print("✅ Page content fetched.")
                 return ToolExecutionResult(success=True, reply_text=reply_text)
             except ImportError:
+                encoding = response_encoding
+                if encoding is None:
+                    encoding = chardet.detect(response_content)["encoding"] if chardet is not None else "utf-8"
+                try:
+                    response_text = str(response_content, encoding, errors="replace")
+                except (LookupError, TypeError):
+                    response_text = str(response_content, errors="replace")
                 text = response_text[:10000]
                 reply_text = f"**URL:** {url}\n**Raw Content:**\n{text}"
                 debug_log("fetchWebPage: BeautifulSoup not available, returning raw text", "web")
