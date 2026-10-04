@@ -6,6 +6,7 @@ from typing import Dict, Any, Optional
 from ...debug import debug_log
 from ..base import Tool, ToolContext
 from ..types import ToolExecutionResult
+from ..http_response import discard_redirect_body
 
 
 _MAX_FETCH_BYTES = 2 * 1024 * 1024
@@ -55,12 +56,6 @@ class FetchWebPageTool(Tool):
                 'Connection': 'keep-alive',
                 'Upgrade-Insecure-Requests': '1',
             }
-            def discard_redirect_body(response, *args, **kwargs):
-                if response.is_redirect:
-                    debug_log("fetchWebPage: following redirect without reading its body", "web")
-                    response.close()
-                return response
-
             # ``with`` releases the connection back to the pool deterministically
             # even if BeautifulSoup or the link extraction raises midway.
             with requests.get(url, headers=headers, timeout=15, allow_redirects=True, stream=True,
