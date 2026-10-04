@@ -137,3 +137,29 @@ def test_mixed_listing_failure_does_not_return_partial_entries_or_log_private_na
     assert 'inside.txt' not in result.reply_text
     assert 'private_payload.txt' not in result.reply_text
     assert all('private_payload.txt' not in message and str(outside) not in message for message in messages)
+
+
+@pytest.mark.parametrize('recursive', [False, True])
+@pytest.mark.parametrize('prefix', ['*/', '*/../outside/', '**/escape/'])
+def test_external_directory_patterns_do_not_reveal_filename_existence(listing_sandbox, recursive, prefix):
+    tool, context, home, outside = listing_sandbox
+    try:
+        (home / 'escape').symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip('🔒 Directory symlinks require platform permission')
+    results = [tool.run({'operation': 'list', 'path': str(home), 'glob': prefix + name,
+                         'recursive': recursive}, context)
+               for name in ['private_payload.txt', 'absent_payload.txt']]
+    assert all(not result.success for result in results), '🔒 Unsafe traversal must fail before checking an external filename'
+    assert results[0].reply_text == results[1].reply_text
+    assert 'private_payload.txt' not in results[0].reply_text
+    assert 'absent_payload.txt' not in results[1].reply_text
+
+
+@pytest.mark.parametrize('recursive', [False, True])
+def test_in_home_wildcard_directories_keep_absent_leaf_success(listing_sandbox, recursive):
+    tool, context, home, outside = listing_sandbox
+    result = tool.run({'operation': 'list', 'path': str(home), 'glob': '*/absent_payload.txt',
+                       'recursive': recursive}, context)
+    assert result.success
+    assert 'No files found' in result.reply_text

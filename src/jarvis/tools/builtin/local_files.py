@@ -92,6 +92,16 @@ class LocalFilesTool(Tool):
                             break
                         prefix = prefix / part
                     _resolve_safe(str(prefix))
+                    # Check expanded directories before the next selector can inspect them.
+                    directory_pattern = Path()
+                    for part in Path(glob_pattern).parts[:-1]:
+                        directory_pattern /= part
+                        directories = (target.rglob(str(directory_pattern)) if recursive
+                                       else target.glob(str(directory_pattern)))
+                        for directory in directories:
+                            mode = directory.lstat().st_mode
+                            if stat.S_ISDIR(mode) or stat.S_ISLNK(mode):
+                                _resolve_safe(str(directory))
                     matches = target.rglob(glob_pattern) if recursive else target.glob(glob_pattern)
                     files = []
                     for entry in matches:
