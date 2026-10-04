@@ -262,6 +262,7 @@ The capture script uses the real widgets and illustrative data, isolates configu
 
 Local AI is the default, not a paid upgrade. No cloud AI service is required.
 
+- **Local file access:** limited to your home directory. Directory listings identify symbolic links and reject patterns that reach external directories.
 - **Conversation memory:** stored locally under `~/.local/share/jarvis`.
 - **Sensitive information:** redacted before model context and saved diary entries. The in-memory chat still shows what you typed.
 - **Network boundaries:** model downloads, web tools and enabled integrations can make network requests. An external model endpoint receives the requests you send to it.

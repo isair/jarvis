@@ -1,6 +1,7 @@
 """Local files tool implementation for safe file operations."""
 
 import os
+import stat
 from pathlib import Path
 from typing import Dict, Any, Optional
 from ...debug import debug_log
@@ -82,10 +83,32 @@ class LocalFilesTool(Tool):
                 glob_pattern = args.get("glob", "*")
 
                 try:
-                    if recursive:
-                        files = list(target.rglob(glob_pattern))
-                    else:
-                        files = list(target.glob(glob_pattern))
+                    if not isinstance(glob_pattern, str):
+                        return ToolExecutionResult(success=False, reply_text="localFiles 'glob' must be a string.")
+                    # Validate literal directories before expanding wildcard components.
+                    prefix = target
+                    for part in Path(glob_pattern).parts[:-1]:
+                        if any(character in part for character in "*?["):
+                            break
+                        prefix = prefix / part
+                    _resolve_safe(str(prefix))
+                    # Check expanded directories before the next selector can inspect them.
+                    directory_pattern = Path()
+                    for part in Path(glob_pattern).parts[:-1]:
+                        directory_pattern /= part
+                        directories = (target.rglob(str(directory_pattern)) if recursive
+                                       else target.glob(str(directory_pattern)))
+                        for directory in directories:
+                            mode = directory.lstat().st_mode
+                            if stat.S_ISDIR(mode) or stat.S_ISLNK(mode):
+                                _resolve_safe(str(directory))
+                    matches = target.rglob(glob_pattern) if recursive else target.glob(glob_pattern)
+                    files = []
+                    for entry in matches:
+                        if entry.name == "..":
+                            _resolve_safe(str(entry))
+                        _resolve_safe(str(entry.parent))
+                        files.append(entry)
 
                     if not files:
                         return ToolExecutionResult(success=True, reply_text=f"No files found matching '{glob_pattern}' in {target}")
@@ -93,7 +116,13 @@ class LocalFilesTool(Tool):
                     file_list = []
                     for f in sorted(files)[:50]:  # Limit to 50 files
                         relative_path = f.relative_to(target)
-                        file_type = "DIR" if f.is_dir() else "FILE"
+                        mode = f.lstat().st_mode
+                        if stat.S_ISLNK(mode):
+                            file_type = "LINK"
+                        elif stat.S_ISDIR(mode):
+                            file_type = "DIR"
+                        else:
+                            file_type = "FILE"
                         file_list.append(f"  {file_type}: {relative_path}")
 
                     result = f"Contents of {target}:\n" + "\n".join(file_list)
@@ -102,7 +131,8 @@ class LocalFilesTool(Tool):
 
                     return ToolExecutionResult(success=True, reply_text=result)
                 except Exception as e:
-                    return ToolExecutionResult(success=False, reply_text=f"List failed: {e}")
+                    debug_log(f"localFiles: listing rejected or inaccessible ({type(e).__name__})", "tools")
+                    return ToolExecutionResult(success=False, reply_text="List failed. Check that the pattern stays within your home directory and the matching files are accessible.")
 
             # read
             if operation == "read":
