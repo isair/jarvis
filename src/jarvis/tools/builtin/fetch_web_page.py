@@ -41,8 +41,15 @@ class FetchWebPageTool(Tool):
         try:
             if not (args and isinstance(args, dict)):
                 return ToolExecutionResult(success=False, reply_text="fetchWebPage requires a JSON object with 'url'.")
-            url = str(args.get("url", "")).strip()
-            include_links = bool(args.get("include_links", False))
+            url = args.get("url", "")
+            if not isinstance(url, str):
+                debug_log("fetchWebPage: rejected a non-string URL argument", "web")
+                return ToolExecutionResult(success=False, reply_text="fetchWebPage 'url' must be a JSON string.")
+            include_links = args.get("include_links", False)
+            if not isinstance(include_links, bool):
+                debug_log("fetchWebPage: rejected a non-boolean link flag", "web")
+                return ToolExecutionResult(success=False, reply_text="fetchWebPage 'include_links' must be a JSON boolean.")
+            url = url.strip()
             if not url:
                 return ToolExecutionResult(success=False, reply_text="fetchWebPage requires a valid 'url'.")
             if not url.startswith(('http://', 'https://')):
