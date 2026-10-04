@@ -394,14 +394,28 @@ class Database:
             ).fetchall()
             return rows
 
-    def upsert_summary_embedding(self, summary_id: int, vec: Sequence[float]) -> Optional[int]:
-        """Store or update embedding for a conversation summary."""
+    def get_summary_embedding_text(self, summary_id: int) -> Optional[str]:
+        """Read the current diary text used to generate an embedding."""
+        with self._lock:
+            row = self.conn.execute('SELECT summary, topics FROM conversation_summaries WHERE id=?',
+                                    (summary_id,)).fetchone()
+            return f"{row['summary'] or ''} {row['topics'] or ''}" if row is not None else None
+
+    def upsert_summary_embedding(self, summary_id: int, vec: Sequence[float], source_text: str) -> Optional[int]:
+        """Refresh an embedding only while its captured diary text is current."""
+        if not isinstance(source_text, str):
+            raise ValueError('Embedding source must be a string')
         if self.is_vss_enabled:
             # Use sqlite-vss
             import json
             with self._lock:
                 try:
                     cur = self.conn.cursor()
+                    cur.execute('BEGIN IMMEDIATE')
+                    if self.get_summary_embedding_text(summary_id) != source_text:
+                        self.conn.rollback()
+                        debug_log('Skipping a superseded sqlite-vss diary embedding', 'memory')
+                        return None
                     emb_id = cur.execute("SELECT COALESCE(MAX(rowid), 0) + 1 FROM embeddings").fetchone()[0]
                     cur.execute("INSERT INTO embeddings(rowid, vec) VALUES (?, ?)", (emb_id, json.dumps([float(x) for x in vec])))
                     cur.execute(
@@ -414,9 +428,14 @@ class Database:
                     self.conn.rollback()
                     raise
         elif self._python_vector_store:
-            # Use Python vector store
-            self._python_vector_store.add_vector(summary_id, list(vec))
-            return summary_id  # Return summary_id as a placeholder for emb_id
+            with self._lock:
+                if self.db_path == ':memory:':
+                    if self.get_summary_embedding_text(summary_id) != source_text:
+                        return None
+                    self._python_vector_store.add_vector(summary_id, list(vec))
+                    return summary_id
+                accepted = self._python_vector_store.add_summary_vector(summary_id, list(vec), source_text)
+                return summary_id if accepted else None
         else:
             return None
 

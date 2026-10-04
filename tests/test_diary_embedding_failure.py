@@ -42,7 +42,7 @@ def assert_readable_and_unlocked(diary, ident):
 def test_failed_vector_mapping_rolls_back_only_the_index_write(diary):
     ident = diary.upsert_conversation_summary('2026-01-01', 'The user prefers Celsius.', 'preferences')
     with pytest.raises(sqlite3.IntegrityError):
-        diary.upsert_summary_embedding(ident, [0.1, 0.2])
+        diary.upsert_summary_embedding(ident, [0.1, 0.2], diary.get_summary_embedding_text(ident))
     assert_readable_and_unlocked(diary, ident)
 
 
@@ -97,11 +97,11 @@ def test_failed_text_write_keeps_the_previous_diary_and_pending_messages(diary, 
 def test_failed_refresh_preserves_the_previous_vector_mapping(diary):
     ident = diary.upsert_conversation_summary('2026-01-01', 'The user prefers Celsius.', 'preferences')
     diary.conn.execute('DROP TRIGGER reject_index')
-    previous = diary.upsert_summary_embedding(ident, [0.5, 0.6])
+    previous = diary.upsert_summary_embedding(ident, [0.5, 0.6], diary.get_summary_embedding_text(ident))
     diary.conn.executescript('''CREATE TRIGGER reject_index BEFORE INSERT ON summary_vec
         BEGIN SELECT RAISE(ABORT, 'synthetic refresh failure'); END;''')
     with pytest.raises(sqlite3.IntegrityError):
-        diary.upsert_summary_embedding(ident, [0.1, 0.2])
+        diary.upsert_summary_embedding(ident, [0.1, 0.2], diary.get_summary_embedding_text(ident))
     with sqlite3.connect(diary.db_path, timeout=0.01) as reader:
         assert reader.execute('SELECT emb_id FROM summary_vec WHERE summary_id=?', (ident,)).fetchone()[0] == previous
         assert reader.execute('SELECT count(*) FROM embeddings').fetchone()[0] == 1
@@ -111,7 +111,7 @@ def test_failed_refresh_preserves_the_previous_vector_mapping(diary):
 def test_successful_vector_write_is_visible_after_reopening(diary):
     ident = diary.upsert_conversation_summary('2026-01-01', 'The user prefers Celsius.', 'preferences')
     diary.conn.execute('DROP TRIGGER reject_index')
-    emb_id = diary.upsert_summary_embedding(ident, [0.1, 0.2])
+    emb_id = diary.upsert_summary_embedding(ident, [0.1, 0.2], diary.get_summary_embedding_text(ident))
     with sqlite3.connect(diary.db_path) as reader:
         assert reader.execute('SELECT emb_id FROM summary_vec WHERE summary_id=?', (ident,)).fetchone()[0] == emb_id
         assert reader.execute('SELECT vec FROM embeddings WHERE rowid=?', (emb_id,)).fetchone()[0] == '[0.1, 0.2]'

@@ -94,6 +94,11 @@ All three rules apply in any language, not only English. The prompt states this 
 
 **Vector embedding:** when a row is rewritten, the embedding stored alongside the summary is regenerated inline from the cleaned text when `cfg.embedding_model` is configured and `db.has_vector_store` reports an available sqlite-vss, FAISS or Python index. Without an embed model the rewrite still happens (FTS stays consistent via SQLite triggers); the vector embedding stays anchored to the pre-rewrite text until the next user-driven write to that date. Per-row embedding refresh is best-effort: an embedding-service failure is logged but does not roll back the summary write.
 
+The embedding source is captured from the live row before inference. A refresh
+whose source text is superseded during inference is rejected atomically with
+the vector write and reports `embedding_refreshed: false`. Diary save, rewrite
+and topic optimisation share this guard, including across independent owners.
+
 **Fail-open at every layer:**
 - LLM call failure on a row → row is left untouched and reported with `error` set to the exception class name.
 - Empty rewrite → row is left untouched, `would_empty: true` surfaced.

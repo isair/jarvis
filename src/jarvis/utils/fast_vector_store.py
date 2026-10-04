@@ -3,7 +3,6 @@ High-performance vector store implementation using FAISS for fast vector search.
 This replaces the slow pure Python vector store with a much faster C++ implementation.
 """
 
-import json
 import numpy as np
 from typing import List, Tuple, Optional, Dict, Any
 import sqlite3
@@ -12,6 +11,7 @@ import threading
 import logging
 from weakref import WeakValueDictionary
 from .embedding_vector import normalise_embedding
+from .vector_persistence import persist_vector
 from ..debug import debug_log
 
 try:
@@ -117,33 +117,30 @@ class FAISSVectorStore:
             self.summary_id_to_index = {summary_id: i for i, summary_id in enumerate(summary_ids)}
             self.index_to_summary_id = {i: summary_id for i, summary_id in enumerate(summary_ids)}
     
-    def _save_vector(self, summary_id: int, vector: np.ndarray) -> None:
+    def _save_vector(self, summary_id: int, vector: np.ndarray, source_text) -> bool:
         """Persist a single vector to SQLite."""
-        conn = None
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cur = conn.cursor()
-            # Convert numpy array to blob
-            vector_blob = vector.astype(np.float32).tobytes()
-            cur.execute(
-                "INSERT OR REPLACE INTO faiss_vector_store (summary_id, vector_blob) VALUES (?, ?)",
-                (summary_id, vector_blob)
-            )
-            conn.commit()
-        except Exception:
-            debug_log('FAISS embedding persistence failed', 'memory')
-            raise
-        finally:
-            if conn is not None:
-                conn.close()
+        return persist_vector(self.db_path, 'faiss', summary_id, vector.astype(np.float32).tobytes(), source_text)
     
     def add_vector(self, summary_id: int, vector: List[float]) -> None:
         """Add or update a vector for a summary."""
+        self._add_vector(summary_id, vector, None)
+
+    def add_summary_vector(self, summary_id: int, vector: List[float], source_text: str) -> bool:
+        """Refresh a diary vector only while the embedding source is current."""
+        if not isinstance(source_text, str):
+            raise ValueError('Embedding source must be a string')
+        if self.db_path == ':memory:':
+            raise ValueError('Guarded vector writes require a file-backed diary')
+        return self._add_vector(summary_id, vector, source_text)
+
+    def _add_vector(self, summary_id: int, vector: List[float], source_text) -> bool:
         with self._lock:
             vec_array = normalise_embedding(vector, self.dimension)
             
             # Save to database
-            self._save_vector(summary_id, vec_array)
+            if not self._save_vector(summary_id, vec_array, source_text):
+                debug_log('Skipping a superseded FAISS diary embedding', 'memory')
+                return False
 
             # If summary already exists, mark for rebuild
             if summary_id in self.summary_id_to_index:
@@ -162,6 +159,7 @@ class FAISSVectorStore:
                 self.index.add(vec_array)
                 self.summary_id_to_index[summary_id] = index_pos
                 self.index_to_summary_id[index_pos] = summary_id
+            return True
     
     def search(self, query_vector: List[float], top_k: int = 10) -> List[Tuple[int, float]]:
         """

@@ -37,6 +37,20 @@ transaction and releases the writer lock; previously committed diary text and
 vector mappings remain readable. Callers commit diary text before refreshing
 the optional index.
 
+`get_summary_embedding_text` captures the current summary and topics, joined by
+a space, before embedding inference. `upsert_summary_embedding` requires that
+exact source text. It accepts a refresh only while the live row has the same
+embedding text and returns `None` for a superseded or deleted row. The content
+comparison and persistence are atomic across database owners: sqlite-vss uses
+a writer transaction, while file-backed Python/FAISS indices use a conditional
+insert from the live summary. In-memory diaries compare and publish under their
+owner's lock. No lock spans embedding inference. Rejected refreshes preserve
+the current vector and are not reported as successfully refreshed by maintenance.
+
+Generic vector-store `add_vector` writes are unconditional. Diary-specific
+`add_summary_vector` writes require the captured source text and publish an
+in-memory candidate only when the conditional persistent write succeeds.
+
 Python and FAISS indices are shared only by active owners of the same resolved
 database file; FAISS dimensions also belong to the in-memory index identity.
 Persistence holds one current vector per summary. Re-embedding a summary with

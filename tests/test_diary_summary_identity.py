@@ -31,7 +31,7 @@ def assert_fts_consistent(db):
 
 def test_updated_summary_retains_semantic_reference_after_reopening(diary):
     ident = diary.upsert_conversation_summary('2026-01-01', 'The user likes cycling.', 'sports')
-    diary.upsert_summary_embedding(ident, [1., 0.])
+    diary.upsert_summary_embedding(ident, [1., 0.], diary.get_summary_embedding_text(ident))
     stamp = '2026-01-01T12:30:00+00:00'
     updated = diary.upsert_conversation_summary(
         '2026-01-01', 'The user likes cycling and prefers Celsius.', 'sports, temperature', ts_utc=stamp,
@@ -68,7 +68,7 @@ def test_distinct_days_and_sources_retain_independent_identities(diary):
 
 def test_failed_text_update_releases_writer_and_preserves_previous_memory(diary):
     ident = diary.upsert_conversation_summary('2026-01-01', 'cycling')
-    diary.upsert_summary_embedding(ident, [1., 0.])
+    diary.upsert_summary_embedding(ident, [1., 0.], diary.get_summary_embedding_text(ident))
     diary.conn.executescript("""CREATE TRIGGER reject_diary BEFORE INSERT ON conversation_summaries
         WHEN new.summary = 'rejected' BEGIN SELECT RAISE(ABORT, 'diary rejected'); END;""")
     with pytest.raises(sqlite3.IntegrityError):
@@ -126,7 +126,7 @@ def test_summary_update_preserves_foreign_key_embedding_mapping(diary):
     ''')
     diary.is_vss_enabled = True
     ident = diary.upsert_conversation_summary('2026-01-01', 'cycling')
-    embedding = diary.upsert_summary_embedding(ident, [1., 0.])
+    embedding = diary.upsert_summary_embedding(ident, [1., 0.], diary.get_summary_embedding_text(ident))
     diary.upsert_conversation_summary('2026-01-01', 'cycling and coffee')
     with sqlite3.connect(diary.db_path) as conn:
         assert conn.execute('SELECT summary_id, emb_id FROM summary_vec').fetchall() == [(ident, embedding)]

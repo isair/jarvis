@@ -88,7 +88,7 @@ def test_failed_optional_refresh_retains_committed_diary(diary, monkeypatch, fai
         dimension = getattr(diary._python_vector_store, 'dimension', 2)
         monkeypatch.setattr(conversation, '_embed_text', lambda *args, **kwargs:
                             [1.] + [0.] * (dimension - 1))
-        monkeypatch.setattr(diary._python_vector_store, 'add_vector', fail)
+        monkeypatch.setattr(diary._python_vector_store, 'add_summary_vector', fail)
     ident = conversation.update_daily_conversation_summary(diary, ['User: I prefer Celsius.'], cfg)
     assert ident and any(row['id'] == ident for row in diary.search_hybrid('Celsius', None))
     diary.close()

@@ -324,13 +324,12 @@ def rewrite_all_diary_summaries(
 
         if can_reembed:
             try:
-                text_for_embedding = f"{cleaned_stripped} {row['topics'] or ''}"
+                text_for_embedding = db.get_summary_embedding_text(summary_id)
                 vec = _embed_text(
                     text_for_embedding, cfg, timeout_sec=embed_timeout_sec,
-                )
+                ) if text_for_embedding is not None else None
                 if vec is not None:
-                    db.upsert_summary_embedding(summary_id, vec)
-                    embedding_refreshed = True
+                    embedding_refreshed = db.upsert_summary_embedding(summary_id, vec, text_for_embedding) is not None
             except Exception as e:
                 # Best-effort. Cleaned summary is already persisted;
                 # FTS stays consistent via triggers. A stale embedding
@@ -584,13 +583,12 @@ def optimise_diary_topics(
 
             if can_reembed:
                 try:
-                    text_for_embedding = f"{row['summary'] or ''} {new_topics}"
+                    text_for_embedding = db.get_summary_embedding_text(summary_id)
                     vec = _embed_text(
                         text_for_embedding, cfg, timeout_sec=embed_timeout_sec,
-                    )
+                    ) if text_for_embedding is not None else None
                     if vec is not None:
-                        db.upsert_summary_embedding(summary_id, vec)
-                        embedding_refreshed = True
+                        embedding_refreshed = db.upsert_summary_embedding(summary_id, vec, text_for_embedding) is not None
                 except Exception as e:
                     debug_log(
                         f"diary topic optimise: embedding refresh failed for "
@@ -1537,10 +1535,10 @@ def update_daily_conversation_summary(
         # empty model never burns a doomed embed round-trip.
         if db.has_vector_store and cfg.embedding_model:
             try:
-                text_for_embedding = f"{summary} {topics}"
-                vec = _embed_text(text_for_embedding, cfg, timeout_sec=15.0)
+                text_for_embedding = db.get_summary_embedding_text(summary_id)
+                vec = _embed_text(text_for_embedding, cfg, timeout_sec=15.0) if text_for_embedding is not None else None
                 if vec is not None:
-                    db.upsert_summary_embedding(summary_id, vec)
+                    db.upsert_summary_embedding(summary_id, vec, text_for_embedding)
             except Exception as e:
                 debug_log(
                     f"⚠️ diary embedding refresh failed: {type(e).__name__}",
