@@ -10,6 +10,7 @@ personal memory themselves.
 
 `ContextualToolRunner` wraps both planned direct execution and normal model tool
 execution. An unresolved supported input triggers one local evidence extraction
+and semantic verification
 and at most one retry with the grounded argument. Successes and misses are cached
 by input name for one reply only. Memory/backend failures preserve the tool's
 clarification. Resolution does not write inferred facts or change configuration.
@@ -43,14 +44,29 @@ not observation times. Stored home records older than 180 days, future dates and
 invalid dates are unusable. These bounds can leave relevant evidence outside the
 retrieved set; absence of evidence leads to clarification.
 
-The FAST-tier model extracts candidate value, source ID, relationship kind and
-an exact supporting quote from fenced JSON evidence. Its generation budget is
-1,024 tokens including reasoning, with `llm_tools_timeout_sec`. It must reject
-former residences, trips, hypotheticals, third-party locations, assistant guesses
-and instructions embedded in evidence. Deterministic checks require valid JSON,
-a known source, an exact non-empty evidence span, a literal short place name,
-an allowed source/kind combination and admissible date. They enforce precedence
-and reject conflicting cities. Semantic attribution depends on model extraction
+The FAST-tier model extracts candidate value, source ID and relationship kind
+from the JSON evidence records. It cites original sources rather than generating
+supporting quotations. Deterministic checks require valid JSON, a known source,
+a literal short place name in that source, an allowed source/kind combination
+and admissible date.
+
+A CHAT-tier semantic verification pass compares every admissible candidate
+against its original source record and the active dialogue. It distinguishes
+actual user assertions from quotations requested for translation/explanation,
+hypotheticals, third-party facts, visits, former homes, assistant guesses and
+instructions embedded in data. Reporting that the user said they live somewhere
+can establish a home; merely requesting translation of that sentence cannot.
+Home defaults are ineligible when active dialogue indicates another current
+location or an unknown destination while away.
+
+Each candidate receives a boolean support verdict identified by its integer
+index. The response must cover every candidate exactly once, without duplicates,
+unknown indices or invalid types. Unsupported candidates are discarded. An
+unavailable or malformed verification aborts resolution and preserves clarification.
+Deterministic precedence and conflict checks apply to the supported candidates.
+Both calls use temperature zero, a 1,024-token allowance including reasoning and
+`llm_tools_timeout_sec` per request. There is at most one extraction/verification
+pair per missing input per reply. Semantic attribution remains model-dependent
 and is exercised by live multilingual and adversarial evals.
 
 Retried tool output carries a location-basis note. Remembered residence is labelled

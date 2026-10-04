@@ -15,12 +15,17 @@ def _cfg():
 
 def _answer(monkeypatch, candidates):
     from jarvis.reply import personal_context
+    def direct(model, system, user, **kwargs):
+        if system == personal_context._LOCATION_REVIEW_PROMPT:
+            claims = json.loads(user)['candidates']
+            return json.dumps([{'id': c['id'], 'supported': True} for c in claims])
+        return json.dumps(candidates)
     monkeypatch.setattr(personal_context, 'get_llm_backend', lambda cfg:
-                        SimpleNamespace(direct=lambda *a, **k: json.dumps(candidates)))
+                        SimpleNamespace(direct=direct))
 
 
-def _candidate(value='London', source='diary:1', kind='home', evidence='The user lives in London.'):
-    return dict(value=value, source=source, kind=kind, evidence=evidence)
+def _candidate(value='London', source='diary:1', kind='home'):
+    return dict(value=value, source=source, kind=kind)
 
 
 def _seed(db, text='The user lives in London.', age=1):
@@ -48,7 +53,7 @@ def test_stale_home_requests_clarification(db, monkeypatch, age):
 
 @pytest.mark.parametrize('candidate', [
     _candidate(value='Paris'), _candidate(source='diary:999'),
-    _candidate(evidence='invented evidence'), _candidate(kind='current'),
+    _candidate(kind='unknown'), _candidate(kind='current'),
 ])
 def test_unbacked_or_transient_memory_cannot_supply_city(db, monkeypatch, candidate):
     from jarvis.reply.personal_context import resolve_missing_context
@@ -61,14 +66,14 @@ def test_conflicting_residences_request_clarification(db, monkeypatch):
     from jarvis.reply.personal_context import resolve_missing_context
     text = 'The user lives in London. The user lives in Paris.'
     _seed(db, text)
-    _answer(monkeypatch, [_candidate(), _candidate('Paris', evidence='The user lives in Paris.')])
+    _answer(monkeypatch, [_candidate(), _candidate('Paris')])
     assert resolve_missing_context('location', db, _cfg(), 'weather', []) is None
 
 
 def test_recent_user_location_overrides_remembered_home(db, monkeypatch):
     from jarvis.reply.personal_context import resolve_missing_context
     _seed(db)
-    _answer(monkeypatch, [_candidate(), _candidate('Paris', 'dialogue:0', 'current', "I'm in Paris.")])
+    _answer(monkeypatch, [_candidate(), _candidate('Paris', 'dialogue:0', 'current')])
     result = resolve_missing_context('location', db, _cfg(), 'weather',
                                     [{'role': 'user', 'content': "I'm in Paris."}])
     assert result.value == 'Paris' and result.kind == 'current'
@@ -76,15 +81,15 @@ def test_recent_user_location_overrides_remembered_home(db, monkeypatch):
 
 def test_assistant_location_is_not_user_evidence(db, monkeypatch):
     from jarvis.reply.personal_context import resolve_missing_context
-    _answer(monkeypatch, [_candidate('Paris', 'dialogue:0', 'current', "I'm in Paris.")])
+    _answer(monkeypatch, [_candidate('Paris', 'dialogue:0', 'current')])
     assert resolve_missing_context('location', db, _cfg(), 'weather',
                                   [{'role': 'assistant', 'content': "I'm in Paris."}]) is None
 
 
 def test_current_query_wins_over_previous_user_message(db, monkeypatch):
     from jarvis.reply.personal_context import resolve_missing_context
-    _answer(monkeypatch, [_candidate('Paris', 'dialogue:0', 'current', "I'm in Paris."),
-                         _candidate('London', 'query', 'current', "I'm in London.")])
+    _answer(monkeypatch, [_candidate('Paris', 'dialogue:0', 'current'),
+                         _candidate('London', 'query', 'current')])
     result = resolve_missing_context('location', db, _cfg(), "I'm in London.",
                                     [{'role': 'user', 'content': "I'm in Paris."}])
     assert result.value == 'London'
@@ -162,7 +167,7 @@ def test_invalid_model_output_preserves_clarification(db, monkeypatch, answer):
 def test_unknown_travel_blocks_home_default(db, monkeypatch):
     from jarvis.reply.personal_context import resolve_missing_context
     _seed(db)
-    _answer(monkeypatch, [_candidate(), _candidate('', 'dialogue:0', 'away', "I'm away today.")])
+    _answer(monkeypatch, [_candidate(), _candidate('', 'dialogue:0', 'away')])
     assert resolve_missing_context('location', db, _cfg(), 'weather',
                                   [{'role': 'user', 'content': "I'm away today."}]) is None
 
@@ -226,7 +231,7 @@ def test_shared_retry_protocol_is_not_weather_specific(db, monkeypatch):
 def test_latest_user_message_survives_dialogue_budget(db, monkeypatch):
     from jarvis.reply.personal_context import resolve_missing_context
     _seed(db)
-    _answer(monkeypatch, [_candidate(), _candidate('Paris', 'dialogue:2', 'current', "I'm in Paris.")])
+    _answer(monkeypatch, [_candidate(), _candidate('Paris', 'dialogue:2', 'current')])
     result = resolve_missing_context('location', db, _cfg(), 'weather', [
         {'role': 'user', 'content': 'older unrelated conversation ' * 100},
         {'role': 'user', 'content': 'another older conversation ' * 100},

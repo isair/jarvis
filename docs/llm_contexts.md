@@ -336,13 +336,32 @@ This graph is the reference for LLM-latency optimisation. Treat it as authoritat
   JSON records are untrusted evidence, not instructions; source IDs and dates
   accompany each record. World/Directives and assistant/tool messages are excluded.
 - **Prompt**: static `_LOCATION_PROMPT`; extracts literal cities with source,
-  relationship kind and exact evidence span. Stored sources can supply home
+  relationship kind. Candidates cite original source IDs rather than
+  model-generated quotations. Stored sources can supply home
   defaults only; current location requires active user dialogue.
 - **Limits**: `llm_tools_timeout_sec`, 1,024 tokens including reasoning. One
-  extraction per missing input per reply; misses are cached too. No embeddings.
+  extraction and at most one CHAT-tier verification per missing input per reply;
+  misses are cached too. No embeddings.
 - **Outputs**: validated context value and attribution note, or no resolution.
-  Deterministic source/date/quote/conflict checks precede one tool retry.
+  Deterministic source/date/literal-value checks and complete semantic support
+  verification precede precedence/conflict checks and one tool retry.
   The unified persona prompt requires remembered defaults to be labelled and
   permits clarification for unresolved personal inputs. The attribution
   note accompanies the retried tool result into ordinary reply synthesis and
   any tool-result digest. No memory/configuration writes occur.
+
+### Personal-context source verification
+
+- **Source**: `personal_context.py`, `_review_location_candidates`.
+- **Model**: `resolve_model(cfg, Tier.CHAT)` through the configured backend.
+- **Trigger**: extraction produced admissible missing-location candidates.
+- **Inputs**: the same bounded original evidence records plus candidate IDs,
+  literal values, relationship kinds and source IDs. Record text is untrusted
+  data. Generated quotes are not used as proof of a factual relationship.
+- **Prompt**: `_LOCATION_REVIEW_PROMPT` checks user attribution, temporal status,
+  quoted examples/translation requests and eligibility as a current default.
+- **Limits**: temperature zero, 1,024 tokens including reasoning,
+  `llm_tools_timeout_sec` per request, one verification per missing input per reply.
+- **Output**: complete boolean support verdicts. Missing, malformed, duplicate
+  or unknown IDs preserve clarification. Supported candidates feed the existing
+  deterministic source/age/precedence/conflict policy and grounded tool retry.
