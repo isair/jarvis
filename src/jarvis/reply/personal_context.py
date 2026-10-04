@@ -224,10 +224,10 @@ def resolve_missing_context(field: str, db, cfg, text: str, recent_messages: lis
         if kind not in ('home', 'current', 'requested'):
             return None
         if kind == 'requested' and source != 'query':
-            return None
+            continue
         if not active:
             if kind != 'home':
-                return None
+                continue
             try:
                 stored = datetime.fromisoformat(record['date']).date()
             except (TypeError, ValueError):

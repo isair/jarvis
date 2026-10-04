@@ -49,6 +49,11 @@ from the JSON evidence records. It cites original sources rather than generating
 supporting quotations. Deterministic checks require valid JSON, a known source,
 a literal short place name in that source, an allowed source/kind combination
 and admissible date.
+Candidates with a relationship kind ineligible for their source are discarded
+individually: a remembered task destination cannot supply a requested/current
+location, or discard a separate admissible residence. Malformed extraction still
+preserves clarification. Semantic verification checks all admissible candidates
+against the original records, including active travel that prevents home defaults.
 
 A CHAT-tier semantic verification pass compares every admissible candidate
 against its original source record and the active dialogue. It distinguishes
