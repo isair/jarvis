@@ -573,6 +573,7 @@ def get_default_config() -> Dict[str, Any]:
         "whisper_vad": True,
         "whisper_min_confidence": 0.3,  # Filter low-confidence segments (hallucinations)
         "whisper_no_speech_threshold": 0.5,  # Hard cutoff: reject segments where no_speech_prob >= this
+        "low_confidence_feedback_phrase": "I didn't quite catch that",  # Spoken when an utterance is fully rejected for low confidence; translate it for other languages, or set "" to disable
         "whisper_min_audio_duration": 0.15,
         "whisper_min_word_length": 1,
 

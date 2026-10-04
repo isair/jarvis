@@ -51,6 +51,13 @@ class LowConfidenceEvent:
     reason: Literal["low_confidence"] = "low_confidence"
 
 
+# Default spoken feedback for a fully rejected utterance. The phrase is
+# configurable via the low_confidence_feedback_phrase config value so it
+# can be localised (the assistant supports many languages); an empty
+# value disables the spoken feedback.
+DEFAULT_LOW_CONFIDENCE_FEEDBACK_PHRASE = "I didn't quite catch that"
+
+
 def is_whisper_hallucination(no_speech_prob: float, threshold: float) -> bool:
     """Shared Whisper no-speech gate.
 
@@ -1476,6 +1483,35 @@ class VoiceListener(threading.Thread):
         except Exception as exc:
             debug_log(f"low-confidence callback failed ({type(exc).__name__})", "voice")
 
+    def _speak_low_confidence_feedback(self, result: _TranscriptionResult) -> None:
+        """Speak the feedback phrase for a fully rejected utterance.
+
+        Called from _handle_transcription_result when the result carries
+        rejection events and produced no transcript. The guards keep the
+        phrase from ever talking over Jarvis or racing queued speech: both
+        TTS engines keep their completion and duration callbacks as
+        instance state, so a speak() call issued while a reply is active
+        could overwrite that reply's callbacks.
+        """
+        if not result.low_confidence_events:
+            return
+        if result.captured_during_tts or self._dictation_active:
+            return
+        tts = self.tts
+        if not tts or not getattr(tts, "enabled", False):
+            return
+        if tts.is_speaking():
+            return
+        phrase = getattr(
+            self.cfg, "low_confidence_feedback_phrase",
+            DEFAULT_LOW_CONFIDENCE_FEEDBACK_PHRASE,
+        )
+        if not phrase or not phrase.strip():
+            return
+        debug_log("speaking low-confidence feedback phrase", "voice")
+        self.track_tts_start(phrase)
+        tts.speak(phrase)
+
     def _filter_noisy_segments(self, segments):
         """Filter out low-confidence Whisper segments."""
         min_confidence = getattr(self.cfg, "whisper_min_confidence", 0.3)
@@ -1785,6 +1821,7 @@ class VoiceListener(threading.Thread):
         self._last_detected_language = result.language
         text = result.text
         if not text or not text.strip():
+            self._speak_low_confidence_feedback(result)
             self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
             return
 

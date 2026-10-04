@@ -415,6 +415,16 @@ the listener result only and is not forwarded, logged by the feedback consumer
 or persisted. Headless operation emits no desktop protocol, and shutdown drops
 pending feedback.
 
+Separately from the event notifications, a transcription result that contains
+rejection events and no accepted transcript produces spoken feedback in the
+listener's result handling: the listener speaks the
+`low_confidence_feedback_phrase` config value (default: "I didn't quite catch
+that") through the TTS engine. The config value exists so the phrase can be
+localised per installation, and an empty value disables the spoken feedback.
+The phrase is spoken at most once per result, only while TTS is idle, and
+never for audio captured during TTS playback or while dictation is active.
+Mixed utterances with an accepted transcript never produce the spoken phrase.
+
 ## Configuration
 
 ```json
