@@ -17,6 +17,7 @@ class TestDeleteMealTool:
         self.context = Mock(spec=ToolContext)
         self.context.user_print = Mock()
         self.context.db = Mock()
+        self.context.db.delete_meal_by_description.return_value = False
     
     def test_tool_properties(self):
         """Test tool metadata properties."""

@@ -1,5 +1,10 @@
 # Diary retrieval
 
+Meal description deletion uses one parameterised SQL statement. It deletes a
+record only when exactly one stored description matches literally, including
+case. Duplicate descriptions preserve all records and require a meal ID.
+Description deletion commits on success and rolls back a failed write.
+
 `Database.search_hybrid` searches conversation summaries with FTS5 and optional
 vector candidates. Both Python/FAISS and sqlite-vss use the same fusion routine.
 
