@@ -85,7 +85,7 @@ def test_unusable_embedding_preserves_keyword_retrieval(tmp_path, monkeypatch, q
     db = Database(str(tmp_path / 'diary.db'))
     try:
         target = db.upsert_conversation_summary('2026-01-01', 'quasar')
-        db.upsert_summary_embedding(target, [1., 0.])
+        db.upsert_summary_embedding(target, [1., 0.], db.get_summary_embedding_text(target))
         assert [row['id'] for row in db.search_hybrid('quasar', json.dumps(query))] == [target]
     finally:
         db.close()

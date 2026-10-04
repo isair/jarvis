@@ -28,7 +28,7 @@ def test_keyword_match_beats_equal_distance_nonmatch(diary):
     for day in range(3, 25):
         diary.upsert_conversation_summary(f'2026-01-{day:02}', 'Ordinary daily notes')
     for sid in (missing, hit):
-        diary.upsert_summary_embedding(sid, [1., 0.])
+        diary.upsert_summary_embedding(sid, [1., 0.], diary.get_summary_embedding_text(sid))
     results = diary.search_hybrid('quasar', json.dumps([1., 0.]))
     assert results[0]['id'] == hit
     assert all(row['score'] > 0 for row in results)
@@ -40,14 +40,14 @@ def test_stronger_keyword_match_wins_with_equal_vectors(diary):
     for day in range(3, 25):
         diary.upsert_conversation_summary(f'2026-01-{day:02}', 'Ordinary daily notes')
     for sid in (weak, strong):
-        diary.upsert_summary_embedding(sid, [1., 0.])
+        diary.upsert_summary_embedding(sid, [1., 0.], diary.get_summary_embedding_text(sid))
     assert diary.search_hybrid('quasar', '[1, 0]')[0]['id'] == strong
 
 
 def test_keyword_only_candidate_and_semantic_only_candidate_are_retained(diary):
     keyword = diary.upsert_conversation_summary('2026-01-01', 'quasar')
     semantic = diary.upsert_conversation_summary('2026-01-02', 'distant star')
-    diary.upsert_summary_embedding(semantic, [1., 0.])
+    diary.upsert_summary_embedding(semantic, [1., 0.], diary.get_summary_embedding_text(semantic))
     results = diary.search_hybrid('quasar', '[1, 0]')
     assert {row['id'] for row in results} == {keyword, semantic}
     assert len(diary.search_hybrid('quasar', '[1, 0]', top_k=1)) == 1
@@ -81,7 +81,7 @@ def test_sqlite_vss_keyword_ranking(tmp_path):
             diary.upsert_conversation_summary(f'2026-01-{day:02}', 'Ordinary notes')
         vector = [1.] + [0.] * 767
         for sid in (missing, hit):
-            diary.upsert_summary_embedding(sid, vector)
+            diary.upsert_summary_embedding(sid, vector, diary.get_summary_embedding_text(sid))
         assert diary.search_hybrid('quasar', json.dumps(vector))[0]['id'] == hit
         diary.close()
     '''), str(tmp_path / 'vss.db')], capture_output=True, text=True, timeout=30)
@@ -100,8 +100,8 @@ def test_unicode_keyword_query_finds_the_matching_diary_not_recent_noise(diary, 
 def test_unicode_keyword_match_participates_in_hybrid_ranking(diary, word):
     target = diary.upsert_conversation_summary('2026-01-01', word)
     noise = diary.upsert_conversation_summary('2026-02-01', 'Unrelated recent notes')
-    diary.upsert_summary_embedding(target, [1., 1.])
-    diary.upsert_summary_embedding(noise, [1., 0.])
+    diary.upsert_summary_embedding(target, [1., 1.], diary.get_summary_embedding_text(target))
+    diary.upsert_summary_embedding(noise, [1., 0.], diary.get_summary_embedding_text(noise))
     assert diary.search_hybrid(word, '[1, 0]', top_k=1)[0]['id'] == target
 
 

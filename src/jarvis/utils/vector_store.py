@@ -11,6 +11,7 @@ from pathlib import Path
 import threading
 from weakref import WeakValueDictionary
 from .embedding_vector import normalise_embedding
+from .vector_persistence import persist_vector
 from ..debug import debug_log
 
 
@@ -53,33 +54,32 @@ class PythonVectorStore:
             if conn is not None:
                 conn.close()
     
-    def _save_vector(self, summary_id: int, vector: np.ndarray) -> None:
+    def _save_vector(self, summary_id: int, vector: np.ndarray, source_text) -> bool:
         """Persist a single vector to SQLite."""
         if self.db_path == ':memory:':
-            return
-        conn = None
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cur = conn.cursor()
-            vector_json = json.dumps(vector.tolist())
-            cur.execute(
-                "INSERT OR REPLACE INTO python_vector_store (summary_id, vector_json) VALUES (?, ?)",
-                (summary_id, vector_json)
-            )
-            conn.commit()
-        except Exception:
-            debug_log('Python embedding persistence failed', 'memory')
-            raise
-        finally:
-            if conn is not None:
-                conn.close()
+            return True
+        return persist_vector(self.db_path, 'python', summary_id, json.dumps(vector.tolist()), source_text)
     
     def add_vector(self, summary_id: int, vector: List[float]) -> None:
         """Add or update a vector for a summary."""
+        self._add_vector(summary_id, vector, None)
+
+    def add_summary_vector(self, summary_id: int, vector: List[float], source_text: str) -> bool:
+        """Refresh a diary vector only while the embedding source is current."""
+        if not isinstance(source_text, str):
+            raise ValueError('Embedding source must be a string')
+        if self.db_path == ':memory:':
+            raise ValueError('Guarded vector writes require a file-backed diary')
+        return self._add_vector(summary_id, vector, source_text)
+
+    def _add_vector(self, summary_id: int, vector: List[float], source_text) -> bool:
         with self._lock:
             vec_array = normalise_embedding(vector)
-            self._save_vector(summary_id, vec_array)
+            if not self._save_vector(summary_id, vec_array, source_text):
+                debug_log('Skipping a superseded Python diary embedding', 'memory')
+                return False
             self.vectors[summary_id] = vec_array
+            return True
     
     def search(self, query_vector: List[float], top_k: int = 10) -> List[Tuple[int, float]]:
         """

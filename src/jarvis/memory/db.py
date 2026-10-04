@@ -11,6 +11,10 @@ _SCHEMA_SQL = """
 PRAGMA journal_mode=WAL;
 PRAGMA synchronous=NORMAL;
 
+CREATE TABLE IF NOT EXISTS diary_index_migrations (
+  name TEXT PRIMARY KEY
+);
+
 -- Structured meals log (optional feature)
 CREATE TABLE IF NOT EXISTS meals (
   id            INTEGER PRIMARY KEY,
@@ -133,7 +137,11 @@ class Database:
             else:
                 debug_log("Using Python fallback vector store", "jarvis")
         
-        self._init_schema()
+        try:
+            self._init_schema()
+        except Exception:
+            self.conn.close()
+            raise
 
     @property
     def has_vector_store(self) -> bool:
@@ -146,7 +154,18 @@ class Database:
             cur.executescript(_SCHEMA_SQL)
             if self.is_vss_enabled:
                 cur.executescript(_VSS_SCHEMA_SQL)
-            self.conn.commit()
+            try:
+                # Serialise the durable consistency check across database owners.
+                cur.execute('BEGIN IMMEDIATE')
+                migration = 'summary_fts_content_consistency'
+                if not cur.execute('SELECT 1 FROM diary_index_migrations WHERE name=?', (migration,)).fetchone():
+                    cur.execute("INSERT INTO summaries_fts(summaries_fts) VALUES('rebuild')")
+                    cur.execute('INSERT INTO diary_index_migrations(name) VALUES (?)', (migration,))
+                    debug_log('Diary full-text index rebuilt from live summaries', 'memory')
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()
+                raise
 
     
 
@@ -309,15 +328,25 @@ class Database:
             ts_utc = datetime.now(timezone.utc).isoformat()
         with self._lock:
             cur = self.conn.cursor()
-            cur.execute(
-                """
-                INSERT OR REPLACE INTO conversation_summaries(date_utc, ts_utc, summary, topics, source_app)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (date_utc, ts_utc, summary, topics, source_app),
-            )
-            self.conn.commit()
-            return int(cur.lastrowid)
+            try:
+                cur.execute(
+                    """
+                    INSERT INTO conversation_summaries(date_utc, ts_utc, summary, topics, source_app)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(date_utc, source_app) DO UPDATE SET
+                        ts_utc=excluded.ts_utc, summary=excluded.summary, topics=excluded.topics
+                    """,
+                    (date_utc, ts_utc, summary, topics, source_app),
+                )
+                summary_id = cur.execute(
+                    'SELECT id FROM conversation_summaries WHERE date_utc=? AND source_app=?',
+                    (date_utc, source_app),
+                ).fetchone()[0]
+                self.conn.commit()
+                return int(summary_id)
+            except Exception:
+                self.conn.rollback()
+                raise
 
     def get_conversation_summary(self, date_utc: str, source_app: str = "jarvis") -> Optional[sqlite3.Row]:
         """Get conversation summary for a specific date."""
@@ -365,14 +394,28 @@ class Database:
             ).fetchall()
             return rows
 
-    def upsert_summary_embedding(self, summary_id: int, vec: Sequence[float]) -> Optional[int]:
-        """Store or update embedding for a conversation summary."""
+    def get_summary_embedding_text(self, summary_id: int) -> Optional[str]:
+        """Read the current diary text used to generate an embedding."""
+        with self._lock:
+            row = self.conn.execute('SELECT summary, topics FROM conversation_summaries WHERE id=?',
+                                    (summary_id,)).fetchone()
+            return f"{row['summary'] or ''} {row['topics'] or ''}" if row is not None else None
+
+    def upsert_summary_embedding(self, summary_id: int, vec: Sequence[float], source_text: str) -> Optional[int]:
+        """Refresh an embedding only while its captured diary text is current."""
+        if not isinstance(source_text, str):
+            raise ValueError('Embedding source must be a string')
         if self.is_vss_enabled:
             # Use sqlite-vss
             import json
             with self._lock:
                 try:
                     cur = self.conn.cursor()
+                    cur.execute('BEGIN IMMEDIATE')
+                    if self.get_summary_embedding_text(summary_id) != source_text:
+                        self.conn.rollback()
+                        debug_log('Skipping a superseded sqlite-vss diary embedding', 'memory')
+                        return None
                     emb_id = cur.execute("SELECT COALESCE(MAX(rowid), 0) + 1 FROM embeddings").fetchone()[0]
                     cur.execute("INSERT INTO embeddings(rowid, vec) VALUES (?, ?)", (emb_id, json.dumps([float(x) for x in vec])))
                     cur.execute(
@@ -385,9 +428,14 @@ class Database:
                     self.conn.rollback()
                     raise
         elif self._python_vector_store:
-            # Use Python vector store
-            self._python_vector_store.add_vector(summary_id, list(vec))
-            return summary_id  # Return summary_id as a placeholder for emb_id
+            with self._lock:
+                if self.db_path == ':memory:':
+                    if self.get_summary_embedding_text(summary_id) != source_text:
+                        return None
+                    self._python_vector_store.add_vector(summary_id, list(vec))
+                    return summary_id
+                accepted = self._python_vector_store.add_summary_vector(summary_id, list(vec), source_text)
+                return summary_id if accepted else None
         else:
             return None
 
