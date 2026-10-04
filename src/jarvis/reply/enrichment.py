@@ -461,6 +461,9 @@ _TOOL_DIGEST_BATCH_MAX_CHARS = 2500
 # here so the combined output stays bounded.
 _TOOL_DIGEST_MAX_CHARS = 600
 
+# Generation includes backend reasoning as well as the attributed fact note.
+_TOOL_DIGEST_TOKEN_BUDGET = 1024
+
 _TOOL_DIGEST_SYSTEM_PROMPT = (
     "You are a fact extractor for a personal AI assistant. You will be "
     "given:\n"
@@ -539,7 +542,7 @@ def _distil_tool_batch(
             user_content=user_content,
             timeout_sec=timeout_sec,
             thinking=thinking,
-            max_tokens=300,
+            max_tokens=_TOOL_DIGEST_TOKEN_BUDGET,
         )
     except Exception as e:
         debug_log(f"tool digest batch failed: {e}", "tools")
