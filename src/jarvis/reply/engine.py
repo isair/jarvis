@@ -881,12 +881,13 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     _full_catalog_names = _all_builtin_names + _all_mcp_names
 
     _dialogue_lines: list[str] = []
-    for _m in (recent_messages or [])[-6:]:
+    for _m in (recent_messages or []):
         _role = _m.get("role", "")
         _content = (_m.get("content") or "").strip().replace("\n", " ")
         if _role in ("user", "assistant") and _content:
-            _dialogue_lines.append(f"{_role}: {_content[:200]}")
-    _dialogue_ctx = "\n".join(_dialogue_lines)
+            _dialogue_lines.append(f"{_role}: {_content[:_HINT_MESSAGE_CHAR_LIMIT]}")
+    _dialogue_ctx = "\n".join(_dialogue_lines[-_HINT_RECENT_MESSAGES:])
+    debug_log(f"planner dialogue: {min(len(_dialogue_lines), _HINT_RECENT_MESSAGES)} non-empty dialogue messages", "planning")
 
     # Step 2a: Tool routing FIRST.
     #
