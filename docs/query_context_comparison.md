@@ -66,7 +66,12 @@ The exploratory profile allows 15 seconds for planning and 20 seconds for
 the intent judge. These results do not establish quality or latency for the
 default Gemma FAST-tier model, or the production planner's 3-second timeout.
 
-### Grounded completion
+### Dated repeated comparison (2026-10-03)
+
+These traces measure an experimental context block attached at the HTTP
+boundary. They establish the comparison baseline, rather than qualification
+of the current production transport. The per-request fingerprints preserve
+the tested prompts. Production transport has separate evidence below.
 
 | Arm | Completed trials | Answer facts correct | All repeats passed | Median latency | Successful median |
 |-----|------------------|----------------------|--------------------|----------------|-------------------|
@@ -111,6 +116,40 @@ The default 3-second planner profile produced timeouts during preflight
 on this 27B model. That incomplete preflight is excluded from the
 controlled comparison and provides no accuracy conclusion. The measured
 15-second planner profile is exploratory, not production timing evidence.
+
+### Production transport qualification (2026-10-04)
+
+The [production-context replay](evaluation_results/production_context_qwen_2026-10-04.jsonl)
+uses `SpeechContext` through the engine, without HTTP context injection.
+All 12 scenarios pass routing, arguments, grounded answers and strict model
+validity, with zero unexpected tools. This is one repeat per scenario on the
+same local Qwen model, with a 15-second planner deadline, six-second intent
+deadline, temperature zero and reasoning disabled. Median reply-pipeline
+latency is 23.07 seconds; raw-arm timings exclude intent classification.
+The model contexts are measured at commit `148cc8e`, as recorded in metadata.
+
+The [default-deadline transport pilot](evaluation_results/production_context_default_deadline_qwen_2026-10-04.jsonl)
+passes 7/12 strict trials. Five planner requests time out at three seconds;
+all twelve recover to correct routing, tool arguments and answer facts, but
+recovered timeouts remain failed trials. This pilot omits the configured wake
+names from reference metadata and is not a final-prompt comparison. The
+default small model is unavailable locally and remains unqualified.
+
+The [decision-only intent eval](evaluation_results/intent_decisions_qwen_2026-10-04.jsonl)
+passes all 54 directedness/cancellation fixtures with valid responses at the
+production six-second deadline. The [prompt baseline](evaluation_results/intent_decisions_before_tuning_qwen_2026-10-04.jsonl)
+passes 52/54: the ASR fragment "Jarvis answered that" and Spanish hot-window
+fragment "Y mañana" fail before their decision rules are made explicit.
+Both cases pass in the complete final rerun. This qualifies the measured
+Qwen decision prompt on these fixtures, not a Jev or Laya model.
+
+The [digest comparison](evaluation_results/digest_context_qwen_2026-10-04.jsonl)
+uses a synthetic three-product catalogue and the ambiguous request "How much
+does it cost?". Memory and tool digests both select the copper lantern's £12
+price when given the transcript. Without context, the tool digest returns all
+three prices and the memory digest returns `NONE`. All four model responses
+are valid at the production eight-second digest deadline. This is one small
+paired fixture, not a broad memory-retrieval benchmark.
 
 ### Interpretation
 

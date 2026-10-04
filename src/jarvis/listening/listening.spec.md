@@ -217,7 +217,7 @@ System is waiting for wake word activation.
 1. Start thinking beep immediately and set face state to LISTENING
 2. Wait for utterance to complete (user finishes speaking)
 3. Send transcript buffer + wake timestamp to intent judge
-4. If `directed=true` and the current engagement signal is valid, collect the original speech for the reply engine
+4. If `directed=true` and the current engagement signal is valid, reject pure hot-window TTS echo even while thinking, then collect the original speech for the reply engine
 5. If rejected, stop the beep and revert face state to IDLE
 
 ### 2. Hot Window Mode

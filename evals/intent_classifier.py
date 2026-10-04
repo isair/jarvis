@@ -1,7 +1,7 @@
 """Local System One client for intent classification qualification.
 
-This client returns decisions only. Query extraction and reference resolution
-remain the responsibility of the listening intent judge.
+This client returns decisions only. Reference resolution belongs to the
+downstream reply pipeline, which receives the original speech and context.
 """
 
 import ipaddress

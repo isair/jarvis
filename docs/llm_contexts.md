@@ -4,13 +4,13 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 
 **Evaluation replay.** [Query/context comparison](query_context_comparison.md)
 runs synthetic directed speech through the intent judge, router, planner and
-reply contexts. Its `raw_context` arm appends separate fenced transcript data
-to every downstream model request; `rewrite` runs the full-context judge and
+reply contexts. Its `raw_context` arm uses production `SpeechContext` transport;
+`rewrite` runs the frozen full-context rewrite baseline and
 passes its generated query, while `raw_only` omits ambient context. The replay
 uses isolated Settings, fresh memory and synthetic tool results. Its request
 profile fixes temperature at zero, controls the reasoning template uniformly,
-retains output caps and records explicit timeout overrides. These evaluation
-data-flow edges do not apply to the listener's runtime path.
+retains output caps and records explicit timeout overrides. The rewrite
+control is evaluation-only; raw-context data flow matches the reply path.
 
 > **Backend abstraction.** Every context below routes through `jarvis.llm` ([spec](../src/jarvis/llm/llm.spec.md)) via `get_llm_backend(cfg)` / `get_embedding_backend(cfg)`. Picking `llm_provider: openai_compatible` swaps the wire shape end-to-end without touching call sites. The active chat model is read directly from `cfg.llm_chat_model` (the `Settings` field that always carries the resolved value, populated by config-load from `ollama_chat_model` when the provider-aware key is left empty).
 
@@ -270,7 +270,7 @@ user input
   └─▶ [2] Intent Judge            (voice only, directedness/stop decisions)
         └─▶ original speech + immutable redacted SpeechContext
               └─▶ [7] Tool router (narrows catalogue for the planner)
-              └─▶ [12] Planner (gates memory; advisory for the router allow-list)
+                    └─▶ [12] Planner (gates memory; advisory for the router allow-list)
                     ├─ plan requests searchMemory  → [3] Enrichment extract → [4] Memory digest (optional)
                     ├─ plan empty (fail-open)      → [3] Enrichment extract → [4] Memory digest
                     └─ plan reply-only             → skip #3 and #4 entirely

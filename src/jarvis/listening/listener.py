@@ -949,6 +949,17 @@ class VoiceListener(threading.Thread):
                     return
 
                 if intent_judgment.directed and not intent_judgment.stop:
+                    # The early guard can be skipped while thinking or for
+                    # queued audio captured during TTS. A directed verdict
+                    # must still not turn pure assistant echo into a query.
+                    if could_be_hot_window and last_tts_text:
+                        echo_score = fuzz.partial_ratio(text_lower, last_tts_text.lower())
+                        tts_words = len(last_tts_text.split())
+                        if (echo_score >= 70
+                                and len(text_lower.split()) <= max(tts_words * 1.3, tts_words + 3)):
+                            debug_log(f"🔇 Directed echo rejected (score={echo_score})", "voice")
+                            self._stop_thinking_tune()
+                            return
                     wake_word = getattr(self.cfg, "wake_word", "jarvis")
                     aliases = list(set(getattr(self.cfg, "wake_aliases", [])) | {wake_word})
                     has_wake_word = self._wake_timestamp is not None or is_wake_word_detected(text_lower, wake_word, aliases)

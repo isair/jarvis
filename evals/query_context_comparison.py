@@ -207,8 +207,8 @@ def summarise(rows: list[dict]) -> dict:
 class RequestRecorder:
     """Instrument local model requests without changing production functions.
 
-    The context arm appends the same fenced data to router, planner and reply
-    requests. The request profile is uniform across arms. Credentials and
+    Observes the fenced data supplied by the production speech-context path.
+    The request profile is uniform across arms. Credentials and
     request headers are excluded from the trace.
     """
 

@@ -4,11 +4,29 @@ from unittest.mock import patch
 
 import pytest
 
-pytestmark = pytest.mark.unit
-
 from jarvis.listening.intent_judge import IntentJudge
 from jarvis.listening.transcript_buffer import TranscriptSegment
 
+pytestmark = pytest.mark.unit
+
+
+def test_directed_echo_does_not_start_a_query_while_thinking():
+    from test_hot_window_input import (
+        _create_listener, _simulate_tts_finish, _wait_for_hot_window_active,
+        _install_intent_judge, _make_judgment, _process_transcript, _accepted_query,
+    )
+    listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=3.0)
+    spoken = 'The weather is sunny today.'
+    listener.echo_detector.track_tts_start(spoken)
+    _simulate_tts_finish(listener)
+    assert _wait_for_hot_window_active(listener)
+    _install_intent_judge(listener, _make_judgment(directed=True))
+    try:
+        with patch.object(listener, '_is_thinking_tune_active', return_value=True):
+            _process_transcript(listener, spoken, utterance_energy=0.01)
+        assert _accepted_query(listener) == ''
+    finally:
+        listener.state_manager.stop()
 
 def test_intent_decision_does_not_produce_a_rewritten_query():
     result = IntentJudge()._parse_response(
