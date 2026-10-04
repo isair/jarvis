@@ -41,6 +41,9 @@ integration in `src/jarvis/reply/engine.py`.
 - After the dialogue context is assembled, MCP tools are loaded, and
   the tool router has produced a narrowed catalogue. Memory search
   runs *after* the planner so it can be gated on its output.
+- Dialogue context contains the latest six non-empty user or assistant
+  messages, in chronological order, with at most 200 characters per message.
+  Other roles and empty messages do not consume this dialogue budget.
 - The planner sees the **router-narrowed** tool catalogue (name +
   one-line description), not the full 30+ list. It does not see memory
   content — it decides whether memory is needed, via the
