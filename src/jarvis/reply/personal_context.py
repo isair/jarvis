@@ -75,7 +75,7 @@ def _collect_evidence(db, cfg, text: str, recent_messages: list[dict], now: date
         remaining -= len(content)
 
     add('query', text)
-    for i, msg in enumerate(recent_messages[-6:]):
+    for i, msg in reversed(list(enumerate(recent_messages[-6:]))):
         if msg.get('role') == 'user' and not msg.get('tool_name'):
             add(f'dialogue:{i}', msg.get('content', ''))
 

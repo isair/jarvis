@@ -221,3 +221,15 @@ def test_shared_retry_protocol_is_not_weather_specific(db, monkeypatch):
     runner = personal_context.ContextualToolRunner(run, db, _cfg(), 'recommend meals', [])
     result = runner(tool_name='recommendMeals', tool_args={})
     assert result.success and 'vegetarian' in result.reply_text and 'Saved dietary preference' in result.reply_text
+
+
+def test_latest_user_message_survives_dialogue_budget(db, monkeypatch):
+    from jarvis.reply.personal_context import resolve_missing_context
+    _seed(db)
+    _answer(monkeypatch, [_candidate(), _candidate('Paris', 'dialogue:2', 'current', "I'm in Paris.")])
+    result = resolve_missing_context('location', db, _cfg(), 'weather', [
+        {'role': 'user', 'content': 'older unrelated conversation ' * 100},
+        {'role': 'user', 'content': 'another older conversation ' * 100},
+        {'role': 'user', 'content': "I'm in Paris."},
+    ])
+    assert result.value == 'Paris'

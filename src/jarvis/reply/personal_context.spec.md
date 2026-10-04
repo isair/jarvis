@@ -34,6 +34,8 @@ without embeddings, graph mutations or a planner searchMemory requirement.
 Bounds: 8,000 evidence characters, 1,000 characters per record, 20 diary rows from
 the latest 180 days and 32 graph nodes through depth eight. Query, dialogue, diary
 and graph have reserved character budgets so one source cannot crowd out another.
+Dialogue is collected newest first so older messages cannot hide the latest
+user location update.
 A missing table or source is non-fatal. Graph update dates are storage metadata,
 not observation times. Stored home records older than 180 days, future dates and
 invalid dates are unusable. These bounds can leave relevant evidence outside the

@@ -63,7 +63,7 @@ class TestGraphSuppliesMissingToolArg:
     missing-context protocol without a planner memory-search step."""
 
     def test_warm_profile_user_fact_grounds_get_weather_call(
-        self, eval_db, eval_dialogue_memory, graph_store,
+        self, eval_dialogue_memory, graph_store,
     ):
         from jarvis.reply.engine import run_reply_engine
 
