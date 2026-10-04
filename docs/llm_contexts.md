@@ -144,8 +144,8 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 - **File**: [src/jarvis/memory/graph_ops.py](src/jarvis/memory/graph_ops.py), `_review_graph_facts()`.
 - **Trigger**: once after a non-empty extraction, before any graph insertion. Background.
 - **Model**: the same `chat_model` and configured backend as extraction (#10).
-- **Inputs**: indexed candidate fact text, quoted as untrusted data; no new user data or external endpoint.
-- **System prompt**: `_FACT_HYGIENE_PROMPT` classifies each candidate by meaning as `DURABLE`, `TRANSIENT`, `INTERACTION` or `ADVICE`, in every language. Weather forecasts and conversation descriptions are excluded; personal facts, explicit assistant style rules, business details and enduring climate facts are retained.
+- **Inputs**: original source summary plus indexed candidate fact text and branches, encoded as untrusted JSON data; no new user data or external endpoint.
+- **System prompt**: `_FACT_HYGIENE_PROMPT` classifies each candidate by meaning as `DURABLE`, `TRANSIENT`, `INTERACTION`, `ADVICE` or `UNSUPPORTED`, in every language. Source support requires the same subject, relationship and temporal status; quoted examples, third-party facts and task parameters cannot establish current user facts. Weather forecasts and conversation descriptions are excluded; personal facts, explicit assistant style rules, business details and enduring climate facts are retained.
 - **Output**: only `DURABLE` candidates, with their original branch and text. The model cannot rewrite candidates or introduce facts. Invalid, duplicate, missing or out-of-range verdicts discard that graph cycle; the diary remains available.
 - **Limits**: the remaining extraction timeout, 4096-token context, `temperature: 0`, `max_tokens: 2048`. No retries. Empty candidates or an exhausted budget skip review.
 
