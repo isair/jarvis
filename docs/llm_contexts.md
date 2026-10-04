@@ -53,6 +53,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 - **Limits**: up to 2 attempts; timeout from `llm_tools_timeout_sec`. `max_tokens: 1024` (`_MEMORY_SEARCH_PARAMETER_TOKEN_BUDGET`), covering reasoning and complete parameter JSON.
 - **Caching**: result cached in `DialogueMemory._hot_cache` under key `enrichment:{redacted_query[+topic_hint]}` for the lifetime of the active conversation. Identical follow-ups within the same conversation reuse the dict and skip the LLM hop. Cleared by `clear_hot_cache()` on the `stop` signal and on new-conversation entry.
 - **Retrieval boundary**: local Python/FAISS indices require finite, non-zero, one-dimensional embeddings. Invalid refreshes preserve the stored vector; unusable query vectors contribute no semantic candidates. Python search skips other dimensions, and FAISS validates its fixed dimension. Keyword candidates remain available when the local semantic query is unusable.
+- **Index refresh boundary**: file-backed Python/FAISS indices publish vector candidates only after a successful SQLite write. A failed write preserves the previous candidate and reaches the diary caller's optional-refresh error handling; committed diary text remains searchable.
 
 ## 3b. Recall Gate (pre-enrichment short-circuit)
 

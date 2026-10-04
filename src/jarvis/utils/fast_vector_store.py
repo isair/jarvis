@@ -119,6 +119,7 @@ class FAISSVectorStore:
     
     def _save_vector(self, summary_id: int, vector: np.ndarray) -> None:
         """Persist a single vector to SQLite."""
+        conn = None
         try:
             conn = sqlite3.connect(self.db_path)
             cur = conn.cursor()
@@ -129,21 +130,24 @@ class FAISSVectorStore:
                 (summary_id, vector_blob)
             )
             conn.commit()
-            conn.close()
-        except Exception as e:
-            logging.warning(f"Failed to save vector to database: {e}")
+        except Exception:
+            debug_log('FAISS embedding persistence failed', 'memory')
+            raise
+        finally:
+            if conn is not None:
+                conn.close()
     
     def add_vector(self, summary_id: int, vector: List[float]) -> None:
         """Add or update a vector for a summary."""
         with self._lock:
             vec_array = normalise_embedding(vector, self.dimension)
             
+            # Save to database
+            self._save_vector(summary_id, vec_array)
+
             # If summary already exists, mark for rebuild
             if summary_id in self.summary_id_to_index:
                 self._needs_rebuild = True
-            
-            # Save to database
-            self._save_vector(summary_id, vec_array)
             
             # If index is empty or needs rebuild, rebuild from database
             if self.index is None or self.index.ntotal == 0 or self._needs_rebuild:

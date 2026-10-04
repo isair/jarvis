@@ -55,6 +55,9 @@ class PythonVectorStore:
     
     def _save_vector(self, summary_id: int, vector: np.ndarray) -> None:
         """Persist a single vector to SQLite."""
+        if self.db_path == ':memory:':
+            return
+        conn = None
         try:
             conn = sqlite3.connect(self.db_path)
             cur = conn.cursor()
@@ -64,17 +67,19 @@ class PythonVectorStore:
                 (summary_id, vector_json)
             )
             conn.commit()
-            conn.close()
         except Exception:
-            # Fail silently - in-memory still works
-            pass
+            debug_log('Python embedding persistence failed', 'memory')
+            raise
+        finally:
+            if conn is not None:
+                conn.close()
     
     def add_vector(self, summary_id: int, vector: List[float]) -> None:
         """Add or update a vector for a summary."""
         with self._lock:
             vec_array = normalise_embedding(vector)
-            self.vectors[summary_id] = vec_array
             self._save_vector(summary_id, vec_array)
+            self.vectors[summary_id] = vec_array
     
     def search(self, query_vector: List[float], top_k: int = 10) -> List[Tuple[int, float]]:
         """

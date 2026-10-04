@@ -5,6 +5,7 @@ quality. Keyword queries and paraphrases share a corpus with weaker distractors.
 """
 
 import json
+import sqlite3
 
 import pytest
 
@@ -26,7 +27,8 @@ CASES = [
 
 
 @pytest.mark.parametrize('mixed_dimensions', [False, True], ids=['current-model', 'mixed-model-history'])
-def test_hybrid_recall_at_three(tmp_path, mixed_dimensions):
+@pytest.mark.parametrize('failed_refresh', [False, True], ids=['healthy-index', 'rejected-refresh'])
+def test_hybrid_recall_at_three(tmp_path, mixed_dimensions, failed_refresh):
     db = Database(str(tmp_path / 'recall.db'))
     db._python_vector_store = PythonVectorStore(db.db_path)
     try:
@@ -42,6 +44,14 @@ def test_hybrid_recall_at_three(tmp_path, mixed_dimensions):
         if mixed_dimensions:
             sid = db.upsert_conversation_summary('2026-03-01', 'Unrelated model history')
             db.upsert_summary_embedding(sid, [1.] * (len(CASES) + 1))
+        if failed_refresh:
+            with sqlite3.connect(db.db_path) as conn:
+                conn.execute("CREATE TRIGGER reject_embedding BEFORE INSERT ON python_vector_store "
+                             "BEGIN SELECT RAISE(ABORT, 'embedding rejected'); END")
+            try:
+                db.upsert_summary_embedding(targets[0], [1.] * len(CASES))
+            except sqlite3.IntegrityError:
+                pass
         results = []
         for subset, query_index in (('lexical', 0), ('semantic', 1)):
             hits = {'fts': 0, 'hybrid': 0}

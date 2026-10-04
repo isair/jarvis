@@ -45,6 +45,12 @@ search considers only stored vectors matching the query dimension. Unusable
 queries contribute no semantic candidates, preserving keyword retrieval.
 Loading skips individual malformed persisted vectors and retains valid rows.
 
+File-backed Python and FAISS vector refreshes persist successfully before
+publishing an in-memory replacement or candidate. A failed SQLite write raises
+to the caller, preserves the previous index and releases the writer connection
+for a later retry. Committed diary text remains available to keyword search.
+Python `:memory:` indices retain vectors in memory without a persistent file.
+
 `has_vector_store` reports availability of sqlite-vss or a local FAISS/Python
 index. Diary saves, summary rewrites and topic optimisation use this capability
 alongside the configured embedding model to refresh semantic candidates. An
