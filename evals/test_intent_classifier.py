@@ -25,7 +25,7 @@ def speech_case(name, text, *, directed=True, stop=False, echo=False, hot=False,
         name=name, segments=[(text, echo)], last_tts_text=tts,
         in_hot_window=hot, wake_timestamp=None if hot or echo else 1000.8,
         expected_directed=directed,
-        expected_stop=stop, expected_query_contains=None,
+        expected_stop=stop,
     )
 
 

@@ -19,14 +19,15 @@ Design principles enforced by the engine:
 ### Entry and Inputs
 - Entry point: the reply engine receives a user query from the ingestion layer.
 - Inputs:
-  - text (string): a redaction-eligible user query.
+  - text (string): the original redaction-eligible user request.
+  - speech_context (optional): an immutable snapshot of retained ambient speech and TTS metadata. Redacted and fenced as reference data for routing, planning, step resolution, every reply turn, relevance digests and mid-loop tool discovery. It is scoped to this request and is not stored as dialogue or diary content. The current request takes priority; earlier instructions and echo cannot trigger actions.
   - persistent store: a database-like service, optionally with vector search.
   - configuration: model endpoints, timeouts, feature flags, and tool settings.
   - speech synthesizer (optional): for spoken output and hot-window activation.
 
 ### Steps and Branches (Agentic Messages Loop)
 1. Redact
-   - Redact input to remove sensitive data.
+   - Redact the current request and all text in the speech-context snapshot. Escape angle brackets in JSON reference data so transcript text cannot close its fence.
 
 2. Recent Dialogue Context
    - Include short-term dialogue memory (last 5 minutes) as prior messages.
@@ -34,8 +35,8 @@ Design principles enforced by the engine:
    - A **recall gate** (`src/jarvis/memory/recall_gate.py`, deterministic, no LLM) skips diary / graph / memory-digest enrichment when the hot window already covers the topic (≥50% content-word overlap with a fresh tool-result row). Language-agnostic via `\w{3,}` with `re.UNICODE`. Fail-open on any error. The gate is bypassed when the planner explicitly emitted a `searchMemory` step, planner intent always wins over coverage heuristics. See `src/jarvis/memory/recall_gate.spec.md`.
    - **Conversation-scoped scratch cache** (`DialogueMemory.hot_cache_get` / `hot_cache_put`): a small primitive used by the engine to memoise three idempotent per-turn computations for the lifetime of the active conversation:
      - **Warm profile** (`DialogueMemory.WARM_PROFILE_CACHE_KEY`, query-agnostic): skips the SQLite traversal of the User + Directives branches on every follow-up turn. Invalidated on User/Directives graph mutations via a listener registered in `daemon.py` against `register_graph_mutation_listener` (`src/jarvis/memory/graph.py`); World-branch writes do not affect it.
-     - **Memory enrichment extractor** (`enrichment:{redacted_query[+topic_hint]}` key): skips the small-model LLM call that derives keywords / questions / time bounds when an identical query repeats.
-     - **Tool router** (`router:{redacted_query}|{strategy}|{builtin-names}|{mcp-names}` key): skips the router LLM call when the query and tool catalogue match. The catalogue signature lets a mid-conversation MCP refresh invalidate the cache. The engine refuses to cache the router's "fall open to all tools" fallback (detected by set equality with the full catalogue): that path fires only when the LLM router gave up, and pinning a fluke fall-open into the conversation cache would force every subsequent turn to expose the entire catalogue, overwhelming small chat models.
+     - **Memory enrichment extractor** (`enrichment:{redacted_query[+topic_hint]}|{speech-context-fingerprint}` key): skips the small-model LLM call that derives keywords / questions / time bounds when an identical query repeats.
+     - **Tool router** (`router:{redacted_query}|{strategy}|{builtin-names}|{mcp-names}|{speech-context-fingerprint}` key): skips the router LLM call when the query and tool catalogue match. The catalogue signature lets a mid-conversation MCP refresh invalidate the cache. The engine refuses to cache the router's "fall open to all tools" fallback (detected by set equality with the full catalogue): that path fires only when the LLM router gave up, and pinning a fluke fall-open into the conversation cache would force every subsequent turn to expose the entire catalogue, overwhelming small chat models.
      - Lifetime: entries persist until (a) the `stop` signal clears the whole cache, (b) the engine detects a new conversation at turn entry (`has_recent_messages()` was False) and clears it before running, or (c) targeted invalidation (warm profile only) on graph mutations. Entries are *not* bounded by `RECENT_WINDOW_SEC` age, so a long active session keeps them warm.
 
 3. Pre-flight Planner

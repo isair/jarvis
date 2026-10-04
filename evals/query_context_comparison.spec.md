@@ -4,24 +4,23 @@
 
 `query_context_comparison.py`, `query_context_cases.py` and
 `run_query_context_comparison.py` provide an evaluation-only replay of the
-production intent judge, tool router, planner and reply engine. They do not
+frozen rewrite baseline, production tool router, planner and reply engine. They do not
 change listener behaviour, application settings or runtime prompts.
 
 ## Arms and context
 
-- `rewrite`: the full-context intent judge produces a self-contained query.
+- `rewrite`: the evaluation-only full-context rewrite baseline produces a self-contained query.
   The downstream engine receives that query and the fixture's shared dialogue.
 - `raw_only`: the engine receives the current utterance unchanged and the same
   dialogue. This diagnostic control omits ambient transcript context.
-- `raw_context`: the engine receives the current utterance unchanged. Every
-  model request receives a separate fenced reference block containing the
-  judge's actual transcript format, current-segment and timestamp markers,
-  wake context, hot-window state and TTS echo information.
+- `raw_context`: the engine receives the original utterance and a production
+  `SpeechContext` snapshot. Routing, planning, step resolution, memory extraction,
+  every reply turn and mid-loop discovery use separate redacted reference data.
 
-The context block treats earlier speech as data. It gives the current query
-priority, excludes unrelated instructions and TTS echo, and JSON-quotes the
-transcript with escaped angle brackets so speech cannot close the fence.
-This prompt is a candidate evaluated by the replay, not a runtime contract.
+The context block gives the current request priority, excludes unrelated
+instructions and TTS echo, and JSON-quotes speech with escaped angle brackets
+so speech cannot close the fence. The recorder observes transport and does not
+inject context into model requests.
 
 ## Isolation and measurement
 
@@ -68,3 +67,5 @@ The fixed facts are lightweight behavioural checks, not an LLM answer judge.
 Tool results and speech are controlled fixtures rather than production data.
 Repeated trials measure consistency on a small case set, not independent
 samples or a general accuracy guarantee.
+
+The rewrite control uses `evals/rewrite_baseline.py`, a frozen evaluation-only extraction prompt. The raw-context arm creates a production `SpeechContext` snapshot and passes it to the reply engine. The request recorder observes context on each request and does not inject it.

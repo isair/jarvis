@@ -40,7 +40,7 @@ def test_raw_control_does_not_receive_ambient_context(case):
 
 
 def test_rewrite_requires_a_successful_directed_judgement(case):
-    from jarvis.listening.intent_judge import IntentJudgment
+    from evals.rewrite_baseline import BaselineJudgment as IntentJudgment
     accepted = IntentJudgment(True, "copper lantern price", False, "high", "reference")
     assert prepare_query(case, "rewrite", judgment=accepted) == (accepted.query, "")
     for judgment in (None, IntentJudgment(False, "", False, "high", "ambient")):
@@ -163,7 +163,7 @@ def model_server():
             messages = payload["messages"]
             system = messages[0]["content"]
             current = next((m["content"] for m in reversed(messages) if m["role"] == "user"), "")
-            has_entity = "copper lantern" in (system + current).lower()
+            has_entity = "copper lantern" in " ".join(m.get("content", "") for m in messages).lower()
             message = {"role": "assistant", "content": "Which item do you mean?"}
             if "You are the intent judge" in system:
                 message["content"] = json.dumps(dict(directed=True, stop=False,
@@ -207,7 +207,7 @@ def test_separate_context_reaches_every_required_stage(case, model_server):
     phases = {request["phase"] for request in outcome.requests}
     assert {"router", "planner", "reply"} <= phases
     assert all(request["context_attached"] for request in outcome.requests)
-    assert all(case.transcript[0][0] in payload["messages"][0]["content"] for payload in handler.payloads)
+    assert all(any(case.transcript[0][0] in message.get("content", "") for message in payload["messages"]) for payload in handler.payloads)
 
 
 def test_rewrite_and_raw_control_use_the_real_pipeline(case, model_server):

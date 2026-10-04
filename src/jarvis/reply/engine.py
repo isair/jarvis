@@ -6,6 +6,7 @@ Handles memory enrichment, tool planning and execution.
 
 from __future__ import annotations
 from typing import Optional, TYPE_CHECKING
+import hashlib
 
 from ..utils.redact import redact
 from ..system_prompt import build_system_prompt
@@ -71,6 +72,7 @@ from ..utils.time_context import format_time_context
 
 if TYPE_CHECKING:
     from ..memory.db import Database
+    from ..listening.speech_context import SpeechContext
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -543,6 +545,7 @@ def _maybe_digest_tool_result(
     query: str,
     tool_name: str,
     raw_tool_result: str,
+    transcript_context: str = "",
 ) -> str:
     """Return the effective tool-role message content, digested if applicable.
 
@@ -581,6 +584,7 @@ def _maybe_digest_tool_result(
     try:
         digested = digest_tool_result_for_query(
             query=query,
+            transcript_context=transcript_context,
             tool_name=tool_name,
             tool_result=raw_tool_result,
             cfg=cfg,
@@ -780,7 +784,8 @@ def _build_enrichment_context_hint(cfg, recent_messages: list) -> Optional[str]:
 def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     text: str, dialogue_memory: "DialogueMemory",
                     language: Optional[str] = None,
-                    quiet: bool = False) -> Optional[str]:
+                    quiet: bool = False,
+                    speech_context: Optional["SpeechContext"] = None) -> Optional[str]:
     """
     Main entry point for reply generation.
 
@@ -795,6 +800,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             web_search can pick locale-appropriate resources (e.g. the
             right Wikipedia host). None when invoked outside the voice
             path — tools then fall back to their own default.
+        speech_context: Immutable voice transcript reference, scoped to this reply.
         quiet: When True, the reply is not printed to stdout. The text-chat
             path sets this so chat replies never land in the daemon's
             stdout, which subprocess mode forwards to the desktop app's
@@ -806,6 +812,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     """
     # Step 1: Redact sensitive information
     redacted = redact(text)
+    transcript_context = speech_context.render() if speech_context else ""
+    context_signature = hashlib.sha256(transcript_context.encode()).hexdigest() if transcript_context else ""
 
     # Step 2: Check for recent dialogue context
     recent_messages = []
@@ -905,14 +913,16 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     # Hot-window cache: router output for the same redacted query and
     # tool catalogue is reused within one conversation. Catalogue
     # signature includes builtin + MCP tool names so a mid-window MCP
-    # refresh invalidates the cache. context_hint is intentionally not
+    # refresh invalidates the cache. The speech snapshot is part of the
+    # key because the same utterance can refer to a different entity.
+    # context_hint is intentionally not
     # part of the key — time/location drift inside one hot window
     # rarely changes the tool pick.
     _router_cache_key = (
         f"router:{redacted}|"
         f"{strategy.value}|"
         f"{','.join(sorted(BUILTIN_TOOLS.keys()))}|"
-        f"{','.join(sorted((mcp_tools or {}).keys()))}"
+        f"{','.join(sorted((mcp_tools or {}).keys()))}|{context_signature}"
     )
     _cached_routed = (
         dialogue_memory.hot_cache_get(_router_cache_key)
@@ -934,6 +944,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             embed_model=cfg.embedding_model,
             embed_timeout_sec=float(getattr(cfg, "llm_embedding_timeout_sec", 10.0)),
             context_hint=context_hint,
+            transcript_context=transcript_context,
         )
         # Don't cache the router's "fall open to all tools" fallback. That
         # path fires when the LLM router times out, returns empty, or emits
@@ -1042,6 +1053,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 cfg=cfg,
                 query=redacted,
                 dialogue_context=_dialogue_ctx,
+                transcript_context=transcript_context,
                 tools=_planner_tool_catalog,
             )
         except Exception as _plan_exc:  # pragma: no cover — defensive
@@ -1187,7 +1199,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             # the (query, topic-hint) pair, so identical follow-ups within
             # one conversation reuse the keywords/questions/from/to dict
             # and skip the LLM call entirely.
-            _extractor_cache_key = f"enrichment:{_extractor_query}"
+            _extractor_cache_key = f"enrichment:{_extractor_query}|{context_signature}"
             _cached_params = (
                 dialogue_memory.hot_cache_get(_extractor_cache_key)
                 if dialogue_memory and hasattr(dialogue_memory, "hot_cache_get") else None
@@ -1200,7 +1212,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     _extractor_query, cfg, resolve_model(cfg, Tier.FAST),
                     timeout_sec=float(getattr(cfg, 'llm_tools_timeout_sec', 8.0)),
                     thinking=getattr(cfg, 'llm_thinking_enabled', False),
-                    context_hint=context_hint,
+                    context_hint="\n\n".join(filter(None, (context_hint, transcript_context))),
                 )
                 if dialogue_memory and hasattr(dialogue_memory, "hot_cache_put"):
                     dialogue_memory.hot_cache_put(_extractor_cache_key, search_params)
@@ -1336,6 +1348,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             digest = digest_memory_for_query(
                 query=redacted,
                 diary_entries=raw_diary_entries,
+                transcript_context=transcript_context,
                 graph_parts=raw_graph_parts,
                 cfg=cfg,
                 chat_model=cfg.llm_chat_model,
@@ -1468,6 +1481,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
     def _build_initial_system_message() -> str:
         guidance = [_persona_prompt.strip()]
+        if transcript_context:
+            guidance.append(transcript_context)
 
         # Add model-size-appropriate prompt components
         guidance.extend(prompts.to_list())
@@ -1858,6 +1873,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                         next_step_text=_plan_tool_steps[_tool_results_so_far],
                         prior_results=_prior,
                         tools_schema=tools_json_schema or [],
+                        transcript_context=transcript_context,
                     )
                     if _resolved is not None:
                         _name, _args = _resolved
@@ -1930,6 +1946,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                                 redacted_text=redacted,
                                 max_retries=1,
                                 language=language,
+                                transcript_context=transcript_context,
                             )
                             if _plan_result.reply_text:
                                 _plan_text = _maybe_digest_tool_result(
@@ -1937,6 +1954,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                                     query=redacted,
                                     tool_name=_name,
                                     raw_tool_result=_plan_result.reply_text,
+                                    transcript_context=transcript_context,
                                 )
                             else:
                                 _plan_err = (
@@ -2218,6 +2236,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 redacted_text=redacted,
                 max_retries=1,
                 language=language,
+                transcript_context=transcript_context,
             )
 
             # Handle stop tool - end conversation without response
@@ -2341,6 +2360,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     query=redacted,
                     tool_name=tool_name,
                     raw_tool_result=result.reply_text,
+                    transcript_context=transcript_context,
                 )
 
                 if use_text_tools:
@@ -2473,6 +2493,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             digested = digest_loop_for_max_turns(
                 user_query=redacted,
                 loop_messages=messages[user_msg_index + 1:],
+                transcript_context=transcript_context,
                 cfg=cfg,
             )
         except Exception as e:

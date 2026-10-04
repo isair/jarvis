@@ -72,10 +72,10 @@ def _create_listener(**kwargs):
     return listener, mock_tts
 
 
-def _make_judgment(directed=True, query="", stop=False, confidence="high", reasoning="test"):
+def _make_judgment(directed=True, stop=False, confidence="high", reasoning="test"):
     """Build an IntentJudgment."""
     return IntentJudgment(
-        directed=directed, query=query, stop=stop,
+        directed=directed, stop=stop,
         confidence=confidence, reasoning=reasoning,
     )
 
@@ -140,7 +140,7 @@ class TestUserSpeaksDuringHotWindow:
         _simulate_tts_finish(listener)
         _wait_for_hot_window_active(listener)
 
-        _install_intent_judge(listener, _make_judgment(directed=True, query="thanks"))
+        _install_intent_judge(listener, _make_judgment(directed=True))
 
         _process_transcript(listener, "thanks", utterance_energy=0.01)
 
@@ -163,7 +163,7 @@ class TestUserSpeaksDuringHotWindow:
         _wait_for_hot_window_active(listener)
 
         _install_intent_judge(listener, _make_judgment(
-            directed=False, query="", confidence="high",
+            directed=False,  confidence="high",
             reasoning="background conversation"))
 
         _process_transcript(listener, "did you see the game last night", utterance_energy=0.01)
@@ -173,14 +173,8 @@ class TestUserSpeaksDuringHotWindow:
         listener.state_manager.stop()
 
     @patch("builtins.print")
-    def test_judge_query_is_used_in_hot_window(self, _print):
-        """In hot window, the intent judge's extracted query is authoritative.
-
-        The judge is the canonical echo-stripper and noise-pruner; its output
-        always wins over the raw transcript. This prevents partial-salvage
-        leakage where echo fragments ride through on the raw text. If the
-        judge returns an empty query, the listener falls back to raw text.
-        """
+    def test_original_speech_is_used_in_hot_window(self, _print):
+        """A directed hot-window utterance keeps fillers and original wording."""
         listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=3.0)
 
         listener.echo_detector.track_tts_start("Do you want to know more?")
@@ -188,24 +182,24 @@ class TestUserSpeaksDuringHotWindow:
         _wait_for_hot_window_active(listener)
 
         _install_intent_judge(listener, _make_judgment(
-            directed=True, query="what is the weather tomorrow"))
+            directed=True))
 
         _process_transcript(listener,
             "uh okay what is the weather tomorrow", utterance_energy=0.01)
 
-        assert _accepted_query(listener) == "what is the weather tomorrow"
+        assert _accepted_query(listener) == "uh okay what is the weather tomorrow"
         listener.state_manager.stop()
 
     @patch("builtins.print")
-    def test_empty_judge_query_falls_back_to_raw_text(self, _print):
-        """If the judge is directed but returns no query, fall back to raw text."""
+    def test_directed_decision_accepts_raw_text(self, _print):
+        """Directedness is sufficient to accept the original speech."""
         listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=3.0)
 
         listener.echo_detector.track_tts_start("Do you want to know more?")
         _simulate_tts_finish(listener)
         _wait_for_hot_window_active(listener)
 
-        _install_intent_judge(listener, _make_judgment(directed=True, query=""))
+        _install_intent_judge(listener, _make_judgment(directed=True))
 
         _process_transcript(listener, "tell me a joke please", utterance_energy=0.01)
 
@@ -247,7 +241,7 @@ class TestTranscriptArrivesAfterHotWindowExpiry:
         assert not listener.state_manager.is_hot_window_active()
 
         # Transcript arrives after expiry — but speech_start was during window
-        _install_intent_judge(listener, _make_judgment(directed=True, query="tell me more"))
+        _install_intent_judge(listener, _make_judgment(directed=True))
         _process_transcript(listener,
             "tell me more", utterance_energy=0.01,
             utterance_start_time=speech_start, utterance_end_time=time.time())
@@ -271,7 +265,7 @@ class TestTranscriptArrivesAfterHotWindowExpiry:
         # Speech starts AFTER expiry
         speech_start = time.time()
 
-        _install_intent_judge(listener, _make_judgment(directed=True, query="tell me more"))
+        _install_intent_judge(listener, _make_judgment(directed=True))
         _process_transcript(listener,
             "tell me more", utterance_energy=0.01,
             utterance_start_time=speech_start, utterance_end_time=time.time())
@@ -290,7 +284,7 @@ class TestTranscriptArrivesAfterHotWindowExpiry:
 
         speech_start = time.time()
 
-        _install_intent_judge(listener, _make_judgment(directed=True, query="tell me more"))
+        _install_intent_judge(listener, _make_judgment(directed=True))
         _process_transcript(listener,
             "tell me more", utterance_energy=0.01,
             utterance_start_time=speech_start, utterance_end_time=time.time())
@@ -312,7 +306,7 @@ class TestTranscriptArrivesAfterHotWindowExpiry:
         # Speech starts now during pending period
         speech_start = time.time()
 
-        _install_intent_judge(listener, _make_judgment(directed=True, query="yes please"))
+        _install_intent_judge(listener, _make_judgment(directed=True))
         _process_transcript(listener,
             "yes please", utterance_energy=0.01,
             utterance_start_time=speech_start, utterance_end_time=time.time())
@@ -341,7 +335,7 @@ class TestTranscriptArrivesAfterHotWindowExpiry:
         speech_start = time.time() + 0.5  # even 500ms later should be rejected
 
         _install_intent_judge(listener, _make_judgment(
-            directed=True, query="something funny"))
+            directed=True))
         _process_transcript(listener,
             "something funny", utterance_energy=0.01,
             utterance_start_time=speech_start, utterance_end_time=speech_start + 1.0)
@@ -371,7 +365,7 @@ class TestEchoAndUserSpeechInSameChunk:
         now = time.time()
         # Intent judge sees the mixed text and marks it directed
         _install_intent_judge(listener, _make_judgment(
-            directed=True, query="thanks can you also check email"))
+            directed=True))
 
         # Mixed chunk: echo + user speech
         _process_transcript(listener,
@@ -413,10 +407,10 @@ class TestEchoAndUserSpeechInSameChunk:
         listener.state_manager.expire_hot_window()
         assert not listener.state_manager.is_hot_window_active()
 
-        # Intent judge correctly extracts user speech from mixed transcript
+        # Intent judge identifies user engagement from mixed transcript
         _install_intent_judge(listener, _make_judgment(
             directed=True,
-            query="tell me something random"))
+            ))
 
         # Mixed chunk: full TTS echo + user speech appended
         # utterance_start_time is BEFORE span_start (VAD triggered during TTS)
@@ -441,14 +435,8 @@ class TestEchoAndUserSpeechInSameChunk:
         listener.state_manager.stop()
 
     @patch("builtins.print")
-    def test_mixed_echo_speech_unsalvaged_uses_judge_extraction(self, _print):
-        """When salvage fails to strip echo, the post-judge echo check should
-        use the intent judge's extraction instead of rejecting everything.
-
-        If the heard text is much longer than TTS (mixed content), the echo
-        check should recognise it's not pure echo and fall through to use the
-        judge's extracted query.
-        """
+    def test_mixed_echo_speech_accepts_original_text(self, _print):
+        """Mixed content accepted by the judge preserves its recognised text."""
         listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=3.0)
 
         tts_text = "The current temperature is around nine degrees celsius."
@@ -456,10 +444,10 @@ class TestEchoAndUserSpeechInSameChunk:
         _simulate_tts_finish(listener)
         _wait_for_hot_window_active(listener)
 
-        # Intent judge correctly extracts user speech
+        # Intent judge identifies user engagement
         _install_intent_judge(listener, _make_judgment(
             directed=True,
-            query="what will it be tomorrow"))
+            ))
 
         # Mixed text where salvage won't work (Whisper transcribed echo differently
         # from TTS text, so exact word matching fails). User speech is substantially
@@ -508,7 +496,7 @@ class TestEchoAndUserSpeechInSameChunk:
         # Intent judge incorrectly classifies as echo (sees TTS text in transcript)
         _install_intent_judge(listener, _make_judgment(
             directed=False,
-            query="",
+
             confidence="high",
             reasoning="echo of TTS output"))
 
@@ -590,7 +578,7 @@ class TestEchoAndUserSpeechInSameChunk:
         utterance_start = tts_finish - 0.5
         utterance_end = tts_finish + 1.0
 
-        _install_intent_judge(listener, _make_judgment(directed=True, query="tell me more"))
+        _install_intent_judge(listener, _make_judgment(directed=True))
 
         _process_transcript(listener,
             "tell me more",
@@ -620,7 +608,7 @@ class TestEchoAndUserSpeechInSameChunk:
         _wait_for_hot_window_active(listener)
 
         _install_intent_judge(listener, _make_judgment(
-            directed=True, query="yeah go ahead and do that"))
+            directed=True))
 
         # Mixed chunk: exact tail of TTS echo + user's follow-up
         _process_transcript(listener,
@@ -647,7 +635,7 @@ class TestEchoAndUserSpeechInSameChunk:
 
         follow_up_words = ["thanks", "tell", "me", "more", "please"][:min_words]
         follow_up = " ".join(follow_up_words)
-        _install_intent_judge(listener, _make_judgment(directed=True, query=follow_up))
+        _install_intent_judge(listener, _make_judgment(directed=True))
 
         _process_transcript(listener,
             f"{tts_text} {follow_up}",
@@ -672,7 +660,7 @@ class TestEchoAndUserSpeechInSameChunk:
 
         short_tail = " ".join(["really", "nice"][: max(min_words - 1, 1)])
         judge = _install_intent_judge(listener, _make_judgment(
-            directed=True, query=short_tail, reasoning="should not be consulted"))
+            directed=True,  reasoning="should not be consulted"))
 
         _process_transcript(listener,
             f"{tts_text} {short_tail}",
@@ -696,7 +684,7 @@ class TestEchoAndUserSpeechInSameChunk:
         _wait_for_hot_window_active(listener)
 
         judge = _install_intent_judge(listener, _make_judgment(
-            directed=False, query="", reasoning="should not be consulted"))
+            directed=False,  reasoning="should not be consulted"))
 
         # Shares enough words with TTS to clear partial_ratio >= 70 (marks it
         # echo) but the tokens are in a different order so cleanup_leading_echo
@@ -736,7 +724,7 @@ class TestHotWindowOnlyFromStateManager:
         listener.echo_detector.track_tts_finish()
 
         # Judge says directed, but no wake word and no hot window
-        _install_intent_judge(listener, _make_judgment(directed=True, query="thanks"))
+        _install_intent_judge(listener, _make_judgment(directed=True))
 
         _process_transcript(listener, "thanks", utterance_energy=0.01)
 
@@ -757,7 +745,7 @@ class TestHotWindowOnlyFromStateManager:
         tts_finish = listener.echo_detector._last_tts_finish_time
 
         # Judge says directed, but no wake word in text — should be rejected
-        _install_intent_judge(listener, _make_judgment(directed=True, query="hello there"))
+        _install_intent_judge(listener, _make_judgment(directed=True))
 
         _process_transcript(listener,
             "hello there",
@@ -778,7 +766,7 @@ class TestHotWindowOnlyFromStateManager:
         _simulate_tts_finish(listener)
         _wait_for_hot_window_active(listener)
 
-        _install_intent_judge(listener, _make_judgment(directed=True, query="and also"))
+        _install_intent_judge(listener, _make_judgment(directed=True))
 
         _process_transcript(listener,
             "and also",
@@ -799,7 +787,7 @@ class TestHotWindowOnlyFromStateManager:
         # TTS finished but no hot window scheduled
         listener.echo_detector.track_tts_finish()
 
-        _install_intent_judge(listener, _make_judgment(directed=True, query="random remark"))
+        _install_intent_judge(listener, _make_judgment(directed=True))
 
         _process_transcript(listener,
             "random remark",
@@ -841,7 +829,7 @@ class TestEchoRejectionDoesNotExtendFollowUpWindow:
         assert listener.state_manager.is_hot_window_active()
 
         # User speaks within the original window
-        _install_intent_judge(listener, _make_judgment(directed=True, query="thanks"))
+        _install_intent_judge(listener, _make_judgment(directed=True))
         _process_transcript(listener, "thanks", utterance_energy=0.01)
 
         assert _accepted_query(listener) == "thanks"
@@ -865,7 +853,7 @@ class TestEchoRejectionDoesNotExtendFollowUpWindow:
         assert not listener.state_manager.is_hot_window_active()
 
         # Speech without wake word should be rejected
-        _install_intent_judge(listener, _make_judgment(directed=True, query="one more thing"))
+        _install_intent_judge(listener, _make_judgment(directed=True))
         _process_transcript(listener, "one more thing", utterance_energy=0.01)
 
         assert _accepted_query(listener) == ""
@@ -945,7 +933,7 @@ class TestEarlyBeepFeedback:
         _simulate_tts_finish(listener)
         _wait_for_hot_window_active(listener)
 
-        _install_intent_judge(listener, _make_judgment(directed=True, query="tell me more"))
+        _install_intent_judge(listener, _make_judgment(directed=True))
         _process_transcript(listener, "tell me more", utterance_energy=0.01)
 
         assert _accepted_query(listener) == "tell me more"
@@ -979,14 +967,14 @@ class TestEarlyBeepFeedback:
         # Install judge that rejects — speech has wake word so early beep fires,
         # but the safety net catches it and falls through to wake word detection.
         _install_intent_judge(listener, _make_judgment(
-            directed=False, query="", confidence="high",
+            directed=False,  confidence="high",
             reasoning="narrative mention"))
 
         _process_transcript(listener, "jarvis is a cool name", utterance_energy=0.01)
 
         # Query should be accepted (safety net catches wake-worded utterances
         # the judge incorrectly rejects)
-        assert _accepted_query(listener) == "is a cool name"
+        assert _accepted_query(listener) == "jarvis is a cool name"
         # Beep should continue — wake word was present
         assert _is_beeping(listener)
         listener.state_manager.stop()
@@ -1025,7 +1013,7 @@ class TestEchoRejectionInHotWindow:
         _wait_for_hot_window_active(listener)
 
         judge = _install_intent_judge(listener, _make_judgment(
-            directed=False, query="", confidence="high",
+            directed=False,  confidence="high",
             reasoning="echo of assistant speech"))
 
         _process_transcript(listener,
@@ -1054,7 +1042,7 @@ class TestEchoRejectionInHotWindow:
         _wait_for_hot_window_active(listener)
 
         judge = _install_intent_judge(listener, _make_judgment(
-            directed=True, query="and kg chai like georgian bread",
+            directed=True,
             confidence="high", reasoning="user follow-up"))
 
         _process_transcript(listener,
@@ -1083,7 +1071,7 @@ class TestEchoRejectionInHotWindow:
 
         # Judge rejects unrelated speech
         _install_intent_judge(listener, _make_judgment(
-            directed=False, query="", confidence="high",
+            directed=False,  confidence="high",
             reasoning="background conversation"))
 
         _process_transcript(listener,
@@ -1113,7 +1101,7 @@ class TestHotWindowBoundary:
         _simulate_tts_finish(listener)
         _wait_for_hot_window_active(listener)
 
-        _install_intent_judge(listener, _make_judgment(directed=True, query="thanks"))
+        _install_intent_judge(listener, _make_judgment(directed=True))
         _process_transcript(listener, "thanks", utterance_energy=0.01)
 
         assert _accepted_query(listener) == "thanks"
@@ -1133,7 +1121,7 @@ class TestHotWindowBoundary:
         assert not listener.state_manager.is_hot_window_active()
 
         # Speech without wake word — should be rejected
-        _install_intent_judge(listener, _make_judgment(directed=True, query="tell me more"))
+        _install_intent_judge(listener, _make_judgment(directed=True))
         _process_transcript(listener, "tell me more", utterance_energy=0.01)
 
         assert _accepted_query(listener) == ""
@@ -1154,7 +1142,7 @@ class TestHotWindowBoundary:
 
         # Speech with wake word — accepted via wake word detection fallback
         _install_intent_judge(listener, _make_judgment(
-            directed=True, query="what time is it"))
+            directed=True))
         _process_transcript(listener, "jarvis what time is it", utterance_energy=0.01)
 
         assert _accepted_query(listener) != ""
@@ -1187,7 +1175,7 @@ class TestEchoCaughtBeforeBeepAndIntentJudge:
 
         # Install intent judge that should NOT be called for echo
         judge = _install_intent_judge(listener, _make_judgment(
-            directed=True, query="tbilisi is a must-see"))
+            directed=True))
 
         _process_transcript(listener,
             "Tbilisi is a must-see especially the colourful old town",
@@ -1210,7 +1198,7 @@ class TestEchoCaughtBeforeBeepAndIntentJudge:
         _wait_for_hot_window_active(listener)
 
         judge = _install_intent_judge(listener, _make_judgment(
-            directed=True, query="explore the mountainous regions"))
+            directed=True))
 
         _process_transcript(listener,
             "For breathtaking scenery you should explore the mountainous regions like Steneti",
@@ -1265,7 +1253,7 @@ class TestEchoCaughtBeforeBeepAndIntentJudge:
         _wait_for_hot_window_active(listener)
 
         _install_intent_judge(listener, _make_judgment(
-            directed=True, query="what about tomorrow"))
+            directed=True))
 
         _process_transcript(listener, "what about tomorrow", utterance_energy=0.01)
 
@@ -1306,7 +1294,7 @@ class TestEchoCaughtBeforeBeepAndIntentJudge:
 
         # Speech after expiry requires wake word
         _install_intent_judge(listener, _make_judgment(
-            directed=True, query="what the hell"))
+            directed=True))
         _process_transcript(listener, "what the hell", utterance_energy=0.01)
         assert _accepted_query(listener) == ""
         listener.state_manager.stop()
@@ -1329,7 +1317,7 @@ class TestSpeechIgnoredOutsideHotWindow:
 
         # Judge would accept if asked — but it shouldn't matter
         _install_intent_judge(listener, _make_judgment(
-            directed=True, query="what is the meaning of life"))
+            directed=True))
 
         _process_transcript(listener,
             "what is the meaning of life",
@@ -1347,7 +1335,7 @@ class TestSpeechIgnoredOutsideHotWindow:
         listener.cfg.tune_enabled = True
 
         judge = _install_intent_judge(listener, _make_judgment(
-            directed=True, query="pass the salt"))
+            directed=True))
 
         _process_transcript(listener,
             "hey can you pass the salt please",
@@ -1375,7 +1363,7 @@ class TestSpeechIgnoredOutsideHotWindow:
 
         # Install judge that would accept everything
         _install_intent_judge(listener, _make_judgment(
-            directed=True, query="first remark"))
+            directed=True))
 
         # First utterance — no wake word, no hot window
         _process_transcript(listener, "I think it might rain later", utterance_energy=0.01)
@@ -1383,13 +1371,13 @@ class TestSpeechIgnoredOutsideHotWindow:
 
         # Second utterance — still no wake word, still no hot window
         _install_intent_judge(listener, _make_judgment(
-            directed=True, query="second remark"))
+            directed=True))
         _process_transcript(listener, "yeah the forecast said so", utterance_energy=0.01)
         assert _accepted_query(listener) == ""
 
         # Third utterance with wake word — THIS should work
         _install_intent_judge(listener, _make_judgment(
-            directed=True, query="will it rain"))
+            directed=True))
         _process_transcript(listener, "jarvis will it rain today", utterance_energy=0.01)
         assert "rain" in _accepted_query(listener)
         listener.state_manager.stop()
@@ -1406,7 +1394,7 @@ class TestSpeechIgnoredOutsideHotWindow:
         # No hot window scheduled — simulates a stale session
 
         _install_intent_judge(listener, _make_judgment(
-            directed=True, query="hey what time is it"))
+            directed=True))
 
         # Speech with timestamps well after any TTS
         now = time.time()
@@ -1449,7 +1437,7 @@ class TestStaleWakeTimestampAcrossUtterances:
         # First utterance: has "jarvis", judge rejects as not directed.
         # The safety net catches this and accepts the query via wake word detection.
         _install_intent_judge(listener, _make_judgment(
-            directed=False, query="", confidence="high",
+            directed=False,  confidence="high",
             reasoning="statement to self, not directed"))
 
         now = time.time()
@@ -1469,7 +1457,7 @@ class TestStaleWakeTimestampAcrossUtterances:
         # Second utterance: no wake word, judge hallucinates directed=true
         # (e.g. because the earlier "jarvis" is still in its context buffer)
         _install_intent_judge(listener, _make_judgment(
-            directed=True, query="tv off", confidence="high",
+            directed=True,  confidence="high",
             reasoning="synthesised from buffer"))
 
         _process_transcript(listener,
@@ -1505,7 +1493,7 @@ class TestIntentJudgeGating:
         listener, _ = _create_listener()
 
         mock_judge = _install_intent_judge(
-            listener, _make_judgment(directed=False, query=""))
+            listener, _make_judgment(directed=False))
 
         # No hot window, no TTS, no wake word in the text
         _process_transcript(listener,
@@ -1525,7 +1513,7 @@ class TestIntentJudgeGating:
 
         mock_judge = _install_intent_judge(
             listener, _make_judgment(
-                directed=True, query="what time is it"))
+                directed=True))
 
         _process_transcript(listener,
             "jarvis what time is it", utterance_energy=0.01,
@@ -1544,7 +1532,7 @@ class TestIntentJudgeGating:
         _wait_for_hot_window_active(listener)
 
         mock_judge = _install_intent_judge(
-            listener, _make_judgment(directed=True, query="thanks"))
+            listener, _make_judgment(directed=True))
 
         _process_transcript(listener, "thanks", utterance_energy=0.01)
 
@@ -1563,7 +1551,7 @@ class TestIntentJudgeGating:
         listener, mock_tts = _create_listener(tts_speaking=True)
 
         mock_judge = _install_intent_judge(
-            listener, _make_judgment(directed=False, query=""))
+            listener, _make_judgment(directed=False))
 
         _process_transcript(listener,
             "uh huh yeah", utterance_energy=0.01,
@@ -1587,7 +1575,7 @@ class TestIntentJudgeGating:
 
         mock_judge = _install_intent_judge(
             listener, _make_judgment(
-                directed=True, query="what about tomorrow's weather"))
+                directed=True))
 
         # >3 words, no stop-command keywords, not echo
         _process_transcript(listener,

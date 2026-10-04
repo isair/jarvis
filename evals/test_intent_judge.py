@@ -2,13 +2,13 @@
 Evals for the Intent Judge LLM.
 
 Single-utterance and transcript-context cases cover engagement, echo,
-interruption and query extraction through the selected evaluation backend.
+interruption and directedness classification through the selected evaluation backend.
 """
 
 import pytest
 from unittest.mock import patch, MagicMock
 from dataclasses import dataclass
-from typing import Optional, List, Union
+from typing import Optional, List
 
 from evals.helpers import is_judge_llm_available, voice_config
 
@@ -26,8 +26,6 @@ class IntentJudgeTestCase:
     in_hot_window: bool
     wake_timestamp: Optional[float]
     expected_directed: bool
-    expected_query_contains: Optional[Union[str, List[str]]]
-    expected_query_not_contains: Optional[Union[str, List[str]]] = None
     expected_stop: bool = False
 
 
@@ -41,8 +39,6 @@ INTENT_JUDGE_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1000.5,
         expected_directed=True,
-        expected_query_contains="time",
-        expected_query_not_contains="jarvis",
     ),
     # Wake word at sentence end, adjacent to a named entity. Regression guard:
     # the judge previously left "Jarvis" in the query, causing the reply engine
@@ -54,8 +50,6 @@ INTENT_JUDGE_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1001.5,
         expected_directed=True,
-        expected_query_contains="possessor",
-        expected_query_not_contains="jarvis",
     ),
     # Wake word mid-sentence (not at start, not at end). Ensures the judge
     # removes every occurrence, not just the leading one.
@@ -66,8 +60,6 @@ INTENT_JUDGE_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1000.3,
         expected_directed=True,
-        expected_query_contains="weather",
-        expected_query_not_contains="jarvis",
     ),
     # Wake word + command/imperative addressed to the assistant (not a question)
     IntentJudgeTestCase(
@@ -77,8 +69,6 @@ INTENT_JUDGE_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1000.5,
         expected_directed=True,
-        expected_query_contains="timer",
-        expected_query_not_contains="jarvis",
     ),
     # Wake word + statement/command to remember something
     IntentJudgeTestCase(
@@ -88,7 +78,6 @@ INTENT_JUDGE_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1000.5,
         expected_directed=True,
-        expected_query_contains="mum",
     ),
     # Wake word + casual share-of-information statement (no explicit command
     # or question). Regression guard: the judge previously rejected these as
@@ -102,8 +91,6 @@ INTENT_JUDGE_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1000.5,
         expected_directed=True,
-        expected_query_contains="burger",
-        expected_query_not_contains="jarvis",
     ),
     IntentJudgeTestCase(
         name="wake_word_share_statement_feeling",
@@ -112,8 +99,6 @@ INTENT_JUDGE_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1000.5,
         expected_directed=True,
-        expected_query_contains="tired",
-        expected_query_not_contains="jarvis",
     ),
     # Wake word at the END of a declarative statement. Position of the wake
     # word must not affect directedness — this pattern must also be directed.
@@ -124,8 +109,6 @@ INTENT_JUDGE_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1001.5,
         expected_directed=True,
-        expected_query_contains="flight",
-        expected_query_not_contains="jarvis",
     ),
     # Wake word at the END of a declarative statement that contains a
     # capitalised brand/product name immediately before "Jarvis". Regression:
@@ -139,8 +122,6 @@ INTENT_JUDGE_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1001.5,
         expected_directed=True,
-        expected_query_contains="big Mac",
-        expected_query_not_contains="jarvis",
     ),
     # Self-contained imperative with an intentionally open subject ("something",
     # "anything", "a joke") — these are valid queries and must not be treated
@@ -155,8 +136,6 @@ INTENT_JUDGE_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1000.5,
         expected_directed=True,
-        expected_query_contains="say something",
-        expected_query_not_contains="jarvis",
     ),
     IntentJudgeTestCase(
         name="wake_word_open_imperative_tell_me_a_joke",
@@ -165,8 +144,6 @@ INTENT_JUDGE_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1000.5,
         expected_directed=True,
-        expected_query_contains="joke",
-        expected_query_not_contains="jarvis",
     ),
     IntentJudgeTestCase(
         name="wake_word_open_imperative_tell_me_anything",
@@ -175,8 +152,6 @@ INTENT_JUDGE_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1000.5,
         expected_directed=True,
-        expected_query_contains="anything",
-        expected_query_not_contains="jarvis",
     ),
     IntentJudgeTestCase(
         name="wake_word_open_imperative_give_me_advice",
@@ -185,8 +160,6 @@ INTENT_JUDGE_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1000.5,
         expected_directed=True,
-        expected_query_contains="advice",
-        expected_query_not_contains="jarvis",
     ),
     IntentJudgeTestCase(
         name="wake_word_open_imperative_surprise_me",
@@ -195,8 +168,6 @@ INTENT_JUDGE_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1000.5,
         expected_directed=True,
-        expected_query_contains="surprise",
-        expected_query_not_contains="jarvis",
     ),
     # Same-segment context synthesis (distinct from simple wake+Q)
     IntentJudgeTestCase(
@@ -206,7 +177,6 @@ INTENT_JUDGE_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1000.8,
         expected_directed=True,
-        expected_query_contains="weather",
     ),
     # Echo + user follow-up in hot window
     IntentJudgeTestCase(
@@ -216,7 +186,6 @@ INTENT_JUDGE_TEST_CASES = [
         in_hot_window=True,
         wake_timestamp=None,
         expected_directed=True,
-        expected_query_contains="more",
     ),
     # Stop command during TTS
     IntentJudgeTestCase(
@@ -226,7 +195,6 @@ INTENT_JUDGE_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=None,
         expected_directed=True,
-        expected_query_contains=None,
         expected_stop=True,
     ),
     # No wake word, not hot window -> not directed
@@ -237,7 +205,6 @@ INTENT_JUDGE_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=None,
         expected_directed=False,
-        expected_query_contains=None,
     ),
     # Wake word only mentioned in narrative -> not directed
     IntentJudgeTestCase(
@@ -247,7 +214,6 @@ INTENT_JUDGE_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1000.8,
         expected_directed=False,
-        expected_query_contains=None,
     ),
     # Hot window simple follow-up
     IntentJudgeTestCase(
@@ -257,7 +223,6 @@ INTENT_JUDGE_TEST_CASES = [
         in_hot_window=True,
         wake_timestamp=None,
         expected_directed=True,
-        expected_query_contains="next week",
     ),
 ]
 
@@ -271,8 +236,6 @@ class MultiSegmentTestCase:
     in_hot_window: bool
     wake_timestamp: Optional[float]
     expected_directed: bool
-    expected_query_contains: Optional[Union[str, List[str]]]
-    expected_query_not_contains: Optional[Union[str, List[str]]] = None
     expected_stop: bool = False
     aliases: Optional[List[str]] = None
 
@@ -290,8 +253,6 @@ MULTI_SEGMENT_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1004.5,
         expected_directed=True,
-        expected_query_contains="movies",
-        expected_query_not_contains="weather",
     ),
     # Hot window with echo in buffer + user follow-up
     MultiSegmentTestCase(
@@ -304,8 +265,6 @@ MULTI_SEGMENT_TEST_CASES = [
         in_hot_window=True,
         wake_timestamp=None,
         expected_directed=True,
-        expected_query_contains="weekend",
-        expected_query_not_contains="sunny",
     ),
     # Stop command with TTS echoes in buffer
     MultiSegmentTestCase(
@@ -319,7 +278,6 @@ MULTI_SEGMENT_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1002.0,
         expected_directed=True,
-        expected_query_contains=None,
         expected_stop=True,
     ),
     # No wake word in multi-segment buffer
@@ -332,7 +290,6 @@ MULTI_SEGMENT_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=None,
         expected_directed=False,
-        expected_query_contains=None,
     ),
     # Context synthesis with prior ambient speech that must be filtered
     MultiSegmentTestCase(
@@ -346,8 +303,6 @@ MULTI_SEGMENT_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1004.0,
         expected_directed=True,
-        expected_query_contains="dish",
-        expected_query_not_contains="game",
     ),
     # Multi-person conversation: context synthesis across speakers without explicit pronoun
     MultiSegmentTestCase(
@@ -361,7 +316,6 @@ MULTI_SEGMENT_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1004.0,
         expected_directed=True,
-        expected_query_contains="weather",
     ),
     # Multi-person + vague reference ("that" = iPhone from earlier segment)
     MultiSegmentTestCase(
@@ -375,7 +329,6 @@ MULTI_SEGMENT_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1004.0,
         expected_directed=True,
-        expected_query_contains="iphone",
     ),
     # User statement follow-up in hot window (not an echo of TTS question)
     MultiSegmentTestCase(
@@ -390,8 +343,6 @@ MULTI_SEGMENT_TEST_CASES = [
         in_hot_window=True,
         wake_timestamp=None,
         expected_directed=True,
-        expected_query_contains="absurdism",
-        expected_query_not_contains="what are your thoughts",
     ),
     # Cross-segment vague reference ("that" -> dinosaurs)
     MultiSegmentTestCase(
@@ -404,7 +355,6 @@ MULTI_SEGMENT_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1002.5,
         expected_directed=True,
-        expected_query_contains="dinosaur",
     ),
     # Imperative resolution: "answer that" -> re-issue prior question
     MultiSegmentTestCase(
@@ -417,8 +367,6 @@ MULTI_SEGMENT_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1002.5,
         expected_directed=True,
-        expected_query_contains="weather",
-        expected_query_not_contains="answer that",
     ),
     # Imperative resolution with unrelated noise between Q and imperative
     MultiSegmentTestCase(
@@ -432,8 +380,6 @@ MULTI_SEGMENT_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1004.5,
         expected_directed=True,
-        expected_query_contains="everest",
-        expected_query_not_contains="answer that",
     ),
     # Whisper tense variant of imperative ("answered that")
     MultiSegmentTestCase(
@@ -446,8 +392,6 @@ MULTI_SEGMENT_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1002.5,
         expected_directed=True,
-        expected_query_contains="weather",
-        expected_query_not_contains="answered that",
     ),
     # Multi-word imperative variant
     MultiSegmentTestCase(
@@ -460,8 +404,6 @@ MULTI_SEGMENT_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1002.5,
         expected_directed=True,
-        expected_query_contains="portugal",
-        expected_query_not_contains="go ahead and answer",
     ),
     # Imperative superseded by new explicit question in same segment
     MultiSegmentTestCase(
@@ -474,8 +416,6 @@ MULTI_SEGMENT_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1002.5,
         expected_directed=True,
-        expected_query_contains="time",
-        expected_query_not_contains="weather",
     ),
     # Cross-segment follow-up in hot window (topic extension)
     MultiSegmentTestCase(
@@ -488,7 +428,6 @@ MULTI_SEGMENT_TEST_CASES = [
         in_hot_window=True,
         wake_timestamp=None,
         expected_directed=True,
-        expected_query_contains="germany",
     ),
     # Alias (Whisper mishearing) should be treated as the wake word. Without
     # alias normalisation the small model sees "Jervis" and decides the user
@@ -502,7 +441,6 @@ MULTI_SEGMENT_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1000.8,
         expected_directed=True,
-        expected_query_contains="time",
         aliases=["jervis", "jaivis", "jervis", "javis"],
     ),
     # Alias mid-utterance after narrative context — the model must still
@@ -518,7 +456,6 @@ MULTI_SEGMENT_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1004.0,
         expected_directed=True,
-        expected_query_contains="iphone",
         aliases=["jervis", "jaivis", "jervis", "javis"],
     ),
     # Buried target sentence amid interleaved unrelated chatter (multi-topic
@@ -539,8 +476,6 @@ MULTI_SEGMENT_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1008.5,
         expected_directed=True,
-        expected_query_contains="iphone",
-        expected_query_not_contains="yankees",
     ),
     # Same buried-target disambiguation, but the wake-word question has no
     # explicit pronoun ("what's the price" instead of "how much does it cost").
@@ -563,8 +498,6 @@ MULTI_SEGMENT_TEST_CASES = [
         # Parent-noun rule: resolving to a sub-item ("pro model") must also
         # include the parent noun/brand ("iPhone") — "pro model" alone is
         # not self-contained.
-        expected_query_contains=["iphone", "pro"],
-        expected_query_not_contains="ball game",
     ),
     # Vague reference "they" — the AirPods are the only plural antecedent
     # that can be cost-queried, so "how much do they cost" must resolve to
@@ -580,7 +513,6 @@ MULTI_SEGMENT_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1006.5,
         expected_directed=True,
-        expected_query_contains="airpods",
     ),
     # Hot-window override: a topic-less follow-up ("tell me more") in hot
     # window must stay directed=true even though a topic-rich earlier buffer
@@ -597,7 +529,6 @@ MULTI_SEGMENT_TEST_CASES = [
         in_hot_window=True,
         wake_timestamp=None,
         expected_directed=True,
-        expected_query_contains=None,
     ),
     # Wake word mid-utterance after narrative buffer, addressing the assistant.
     # Real-world case: user was discussing Mata Hari in the background, then
@@ -617,7 +548,6 @@ MULTI_SEGMENT_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1004.5,
         expected_directed=True,
-        expected_query_contains="mata hari",
     ),
 ]
 
@@ -631,13 +561,6 @@ KNOWN_FAILING_CASES: set = set()
 # Helper Functions
 # =============================================================================
 
-def _as_substring_list(value):
-    """Normalise an expected_query_contains / _not_contains value to a list."""
-    if value is None:
-        return []
-    if isinstance(value, str):
-        return [value]
-    return list(value)
 
 
 def create_transcript_segment(
@@ -757,7 +680,7 @@ class TestIntentJudgeAccuracy:
         print(f"TTS: {case.last_tts_text[:50]}..." if case.last_tts_text else "TTS: None")
         print(f"Mode: {'hot_window' if case.in_hot_window else 'wake_word'}")
         print(f"{'='*60}")
-        print(f"Result: directed={result.directed}, query='{result.query}', stop={result.stop}")
+        print(f"Result: directed={result.directed}, stop={result.stop}")
         print(f"Confidence: {result.confidence}")
         print(f"Reasoning: {result.reasoning}")
         print(f"{'='*60}")
@@ -770,17 +693,6 @@ class TestIntentJudgeAccuracy:
             f"Expected stop={case.expected_stop}, got {result.stop}. "
             f"Reasoning: {result.reasoning}"
         )
-        for needle in _as_substring_list(case.expected_query_contains):
-            assert needle.lower() in (result.query or "").lower(), (
-                f"Expected query to contain '{needle}', "
-                f"got '{result.query}'. Reasoning: {result.reasoning}"
-            )
-        if result.query:
-            for needle in _as_substring_list(case.expected_query_not_contains):
-                assert needle.lower() not in result.query.lower(), (
-                    f"Expected query to NOT contain '{needle}', "
-                    f"got '{result.query}'. Reasoning: {result.reasoning}"
-                )
 
 
 class TestIntentJudgePromptQuality:
@@ -871,7 +783,7 @@ class TestIntentJudgeMultiSegment:
         print(f"TTS: {case.last_tts_text[:50]}..." if case.last_tts_text else "TTS: None")
         print(f"Mode: {'hot_window' if case.in_hot_window else 'wake_word'}")
         print(f"{'='*60}")
-        print(f"Result: directed={result.directed}, query='{result.query}', stop={result.stop}")
+        print(f"Result: directed={result.directed}, stop={result.stop}")
         print(f"Confidence: {result.confidence}")
         print(f"Reasoning: {result.reasoning}")
         print(f"{'='*60}")
@@ -884,17 +796,6 @@ class TestIntentJudgeMultiSegment:
             f"Expected stop={case.expected_stop}, got {result.stop}. "
             f"Reasoning: {result.reasoning}"
         )
-        for needle in _as_substring_list(case.expected_query_contains):
-            assert needle.lower() in (result.query or "").lower(), (
-                f"Expected query to contain '{needle}', "
-                f"got '{result.query}'. Reasoning: {result.reasoning}"
-            )
-        if result.query:
-            for needle in _as_substring_list(case.expected_query_not_contains):
-                assert needle.lower() not in result.query.lower(), (
-                    f"Expected query to NOT contain '{needle}', "
-                    f"got '{result.query}'. Reasoning: {result.reasoning}"
-                )
 
 
 class TestProcessedSegmentFiltering:
@@ -936,11 +837,6 @@ class TestProcessedSegmentFiltering:
 
         assert result is not None
         assert result.directed is True
-        assert "random" in result.query.lower() or "topic" in result.query.lower(), (
-            f"Expected query about 'random topic', got '{result.query}'."
-        )
-        assert "weather" not in result.query.lower(), (
-            f"Query contains 'weather' from processed segment: '{result.query}'"
-        )
+        assert not hasattr(result, "query")
 
-        print(f"\n✅ Correctly extracted new query: '{result.query}'")
+        print("✅ Current speech classified without synthesising a query")

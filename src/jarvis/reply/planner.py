@@ -428,6 +428,7 @@ def plan_query(
     tools: Sequence[Tuple[str, str]],
     *,
     timeout_sec: Optional[float] = None,
+    transcript_context: str = "",
     memory_context: str = "",  # deprecated; planner now runs before memory
 ) -> List[str]:
     """Run a short planning LLM pass over the query + dialogue context.
@@ -465,6 +466,8 @@ def plan_query(
 
     system_prompt = _PROMPT_TEMPLATE.format(max_steps=MAX_STEPS)
     user_content = _build_user_message(query, dialogue_context, tools)
+    if transcript_context:
+        system_prompt += "\n\n" + transcript_context
 
     try:
         raw = call_llm_direct(
@@ -726,6 +729,7 @@ def resolve_next_tool_call(
     tools_schema: Sequence[dict],
     *,
     timeout_sec: Optional[float] = None,
+    transcript_context: str = "",
 ) -> Optional[Tuple[str, dict]]:
     """Turn a planned step + prior results into a concrete tool call.
 
@@ -813,7 +817,7 @@ def resolve_next_tool_call(
         raw = call_llm_direct(
             cfg=cfg,
             chat_model=model,
-            system_prompt=_STEP_RESOLVER_SYSTEM,
+            system_prompt=_STEP_RESOLVER_SYSTEM + ("\n\n" + transcript_context if transcript_context else ""),
             user_content=user_content,
             timeout_sec=effective_timeout,
             thinking=False,

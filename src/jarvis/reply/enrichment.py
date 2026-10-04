@@ -290,6 +290,7 @@ def _distil_batch(
     chat_model: str,
     timeout_sec: float,
     thinking: bool,
+    transcript_context: str = "",
 ) -> str:
     """Run one distil LLM call over ``raw_block``; returns the relevance note or ""."""
     user_content = (
@@ -297,6 +298,8 @@ def _distil_batch(
         f"PAST MEMORY SNIPPETS:\n{raw_block}\n\n"
         "Produce the short relevance note now (or NONE)."
     )
+    if transcript_context:
+        user_content += "\n\n" + transcript_context
     try:
         response = call_llm_direct(
             cfg=cfg,
@@ -331,6 +334,7 @@ def digest_memory_for_query(
     chat_model: str,
     timeout_sec: float = 8.0,
     thinking: bool = False,
+    transcript_context: str = "",
 ) -> str:
     """Condense raw memory dumps into a short relevance-filtered note.
 
@@ -389,7 +393,7 @@ def digest_memory_for_query(
     if len(raw_block) <= _DIGEST_BATCH_MAX_CHARS:
         cleaned = _distil_batch(
             query, raw_block, cfg, chat_model,
-            timeout_sec, thinking,
+            timeout_sec, thinking, transcript_context,
         )
         if not cleaned:
             debug_log("memory digest: NONE — no relevant memory", "memory")
@@ -410,7 +414,7 @@ def digest_memory_for_query(
         block = _compose(batch, [])
         note = _distil_batch(
             query, block, cfg, chat_model,
-            timeout_sec, thinking,
+            timeout_sec, thinking, transcript_context,
         )
         if note:
             notes.append(note)
@@ -418,7 +422,7 @@ def digest_memory_for_query(
         block = _compose([], batch)
         note = _distil_batch(
             query, block, cfg, chat_model,
-            timeout_sec, thinking,
+            timeout_sec, thinking, transcript_context,
         )
         if note:
             notes.append(note)
@@ -524,6 +528,7 @@ def _distil_tool_batch(
     chat_model: str,
     timeout_sec: float,
     thinking: bool,
+    transcript_context: str = "",
 ) -> str:
     """Run one distil LLM call over ``raw_block``; returns the fact note or ""."""
     user_content = (
@@ -531,6 +536,8 @@ def _distil_tool_batch(
         f"TOOL OUTPUT:\n{raw_block}\n\n"
         "Produce the short attributed fact note now (or NONE)."
     )
+    if transcript_context:
+        user_content += "\n\n" + transcript_context
     try:
         response = call_llm_direct(
             cfg=cfg,
@@ -595,6 +602,7 @@ def digest_tool_result_for_query(
     chat_model: str,
     timeout_sec: float = 8.0,
     thinking: bool = False,
+    transcript_context: str = "",
 ) -> str:
     """Condense a raw tool-result payload into a short, attributed fact note.
 
@@ -637,7 +645,7 @@ def digest_tool_result_for_query(
     if len(raw) <= _TOOL_DIGEST_BATCH_MAX_CHARS:
         cleaned = _distil_tool_batch(
             framed_query, raw, cfg, chat_model,
-            timeout_sec, thinking,
+            timeout_sec, thinking, transcript_context,
         )
         if not cleaned:
             debug_log(
@@ -659,7 +667,7 @@ def digest_tool_result_for_query(
     for chunk in chunks:
         note = _distil_tool_batch(
             framed_query, chunk, cfg, chat_model,
-            timeout_sec, thinking,
+            timeout_sec, thinking, transcript_context,
         )
         if note:
             notes.append(note)
@@ -831,6 +839,7 @@ def digest_loop_for_max_turns(
     user_query: str,
     loop_messages: list[dict],
     cfg,
+    transcript_context: str = "",
 ) -> str | None:
     """Summarise what the agentic loop produced when it hit max turns.
 
@@ -869,6 +878,8 @@ def digest_loop_for_max_turns(
         "language as the user's original request."
     )
 
+    if transcript_context:
+        user_content += "\n\n" + transcript_context
     try:
         raw = call_llm_direct(
             cfg=cfg,

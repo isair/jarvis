@@ -245,6 +245,7 @@ def _select_llm(
     llm_model: str,
     llm_timeout_sec: float,
     context_hint: Optional[str] = None,
+    transcript_context: str = "",
 ) -> List[str]:
     """Ask a lightweight LLM call which tools are relevant.
 
@@ -329,6 +330,7 @@ def _select_llm(
     user_prompt = (
         f"Available tools:\n{catalogue}\n\n"
         f"{hint_section}"
+        f"{transcript_context}\n\n"
         f"User query: {query}\n\n"
         "Top tools (comma-separated, max 5, or 'none'):"
     )
@@ -395,6 +397,7 @@ def select_tools(
     embed_model: str = "",
     embed_timeout_sec: float = 10.0,
     context_hint: Optional[str] = None,
+    transcript_context: str = "",
 ) -> List[str]:
     """
     Return a list of tool names relevant to *query*.
@@ -435,6 +438,7 @@ def select_tools(
             query, builtin_tools, mcp_tools,
             llm_backend, llm_model, llm_timeout_sec,
             context_hint=context_hint,
+            transcript_context=transcript_context,
         )
     else:
         return _all_tool_names(builtin_tools, mcp_tools)

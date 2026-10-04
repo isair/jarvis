@@ -42,13 +42,12 @@ class TestIntentJudgment:
         """Can create a basic judgment."""
         judgment = IntentJudgment(
             directed=True,
-            query="what time is it",
             stop=False,
             confidence="high",
             reasoning="clear wake word",
         )
         assert judgment.directed is True
-        assert judgment.query == "what time is it"
+        assert not hasattr(judgment, "query")
         assert judgment.stop is False
         assert judgment.confidence == "high"
 
@@ -210,7 +209,7 @@ class TestIntentJudge:
 
         assert result is not None
         assert result.directed is True
-        assert result.query == "what time"
+        assert not hasattr(result, "query")
         assert result.stop is False
         assert result.confidence == "high"
 
@@ -232,16 +231,8 @@ class TestIntentJudge:
         assert result is None
 
     def test_parse_response_missing_fields(self):
-        """Handles missing fields with defaults."""
-        judge = IntentJudge()
-        response = '{"directed": true}'
-        result = judge._parse_response(response)
-
-        assert result is not None
-        assert result.directed is True
-        assert result.query == ""
-        assert result.stop is False
-        assert result.confidence == "low"
+        """Incomplete decisions abstain so listener fallback can decide."""
+        assert IntentJudge()._parse_response('{"directed": true}') is None
 
     def test_judge_returns_none_for_empty_segments(self):
         """judge() returns None for empty segments."""
@@ -274,7 +265,7 @@ class TestIntentJudge:
 
         assert result is not None
         assert result.directed is True
-        assert result.query == "what time is it"
+        assert not hasattr(result, "query")
 
     def test_judge_uses_short_keep_alive_in_low_power_mode(self):
         """Low-power mode keeps Ollama's judge residency brief."""
@@ -468,7 +459,7 @@ class TestResponseParserRobustness:
 
         assert result is not None
         assert result.directed is True
-        assert "json" in result.query
+        assert not hasattr(result, "query")
 
     def test_parse_response_with_markdown_code_fence(self):
         """Parser handles JSON wrapped in ```json ... ``` fences."""
@@ -478,54 +469,8 @@ class TestResponseParserRobustness:
 
         assert result is not None
         assert result.directed is True
-        assert result.query == "hi"
+        assert not hasattr(result, "query")
 
-    def test_parse_response_normalises_aliases_in_query(self):
-        """Misheard wake-word aliases are rewritten to the primary name in
-        the directed query, not just in the transcript segments. Field
-        capture (2026-04-21): Whisper heard 'Chavis'; the judge echoed it
-        back in its ``query`` and the reply engine saw 'random pop artist,
-        Chavis' as the user's intent — polluting memory search and
-        prompts. The rewrite is case-insensitive and only applies on word
-        boundaries.
-        """
-        config = IntentJudgeConfig(
-            assistant_name="Jarvis",
-            aliases=["chavis", "jervis"],
-        )
-        judge = IntentJudge(config)
-        response = (
-            '{"directed": true, '
-            '"query": "tell me a random pop artist, Chavis", '
-            '"stop": false, "confidence": "high", "reasoning": "ok"}'
-        )
-        result = judge._parse_response(response)
-
-        assert result is not None
-        assert result.directed is True
-        # Alias must be replaced with the canonical assistant name.
-        assert "chavis" not in result.query.lower(), (
-            f"Alias leaked into query: {result.query!r}"
-        )
-        assert "Jarvis" in result.query, (
-            f"Expected canonical name in query, got: {result.query!r}"
-        )
-
-    def test_parse_response_no_aliases_leaves_query_untouched(self):
-        """With an empty alias list, the query passes through verbatim."""
-        config = IntentJudgeConfig(assistant_name="Jarvis", aliases=[])
-        judge = IntentJudge(config)
-        response = (
-            '{"directed": true, "query": "what is the weather like", '
-            '"stop": false, "confidence": "high", "reasoning": "ok"}'
-        )
-        result = judge._parse_response(response)
-
-        assert result is not None
-        assert result.query == "what is the weather like"
-
-
-class TestCreateIntentJudge:
     """Tests for create_intent_judge factory function."""
 
     def test_creates_judge_with_defaults(self):
@@ -630,14 +575,6 @@ class TestWarmUp:
 class TestEchoFollowUpPattern:
     """Tests for echo + follow-up pattern handling."""
 
-    def test_system_prompt_includes_echo_followup_guidance(self):
-        """System prompt includes guidance for echo + follow-up pattern."""
-        judge = IntentJudge()
-        prompt = judge._build_system_prompt()
-
-        # Check that the prompt mentions echo handling
-        assert "(during TTS)" in prompt  # Should explain during TTS marker
-        assert "echo" in prompt.lower()  # Should mention echo
 
     def test_user_prompt_with_echo_and_followup(self):
         """User prompt correctly formats transcript with potential echo + follow-up."""
@@ -660,7 +597,7 @@ class TestEchoFollowUpPattern:
         assert "HOT WINDOW" in prompt
         assert "8 hours of daylight" in prompt  # TTS text included
 
-    def test_judge_extracts_followup_from_echo_mixed_transcript(self):
+    def test_judge_classifies_followup_in_echo_mixed_transcript(self):
         """Judge correctly extracts follow-up from transcript containing echo."""
         judge = IntentJudge()
         backend = MagicMock()
@@ -689,7 +626,7 @@ class TestEchoFollowUpPattern:
         assert result is not None
         assert result.directed is True
         # The extracted query should be the follow-up, not the echo
-        assert "tell me more" in result.query.lower()
+        assert not hasattr(result, "query")
 
 
 class TestCurrentSegmentMarker:
@@ -714,7 +651,7 @@ class TestCurrentSegmentMarker:
         # The current segment should be marked
         assert "CURRENT - JUDGE THIS" in prompt
         # Verify it's associated with the right segment
-        assert '"hello jarvis"' in prompt
+        assert 'hello jarvis' in prompt
 
     def test_current_segment_not_marked_when_no_match(self):
         """Prompt doesn't mark segments when current_text doesn't match."""
@@ -778,44 +715,16 @@ class TestCurrentSegmentMarker:
             prompt = messages[1]["content"]
             assert "CURRENT - JUDGE THIS" in prompt
 
-    def test_system_prompt_includes_current_segment_guidance(self):
-        """System prompt explains the CURRENT - JUDGE THIS marker."""
-        judge = IntentJudge()
-        prompt = judge._build_system_prompt()
-
-        # System prompt should explain the marker
-        assert "CURRENT - JUDGE THIS" in prompt
-        assert "segment to judge" in prompt.lower()
 
 
 class TestCrossSegmentContextInPrompt:
     """Tests that the system prompt guides cross-segment reference resolution.
 
     When the CURRENT segment contains vague references like "that", "it", "this",
-    the intent judge should use PREVIOUS segments to resolve them into a complete query.
+    the intent judge should use previous segments to classify engagement.
     """
 
-    def test_system_prompt_encourages_cross_segment_resolution(self):
-        """System prompt should explicitly tell the LLM to resolve references from other segments."""
-        judge = IntentJudge()
-        prompt = judge._build_system_prompt()
 
-        # The prompt must mention resolving references from other/previous/background segments
-        prompt_lower = prompt.lower()
-        assert "previous" in prompt_lower or "other segment" in prompt_lower or "background" in prompt_lower, (
-            "System prompt should mention using previous/background segments to resolve references"
-        )
-
-    def test_system_prompt_has_cross_segment_example(self):
-        """System prompt should include an example of cross-segment reference resolution."""
-        judge = IntentJudge()
-        prompt = judge._build_system_prompt()
-
-        # Should have an example where context comes from a DIFFERENT segment than the wake word
-        # The key indicator is showing a multi-segment scenario in the prompt examples
-        assert "previous segment" in prompt.lower() or "background context" in prompt.lower() or "earlier segment" in prompt.lower(), (
-            "System prompt should have guidance about using earlier/background segments for context"
-        )
 
     def test_context_segments_included_in_user_prompt(self):
         """Background context segments (unprocessed, no wake word) appear in the user prompt."""
@@ -966,7 +875,7 @@ class TestReasoningModelHandling:
         })
         assert result is not None
         assert result.directed is True
-        assert result.query == "what time is it"
+        assert not hasattr(result, "query")
 
     def test_content_takes_priority_over_reasoning_content(self):
         """When both are present, ``content`` wins — reasoning is only a
@@ -985,7 +894,7 @@ class TestReasoningModelHandling:
         })
         assert result is not None
         assert result.directed is False
-        assert result.query == ""
+        assert not hasattr(result, "query")
 
     def test_reasoning_without_json_falls_back_to_top_level_response(self):
         """Reasoning text with no JSON object: the existing top-level
@@ -999,7 +908,7 @@ class TestReasoningModelHandling:
         })
         assert result is not None
         assert result.directed is True
-        assert result.query == "what time is it"
+        assert not hasattr(result, "query")
 
     def test_unparseable_reasoning_returns_none(self):
         """Reasoning with no usable JSON and no fallback → unparseable."""
@@ -1031,7 +940,7 @@ class TestReasoningModelHandling:
         })
         assert result is not None
         assert result.directed is True
-        assert "tomorrow what I meant today" in result.query
+        assert not hasattr(result, "query")
         assert result.raw_response == (
             '{"directed": true, "query": "No worries, by the way, I said '
             'tomorrow what I meant today, because it is after midnight", '
@@ -1088,7 +997,7 @@ class TestReasoningModelHandling:
         })
         assert result is not None
         assert result.directed is True
-        assert result.query == "No worries, by the way, I said tomorrow what I meant today"
+        assert not hasattr(result, "query")
         assert result.reasoning == "hot window follow-up"
 
     def test_max_tokens_passed_via_extra_options(self):

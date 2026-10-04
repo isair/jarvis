@@ -82,6 +82,8 @@ Budget memory for Whisper and, when different from chat, the fast model used for
 >
 > **You:** Jarvis, what do you think?
 
+Voice follow-ups retain the recognised speech and use recent transcript context to resolve references. Transcript context stays local and is redacted before model use.
+
 Jarvis can use the recent conversation to understand that you are asking about the weather for the picnic, rather than treating the last sentence as an isolated question. This is the experience it is built around. Personalised requests can also draw on saved conversation history when no external tools are needed. How reliably it understands the context depends on speech recognition and your chosen model; see the [evaluation results](EVALS.md).
 
 ## Inside Jarvis

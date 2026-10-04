@@ -1,21 +1,10 @@
 # Local intent classifier qualification
 
-The voice intent judge has two responsibilities: classify speech (`directed`
-and `stop`), and synthesise a clean, self-contained query from the transcript.
-Typed decision models can supply the first part. They cannot generate a query
-or resolve a reference into a new string. The runtime judge uses the FAST-tier
-LLM for the full contract.
+The intent judge classifies directedness and cancellation without generating a query. The reply engine receives original speech and a separate redacted transcript snapshot; routing, planning and reply generation resolve references. This separation permits a local typed classifier to replace the judge without a text-generation requirement.
 
-[Query/context comparison](query_context_comparison.md) evaluates the downstream
-alternative: original speech plus separate transcript context on router,
-planner and reply requests. It assumes successful classification and does not
-replace this qualification suite.
+`evals/test_intent_classifier.py` qualifies that classification contract. Jev itself has not been tested here. TypeSafe's [official model documentation](https://docs.typesafe.ai/models) describes hosted API models; no official local Jev runtime or weights have been verified for this integration. Laya is a distinct local candidate, and its results below apply only to the pinned checkpoint.
 
-[Jev](https://docs.typesafe.ai/introduction) exposes atomic typed decisions.
-This evaluation uses the self-hostable System One protocol implemented by
-[Laya](https://github.com/NandhaKishorM/laya). It permits loopback endpoints only,
-disables environment proxies and redirects, and sends no credentials. Jarvis
-has no dependency on Laya or a proprietary classification service.
+[Query/context comparison](query_context_comparison.md) measures downstream routing, arguments and grounded answers independently of classifier accuracy.
 
 ## Run
 
@@ -61,7 +50,7 @@ The 54 cases comprise 42 existing single- and multi-segment intent cases and 12
 additional cases covering Spanish, Turkish, French and Japanese speech,
 quoted stops, the word "stop" in ordinary questions and pure TTS echo. The
 suite asserts both decisions on every case. The existing LLM intent evals
-remain responsible for query extraction, wake-word removal and topic synthesis.
+remain responsible for reference resolution and tool-argument composition using the original speech and transcript context.
 
 ## Candidate evidence
 
@@ -80,6 +69,6 @@ for runtime use. There is no measured accuracy comparison with the FAST-tier
 LLM, and these classification results do not establish end-to-end query quality.
 
 Qualification requires every declared case to pass without fallback, followed
-by the listener and query-synthesis evals for any runtime integration. Passing
+by the listener and transcript-context evals for any runtime integration. Passing
 this finite suite is necessary evidence, rather than a guarantee for arbitrary
 speech or languages.
