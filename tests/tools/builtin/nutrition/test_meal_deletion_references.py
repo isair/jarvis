@@ -37,7 +37,7 @@ def test_unique_description_deletes_only_that_meal(context, description):
     assert [row['id'] for row in rows(context)] == [keep]
 
 
-@pytest.mark.parametrize('reference', ['Big', 'that meal', '', None, True, 1.9])
+@pytest.mark.parametrize('reference', ['Big', 'that meal', '', None, True, 1.9, pytest.param('1' * 5000, id='oversized-decimal')])
 def test_unresolved_or_invalid_reference_preserves_meals(context, reference):
     keep = insert(context, 'Big Mac')
     result = DeleteMealTool().run({'id': reference}, context)

@@ -32,12 +32,12 @@ class DeleteMealTool(Tool):
         """Execute the delete meal tool."""
         context.user_print("🗑️ Deleting the meal…")
         reference = args.get("id") if isinstance(args, dict) else None
-        if isinstance(reference, str):
-            reference = reference.strip()
-            if reference.isascii() and reference.isdecimal():
-                reference = int(reference)
         is_deleted = False
         try:
+            if isinstance(reference, str):
+                reference = reference.strip()
+                if reference.isascii() and reference.isdecimal():
+                    reference = int(reference)
             if type(reference) is int and reference > 0:
                 is_deleted = context.db.delete_meal(reference)
             elif isinstance(reference, str) and reference:
