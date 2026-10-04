@@ -19,7 +19,7 @@ def test_followup_entity_survives_native_tool_messages(monkeypatch, mock_config,
         call_id = f'fixture-{index}'
         native_messages.extend([
             {'role': 'assistant', 'content': '', 'tool_calls': [{
-                'id': call_id, 'type': 'function', 'function': {'name': 'webSearch', 'arguments': {'query': entity}},
+                'id': call_id, 'type': 'function', 'function': {'name': 'webSearch', 'arguments': {'search_query': entity}},
             }]},
             {'role': 'tool', 'tool_name': 'webSearch', 'tool_call_id': call_id, 'content': 'Reference material.', 'tool_failed': False},
         ])
