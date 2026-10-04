@@ -16,13 +16,13 @@ from dotenv import load_dotenv
 
 SUPPORTED_CHAT_MODELS: Dict[str, Dict[str, str]] = {
     "gemma4:e2b": {
-        "name": "Gemma 4 E2B (Default)",
+        "name": "Gemma 4 E2B (Low memory)",
         "description": "Fast, multimodal, effective 2B — a little dumb, occasionally fumbles tool calls; ~7.2GB download",
         "size": "~7.2GB",
         "vram": "8GB+",
     },
     "gemma4:e4b": {
-        "name": "Gemma 4 E4B (Recommended)",
+        "name": "Gemma 4 E4B (Default)",
         "description": "Smarter tool use and reasoning, multimodal, effective 4B — ~9.6GB download",
         "size": "~9.6GB",
         "vram": "16GB+",
@@ -41,13 +41,14 @@ SUPPORTED_CHAT_MODELS: Dict[str, Dict[str, str]] = {
     },
 }
 
-# The default chat model (first in the supported list)
-DEFAULT_CHAT_MODEL = "gemma4:e2b"
+# The quality-first chat default; setup adapts it to the memory budget.
+DEFAULT_CHAT_MODEL = "gemma4:e4b"
 # Ollama-path default for the fast tier (voice intent, tool routing, and the
 # other real-time classification passes). On an OpenAI-compatible chat
 # provider an unset fast model resolves to the active chat model instead —
 # this pull-name only exists on Ollama.
 DEFAULT_FAST_MODEL = "gemma4:e2b"
+SUPPORTED_FAST_MODEL_IDS = ("qwen3.5:0.8b", "gemma4:e2b", "gemma4:e4b")
 
 
 def get_supported_model_ids() -> set[str]:

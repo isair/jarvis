@@ -186,9 +186,8 @@ class TestGetRequiredModels:
         with patch("desktop_app.setup_wizard.load_settings", side_effect=Exception("Config error")):
             models = get_required_models()
 
-            assert len(models) == 2
-            assert "gemma4:e2b" in models
-            assert "nomic-embed-text" in models
+            from jarvis.config import DEFAULT_CHAT_MODEL, DEFAULT_FAST_MODEL
+            assert set(models) == {DEFAULT_CHAT_MODEL, DEFAULT_FAST_MODEL, "nomic-embed-text"}
 
     def _cfg(self, **over):
         from types import SimpleNamespace

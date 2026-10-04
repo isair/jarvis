@@ -203,36 +203,11 @@ class TestModelConsistency:
             vram = info["vram"]
             assert "GB" in vram, f"{model_id} VRAM should specify GB"
 
-    def test_non_default_models_require_more_vram_than_default(self):
-        """Non-default models need more VRAM because the intent judge (gemma4:e2b) runs alongside them.
-
-        The default model (gemma4:e2b) shares the intent judge, so its VRAM is the baseline.
-        Other models must load both themselves AND the intent judge, so their VRAM must be higher.
-
-        Excludes explicit low-VRAM models (``qwen3.5:0.8b``) which are designed
-        for constrained hardware where the intent judge overhead is absorbed
-        by using the same model for both roles.
-        """
-        import re
-
-        # Models intentionally designed for low-VRAM / CPU fallback
-        LOW_VRAM_MODELS = {"qwen3.5:0.8b"}
-
-        def _extract_vram_gb(vram_str: str) -> int:
-            match = re.search(r"(\d+)", vram_str)
-            assert match, f"Could not parse VRAM value from: {vram_str}"
-            return int(match.group(1))
-
-        default_vram = _extract_vram_gb(SUPPORTED_CHAT_MODELS[DEFAULT_CHAT_MODEL]["vram"])
-
-        for model_id, info in SUPPORTED_CHAT_MODELS.items():
-            if model_id == DEFAULT_CHAT_MODEL:
-                continue
-            if model_id in LOW_VRAM_MODELS:
-                continue
-            model_vram = _extract_vram_gb(info["vram"])
-            assert model_vram > default_vram, (
-                f"{model_id} VRAM ({info['vram']}) should be higher than default model VRAM "
-                f"({SUPPORTED_CHAT_MODELS[DEFAULT_CHAT_MODEL]['vram']}) because the intent judge "
-                f"(gemma4:e2b) always runs alongside the chat model"
-            )
+    def test_model_budgets_are_individual_and_recommendations_fit(self):
+        """The registry budgets models individually; setup adds companions."""
+        from jarvis.utils.vram import required_vram_mb, get_recommended_model_id
+        for model in SUPPORTED_CHAT_MODELS:
+            budget = required_vram_mb(model)
+            assert budget is not None and budget > 0
+            recommended = get_recommended_model_id(budget)
+            assert required_vram_mb(recommended) <= budget

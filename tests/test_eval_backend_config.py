@@ -35,6 +35,13 @@ def test_model_override_applies_without_an_endpoint_override(monkeypatch):
     assert cfg.llm_chat_model == cfg.ollama_chat_model == 'local-test-model'
 
 
+def test_eval_default_tracks_the_product_chat_default(monkeypatch):
+    import runpy
+    from jarvis import config
+    monkeypatch.setattr(config, 'DEFAULT_CHAT_MODEL', 'synthetic-quality-default')
+    assert runpy.run_path(helpers.__file__)['JUDGE_MODEL'] == config.DEFAULT_CHAT_MODEL
+
+
 def test_versioned_endpoint_can_detect_an_available_model(monkeypatch):
     import requests
     monkeypatch.setattr(helpers, 'JUDGE_BASE_URL', 'http://127.0.0.1:8000/v1')

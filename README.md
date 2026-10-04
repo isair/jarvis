@@ -56,11 +56,11 @@ Memory needs depend on model size, quantisation, context length and speech recog
 | Starting point | Chat model |
 | :--- | :--- |
 | Smaller hardware | `qwen3.5:0.8b` |
-| Default | `gemma4:e2b` |
-| More capable | `gemma4:e4b` |
+| Constrained memory | `gemma4:e2b` |
+| Default | `gemma4:e4b` |
 | Larger local setup | `qwen3.8:27b` |
 
-Budget memory for Whisper and, when different from chat, the fast model used for voice intent and tool routing. Apple Silicon uses unified memory; other GPUs use dedicated VRAM. The wizard recommends smaller models when detected memory is exhausted and warns when CPU fallback is needed.
+Budget memory for Whisper and, when different from chat, the fast model used for voice intent and tool routing. Apple Silicon uses unified memory; other GPUs use dedicated VRAM. Setup budgets chat and fast together alongside the selected Whisper model, using E2B for fast tasks when it fits or sharing E4B across both roles to save memory. Apple Silicon estimates reserve memory for macOS. Saved model choices are preserved, and insufficient memory shows CPU fallback guidance.
 
 </details>
 
@@ -132,6 +132,7 @@ Jarvis is actively developed, primarily on macOS. Windows and Linux behaviour ma
 - **No mobile app** is available ([#17](https://github.com/isair/jarvis/issues/17)).
 - **Capture continues while Jarvis thinks.** Speech detection and assembly run independently of intent judging and reply generation. Recognition backlogs are bounded; Logs warns when speech arrives faster than it can be processed.
 - **Continuous speech is split at your utterance limit.** The shorter limit during speech playback helps interruption requests reach recognition promptly. Both limits are adjustable in Settings.
+- **Smaller chat models can miss tool arguments.** E4B is the preferred chat default when memory allows; constrained hardware can use a smaller model, with lower tool-use reliability.
 - **Reasoning models can take longer.** Planning, recall, summaries and partial replies reserve room for reasoning and the final answer, with the configured timeout limiting the wait.
 - **GPT-OSS always reasons.** Its Ollama thinking toggle selects low or high reasoning effort; turning it off selects low effort rather than disabling reasoning.
 - **Long conversations feed the complete pending snapshot into the diary.** Bounded batches share the configured generation timeout; interrupted saves resume completed batches privately in memory on the next attempt.
