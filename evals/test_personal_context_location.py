@@ -12,6 +12,9 @@ pytestmark = [pytest.mark.eval, requires_judge_llm]
 
 @pytest.mark.parametrize(('evidence', 'expected'), [
     ('The user lives in London.', 'London'),
+    ('The user resides in Bristol. They requested tomorrow\'s weather for Bristol. '
+     'The assistant forecast 11 to 21 degrees.', 'Bristol'),
+    ('The user stated they live in Ankara. They requested a forecast for the following day.', 'Ankara'),
     ('The user stated that they live in Ankara. They asked for a forecast.', 'Ankara'),
     ('The user lives in Bristol. Previously they asked about the weather.', 'Bristol'),
     ('The user said, "I live in Bristol."', 'Bristol'),

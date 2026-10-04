@@ -261,3 +261,11 @@ def test_shared_protocol_preserves_explicit_non_string_values(db, monkeypatch, v
     runner = personal_context.ContextualToolRunner(run, db, _cfg(), 'preferences', [])
     result = runner(tool_name='setPreferences', tool_args={'preference': value})
     assert result.reply_text == f'Explicit value: {value!r}'
+
+
+def test_ineligible_task_candidate_does_not_discard_grounded_home(db, monkeypatch):
+    from jarvis.reply.personal_context import resolve_missing_context
+    _seed(db, 'The user lives in London. They requested a weather forecast for London.')
+    _answer(monkeypatch, [_candidate(), _candidate(kind='requested')])
+    result = resolve_missing_context('location', db, _cfg(), 'weather tomorrow', [])
+    assert result and result.value == 'London' and result.kind == 'home'

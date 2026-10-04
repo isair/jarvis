@@ -345,6 +345,8 @@ This graph is the reference for LLM-latency optimisation. Treat it as authoritat
 - **Outputs**: validated context value and attribution note, or no resolution.
   Deterministic source/date/literal-value checks and complete semantic support
   verification precede precedence/conflict checks and one tool retry.
+  Source-ineligible relationship kinds are discarded individually, so a stored
+  task destination cannot discard a separate grounded residence.
   The unified persona prompt requires remembered defaults to be labelled and
   permits clarification for unresolved personal inputs. The attribution
   note accompanies the retried tool result into ordinary reply synthesis and
