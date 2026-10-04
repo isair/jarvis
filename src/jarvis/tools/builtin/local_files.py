@@ -3,6 +3,7 @@
 import os
 from pathlib import Path
 from typing import Dict, Any, Optional
+from ...debug import debug_log
 from ..base import Tool, ToolContext
 from ..types import ToolExecutionResult
 
@@ -69,13 +70,16 @@ class LocalFilesTool(Tool):
 
             # list
             if operation == "list":
+                recursive = args.get("recursive", False)
+                if not isinstance(recursive, bool):
+                    debug_log("localFiles: rejected non-boolean recursion argument", "tools")
+                    return ToolExecutionResult(success=False, reply_text="localFiles 'recursive' must be a JSON boolean.")
                 if not target.exists():
                     return ToolExecutionResult(success=False, reply_text=f"Path not found: {target}")
                 if target.is_file():
                     return ToolExecutionResult(success=True, reply_text=f"File: {target.name}")
 
                 glob_pattern = args.get("glob", "*")
-                recursive = bool(args.get("recursive", False))
 
                 try:
                     if recursive:
