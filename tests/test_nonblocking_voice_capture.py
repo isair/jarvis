@@ -382,3 +382,33 @@ def test_transcript_keeps_capture_generation_across_buffer_storage(synthetic_lis
                                    obj._dictation_generation, False, 0.)
     obj._handle_transcription_result(result)
     assert not obj.state_manager.get_pending_query(), 'Old transcript adopted a new voice generation'
+
+
+@pytest.mark.parametrize('text', [
+    "I'm talking to Jairus not you.",
+    "I'm talking to Jarvis, not you.",
+    "I told my friend about Jarvis yesterday.",
+    "Jarvis'le konuşuyorum, seninle değil.",
+    "Estoy hablando con Jarvis, no contigo.",
+])
+def test_confident_mention_rejection_does_not_start_query(synthetic_listener, text):
+    from jarvis.listening.intent_judge import IntentJudgment
+    obj = synthetic_listener
+    obj._intent_judge = SimpleNamespace(available=True, judge=lambda **kwargs:
+        IntentJudgment(directed=False, query='', stop=False, confidence='high',
+                       reasoning='Assistant mentioned while addressing another person'))
+    obj._process_transcript(text, captured_during_tts=False,
+                            captured_tts_start_time=0., generation=obj._dictation_generation)
+    assert not obj.state_manager.get_pending_query(), 'Mention reached reply collection'
+
+
+@pytest.mark.parametrize('confidence,directed', [('high', True), ('low', False)])
+def test_direct_address_and_inconclusive_fallback_remain_usable(synthetic_listener, confidence, directed):
+    from jarvis.listening.intent_judge import IntentJudgment
+    obj = synthetic_listener
+    obj._intent_judge = SimpleNamespace(available=True, judge=lambda **kwargs:
+        IntentJudgment(directed=directed, query='I am tired' if directed else '',
+                       stop=False, confidence=confidence, reasoning='Address or uncertainty'))
+    obj._process_transcript('Jarvis I am tired', captured_during_tts=False,
+                            captured_tts_start_time=0., generation=obj._dictation_generation)
+    assert obj.state_manager.get_pending_query(), 'Direct address or fail-open fallback was lost'

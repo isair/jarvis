@@ -735,6 +735,39 @@ def is_intent_judge_available() -> bool:
 # Tests
 # =============================================================================
 
+# Addressing another person about the assistant is a mention, including aliases.
+MENTION_ADDRESS_CASES = [
+    ("partner_alias", "I'm talking to Jairus not you.", False, ["jairus"]),
+    ("partner_primary", "I'm talking to Jarvis, not you.", False, []),
+    ("partner_question", "Did you think I was talking to you? I'm talking to Jarvis, not you.", False, []),
+    ("partner_turkish", "Jarvis'le konuşuyorum, seninle değil.", False, []),
+    ("partner_spanish", "Estoy hablando con Jarvis, no contigo.", False, []),
+    ("direct_statement", "Jarvis, I'm feeling tired today.", True, []),
+    ("direct_alias", "Jairus, what time is it?", True, ["jairus"]),
+    ("direct_about_assistant", "Jarvis, tell me about yourself.", True, []),
+    ("direct_hearing", "Jarvis, can you hear me?", True, []),
+]
+
+
+class TestMentionVersusAddress:
+    @pytest.mark.parametrize('name,text,directed,aliases', MENTION_ADDRESS_CASES,
+                             ids=[case[0] for case in MENTION_ADDRESS_CASES])
+    def test_mention_versus_address(self, name, text, directed, aliases):
+        if not is_intent_judge_available():
+            pytest.skip("🎤 Selected voice evaluation model is unavailable")
+        case = MultiSegmentTestCase(name=name, segments=[(text, False)], last_tts_text='',
+            in_hot_window=False, wake_timestamp=1000.5, expected_directed=directed,
+            expected_query_contains=None, aliases=aliases)
+        result = run_intent_judge_multi_segment(case)
+        assert result is not None, 'Intent judge did not return a usable decision'
+        assert result.directed is directed, result
+        assert result.stop is False, result
+        if directed:
+            assert result.query.strip(), result
+        else:
+            assert not result.query.strip(), result
+
+
 class TestIntentJudgeAccuracy:
     """Evals for intent judge accuracy."""
 
