@@ -78,6 +78,10 @@ an earlier summary.
 A task parameter or requested option does not imply a personal fact. A requested
 city is not a residence, and a requested meal type is not a dietary identity.
 Quoted, hypothetical and third-party assertions retain their original attribution.
+Text supplied for translation, explanation, editing or role-play remains task
+content even when it contains first-person statements. The summariser identifies
+that speech act before extracting personal declarations and does not duplicate
+the supplied sentence as a separate user fact.
 Current visits and future plans do not become home residence. Correction chains
 keep former and current facts in separate, explicitly scoped sentences.
 

@@ -1326,7 +1326,7 @@ Create a summary that:
    - Never paraphrase an attributed claim into an unattributed assertion. "The assistant said Possessor is a 2006 film by Brandon Cronenberg" is fine (attribution preserved). "Possessor is a 2006 film by Brandon Cronenberg" is NOT (attribution stripped — now reads as established fact).
    - If the user later corrects the assistant, record both: the initial claim AND the correction. That's how the final state becomes recoverable — never delete earlier claims when a correction comes in.
    - Weather, time, location, calculator results, and other clearly tool-grounded data can be recorded as fact without attribution caveats — the tool output is the authority.
-   - User-stated facts about themselves (preferences, biography, plans, decisions) are always safe to record verbatim as user facts.
+   - Explicit real-user declarations about themselves (preferences, biography, plans, decisions) are safe to record as user facts. First-person statements supplied as task text are not real-user declarations; preserve the enclosing translation, explanation, editing or role-play request instead.
 
    Example — attributed assistant claim (preserves information, flags provenance):
      GOOD: "The user asked about the movie Possessor; the assistant said it is a 2006 science fiction film directed by Brandon Cronenberg."
@@ -1348,6 +1348,16 @@ Create a summary that:
      GOOD: "The user asked about the movie Possessor; the assistant said it is a 2020 science-fiction horror film directed by Brandon Cronenberg. Separately, the user asked about the name Jarvis; the assistant said the MCU character Jarvis is an AI created by Tony Stark and later embodied by Vision."
 
    This rule applies in any language.
+
+9. CRITICAL speech-act rule: first identify what the user is doing with supplied text. A sentence submitted for translation, explanation, editing, quotation or role-play belongs to that task. Its first-person speaker is not established as the actual user. Summarise the TASK with the supplied sentence attributed to it; do not also create a standalone declaration from its contents. This rule takes precedence over personal-fact preservation.
+   - Input: User: Translate this sentence: I live in X.
+     GOOD: "The user requested translation of the sentence 'I live in X'."
+     BAD: "The user lives in X. They requested translation of 'I live in X'."
+   - Input: User: Explain the phrase 'I am vegetarian'.
+     GOOD: "The user requested an explanation of the phrase 'I am vegetarian'."
+     BAD: "The user is vegetarian. They requested an explanation."
+   - A real declaration outside supplied task text remains a user fact: "I am vegetarian, suggest dinner" means the user is vegetarian and requested dinner suggestions.
+   Apply the speech-act distinction to every relationship and every language.
 
 Also extract 3-5 main topics as comma-separated keywords."""
 

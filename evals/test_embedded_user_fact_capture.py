@@ -59,6 +59,7 @@ def test_embedded_residence_reaches_diary_and_graph(graph_store, user, answer, c
 @pytest.mark.parametrize(('user', 'expected'), [
     ('I am vegetarian. Suggest something for dinner.', True),
     ('Suggest a vegetarian dinner.', False),
+    ('Translate this sentence: I am vegetarian.', False),
 ])
 def test_preference_embedded_in_request_reaches_user_graph(graph_store, user, expected):
     from jarvis.memory.conversation import generate_conversation_summary
@@ -82,6 +83,8 @@ def test_preference_embedded_in_request_reaches_user_graph(graph_store, user, ex
     'My brother lives in Bristol. What is the weather there tomorrow?',
     'If I lived in Bristol, what weather should I expect?',
     'Translate this sentence: I live in Bristol.',
+    'Explain what this sentence means: I live in Bristol.',
+    'Şu cümleyi çevir: Bristol şehrinde yaşıyorum.',
 ])
 def test_task_destinations_visits_and_other_people_do_not_become_user_home(graph_store, user):
     from jarvis.memory.conversation import generate_conversation_summary
