@@ -66,9 +66,28 @@ Unrelated topics must never be welded into one grammatical clause. No shared "an
 - A welded clause like "the film X and the character Y, identified as Z" is read by downstream retrievers as a single claim about both referents and silently corrupts future enrichment.
 - A dangling appositive attaching to multiple antecedents is the exact failure mode — small models produce it frequently when two topics are raised in one conversation.
 
+### 4. Preserve declarations embedded in requests
+
+Explicit user-stated facts remain separate from the task or question that contains
+them. Identity, residence, preferences, constraints, plans and circumstances are
+preserved as standalone statements with their subject, relationship and temporal
+status. They take priority over incidental assistant wording within the summary
+budget. These relationships remain intact when combining later conversation with
+an earlier summary.
+
+A task parameter or requested option does not imply a personal fact. A requested
+city is not a residence, and a requested meal type is not a dietary identity.
+Quoted, hypothetical and third-party assertions retain their original attribution.
+Text supplied for translation, explanation, editing or role-play remains task
+content even when it contains first-person statements. The summariser identifies
+that speech act before extracting personal declarations and does not duplicate
+the supplied sentence as a separate user fact.
+Current visits and future plans do not become home residence. Correction chains
+keep former and current facts in separate, explicitly scoped sentences.
+
 ## Applicability
 
-All three rules apply in any language, not only English. The prompt states this explicitly because small models otherwise assume the rule is keyed to the English phrases it names.
+All four rules apply in any language, not only English. The prompt states this explicitly because small models otherwise assume the rule is keyed to the English phrases it names.
 
 ## LLM Rewrite Sweep
 
@@ -135,6 +154,7 @@ Idempotent once the mapping has been applied: a second run finds no tags to chan
 | Test | Location | Guards |
 |------|----------|--------|
 | Pending snapshot cases | `tests/test_diary_pending_batches.py` | Complete input coverage, atomic failure, shared deadline, retry, concurrent arrivals and final-pass streaming |
+| Embedded user declarations | `evals/test_embedded_user_fact_capture.py` | English/Turkish residence, streaming/direct generation, later-turn retention, persisted graph recall, preferences, temporal status and attribution |
 | English and Turkish pending conversations | `evals/test_diary_pending_snapshot.py` | Early, middle and late facts retained through real direct and streaming generation |
 | `test_omits_deflection_narration_for_unknown_entity` | `evals/test_diary_summariser_hygiene.py` | Rule 1, resolved case |
 | `test_omits_deflection_when_topic_never_resolved` | `evals/test_diary_summariser_hygiene.py` | Rule 1, unresolved case |
