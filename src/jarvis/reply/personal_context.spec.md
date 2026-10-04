@@ -3,7 +3,9 @@
 The reply layer owns personal-context resolution. Tools identify an unresolved
 personal input with `ToolExecutionResult.missing_context`, naming the destination
 argument. A successful tool call, an explicit argument, and a failure without a
-missing-context request bypass resolution. Tools return raw data and do not search
+missing-context request bypass resolution. Explicit false, zero and empty-list
+arguments retain their meaning; absent/null/blank strings permit resolution.
+Malformed argument shapes preserve the original tool error. Tools return raw data and do not search
 personal memory themselves.
 
 `ContextualToolRunner` wraps both planned direct execution and normal model tool

@@ -224,8 +224,14 @@ class ContextualToolRunner:
         field = result.missing_context
         if not isinstance(field, str) or not field:
             return result
-        args = kwargs.get('tool_args') or {}
-        if result.success or not field or args.get(field):
+        args = kwargs.get('tool_args')
+        if args is None:
+            args = {}
+        if not isinstance(args, dict):
+            return result
+        explicit = args.get(field)
+        has_explicit = explicit is not None and not (isinstance(explicit, str) and not explicit.strip())
+        if result.success or has_explicit:
             return result
         if field not in self.cache:
             try:

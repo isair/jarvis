@@ -233,3 +233,26 @@ def test_latest_user_message_survives_dialogue_budget(db, monkeypatch):
         {'role': 'user', 'content': "I'm in Paris."},
     ])
     assert result.value == 'Paris'
+
+
+@pytest.mark.parametrize('args', [['unexpected'], 'malformed', 1])
+def test_invalid_argument_shape_preserves_tool_error(db, args):
+    from jarvis.reply.personal_context import ContextualToolRunner
+    from jarvis.tools.types import ToolExecutionResult
+    runner = ContextualToolRunner(
+        lambda **kw: ToolExecutionResult(False, 'Invalid arguments', missing_context='location'),
+        db, _cfg(), 'weather', [])
+    assert runner(tool_name='getWeather', tool_args=args).reply_text == 'Invalid arguments'
+
+
+@pytest.mark.parametrize('value', [False, 0, []])
+def test_shared_protocol_preserves_explicit_non_string_values(db, monkeypatch, value):
+    from jarvis.reply import personal_context
+    from jarvis.tools.types import ToolExecutionResult
+    monkeypatch.setattr(personal_context, 'resolve_missing_context', lambda *a:
+                        personal_context.ContextValue('replacement', 'preference', 'Saved default'))
+    def run(**kw):
+        return ToolExecutionResult(False, f"Explicit value: {kw['tool_args']['preference']!r}", missing_context='preference')
+    runner = personal_context.ContextualToolRunner(run, db, _cfg(), 'preferences', [])
+    result = runner(tool_name='setPreferences', tool_args={'preference': value})
+    assert result.reply_text == f'Explicit value: {value!r}'
