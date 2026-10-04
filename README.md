@@ -139,6 +139,7 @@ Jarvis is actively developed, primarily on macOS. Windows and Linux behaviour ma
 - **Diary saves remain successful if the optional search index fails.** Saved text stays available through keyword search; semantic search can retain an older embedding.
 - **Meal logging confirms saved meals even if coaching is unavailable.** Optional follow-up advice can fail without logging the meal twice.
 - **Weather place fallback supports abbreviated names.** Names such as Washington D.C. retain internal punctuation when location detection is unavailable.
+- **Weather can use remembered home location.** If automatic detection is unavailable, Jarvis checks local conversation and memory before asking for a city. A remembered home is a labelled default; conflicting or outdated evidence requires clarification.
 - **Slow speech recognition produces guidance.** After several utterances decode slower than real time, Logs recommends a smaller Whisper model or checking available acceleration. Smaller models can reduce accuracy.
 - **First-run downloads can take time.** Whisper and language models can be large. Check Logs for progress before assuming startup is stuck.
 - **Apple Silicon desktop bundles include MLX speech recognition.** Windows, Linux and Intel Mac builds use faster-whisper.

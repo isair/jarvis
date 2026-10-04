@@ -1590,6 +1590,11 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     # exit path safely.
     _carryover_state = {"recorded": False}
 
+    from .personal_context import ContextualToolRunner
+    contextual_tool_runner = ContextualToolRunner(
+        run_tool_with_retries, db, cfg, redacted, recent_messages or [],
+    )
+
     # Per-reply memo for the time/location context line (see _get_context_string).
     _context_cache: Optional[str] = None
 
@@ -1920,7 +1925,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                                     }
                                 ],
                             })
-                            _plan_result = run_tool_with_retries(
+                            _plan_result = contextual_tool_runner(
                                 db=db,
                                 cfg=cfg,
                                 tool_name=_name,
@@ -2208,7 +2213,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 continue
 
             # Execute tool
-            result = run_tool_with_retries(
+            result = contextual_tool_runner(
                 db=db,
                 cfg=cfg,
                 tool_name=tool_name,

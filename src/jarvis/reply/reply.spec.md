@@ -384,3 +384,12 @@ Behaviour:
 - Avoid excessive logging; logs must remain readable and privacy-preserving.
 
 
+
+## Tool-requested personal context
+
+Both planned direct execution and model-generated tool calls pass through
+`ContextualToolRunner`. A tool's typed missing-context request can trigger bounded
+local personal-context recall even when the planner omitted `searchMemory`.
+The wrapper retries once with a grounded argument and preserves its source note
+in the tool result. Ordinary tool errors retain their existing behaviour.
+See `personal_context.spec.md` for policies and bounds.

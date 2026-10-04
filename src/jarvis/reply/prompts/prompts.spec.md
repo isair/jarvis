@@ -113,3 +113,11 @@ All prompts are language-agnostic:
 2. **Eval tests** (`evals/test_greeting_no_tools.py`):
    - Greetings in multiple languages don't trigger tools
    - Tool-requiring queries still trigger tools
+
+## Remembered personal defaults
+
+The unified persona prompt (`src/jarvis/system_prompt.py`) distinguishes an
+unknown live location from unavailable personal memory. Tool-requested context
+resolution can supply a remembered default; replies explicitly qualify its use
+rather than treating it as detected current state. Unresolved personal inputs
+permit clarification after tool/context resolution has failed.
