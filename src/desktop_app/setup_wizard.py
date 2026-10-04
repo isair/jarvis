@@ -2986,19 +2986,15 @@ class WhisperSetupPage(ScrollableWizardPage):
         options = self._get_current_model_options()
         n = len(options)
 
-        # Clear existing labels.  The labels are already properly parented
-        # to their container widget, and takeAt() removes the layout's
-        # reference — scheduling deleteLater() is enough.  Do NOT call
-        # setParent(None) here: on macOS that promotes each QLabel to a
-        # top-level widget mid-transition, which triggers a native
-        # NSWindow creation and can SIGABRT inside QWizard.exec().  On
-        # Windows the same reparent creates a native HWND and fast-fails
-        # (0xc0000409) inside Qt6Core.dll — see dictation_history.py
-        # where the same mistake crashed the history window.
+        # Hide removed labels immediately: deferred deletion can wait until
+        # the wizard's nested event loop returns. Keep their container parent
+        # until deletion; setParent(None) creates native top-level windows
+        # during page transitions and can crash on macOS and Windows.
         while self._labels_layout.count():
             item = self._labels_layout.takeAt(0)
             widget = item.widget()
             if widget is not None:
+                widget.hide()
                 widget.deleteLater()
             # Spacers are automatically cleaned up when the item goes out of scope.
 
@@ -3006,6 +3002,7 @@ class WhisperSetupPage(ScrollableWizardPage):
             item = self._size_layout.takeAt(0)
             widget = item.widget()
             if widget is not None:
+                widget.hide()
                 widget.deleteLater()
 
         # Add labels aligned with slider tick positions
