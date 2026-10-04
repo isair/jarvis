@@ -341,7 +341,7 @@ This graph is the reference for LLM-latency optimisation. Treat it as authoritat
 - **Limits**: `llm_tools_timeout_sec`, 1,024 tokens including reasoning. One
   extraction per missing input per reply; misses are cached too. No embeddings.
 - **Outputs**: validated context value and attribution note, or no resolution.
-  Deterministic source/date/quote/conflict checks precede one tool retry. The
+  Deterministic source/date/quote/conflict checks precede one tool retry.
   The unified persona prompt requires remembered defaults to be labelled and
   permits clarification for unresolved personal inputs. The attribution
   note accompanies the retried tool result into ordinary reply synthesis and

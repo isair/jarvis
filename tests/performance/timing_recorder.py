@@ -66,6 +66,7 @@ _CALLER_TO_CONTEXT: dict[str, str] = {
     "_llm_pick_best_child": "graph_best_child",
     # Context 13 — tool-specific LLM calls
     "_extract_place_from_user_text": "tool_weather",
+    "resolve_missing_context": "personal_context",
     "extract_and_log_meal": "tool_nutrition",
     "generate_followups_for_meal": "tool_nutrition",
 }
