@@ -212,6 +212,10 @@ The engine consumes the plan in two phases.
   values stay literal; declared booleans, integers, finite numbers and null
   values use their JSON types, including values in the planner's quote syntax.
   Invalid primitive values, complex types and type unions use the LLM resolver.
+  Each property appears once and all argument text must be consumed, apart
+  from whitespace, commas between pairs and an optional final full stop.
+  Unmatched quotes or unparsed text use the LLM resolver rather than dispatching
+  a partial literal value.
 - **LLM path**: when the step contains a `<placeholder>`, uses unknown
   argument keys, or doesn't fit the `key=value` shape, the step is
   passed to the LLM resolver which can substitute entities from prior

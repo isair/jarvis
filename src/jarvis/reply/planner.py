@@ -652,8 +652,17 @@ def _parse_plan_step_concrete(
         return name, {}
     args: dict = {}
     properties = property_schemas.get(name, {})
+    cursor = 0
     for m in _PLAN_STEP_KV_RE.finditer(rest):
         key = m.group("key")
+        gap = rest[cursor:m.start()].strip()
+        if gap not in (("", ",") if args else ("",)) or key in args:
+            debug_log("planner: ambiguous concrete step needs resolver", "planning")
+            return None
+        bare = m.group("bare")
+        if bare and bare[0] in ("'", '"'):
+            debug_log("planner: incomplete concrete quote needs resolver", "planning")
+            return None
         value = m.group("sq")
         if value is None:
             value = m.group("dq")
@@ -679,6 +688,10 @@ def _parse_plan_step_concrete(
                 return None
             value = parsed
         args[key] = value
+        cursor = m.end()
+    if rest[cursor:].strip() not in ("", "."):
+        debug_log("planner: unparsed concrete text needs resolver", "planning")
+        return None
     if not args:
         # Rest has content but no parseable key=value pairs — the step is
         # prose-shaped (e.g. `webSearch for the director's latest film`).
