@@ -322,3 +322,27 @@ When you add or change a context, update `_CALLER_TO_CONTEXT` so it shows up in 
 ## Keep this doc in sync
 
 This graph is the reference for LLM-latency optimisation. Treat it as authoritative: whenever code changes affect an LLM call — a new context, a removed one, a changed model/timeout/cap/gating/prompt source, or a new data-flow edge — update this file in the same PR. If the update would be more than a one-line tweak, reflect it in the relevant `*.spec.md` too.
+
+## Missing personal tool context
+
+- **Source**: `src/jarvis/reply/personal_context.py`, `resolve_missing_context`.
+- **Trigger**: a failed tool result declares `missing_context="location"` with
+  no explicit location argument. Both planned and model-generated calls use
+  the same reply-scoped wrapper. This gate is independent of planner recall.
+- **Model**: `resolve_model(cfg, Tier.FAST)` through the configured backend.
+- **Inputs**: current redacted query, recent user-only dialogue, bounded local
+  User graph records and dated diary summaries. `memory_enrichment_source`
+  controls persisted channels. Total evidence is at most 8,000 characters.
+  JSON records are untrusted evidence, not instructions; source IDs and dates
+  accompany each record. World/Directives and assistant/tool messages are excluded.
+- **Prompt**: static `_LOCATION_PROMPT`; extracts literal cities with source,
+  relationship kind and exact evidence span. Stored sources can supply home
+  defaults only; current location requires active user dialogue.
+- **Limits**: `llm_tools_timeout_sec`, 1,024 tokens including reasoning. One
+  extraction per missing input per reply; misses are cached too. No embeddings.
+- **Outputs**: validated context value and attribution note, or no resolution.
+  Deterministic source/date/quote/conflict checks precede one tool retry. The
+  The unified persona prompt requires remembered defaults to be labelled and
+  permits clarification for unresolved personal inputs. The attribution
+  note accompanies the retried tool result into ordinary reply synthesis and
+  any tool-result digest. No memory/configuration writes occur.

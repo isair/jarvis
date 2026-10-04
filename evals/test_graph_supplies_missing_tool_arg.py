@@ -5,6 +5,7 @@ memory-search step. Model inference uses the selected evaluation transport.
 """
 
 from unittest.mock import patch
+from contextlib import closing
 
 import pytest
 
@@ -39,6 +40,7 @@ def _make_runner(capture: ToolCallCapture):
                         "I couldn't auto-detect your location. Please "
                         "tell me which city to check the weather for."
                     ),
+                    missing_context="location",
                 )
             if "edinburgh" not in location.casefold():
                 return ToolExecutionResult(
@@ -57,13 +59,11 @@ def _make_runner(capture: ToolCallCapture):
 @pytest.mark.eval
 @requires_judge_llm
 class TestGraphSuppliesMissingToolArg:
-    """Warm-profile injection path: a User-branch fact ("lives in
-    Edinburgh") is always loaded into the system prompt, so the chat
-    model can supply it as the location argument without an extra
-    memory search."""
+    """A persisted User-branch residence grounds weather through the shared
+    missing-context protocol without a planner memory-search step."""
 
     def test_warm_profile_user_fact_grounds_get_weather_call(
-        self, eval_db, eval_dialogue_memory,
+        self, eval_db, eval_dialogue_memory, graph_store,
     ):
         from jarvis.reply.engine import run_reply_engine
 
@@ -74,26 +74,17 @@ class TestGraphSuppliesMissingToolArg:
 
         capture = ToolCallCapture()
 
-        # Inject a User-branch fact directly into the warm-profile builder
-        # rather than seeding the SQLite-backed graph store. The warm-
-        # profile path the engine relies on is `build_warm_profile` →
-        # `format_warm_profile_block`; seeding via the public API replays
-        # the production shape without depending on graph-mutation
-        # listeners or branch-root bootstrapping in the test DB.
-        warm_profile = {
-            "user": "The user lives in Edinburgh.",
-            "directives": "",
-        }
+        from jarvis.memory.db import Database
+        cfg.db_path = graph_store.db_path
+        graph_store.create_node('Home', 'User residence',
+                                data='The user lives in Edinburgh.', parent_id='user')
 
-        with patch(
-            "jarvis.memory.graph_ops.build_warm_profile",
-            return_value=warm_profile,
-        ), patch(
+        with closing(Database(graph_store.db_path)) as persisted_db, patch(
             "jarvis.reply.engine.run_tool_with_retries",
             side_effect=_make_runner(capture),
         ):
             response = run_reply_engine(
-                db=eval_db, cfg=cfg, tts=None,
+                db=persisted_db, cfg=cfg, tts=None,
                 text="how's the weather, Jarvis?",
                 dialogue_memory=eval_dialogue_memory,
             )

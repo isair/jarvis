@@ -10,3 +10,4 @@ class ToolExecutionResult:
     success: bool
     reply_text: Optional[str]
     error_message: Optional[str] = None
+    missing_context: Optional[str] = None

@@ -248,6 +248,7 @@ class WeatherTool(Tool):
                                 "I couldn't auto-detect your location. "
                                 "Please tell me which city to check the weather for."
                             ),
+                            missing_context="location",
                         )
 
             if location_str:
