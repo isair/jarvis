@@ -25,7 +25,8 @@ CASES = [
 ]
 
 
-def test_hybrid_recall_at_three(tmp_path):
+@pytest.mark.parametrize('mixed_dimensions', [False, True], ids=['current-model', 'mixed-model-history'])
+def test_hybrid_recall_at_three(tmp_path, mixed_dimensions):
     db = Database(str(tmp_path / 'recall.db'))
     db._python_vector_store = PythonVectorStore(db.db_path)
     try:
@@ -38,6 +39,9 @@ def test_hybrid_recall_at_three(tmp_path):
             sid = db.upsert_conversation_summary(f'2026-02-{index + 1:02}', ' '.join([keyword] * 3))
             db.upsert_summary_embedding(sid, [1.1 if i == index else 1. for i in range(len(CASES))])
             targets.append(sid)
+        if mixed_dimensions:
+            sid = db.upsert_conversation_summary('2026-03-01', 'Unrelated model history')
+            db.upsert_summary_embedding(sid, [1.] * (len(CASES) + 1))
         results = []
         for subset, query_index in (('lexical', 0), ('semantic', 1)):
             hits = {'fts': 0, 'hybrid': 0}
