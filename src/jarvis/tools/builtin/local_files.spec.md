@@ -3,6 +3,7 @@
 `localFiles` reads, writes, appends, lists and deletes files locally. It does not call an LLM or a network service. Paths are expanded and resolved before use, and the resolved target must be the user's home directory or a descendant.
 
 - `operation` and `path` are required. Supported operations are `list`, `read`, `write`, `append` and `delete`.
+- `path` must be a non-empty JSON string. Numbers, booleans, arrays and objects return a correctable error before path resolution or file access. Relative paths, including numeric filenames represented as strings, are supported.
 - Write and append require string `content`, which is stored literally as UTF-8. Write creates parent directories.
 - Listings use `glob` (default `*`). `recursive` defaults to false and must be a JSON boolean when supplied. Strings, numbers, null, arrays and objects return a correctable tool error without producing a listing.
 - False and omitted recursion apply the supplied glob to the target directory. True recursion applies the pattern recursively. Listings show at most 50 sorted entries and report the count of additional entries.

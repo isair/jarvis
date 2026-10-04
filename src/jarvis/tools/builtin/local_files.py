@@ -41,8 +41,6 @@ class LocalFilesTool(Tool):
             home_root = Path(os.path.expanduser("~")).resolve()
 
             def _expand_user_path(p: str) -> str:
-                if not isinstance(p, str):
-                    return str(p)
                 if p == "~":
                     return os.path.expanduser("~")
                 if p.startswith("~/") or p.startswith("~\\"):
@@ -64,10 +62,15 @@ class LocalFilesTool(Tool):
 
             operation = str(args.get("operation") or "").strip().lower()
             path_arg = args.get("path")
-            if not operation or not path_arg:
+            if not operation or path_arg is None:
+                return ToolExecutionResult(success=False, reply_text="localFiles requires 'operation' and 'path'.")
+            if not isinstance(path_arg, str):
+                debug_log("localFiles: rejected non-string path argument", "tools")
+                return ToolExecutionResult(success=False, reply_text="localFiles 'path' must be a JSON string.")
+            if not path_arg:
                 return ToolExecutionResult(success=False, reply_text="localFiles requires 'operation' and 'path'.")
 
-            target = _resolve_safe(str(path_arg))
+            target = _resolve_safe(path_arg)
 
             # list
             if operation == "list":
