@@ -505,4 +505,8 @@ class TestGraphFactHygieneReview:
             ('directives', 'Always reply briefly'),
             ('world', 'The forecast predicts 6.8 to 16.8 degrees Celsius this week'),
         ]
-        assert _review_graph_facts(candidates, mock_config, JUDGE_MODEL, 30, False) == candidates[:3]
+        summary = ('London has mild winters. The user prefers cool weather and told '
+                   'the assistant to always reply briefly. This week\'s forecast '
+                   'predicts 6.8 to 16.8 degrees Celsius.')
+        assert _review_graph_facts(candidates, mock_config, JUDGE_MODEL, 30, False,
+                                   summary) == candidates[:3]
