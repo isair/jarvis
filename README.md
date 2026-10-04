@@ -17,11 +17,11 @@ Talk naturally, as if Jarvis were a third person in the room.
 
 ## An assistant that lives with you, not in the cloud
 
-Jarvis is built to be part of the conversation, not another screen to type into. Talk through an idea, discuss plans with a friend, then ask “Jarvis, what do you think?” While listening, it keeps a short, temporary rolling transcript of nearby speech so it can join an ongoing conversation using what was just discussed, without you having to repeat the background.
+Jarvis is built to be part of the conversation. Talk through an idea, discuss plans with a friend, then ask “Jarvis, what do you think?” While listening, it keeps a short, temporary rolling transcript of nearby speech so it can join an ongoing conversation using what was just discussed.
 
-Address Jarvis by name anywhere in a sentence and follow up naturally. Wake aliases match whole words so unrelated words do not trigger their approximate variants. Mentions while speaking to someone else are not invitations to reply. Speech recognition, language models and speech synthesis run on hardware you control. The animated face gives your voice assistant a presence on the desktop; chat is there when you would rather type.
+Address Jarvis by name anywhere in a sentence and follow up naturally. Speech recognition, language models and speech synthesis run on hardware you control.
 
-Your conversation memory stays on your computer. Separate local databases keep their semantic search indices separate. Sensitive information is redacted before it reaches model context or the saved diary. Web search, weather and connected tools use the network when you ask for those capabilities; local conversation does not require a cloud AI account.
+Your conversation and all data stays solely on your computer. Separate local databases keep their semantic search indices separate. Sensitive information is redacted before it reaches model context or the saved diary, even though both are local, to ensure the security of your private information. Web search, weather and connected tools use the network but send only what is necessary when you ask for those capabilities.
 
 <p align="center">
   <img src="docs/img/face.png" alt="Jarvis's animated amber wireframe face, the desktop presence of your local voice assistant" width="460">
