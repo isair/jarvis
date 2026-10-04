@@ -12,7 +12,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 
 - **File**: [src/jarvis/reply/engine.py](src/jarvis/reply/engine.py) — `reply()` and the loop at ~lines 1370-1650; native tool-call path in `chat_with_messages()` (~1424, 1455).
 - **Trigger**: every user message. Runs up to `agentic_max_turns` (default 8) iterations per reply.
-- **Model / gating**: `cfg.llm_chat_model` via `get_llm_backend(cfg)`. Ollama defaults to E4B chat; setup adapts unsaved chat choices to detected memory after embedding and Whisper overhead, preserving explicit saved choices. Not optional. No size branching on the loop itself — size branching affects the digests/evaluator around it.
+- **Model / gating**: `cfg.llm_chat_model` via `get_llm_backend(cfg)`. Ollama defaults to E4B chat; setup budgets chat and fast together after embedding and Whisper overhead, preserving explicit saved choices. Larger chat recommendations retain room for E2B fast. Not optional. No size branching on the loop itself — size branching affects the digests/evaluator around it.
 - **Inputs**:
   - Redacted user query
   - Recent dialogue (last 5 minutes), including in-loop tool-call + tool-role messages from prior replies within the active conversation (tool carryover, `DialogueMemory.record_tool_turn` / `get_recent_turns_with_tools` in [src/jarvis/memory/conversation.py](src/jarvis/memory/conversation.py); per-prompt cap via `cfg.tool_carryover_max_turns` / `tool_carryover_per_entry_chars`; storage cap `_tool_turns_max_storage = 16`; cleared on `stop` signal AND on new-conversation entry; UNTRUSTED WEB EXTRACT fence markers preserved on truncation; both `content` and `tool_calls[*].function.arguments` scrubbed on write)

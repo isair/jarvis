@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 
 SUPPORTED_CHAT_MODELS: Dict[str, Dict[str, str]] = {
     "gemma4:e2b": {
-        "name": "Gemma 4 E2B (Low-memory chat / Fast)",
+        "name": "Gemma 4 E2B (Low memory)",
         "description": "Fast, multimodal, effective 2B — a little dumb, occasionally fumbles tool calls; ~7.2GB download",
         "size": "~7.2GB",
         "vram": "8GB+",
@@ -48,6 +48,7 @@ DEFAULT_CHAT_MODEL = "gemma4:e4b"
 # provider an unset fast model resolves to the active chat model instead —
 # this pull-name only exists on Ollama.
 DEFAULT_FAST_MODEL = "gemma4:e2b"
+SUPPORTED_FAST_MODEL_IDS = ("qwen3.5:0.8b", "gemma4:e2b", "gemma4:e4b")
 
 
 def get_supported_model_ids() -> set[str]:

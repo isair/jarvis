@@ -345,6 +345,23 @@ def format_vram_warning(total_vram_mb: Optional[int],
     )
 
 
+def get_recommended_model_pair(model_budget_mb: Optional[int]) -> tuple[str, str]:
+    """Recommend chat and fast together after reserving companion overhead."""
+    from jarvis.config import DEFAULT_CHAT_MODEL, DEFAULT_FAST_MODEL, SUPPORTED_FAST_MODEL_IDS
+
+    if model_budget_mb is None:
+        return DEFAULT_CHAT_MODEL, DEFAULT_FAST_MODEL
+    fast_mb = required_vram_mb(DEFAULT_FAST_MODEL) or 0
+    for chat, _name, chat_mb, _low in reversed(_MODEL_VRAM_TABLE):
+        total = chat_mb + (0 if chat == DEFAULT_FAST_MODEL else fast_mb)
+        if total <= model_budget_mb:
+            return chat, DEFAULT_FAST_MODEL
+        if chat in SUPPORTED_FAST_MODEL_IDS and chat_mb <= model_budget_mb:
+            return chat, chat
+    smallest = _MODEL_VRAM_TABLE[0][0]
+    return smallest, smallest
+
+
 def required_vram_mb(model_id: str) -> Optional[int]:
     """Look up the VRAM requirement for a model ID.
 

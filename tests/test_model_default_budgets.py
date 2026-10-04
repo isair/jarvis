@@ -27,7 +27,7 @@ def test_recommendation_survives_page_entry(qapp, monkeypatch, chat):
     budget = overhead + vram.required_vram_mb(chat)
     monkeypatch.setattr(setup_wizard, 'detect_total_vram_mb', lambda: budget)
     page = setup_wizard.ModelsPage()
-    expected = vram.get_recommended_model_id(budget - overhead)
+    expected, _ = vram.get_recommended_model_pair(budget - overhead)
     assert page._chat_combo.currentData() == expected
     page.initializePage()
     assert page._chat_combo.currentData() == expected
@@ -85,3 +85,18 @@ def test_explicit_default_chat_choice_survives_higher_memory(qapp, monkeypatch, 
     page.initializePage()
     assert page._chat_combo.currentData() == cfg.ollama_chat_model
     assert page._fast_combo.currentData() == cfg.fast_model
+
+
+def test_larger_chat_recommendation_leaves_room_for_a_capable_fast_model(qapp, monkeypatch):
+    cfg = SimpleNamespace(ollama_chat_model=DEFAULT_CHAT_MODEL,
+                          fast_model=DEFAULT_FAST_MODEL, whisper_model='small')
+    monkeypatch.setattr(setup_wizard, 'load_settings', lambda: cfg)
+    overhead = (setup_wizard.ModelsPage._EMBED_VRAM_MB
+                + setup_wizard.WhisperSetupPage.get_whisper_vram_mb(cfg.whisper_model))
+    largest = max(setup_wizard.ModelsPage._ALL_MODELS, key=vram.required_vram_mb)
+    monkeypatch.setattr(setup_wizard, 'detect_total_vram_mb',
+                        lambda: overhead + vram.required_vram_mb(largest))
+    page = setup_wizard.ModelsPage()
+    page.initializePage()
+    assert 'CPU fallback' not in page._vram_detail.text()
+    assert page._fast_combo.currentData() == DEFAULT_FAST_MODEL

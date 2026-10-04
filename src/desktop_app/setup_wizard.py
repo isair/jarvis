@@ -23,10 +23,11 @@ from urllib.parse import urlsplit
 import requests
 
 from jarvis.debug import debug_log
-from jarvis.config import SUPPORTED_CHAT_MODELS, DEFAULT_CHAT_MODEL, DEFAULT_FAST_MODEL
+from jarvis.config import SUPPORTED_CHAT_MODELS, DEFAULT_CHAT_MODEL, DEFAULT_FAST_MODEL, SUPPORTED_FAST_MODEL_IDS
 from jarvis.utils.vram import (
     detect_total_vram_mb,
     get_recommended_model_id,
+    get_recommended_model_pair,
     required_vram_mb,
 )
 
@@ -2136,7 +2137,7 @@ class ModelsPage(ScrollableWizardPage):
 
     MODEL_OPTIONS = SUPPORTED_CHAT_MODELS
     _ALL_MODELS = MODEL_OPTIONS
-    _FAST_MODEL_IDS = ["qwen3.5:0.8b", "gemma4:e2b", "gemma4:e4b"]
+    _FAST_MODEL_IDS = SUPPORTED_FAST_MODEL_IDS
 
     # VRAM overhead for always-running companion models (MB).
     # nomic-embed-text: ~1 GB for ~1.5K dim semantic search.
@@ -2321,10 +2322,11 @@ class ModelsPage(ScrollableWizardPage):
             # leaves room for embeddings + whisper alongside the chat model.
             overhead = self._EMBED_VRAM_MB + self._whisper_vram_mb()
             usable_mb = self._detected_vram_mb - overhead
-            rec = get_recommended_model_id(max(usable_mb, 0))
+            rec, fast = get_recommended_model_pair(max(usable_mb, 0))
             debug_log(f"Chat model memory recommendation: {rec} (available {usable_mb} MB)", "setup")
             if rec in self._ALL_MODELS:
                 self._chat_model = rec
+                self._fast_model = fast
                 self._constrain_fast_model()
                 self._sync_combo_states()
         self._refresh_vram_display()
@@ -2428,12 +2430,12 @@ class ModelsPage(ScrollableWizardPage):
             dg = self._detected_vram_mb / 1024
             self._vram_label.setText(
                 f"Total VRAM Required: {tg:.1f} GB    "
-                f"Your GPU: {dg:.1f} GB"
+                f"Available budget: {dg:.1f} GB"
             )
             if total > self._detected_vram_mb:
                 sg = (total - self._detected_vram_mb) / 1024
                 self._vram_detail.setText(
-                    f"Your GPU has {dg:.1f} GB VRAM but the selected "
+                    f"The available model budget is {dg:.1f} GB but the selected "
                     f"models need {tg:.1f} GB ({sg:.1f} GB over). "
                     "Switch to smaller models or use CPU fallback."
                 )
@@ -2509,7 +2511,9 @@ class ModelsPage(ScrollableWizardPage):
         saved = _load_json(default_config_path())
         if self._detected_vram_mb is not None and cc == DEFAULT_CHAT_MODEL and "ollama_chat_model" not in saved:
             usable_mb = self._detected_vram_mb - self._EMBED_VRAM_MB - self._whisper_vram_mb()
-            self._chat_model = get_recommended_model_id(max(usable_mb, 0))
+            self._chat_model, recommended_fast = get_recommended_model_pair(max(usable_mb, 0))
+            if "fast_model" not in saved:
+                self._fast_model = recommended_fast
             debug_log(f"Default chat memory recommendation: {self._chat_model}", "setup")
         self._constrain_fast_model()
         # Default to unlinked — separate fast model is the recommended layout
