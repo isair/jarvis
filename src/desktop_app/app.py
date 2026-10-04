@@ -2484,8 +2484,30 @@ class JarvisSystemTray:
         else:
             self.start_daemon()
 
+    def _daemon_alive(self) -> bool:
+        """True while a daemon this app started is still running (or stuck stopping)."""
+        if getattr(self, "_daemon_stuck", False):
+            return True
+        thread = getattr(self, "daemon_thread", None)
+        if thread is not None and not thread.isFinished():
+            return True
+        process = getattr(self, "daemon_process", None)
+        return process is not None and process.poll() is None
+
     def start_daemon(self) -> None:
         """Start the Jarvis daemon."""
+        # Never start a second daemon while one is alive: two daemons means
+        # two listeners and two TTS engines answering the same mic (the
+        # "two voices" bug). daemon.main() also refuses via its own lock.
+        if self._daemon_alive():
+            if getattr(self, "_daemon_stuck", False):
+                self.log_signals.new_log.emit(
+                    "⚠️ The previous daemon is still shutting down — quit and reopen Jarvis to start fresh.\n"
+                )
+            else:
+                self.log_signals.new_log.emit("ℹ️ Jarvis is already running.\n")
+            debug_log("start_daemon ignored: a daemon is still alive", "desktop")
+            return
         self._daemon_stop_expected = False
         self._set_chat_daemon_status("starting")
         try:
@@ -2647,6 +2669,10 @@ class JarvisSystemTray:
 
     def _on_daemon_finished(self) -> None:
         """Called when daemon thread finishes."""
+        # A stuck daemon that finally exited frees the slot for a new start.
+        self._daemon_stuck = False
+        if self.daemon_thread is not None and self.daemon_thread.isFinished():
+            self.daemon_thread = None
         if self.is_listening:
             status = "stopped" if self._daemon_stop_expected else "crashed"
             self.is_listening = False
@@ -2809,7 +2835,18 @@ class JarvisSystemTray:
                         # Wait up to 3x timeout total before giving up
                         self.daemon_thread.wait(shutdown_wait_timeout_sec * 2000)
 
-                self.daemon_thread = None
+                if self.daemon_thread.isFinished():
+                    self.daemon_thread = None
+                else:
+                    # Gave up waiting, but the daemon is still alive. Keep the
+                    # handle and mark it stuck: dropping it let the next "Start
+                    # Listening" spawn a second daemon beside the orphan — two
+                    # listeners, two voices — with Stop only reaching the new one.
+                    self._daemon_stuck = True
+                    self.log_signals.new_log.emit(
+                        "⚠️ The daemon didn't stop — quit and reopen Jarvis before starting again.\n"
+                    )
+                    debug_log("daemon thread still alive after give-up; marked stuck", "desktop")
             elif self.daemon_process:
                 # For subprocess mode, show diary dialog with IPC-based updates
                 # The existing log reader thread emits signals; we use a queue to collect lines

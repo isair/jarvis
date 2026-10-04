@@ -741,15 +741,43 @@ def _check_and_update_diary(
 def main(smoke_test: bool = False) -> None:
     """Main daemon entry point.
 
+    Only one daemon may run at a time (jarvis/daemon_lock.py): two daemons
+    means two listeners and two TTS engines answering the same mic — the
+    "two voices" bug. A second main() — another process, or a second
+    in-process DaemonThread — is refused here, BEFORE anything else runs,
+    so in particular it never resets the stop flag of a daemon that is
+    still shutting down.
+
     Args:
         smoke_test: If True, initialise all components, print a success
             marker, and return without entering the main event loop.
             Used by CI smoke tests to verify the build is not broken.
     """
+    from .daemon_lock import acquire_daemon_lock, lock_holder_pid, release_daemon_lock
+
+    lock = None if smoke_test else acquire_daemon_lock()
+    if lock is None and not smoke_test:
+        pid = lock_holder_pid()
+        print(
+            f"⚠️ Another Jarvis daemon is already running{f' (pid {pid})' if pid else ''} — "
+            "not starting a second one (two daemons would both listen and both speak).",
+            flush=True,
+        )
+        debug_log("daemon start refused: another daemon holds the lock", "jarvis")
+        return
+    try:
+        _run_daemon(smoke_test)
+    finally:
+        release_daemon_lock(lock)
+
+
+def _run_daemon(smoke_test: bool = False) -> None:
+    """The daemon itself — only ever entered while holding the daemon lock."""
     global _global_dialogue_memory, _global_stop_requested, _global_tts_engine, _global_dictation_engine
     global _warm_profile_graph_listener
 
-    # Reset stop flag at start (in case of restart)
+    # Reset stop flag at start (in case of restart). Safe: we hold the
+    # daemon lock, so no other daemon is mid-shutdown in this process.
     _global_stop_requested = False
 
     _install_signal_handlers()
