@@ -28,7 +28,8 @@ CASES = [
 
 @pytest.mark.parametrize('mixed_dimensions', [False, True], ids=['current-model', 'mixed-model-history'])
 @pytest.mark.parametrize('failed_refresh', [False, True], ids=['healthy-index', 'rejected-refresh'])
-def test_hybrid_recall_at_three(tmp_path, mixed_dimensions, failed_refresh):
+@pytest.mark.parametrize('updated_text', [False, True], ids=['initial-text', 'updated-text'])
+def test_hybrid_recall_at_three(tmp_path, mixed_dimensions, failed_refresh, updated_text):
     db = Database(str(tmp_path / 'recall.db'))
     db._python_vector_store = PythonVectorStore(db.db_path)
     try:
@@ -52,6 +53,11 @@ def test_hybrid_recall_at_three(tmp_path, mixed_dimensions, failed_refresh):
                 db.upsert_summary_embedding(targets[0], [1.] * len(CASES))
             except sqlite3.IntegrityError:
                 pass
+        if updated_text:
+            for index, (keyword, _) in enumerate(CASES):
+                targets[index] = db.upsert_conversation_summary(
+                    f'2026-02-{index + 1:02}', ' '.join([keyword] * 3) + ' Additional diary note.',
+                )
         results = []
         for subset, query_index in (('lexical', 0), ('semantic', 1)):
             hits = {'fts': 0, 'hybrid': 0}

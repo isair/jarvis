@@ -11,6 +11,10 @@ _SCHEMA_SQL = """
 PRAGMA journal_mode=WAL;
 PRAGMA synchronous=NORMAL;
 
+CREATE TABLE IF NOT EXISTS diary_index_migrations (
+  name TEXT PRIMARY KEY
+);
+
 -- Structured meals log (optional feature)
 CREATE TABLE IF NOT EXISTS meals (
   id            INTEGER PRIMARY KEY,
@@ -133,7 +137,11 @@ class Database:
             else:
                 debug_log("Using Python fallback vector store", "jarvis")
         
-        self._init_schema()
+        try:
+            self._init_schema()
+        except Exception:
+            self.conn.close()
+            raise
 
     @property
     def has_vector_store(self) -> bool:
@@ -146,7 +154,18 @@ class Database:
             cur.executescript(_SCHEMA_SQL)
             if self.is_vss_enabled:
                 cur.executescript(_VSS_SCHEMA_SQL)
-            self.conn.commit()
+            try:
+                # Serialise the durable consistency check across database owners.
+                cur.execute('BEGIN IMMEDIATE')
+                migration = 'summary_fts_content_consistency'
+                if not cur.execute('SELECT 1 FROM diary_index_migrations WHERE name=?', (migration,)).fetchone():
+                    cur.execute("INSERT INTO summaries_fts(summaries_fts) VALUES('rebuild')")
+                    cur.execute('INSERT INTO diary_index_migrations(name) VALUES (?)', (migration,))
+                    debug_log('Diary full-text index rebuilt from live summaries', 'memory')
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()
+                raise
 
     
 
@@ -309,15 +328,25 @@ class Database:
             ts_utc = datetime.now(timezone.utc).isoformat()
         with self._lock:
             cur = self.conn.cursor()
-            cur.execute(
-                """
-                INSERT OR REPLACE INTO conversation_summaries(date_utc, ts_utc, summary, topics, source_app)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (date_utc, ts_utc, summary, topics, source_app),
-            )
-            self.conn.commit()
-            return int(cur.lastrowid)
+            try:
+                cur.execute(
+                    """
+                    INSERT INTO conversation_summaries(date_utc, ts_utc, summary, topics, source_app)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(date_utc, source_app) DO UPDATE SET
+                        ts_utc=excluded.ts_utc, summary=excluded.summary, topics=excluded.topics
+                    """,
+                    (date_utc, ts_utc, summary, topics, source_app),
+                )
+                summary_id = cur.execute(
+                    'SELECT id FROM conversation_summaries WHERE date_utc=? AND source_app=?',
+                    (date_utc, source_app),
+                ).fetchone()[0]
+                self.conn.commit()
+                return int(summary_id)
+            except Exception:
+                self.conn.rollback()
+                raise
 
     def get_conversation_summary(self, date_utc: str, source_app: str = "jarvis") -> Optional[sqlite3.Row]:
         """Get conversation summary for a specific date."""

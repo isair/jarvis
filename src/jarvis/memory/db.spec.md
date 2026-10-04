@@ -19,6 +19,18 @@ vector candidates. Both Python/FAISS and sqlite-vss use the same fusion routine.
 `evals/test_hybrid_retrieval.py` measures lexical and semantic recall@3 on a
 controlled corpus. It exercises ranking, not a particular embedding model.
 
+Each `(date_utc, source_app)` summary retains its row ID when its text, topics or
+timestamp are updated. Existing vector references remain attached when an
+optional refresh is unavailable. Full-text update triggers replace the indexed
+terms, and a failed text write rolls back and releases the writer lock while
+preserving the committed summary and its references.
+
+Opening a diary rebuilds its full-text index from live summaries once, tracked
+in `diary_index_migrations`. The rebuild and its marker commit together under a
+SQLite writer transaction shared across database owners. A failed rebuild rolls
+back without a marker, allowing a later open to retry. Diary text and vector
+rows are unchanged by the rebuild; orphaned vectors are not reassociated.
+
 `upsert_summary_embedding` writes the sqlite-vss vector and its summary mapping
 in one transaction under the database lock. A failed write rolls back the index
 transaction and releases the writer lock; previously committed diary text and
