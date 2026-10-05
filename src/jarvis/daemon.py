@@ -829,12 +829,8 @@ def _check_and_update_diary(
 def main(smoke_test: bool = False) -> None:
     """Main daemon entry point.
 
-    Only one daemon may run at a time (jarvis/daemon_lock.py): two daemons
-    means two listeners and two TTS engines answering the same mic — the
-    "two voices" bug. A second main() — another process, or a second
-    in-process DaemonThread — is refused here, BEFORE anything else runs,
-    so in particular it never resets the stop flag of a daemon that is
-    still shutting down.
+    The per-user OS lock covers initialisation, the event loop and cleanup.
+    Contenders return before any runtime globals or stop flags are changed.
 
     Args:
         smoke_test: If True, initialise all components, print a success
@@ -843,15 +839,17 @@ def main(smoke_test: bool = False) -> None:
     """
     from .daemon_lock import acquire_daemon_lock, lock_holder_pid, release_daemon_lock
 
-    lock = None if smoke_test else acquire_daemon_lock()
-    if lock is None and not smoke_test:
+    lock = acquire_daemon_lock()
+    if lock is None:
         pid = lock_holder_pid()
         print(
-            f"⚠️ Another Jarvis daemon is already running{f' (pid {pid})' if pid else ''} — "
-            "not starting a second one (two daemons would both listen and both speak).",
+            f"⚠️ Another Jarvis daemon is already running{f' (pid {pid})' if pid else ''}. "
+            "Stop it before starting Jarvis again.",
             flush=True,
         )
         debug_log("daemon start refused: another daemon holds the lock", "jarvis")
+        if smoke_test:
+            raise RuntimeError("Another Jarvis daemon is already running; smoke initialisation was not performed")
         return
     try:
         _run_daemon(smoke_test)
@@ -860,12 +858,11 @@ def main(smoke_test: bool = False) -> None:
 
 
 def _run_daemon(smoke_test: bool = False) -> None:
-    """The daemon itself — only ever entered while holding the daemon lock."""
+    """Initialise and run the daemon while holding its single-instance lock."""
     global _global_dialogue_memory, _global_stop_requested, _global_tts_engine, _global_dictation_engine
     global _warm_profile_graph_listener
 
-    # Reset stop flag at start (in case of restart). Safe: we hold the
-    # daemon lock, so no other daemon is mid-shutdown in this process.
+    # The lock prevents contenders from resetting a stopping runtime.
     _global_stop_requested = False
     _voice_feedback_pending.clear()
 

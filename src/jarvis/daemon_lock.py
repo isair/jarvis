@@ -1,25 +1,13 @@
-"""Single-instance lock for the Jarvis daemon.
+"""Per-user OS lock for a single Jarvis daemon across threads and processes.
 
-Speech is serialized inside one daemon (one TTS engine, one queue), so two
-overlapping voices mean two daemons are alive, each with its own listener
-and TTS, both hearing the mic and both answering. The desktop app already
-guards against a second *app*; nothing guarded against a second *daemon*:
-a stray ``python -m jarvis.daemon``, a survivor of a crashed app, or a
-second in-process DaemonThread started after the app gave up waiting for
-the first one to stop.
-
-This lock closes all three. It's an OS file lock on a fresh file handle:
-``flock`` (Unix) and ``msvcrt.locking`` (Windows) both conflict between two
-handles to the same file even inside ONE process, so a second ``main()`` in
-the same process is refused exactly like a second process is. The lock is
-released when the handle closes, including when the process dies, so a
-crash never leaves a stale lock behind.
-
-Stdlib only, so it can be tested without the daemon's heavy dependencies.
+The owner retains its file handle for the complete daemon lifetime. Closing
+it, including on process death, releases ownership. The lock file stays at
+its path so all contenders lock the same inode.
 """
 
 from __future__ import annotations
 
+import errno
 import os
 import sys
 from pathlib import Path
@@ -31,7 +19,7 @@ _LOCK_OFFSET = 64
 
 
 def daemon_lock_path() -> Path:
-    """Where the daemon lock lives — beside the desktop app's own lock."""
+    """Return the per-user daemon lock path."""
     override = os.environ.get("JARVIS_DAEMON_LOCK")
     if override:
         return Path(override)
@@ -41,7 +29,6 @@ def daemon_lock_path() -> Path:
         lock_dir = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "Jarvis"
     else:
         lock_dir = Path.home() / ".jarvis"
-    lock_dir.mkdir(parents=True, exist_ok=True)
     return lock_dir / "jarvis_daemon.lock"
 
 
@@ -49,26 +36,34 @@ def acquire_daemon_lock(path: Optional[Path] = None) -> Optional[IO[bytes]]:
     """Take the daemon lock. Returns the open handle (keep it open for the
     daemon's lifetime) or None when another daemon already holds it."""
     lock_path = path or daemon_lock_path()
-    handle = open(lock_path, "a+b")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    # Opening without truncation preserves the current owner's diagnostic PID.
+    handle = os.fdopen(os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600), "r+b")
     try:
-        if sys.platform == "win32":
-            import msvcrt
+        try:
+            if sys.platform == "win32":
+                import msvcrt
 
-            handle.seek(_LOCK_OFFSET)
-            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-        else:
-            import fcntl
+                handle.seek(_LOCK_OFFSET)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
 
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            if exc.errno in (errno.EACCES, errno.EAGAIN):
+                handle.close()
+                return None
+            raise
+        # Leave the Windows lock byte untouched: its mandatory lock is beyond
+        # the fixed-width diagnostic field, so contenders can read the PID.
+        handle.seek(0)
+        handle.write(str(os.getpid()).encode().ljust(_LOCK_OFFSET, b" "))
+        handle.flush()
+        return handle
+    except BaseException:
         handle.close()
-        return None
-    # Ours — record the PID for anyone diagnosing a refused start.
-    handle.seek(0)
-    handle.truncate(0)
-    handle.write(str(os.getpid()).encode())
-    handle.flush()
-    return handle
+        raise
 
 
 def release_daemon_lock(handle: Optional[IO[bytes]]) -> None:
@@ -92,9 +87,10 @@ def release_daemon_lock(handle: Optional[IO[bytes]]) -> None:
 
 
 def lock_holder_pid(path: Optional[Path] = None) -> Optional[int]:
-    """The PID recorded by the current holder, for the refusal message."""
+    """Return the recorded PID for diagnostics; it is not proof of ownership."""
     try:
-        text = (path or daemon_lock_path()).read_text(errors="ignore").strip()
+        with (path or daemon_lock_path()).open("rb") as handle:
+            text = handle.read(_LOCK_OFFSET).decode("ascii", errors="ignore").strip()
         return int(text) if text.isdigit() else None
     except OSError:
         return None

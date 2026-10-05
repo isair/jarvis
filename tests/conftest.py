@@ -189,3 +189,9 @@ def qapp(_qapplication):
             widget.deleteLater()
     # Flush deferred destruction, not unrelated timers or application callbacks.
     QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_daemon_lock(tmp_path, monkeypatch):
+    """Daemon entry-point tests must not contend with the user's runtime."""
+    monkeypatch.setenv("JARVIS_DAEMON_LOCK", str(tmp_path / "jarvis_daemon.lock"))
