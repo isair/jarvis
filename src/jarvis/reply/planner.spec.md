@@ -279,3 +279,7 @@ The engine consumes the plan in two phases.
   resolver's schema-level guard to reject unknown tools.
 - Plans are not cached across turns. Each user utterance gets its own
   plan because the dialogue state and entity references change.
+
+Concrete primitive arguments accept declared type unions. A valid non-string
+JSON primitive retains its type; otherwise an allowed string retains its literal
+value. Invalid values without a string alternative require model resolution.

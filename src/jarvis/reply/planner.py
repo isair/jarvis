@@ -682,23 +682,27 @@ def _parse_plan_step_concrete(
             value = m.group("bare") or ""
         property_schema = properties.get(key)
         kind = property_schema.get("type") if isinstance(property_schema, dict) else None
-        if kind is not None and kind != "string":
+        kinds = kind if isinstance(kind, list) else [kind]
+        if kind is not None and kinds != ["string"]:
             try:
                 parsed = json.loads(value)
             except (ValueError, TypeError):
-                debug_log("planner: concrete typed argument needs resolver", "planning")
-                return None
-            valid = (
-                (kind == "boolean" and type(parsed) is bool)
-                or (kind == "integer" and type(parsed) is int)
-                or (kind == "number" and type(parsed) in (int, float)
-                    and (type(parsed) is int or math.isfinite(parsed)))
-                or (kind == "null" and parsed is None)
-            )
-            if not valid:
-                debug_log("planner: concrete typed argument needs resolver", "planning")
-                return None
-            value = parsed
+                if "string" not in kinds:
+                    debug_log("planner: concrete typed argument needs resolver", "planning")
+                    return None
+            else:
+                valid = (
+                    ("boolean" in kinds and type(parsed) is bool)
+                    or ("integer" in kinds and type(parsed) is int)
+                    or ("number" in kinds and type(parsed) in (int, float)
+                        and (type(parsed) is int or math.isfinite(parsed)))
+                    or ("null" in kinds and parsed is None)
+                )
+                if valid:
+                    value = parsed
+                elif "string" not in kinds:
+                    debug_log("planner: concrete typed argument needs resolver", "planning")
+                    return None
         args[key] = value
         cursor = m.end()
     if rest[cursor:].strip() not in ("", "."):

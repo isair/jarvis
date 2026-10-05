@@ -15,7 +15,7 @@ def test_logged_record_reference_is_grounded_in_saved_row(db, mock_config, monke
     ctx = ToolContext(db, mock_config, '', '', 'I ate oats', 0, lambda text: None)
     result = log_meal.LogMealTool().run({}, ctx)
     assert result.success
-    refs = getattr(result, 'resource_references', ())
+    refs = result.resource_references
     assert len(refs) == 1, '🥗 A successful write must expose its record identity'
     row = db.conn.execute('SELECT id, description FROM meals').fetchone()
     assert refs[0]['id'] == row['id']
@@ -28,11 +28,9 @@ def test_digest_does_not_erase_followup_identity(db, mock_config, dialogue_memor
     now = '2026-10-05T00:00:00+00:00'
     keep = db.insert_meal(now, 'fixture', 'Oats')
     monkeypatch.setattr(log_meal, 'call_llm_direct', lambda **kwargs: json.dumps({'description':'Oats'}) if kwargs['system_prompt'] == log_meal.NUTRITION_SYS else '')
-    seen = []
     def plan(**kwargs):
         if kwargs['query'] == 'Log oats':
             return ["logMeal meal='Oats'", 'Reply to the user.']
-        seen.append(kwargs['dialogue_context'])
         # The planner fixture follows available recorded identity, never DB ordering.
         records = dialogue_memory.get_recent_turns_with_tools()
         refs = [r for m in records for r in m.get('resource_references', [])]
@@ -46,6 +44,7 @@ def test_digest_does_not_erase_followup_identity(db, mock_config, dialogue_memor
         return {'message': {'content': 'Done.'}}
     with patch.object(engine, 'select_tools', return_value=['logMeal','deleteMeal','stop']), \
          patch.object(engine, 'plan_query', side_effect=plan), \
+         patch('jarvis.reply.planner.call_llm_direct', side_effect=AssertionError('Concrete IDs need no model')),  \
          patch.object(engine, 'digest_tool_result_for_query', return_value='The meal contains estimated nutrition.'), \
          patch.object(engine, 'chat_with_messages', side_effect=reply_chat):
         assert engine.run_reply_engine(db, mock_config, None, 'Log oats', dialogue_memory)

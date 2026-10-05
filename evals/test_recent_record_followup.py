@@ -38,6 +38,11 @@ def test_delete_logged_record_with_duplicate_label(eval_db, eval_dialogue_memory
         logged = [r['id'] for r in meals if r['id'] != older]
         assert len(logged) == 1, f'🥗 Meal was not logged once: {len(logged)}'
         recent_id = logged[0]
+        saved = next(row for row in meals if row['id'] == recent_id)
+        # Match the stored label even when extraction normalises its spelling.
+        eval_db.conn.execute('UPDATE meals SET description = ? WHERE id = ?',
+                             (saved['description'], older))
+        eval_db.conn.commit()
         # Ensure a database-wide "latest record" guess would delete the wrong meal.
         keep = eval_db.insert_meal(now.isoformat(), 'eval', 'Unrelated fixture meal')
         fallback = nullcontext() if resolver_available else patch.object(engine, '_resolve_plan_step', return_value=None)
@@ -50,7 +55,7 @@ def test_delete_logged_record_with_duplicate_label(eval_db, eval_dialogue_memory
 
 
 @pytest.mark.parametrize('kind, identity, label, query', [
-    ('note', 'note-84', 'Shopping', 'Delete that note.'),
+    ('note', 'note-k19', 'Shopping', 'Delete that note.'),
     ('appointment', 29, 'Dentist', 'O randevuyu sil.'),
 ])
 def test_planner_uses_recorded_identity_for_other_resources(kind, identity, label, query):

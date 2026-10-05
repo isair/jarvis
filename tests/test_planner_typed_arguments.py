@@ -16,6 +16,11 @@ pytestmark = pytest.mark.unit
     ('string', 'false', 'false'), ('string', '7', '7'),
     ('string', 'null', 'null'), (None, 'false', 'false'),
     ('number', '7', 7), ('integer', '-7', -7),
+    (['integer', 'string'], '7', 7),
+    (['integer', 'string'], "'note-84'", 'note-84'),
+    (['integer', 'string'], "'007'", '007'),
+    (['string', 'null'], 'null', None),
+    (['integer', 'boolean'], 'true', True),
 ])
 def test_concrete_value_matches_declared_type(monkeypatch, field_type, literal, expected):
     schema = [{'type': 'function', 'function': {
@@ -53,7 +58,8 @@ def test_planned_recursion_respects_the_directory_boundary(monkeypatch, tmp_path
     ('integer', 'true'), ('number', 'NaN'), ('number', 'Infinity'),
     ('number', '1e309'), ('null', 'false'),
     ('array', "'[1,2]'"), ('object', "'{key:value}'"),
-    (['string', 'null'], 'null'),
+    (['integer', 'null'], 'true'),
+    (['integer', 'boolean'], '1.5'),
 ])
 def test_unresolved_typed_values_return_to_the_model(monkeypatch, field_type, literal):
     schema = [{'type': 'function', 'function': {
