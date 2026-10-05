@@ -32,7 +32,10 @@ class DeleteMealTool(Tool):
     def run(self, args: Optional[Dict[str, Any]], context: ToolContext) -> ToolExecutionResult:
         """Execute the delete meal tool."""
         context.user_print("🗑️ Deleting the meal…")
-        fields = args if isinstance(args, dict) else {}
+        fields = (
+            {key: value for key, value in args.items() if value is not None}
+            if isinstance(args, dict) else {}
+        )
         by_description = "meal_description" in fields
         reference = None
         if ("id" in fields) != by_description:
