@@ -160,6 +160,8 @@ class LowPolyFaceWidget(QWidget):
     creating a futuristic AI assistant aesthetic.
     """
     
+    state_observed = pyqtSignal(str)
+
     # Colours
     PRIMARY_COLOR = QColor("#fbbf24")  # Amber/gold - matches Jarvis theme
     SECONDARY_COLOR = QColor("#f59e0b")  # Darker amber
@@ -232,7 +234,6 @@ class LowPolyFaceWidget(QWidget):
 
         # Connect to global Jarvis state
         self._state_manager = get_jarvis_state()
-        self._state_manager.state_changed.connect(self._on_state_changed)
 
         # Animation timer
         self._animation_timer = QTimer(self)
@@ -253,13 +254,6 @@ class LowPolyFaceWidget(QWidget):
             self._is_blinking = True
             self._blink_progress = 0.0
         self._schedule_next_blink()
-
-    def _on_state_changed(self, state_value: str):
-        """Handle Jarvis state change from global state."""
-        try:
-            self._jarvis_state = JarvisState(state_value)
-        except ValueError:
-            pass
 
     def set_expression(self, expression: Expression):
         """Set the face expression."""
@@ -431,6 +425,8 @@ class LowPolyFaceWidget(QWidget):
             self._jarvis_state = self._state_manager.state
         except Exception:
             pass
+        if self._jarvis_state != prev_state:
+            self.state_observed.emit(self._jarvis_state.value)
         # Re-anchor the listening ring clock each time we enter LISTENING
         # so the first ring lands with the first audible click and later
         # rings stay phase-locked to wall time.
@@ -1063,7 +1059,7 @@ class FaceWindow(QWidget):
         shadow.setOffset(0, 0)
         shadow.setColor(QColor(0, 0, 0, 155))
         self.face.setGraphicsEffect(shadow)
-        self.face._state_manager.state_changed.connect(self._update_presence)
+        self.face.state_observed.connect(self._update_presence)
         self._update_presence(self.face._state_manager.state.value)
 
         # Position on the right side of the screen

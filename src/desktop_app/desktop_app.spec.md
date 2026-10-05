@@ -128,6 +128,8 @@ no background panel, grid, title bar, subtitle area or persistent toolbar.
 
 The default footprint is 220 × 280 logical pixels, with zero layout margins.
 Vector strokes, glows and motion scale together with the face geometry.
+Presence opacity and state-entry animations follow the same frame-level state
+observation for bundled signals and file-backed subprocess updates.
 Asleep and idle states have lower window opacity than active listening,
 thinking, speaking or dictation. The state animations remain distinct. Empty
 corners are excluded from the native input region through an elliptical mask.

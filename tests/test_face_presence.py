@@ -79,13 +79,16 @@ def test_resting_presence_is_quieter_than_active_states(face):
     from desktop_app.face_widget import JarvisState
     manager = face.face._state_manager
     manager.set_state(JarvisState.ASLEEP)
+    face.face._animate()
     asleep = face.windowOpacity()
     manager.set_state(JarvisState.IDLE)
+    face.face._animate()
     idle = face.windowOpacity()
     for state in (JarvisState.LISTENING, JarvisState.THINKING,
                   JarvisState.SPEAKING, JarvisState.DICTATING,
                   JarvisState.DICTATION_PROCESSING):
         manager.set_state(state)
+        face.face._animate()
         assert 0 < asleep < idle < face.windowOpacity() <= 1
 
 
@@ -98,3 +101,13 @@ def test_tray_show_does_not_request_focus(face):
     face.activateWindow = lambda: pytest.fail('The face must not interrupt the active desktop application')
     tray.show_face_window()
     assert face.isVisible()
+
+
+def test_subprocess_state_file_updates_presence_without_a_qt_signal(face):
+    from pathlib import Path
+    from desktop_app.face_widget import JarvisState
+    before = face.windowOpacity()
+    Path(face.face._state_manager._state_file).write_text(JarvisState.LISTENING.value)
+    face.face._animate()
+    assert face.windowOpacity() > before
+    assert face.face._listening_started_at is not None

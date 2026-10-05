@@ -63,6 +63,7 @@ def main():
         face = face_widget.FaceWindow()
         face.face._animation_timer.stop()
         face.face._state_manager.set_state(face_widget.JarvisState.IDLE)
+        face.face._animate()
         face.face._activation_level = 1.0
         capture(face, 'face.png')
         face.close()
