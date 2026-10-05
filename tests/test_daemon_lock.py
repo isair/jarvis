@@ -1,10 +1,12 @@
 """The daemon single-instance lock — the guard against the "two voices" bug
 (two daemons alive, each with its own listener + TTS, both answering)."""
 
-import os
 import errno
+import os
 import subprocess
 import sys
+
+from pathlib import Path
 
 import pytest
 
@@ -48,7 +50,7 @@ def test_closing_the_handle_releases_it(tmp_path):
 
 @pytest.mark.unit
 def test_second_main_is_refused_without_reviving_a_stopping_daemon(tmp_path, monkeypatch):
-    daemon = pytest.importorskip("jarvis.daemon")
+    from jarvis import daemon
     monkeypatch.setenv("JARVIS_DAEMON_LOCK", str(tmp_path / "jarvis_daemon.lock"))
     ran = []
     monkeypatch.setattr(daemon, "_run_daemon", lambda smoke_test=False: ran.append(smoke_test))
@@ -92,6 +94,7 @@ def test_process_lock_survives_refusal_and_recovers_after_process_death(tmp_path
     path = tmp_path / "daemon.lock"
     child_code = """
 import sys
+sys.path.insert(0, sys.argv[2])
 from pathlib import Path
 from jarvis.daemon_lock import acquire_daemon_lock
 held = acquire_daemon_lock(Path(sys.argv[1]))
@@ -99,10 +102,13 @@ assert held is not None
 print("LOCKED", flush=True)
 sys.stdin.read()
 """
-    child = subprocess.Popen([sys.executable, "-u", "-c", child_code, str(path)],
+    child = subprocess.Popen([sys.executable, "-u", "-c", child_code, str(path), str(Path(__file__).resolve().parents[1] / "src")],
                              stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     try:
-        assert child.stdout.readline().strip() == "LOCKED"
+        ready = child.stdout.readline().strip()
+        if ready != "LOCKED":
+            _, error = child.communicate(timeout=10)
+            pytest.fail(f"Child did not acquire the lock: {ready} {error}")
         assert lock_holder_pid(path) == child.pid
         assert acquire_daemon_lock(path) is None
         assert lock_holder_pid(path) == child.pid
