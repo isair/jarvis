@@ -66,10 +66,10 @@ def _safe_float(x: Any) -> Optional[float]:
 
 
 
-def extract_and_log_meal(db: Database, cfg: Any, original_text: str, source_app: str) -> Optional[str]:
+def extract_and_log_meal(db: Database, cfg: Any, original_text: str, source_app: str) -> Optional[ToolExecutionResult]:
     """
     Uses the chat model to extract a structured meal from the redacted user text, logs it to DB,
-    and returns a short user-facing confirmation + healthy follow-ups.
+    and returns confirmation with the saved record reference and optional coaching.
     """
     # Fence the user text as untrusted data so prompt-injection attempts
     # ("ignore previous instructions and …") embedded in a meal description
@@ -166,9 +166,11 @@ def extract_and_log_meal(db: Database, cfg: Any, original_text: str, source_app:
     except Exception as exc:
         debug_log(f"⚠️ logMeal coaching unavailable: {type(exc).__name__}", "nutrition")
         follow_text = ''
-    if not follow_text:
-        return confirmation
-    return f"{confirmation}\nFollow-ups: {follow_text}"
+    reply = f"{confirmation}\nFollow-ups: {follow_text}" if follow_text else confirmation
+    return ToolExecutionResult(
+        success=True, reply_text=reply,
+        resource_references=({"kind": "meal", "id": meal_id, "label": description},),
+    )
 
 
 def generate_followups_for_meal(cfg: Any, description: str, approx: str) -> str:
@@ -246,10 +248,10 @@ class LogMealTool(Tool):
         for attempt in range(context.max_retries + 1):
             try:
                 debug_log(f"logMeal: extracting from text (attempt {attempt+1}/{context.max_retries+1})", "nutrition")
-                meal_summary = extract_and_log_meal(context.db, context.cfg, original_text=extract_text, source_app=("stdin" if context.cfg.use_stdin else "unknown"))
-                if meal_summary:
+                meal_result = extract_and_log_meal(context.db, context.cfg, original_text=extract_text, source_app=("stdin" if context.cfg.use_stdin else "unknown"))
+                if meal_result:
                     debug_log("logMeal: extraction+log succeeded", "nutrition")
-                    return ToolExecutionResult(success=True, reply_text=meal_summary)
+                    return meal_result
             except Exception as e:
                 debug_log(f"logMeal extract_and_log_meal attempt {attempt+1} raised: {e!r}", "nutrition")
 

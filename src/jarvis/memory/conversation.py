@@ -945,6 +945,8 @@ class DialogueMemory:
                 # API responses, scraped pages). Scrub before persisting
                 # so re-injection on the next turn can't leak them.
                 mm["content"] = scrub_secrets(c)
+            if "resource_references" in mm:
+                mm["resource_references"] = _scrub_args(mm["resource_references"])
             # Native tool-call arguments can also carry sensitive query
             # text (e.g. webSearch(query="my email is alice@example.com")).
             # Scrub each argument value so re-injection of the assistant

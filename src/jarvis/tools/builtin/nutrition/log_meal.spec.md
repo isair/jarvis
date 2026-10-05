@@ -114,3 +114,11 @@ The macro summary is a comma-joined list of present-only fields (kcal,
 protein, carbs, fat, fiber). On failure: `"Failed to log meal"` (extractor
 returned NONE or all retries raised) or `"No meal description provided"`
 (extract-text guard).
+
+### Recorded resource reference
+
+A successful extraction returns a `ToolExecutionResult` with the saved meal's
+`kind="meal"`, database ID and stored description as its label. `run()` returns
+that result directly. The reference is independent of coaching and reply prose.
+The reply engine preserves it through digestion and carries it into follow-up
+planning (see `src/jarvis/tools/types.spec.md`).

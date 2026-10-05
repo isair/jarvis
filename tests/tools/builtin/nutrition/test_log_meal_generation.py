@@ -48,7 +48,7 @@ def test_nutrition_answer_survives_reasoning_budget(monkeypatch, provider, phase
                                         (now + timedelta(minutes=1)).isoformat())
             assert rows and rows[0]['description'] == meal['description']
             assert rows[0]['calories_kcal'] == meal['calories_kcal']
-            assert reply and meal['description'] in reply
+            assert reply and meal['description'] in reply.reply_text
         finally:
             db.close()
     else:
