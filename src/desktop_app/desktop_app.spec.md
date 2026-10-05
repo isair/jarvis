@@ -118,6 +118,23 @@ The central controller that manages:
 
 Window visibility is user-controlled: starting or stopping the assistant never shows or hides the log viewer or the face window. The windows open automatically once at app launch; after that the tray menu's `📝 View Logs` and `👤 Show Face` actions are the only controls over their visibility (the diary dialog shown while stopping is raised on top but leaves those windows' visibility untouched).
 
+### Desktop face presence
+
+The face is a compact frameless, translucent tool window, always on top without
+accepting focus or activating when shown. macOS keeps the tool window visible
+when another application is active. It paints only the amber face and its
+animation, with an ink-only shadow for contrast on light backgrounds. There is
+no background panel, grid, title bar, subtitle area or persistent toolbar.
+
+The default footprint is 220 × 280 logical pixels, with zero layout margins.
+Vector strokes, glows and motion scale together with the face geometry.
+Asleep and idle states have lower window opacity than active listening,
+thinking, speaking or dictation. The state animations remain distinct. Empty
+corners are excluded from the native input region through an elliptical mask.
+Dragging the face uses native window movement where supported, with a pointer
+position fallback. A right-click menu hides the face; the tray shows it again
+without activating it. Visibility remains user-controlled after launch.
+
 **Face state follows the daemon lifecycle**: the face animates from states written by the daemon (`JarvisStateManager`, file-backed for cross-process use). Whenever the daemon goes down — the tray's Stop/Start Listening toggle, an unexpected exit, or the setup wizard pausing it — the tray resets the face to `ASLEEP` so it never looks awake while no daemon is running. Starting the daemon lets the daemon's own state writes take over again.
 
 ### Rejected speech

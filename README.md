@@ -24,7 +24,7 @@ Address Jarvis by name anywhere in a sentence and follow up naturally. Speech re
 Your conversation and all data stays solely on your computer. Separate local databases keep their semantic search indices separate. Sensitive information is redacted before it reaches model context or the saved diary, even though both are local, to ensure the security of your private information. Web search, weather and connected tools use the network but send only what is necessary when you ask for those capabilities.
 
 <p align="center">
-  <img src="docs/img/face.png" alt="Jarvis's animated amber wireframe face, the desktop presence of your local voice assistant" width="460">
+  <img src="docs/img/face.png" alt="Jarvis's floating amber face, with no frame or background" width="420">
 </p>
 
 <p align="center"><sub>A voice, a face, and a place in the conversation.</sub></p>

@@ -1,5 +1,5 @@
 """
-Low-poly grid face widget for Jarvis with intelligent state management and organic idle behavior.
+Floating wireframe face for Jarvis with state animations and quiet idle behaviour.
 
 Features:
 - Low-poly wireframe aesthetic with glowing effects
@@ -7,14 +7,14 @@ Features:
   * LISTENING: Expanding ring echoes of face outline (bell chime effect)
   * THINKING: Animated spinner pupils (3 rotating arcs)
   * SPEAKING: Smooth continuous waveform mouth
-- Smooth continuous waveform mouth visualization:
+- Smooth continuous waveform mouth visualisation:
   * Uses multiple layered sine waves for natural audio-like appearance
   * Amplitude and frequency vary to simulate speech patterns
   * Edge tapering for organic look
   * 60-point smooth curve with glow effect
 - Comprehensive state system (ASLEEP, IDLE, LISTENING, THINKING, SPEAKING)
 - Smooth wake/sleep transitions with opacity-based activation
-- Intelligent idle activity system (only active in IDLE state) that alternates between behaviors:
+- Intelligent idle activity system (only active in IDLE state) that alternates between behaviours:
   * looking_around (33%) - Frequent eye movement scanning the environment
   * hovering (24%) - Gentle vertical floating motion
   * head_tilt (19%) - Subtle head rotation
@@ -34,8 +34,8 @@ import threading
 import time as _time
 from typing import Optional, List, Tuple
 from enum import Enum
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QApplication
-from PyQt6.QtGui import QPainter, QPen, QColor, QBrush, QPainterPath, QLinearGradient, QRadialGradient
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QApplication, QMenu, QGraphicsDropShadowEffect
+from PyQt6.QtGui import QPainter, QPen, QColor, QPainterPath, QRadialGradient, QRegion
 from PyQt6.QtCore import Qt, QTimer, QPointF, pyqtSignal, QObject
 
 from jarvis.debug import debug_log
@@ -160,16 +160,16 @@ class LowPolyFaceWidget(QWidget):
     creating a futuristic AI assistant aesthetic.
     """
     
-    # Colors
+    # Colours
     PRIMARY_COLOR = QColor("#fbbf24")  # Amber/gold - matches Jarvis theme
     SECONDARY_COLOR = QColor("#f59e0b")  # Darker amber
     GLOW_COLOR = QColor("#fcd34d")  # Light amber for glow
-    BG_COLOR = QColor("#0a0a0a")  # Near black background
-    GRID_COLOR = QColor("#1f1f1f")  # Dark gray for background grid
     
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setMinimumSize(300, 400)
+        self.setMinimumSize(160, 208)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
 
         # Current Jarvis state
         self._jarvis_state = JarvisState.ASLEEP  # Start asleep until daemon ready
@@ -179,7 +179,7 @@ class LowPolyFaceWidget(QWidget):
         self._is_blinking = False
         self._blink_progress = 0.0
 
-        # Soundwave visualization (for mouth) - continuous line waveform
+        # Soundwave visualisation (for mouth) - continuous line waveform
         self._waveform_time = 0.0  # Time parameter for waveform animation
         self._waveform_amplitude = 0.0  # Overall amplitude (smoothly changes)
         self._waveform_frequency_base = 0.15  # Base frequency for wave oscillation
@@ -584,14 +584,14 @@ class LowPolyFaceWidget(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        w, h = self.width(), self.height()
+        # Scale strokes, glows and motion together with the vector geometry.
+        scale = min(self.width() / 300, self.height() / 400)
+        painter.scale(scale, scale)
+        w, h = self.width() / scale, self.height() / scale
         cx, cy = w / 2, h / 2
 
         # Apply hover offset to center position
         cy += self._hover_offset
-
-        # Draw background
-        self._draw_background(painter, w, h)
 
         # Save painter state and apply transformations
         painter.save()
@@ -626,21 +626,6 @@ class LowPolyFaceWidget(QWidget):
         painter.restore()
 
         painter.end()
-    
-    def _draw_background(self, painter: QPainter, w: int, h: int):
-        """Draw the dark background with subtle grid."""
-        # Solid background
-        painter.fillRect(0, 0, w, h, self.BG_COLOR)
-        
-        # Subtle background grid
-        grid_pen = QPen(self.GRID_COLOR, 1)
-        painter.setPen(grid_pen)
-        
-        grid_size = 30
-        for x in range(0, w, grid_size):
-            painter.drawLine(x, 0, x, h)
-        for y in range(0, h, grid_size):
-            painter.drawLine(0, y, w, y)
     
     def _draw_face_mesh(self, painter: QPainter, cx: float, cy: float,
                         face_width: float, face_height: float):
@@ -1051,25 +1036,35 @@ class FaceWindow(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("🤖 Jarvis")
-        self.setMinimumSize(320, 420)
-        self.resize(350, 450)
-
-        # Set window flags for floating window
+        self.setMinimumSize(160, 208)
+        self.resize(220, 280)
         self.setWindowFlags(
-            Qt.WindowType.Window |
-            Qt.WindowType.WindowStaysOnTopHint
+            Qt.WindowType.Tool
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.WindowDoesNotAcceptFocus
         )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        self.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow)
+        self.setStyleSheet("background: transparent;")
+        self.setAccessibleName("Jarvis face")
+        self.setToolTip("Drag to move. Right-click to hide.")
+        self._drag_offset = None
 
-        # Dark background
-        self.setStyleSheet("background-color: #0a0a0a;")
-
-        # Layout
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
-
-        # Face widget
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
         self.face = LowPolyFaceWidget()
         layout.addWidget(self.face)
+        # An ink-only shadow keeps the amber strokes legible on light desktops.
+        shadow = QGraphicsDropShadowEffect(self.face)
+        shadow.setBlurRadius(6)
+        shadow.setOffset(0, 0)
+        shadow.setColor(QColor(0, 0, 0, 155))
+        self.face.setGraphicsEffect(shadow)
+        self.face._state_manager.state_changed.connect(self._update_presence)
+        self._update_presence(self.face._state_manager.state.value)
 
         # Position on the right side of the screen
         self._position_on_right()
@@ -1094,3 +1089,41 @@ class FaceWindow(QWidget):
     def set_expression(self, expression: Expression):
         """Set the face expression."""
         self.face.set_expression(expression)
+
+    def _update_presence(self, state_value: str) -> None:
+        """Keep resting states quiet and active interaction clearly visible."""
+        state = JarvisState(state_value)
+        opacity = (
+            0.45 if state == JarvisState.ASLEEP
+            else 0.72 if state == JarvisState.IDLE else 0.96
+        )
+        self.setWindowOpacity(opacity)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        # Empty corners are outside the native input region.
+        self.setMask(QRegion(self.rect(), QRegion.RegionType.Ellipse))
+
+    def mousePressEvent(self, event) -> None:
+        self._drag_offset = None
+        if event.button() == Qt.MouseButton.LeftButton:
+            handle = self.windowHandle()
+            if handle is None or not handle.startSystemMove():
+                self._drag_offset = event.globalPosition().toPoint() - self.pos()
+            event.accept()
+
+    def mouseMoveEvent(self, event) -> None:
+        if self._drag_offset is not None and event.buttons() & Qt.MouseButton.LeftButton:
+            self.move(event.globalPosition().toPoint() - self._drag_offset)
+            event.accept()
+
+    def mouseReleaseEvent(self, event) -> None:
+        self._drag_offset = None
+        super().mouseReleaseEvent(event)
+
+    def contextMenuEvent(self, event) -> None:
+        menu = QMenu(self)
+        menu.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        menu.addAction("Hide face", self.hide)
+        menu.popup(event.globalPos())
+        event.accept()

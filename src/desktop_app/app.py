@@ -2383,7 +2383,6 @@ class JarvisSystemTray:
         """Show the face window and bring it to front."""
         self.face_window.show()
         self.face_window.raise_()
-        self.face_window.activateWindow()
 
     def open_directory(self, directory_path: Path, directory_name: str) -> None:
         """Open a directory in the system file manager."""
