@@ -1475,16 +1475,9 @@ class TestDaemonSmokeTest:
             # Capture stdout
             captured = io.StringIO()
             with patch("sys.stdout", captured):
-                import threading
-                from jarvis.daemon import main, _stop_voice_feedback_worker
-                try:
-                    main(smoke_test=True)
-                    assert not any(
-                        thread.name == "jarvis-voice-feedback" and thread.is_alive()
-                        for thread in threading.enumerate()
-                    ), "Smoke completion must leave no notification worker running"
-                finally:
-                    _stop_voice_feedback_worker()
+                from jarvis.daemon import main
+                main(smoke_test=True)
+                assert mock_vl.call_args.kwargs.get('on_low_confidence') is None
 
             output = captured.getvalue()
             assert "SMOKE_TEST_INIT_OK" in output, (
