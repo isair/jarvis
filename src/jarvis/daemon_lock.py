@@ -89,7 +89,8 @@ def release_daemon_lock(handle: Optional[IO[bytes]]) -> None:
 def lock_holder_pid(path: Optional[Path] = None) -> Optional[int]:
     """Return the recorded PID for diagnostics; it is not proof of ownership."""
     try:
-        with (path or daemon_lock_path()).open("rb") as handle:
+        # Unbuffered reads cannot prefetch the mandatory Windows lock byte.
+        with (path or daemon_lock_path()).open("rb", buffering=0) as handle:
             text = handle.read(_LOCK_OFFSET).decode("ascii", errors="ignore").strip()
         return int(text) if text.isdigit() else None
     except OSError:
