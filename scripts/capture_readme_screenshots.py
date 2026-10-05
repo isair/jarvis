@@ -8,6 +8,7 @@ network access and worker starts are blocked. Images are unretouched widget
 captures, not mock-ups. Requires PyQt6 and the desktop dependencies.
 """
 
+import argparse
 from contextlib import ExitStack
 from datetime import datetime
 import os
@@ -41,6 +42,9 @@ def capture(window, name):
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--face-only', action='store_true', help='Capture only the desktop face')
+    options = parser.parse_args()
     app = QApplication([])
     app.setQuitOnLastWindowClosed(False)
     with TemporaryDirectory(prefix='jarvis-screenshots-') as temporary, ExitStack() as stack:
@@ -52,6 +56,20 @@ def main():
         stack.enter_context(patch.object(socket.socket, 'connect', side_effect=AssertionError('Screenshots must be offline')))
         from desktop_app.qt_worker import KeepAliveWorker
         stack.enter_context(patch.object(KeepAliveWorker, 'start', side_effect=AssertionError('Screenshots must not start workers')))
+        from desktop_app import face_widget
+        stack.enter_context(patch.object(face_widget, '_get_jarvis_state_file',
+            return_value=str(Path(temporary) / 'face-state')))
+        stack.enter_context(patch.object(face_widget, '_jarvis_state_instance', None))
+        face = face_widget.FaceWindow()
+        face.face._animation_timer.stop()
+        face.face._state_manager.set_state(face_widget.JarvisState.IDLE)
+        face.face._animate()
+        face.face._activation_level = 1.0
+        capture(face, 'face.png')
+        face.close()
+        if options.face_only:
+            return
+
         from desktop_app import chat_window, setup_wizard, settings_window
         from desktop_app import app as desktop_app
         stack.enter_context(patch.object(desktop_app.time, 'strftime', return_value='09:41:00'))
