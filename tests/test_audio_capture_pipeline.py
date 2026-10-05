@@ -28,6 +28,14 @@ def listener(rate=48000):
     obj._dictation_is_active = False
     obj._dictation_generation = 0
     obj._transcription_worker_thread = None
+    import threading
+    obj._audio_worker_thread = None
+    obj._audio_state_lock = threading.RLock()
+    obj._audio_generation = 0
+    obj._pre_roll = deque()
+    obj._slow_transcription_streak = 0
+    obj._slow_transcription_warned = False
+    obj._whisper_model_name = "small"
     obj._callback_count = 0
     obj._audio_q = queue.Queue(maxsize=2)
     obj._reset_audio_health(now=0)
@@ -427,6 +435,7 @@ def test_transcription_result_keeps_language_and_utterance_context():
     )
     obj._process_transcript.assert_called_once_with(
         "hello there", 0.2, 10.0, 11.0,
+        generation=result.dictation_generation,
         captured_during_tts=False, captured_tts_start_time=0,
     )
 
@@ -640,7 +649,7 @@ def test_delayed_stop_only_interrupts_tts_that_overlapped_capture(
                             else (10.0, 11.0))
     obj._process_transcript("stop", 0.2, start_time, end_time,
                             captured_during_tts=captured_during_tts,
-                            captured_tts_start_time=captured_tts_start_time)
+                            captured_tts_start_time=captured_tts_start_time, generation=obj._dictation_generation)
 
     assert obj.tts.interrupt.called is should_interrupt
 
@@ -671,6 +680,137 @@ def test_delayed_utterance_does_not_inherit_later_tts_text_for_intent():
     obj._wake_timestamp = None
 
     obj._process_transcript("jarvis weather", 0.2, 10.0, 11.0,
-                            captured_during_tts=False, captured_tts_start_time=0)
+                            captured_during_tts=False, captured_tts_start_time=0, generation=obj._dictation_generation)
 
     assert obj._intent_judge.judge.call_args.kwargs["last_tts_text"] == ""
+
+
+@pytest.mark.parametrize('configured', [None, '', 'default', 'system'])
+def test_default_input_is_pinned_across_capture_phases(configured):
+    default = {'index': 3, 'max_input_channels': 1}
+    opened = []
+
+    def query_devices(*, kind):
+        assert kind == 'input'
+        return default.copy()
+
+    def open_stream(**kwargs):
+        opened.append(kwargs['device'])
+        return object()
+
+    audio = SimpleNamespace(query_devices=query_devices, InputStream=open_stream)
+    selected = audio_capture.resolve_input_device(audio, configured)
+    audio_capture.open_input_stream(audio, 16000, 20, selected)
+    default['index'] = 7
+    audio_capture.open_input_stream(audio, 16000, 20, selected)
+    assert opened == [3, 3]
+
+
+def test_missing_default_input_is_actionable_without_selecting_another_device():
+    def missing_default(*, kind):
+        raise RuntimeError('Error querying device -1')
+
+    audio = SimpleNamespace(query_devices=missing_default)
+    with pytest.raises(ValueError, match='default microphone.*Settings'):
+        audio_capture.resolve_input_device(audio, None, [
+            {'index': 2, 'name': 'Other microphone', 'max_input_channels': 1},
+        ])
+
+
+def test_output_only_default_is_not_accepted_as_a_microphone():
+    audio = SimpleNamespace(query_devices=lambda **kwargs: {
+        'index': 2, 'max_input_channels': 0,
+    })
+    with pytest.raises(ValueError, match='default microphone.*Settings'):
+        audio_capture.resolve_input_device(audio, None)
+
+
+def test_listener_reports_missing_default_before_loading_whisper(monkeypatch, capsys):
+    obj = listener()
+    obj.cfg.voice_device = None
+    obj._warm_up_models = lambda: pytest.fail('unexpected model warm-up')
+
+    def devices(*args, **kwargs):
+        if kwargs.get('kind') == 'input':
+            raise RuntimeError('Error querying device -1')
+        return [{'index': 0, 'name': 'Available mic', 'max_input_channels': 1}]
+
+    monkeypatch.setattr(capture.sd, 'query_devices', devices)
+    monkeypatch.setattr(capture.sd, 'InputStream', lambda **kwargs: pytest.fail('unexpected capture'))
+    monkeypatch.setattr(capture, 'WhisperModel', lambda *args, **kwargs: pytest.fail('unexpected model load'))
+    obj.run()
+    assert 'default microphone' in capsys.readouterr().out
+
+@pytest.fixture(autouse=True)
+def cached_whisper_files(monkeypatch):
+    """Model-loading tests use synthetic local files and never access the Hub."""
+    monkeypatch.setattr("jarvis.listening.model_download.prepare_faster_whisper_model",
+                        lambda name: name)
+
+
+@pytest.mark.parametrize('frame_ms,tts_speaking,limit_frames,silent_endpoint', [
+    (10, False, 7, False), (20, False, 11, False),
+    (30, False, 5, False), (20, True, 6, False),
+    (20, False, 1, False), (20, False, 11, True),
+])
+def test_speech_reaches_whisper_at_configured_boundary(
+    monkeypatch, frame_ms, tts_speaking, limit_frames, silent_endpoint,
+):
+    from unittest.mock import MagicMock
+    from jarvis.config import load_settings
+
+    from dataclasses import replace
+    cfg = replace(
+        load_settings(), voice_debug=False, vad_enabled=False,
+        vad_frame_ms=frame_ms, vad_pre_roll_ms=0,
+        max_utterance_ms=limit_frames * frame_ms,
+        tts_max_utterance_ms=(limit_frames if tts_speaking else 2) * frame_ms,
+        whisper_backend='faster-whisper', whisper_device='cpu',
+        whisper_min_audio_duration=0, endpoint_silence_ms=3 * frame_ms,
+    )
+    monkeypatch.setattr(capture, 'create_intent_judge', lambda _cfg: None)
+    monkeypatch.setattr(capture, 'FASTER_WHISPER_AVAILABLE', True)
+    monkeypatch.setattr(capture, '_load_faster_whisper_model', lambda *a, **kw: MagicMock())
+    monkeypatch.setattr(VoiceListener, '_decode_faster_whisper', lambda *a: ([], None))
+    monkeypatch.setattr(VoiceListener, '_start_llm_warmup', lambda _self: [])
+    monkeypatch.setattr(VoiceListener, '_start_transcription_worker', lambda _self: None)
+    monkeypatch.setattr('desktop_app.face_widget.get_jarvis_state', lambda: MagicMock())
+    obj = VoiceListener(MagicMock(), cfg, SimpleNamespace(is_speaking=lambda: tts_speaking), None)
+    frame_samples = cfg.sample_rate * frame_ms // 1000
+    speech_frames = limit_frames - 2 if silent_endpoint else limit_frames * 3
+    speech = np.linspace(.05, .2, frame_samples * speech_frames, dtype=np.float32)
+    audio = (np.concatenate([speech, np.zeros(frame_samples * 3, dtype=np.float32)])
+             if silent_endpoint else speech)
+
+    class Feed(queue.Queue):
+        def get(self, *args, **kwargs):
+            if self.empty():
+                obj._should_stop = True
+                raise queue.Empty
+            return super().get(*args, **kwargs)
+
+    obj._audio_q = Feed()
+
+    class Stream:
+        active = True
+        def start(self):
+            obj._on_audio(audio[:, None], len(audio), None, None)
+        def stop(self):
+            pass
+        def close(self):
+            pass
+
+    def devices(device=None, **kwargs):
+        info = {'index': 0, 'name': 'Synthetic input', 'max_input_channels': 1}
+        return info if device is not None or kwargs else [info]
+    monkeypatch.setattr(capture, 'sd', SimpleNamespace(
+        query_devices=devices, InputStream=lambda **kw: Stream(),
+    ))
+    obj.run()
+
+    jobs = list(obj._transcription_jobs_q.queue)
+    expected_count = 1 if silent_endpoint else 3
+    expected_frames = speech_frames if silent_endpoint else limit_frames
+    assert len(jobs) == expected_count, 'Speech must be submitted at its capture boundary'
+    assert all(len(job.audio) == frame_samples * expected_frames for job in jobs)
+    np.testing.assert_array_equal(np.concatenate([job.audio for job in jobs]), speech)

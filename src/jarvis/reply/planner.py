@@ -36,6 +36,7 @@ Contract:
 from __future__ import annotations
 
 import json
+import math
 import re
 from typing import List, Optional, Sequence, Tuple
 
@@ -65,6 +66,9 @@ def call_llm_direct(*, cfg, chat_model, system_prompt, user_content,
 # readable and prevents the model from treating the plan as exhaustive.
 MAX_STEPS = 5
 
+# Shared generation room for a reasoning prelude and a structured answer.
+_PLANNER_TOKEN_BUDGET = 1024
+
 # Absolute minimum query length worth planning. The planner now runs
 # FIRST in the reply flow (before memory search and tool routing), so
 # even short queries benefit: a "Reply to user." plan lets the engine
@@ -81,28 +85,9 @@ MIN_QUERY_CHARS = 4
 SEARCH_MEMORY_DIRECTIVE = "searchMemory"
 
 
-# URL hygiene applied to resolved tool arguments.
-#
-# Background (2026-05 field trace, chrome-devtools__navigate_page):
-# the planner LLM emitted `page='[youtube.com](http://youtube.com)'`
-# (markdown link syntax leaked from training priors) and even when the
-# resolver remapped the key to `url` the value retained the wrapper.
-# Puppeteer's Page.navigate then rejected with "Cannot navigate to
-# invalid URL". A separate failure mode is bare-domain values like
-# `youtube.com` with no scheme — Page.navigate rejects those too.
-#
-# Two-stage normalisation closes both holes in one place:
-#   1. Strip `[text](url)` markdown wrappers, keeping only the URL
-#      portion. Tools should never receive markdown — it's never a
-#      valid tool argument.
-#   2. Prepend `https://` to scheme-less bare domains so URL-shaped
-#      arguments always reach the tool as a fully-qualified URL.
-#
-# Scoped to keys whose name suggests a URL value to avoid stomping on
-# unrelated string args (a `query='youtube.com tutorials'` step must
-# stay literal). Keys are matched against a small allow-list of common
-# URL-ish parameter names; this is generic enough to cover every MCP
-# server we ship with and every tool we plan to add.
+# URL fields accept Markdown links and scheme-less bare domains. Strip
+# wrappers and qualify domains before dispatch. Explicit URL key names and
+# URI formats identify these fields; place names and addresses remain literal.
 _MARKDOWN_LINK_RE = re.compile(r"^\s*\[([^\]]*)\]\((https?://[^\s)]+)\)\s*$")
 _BARE_DOMAIN_RE = re.compile(
     r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?"
@@ -111,7 +96,7 @@ _BARE_DOMAIN_RE = re.compile(
     re.IGNORECASE,
 )
 _URL_KEY_RE = re.compile(
-    r"^(?:url|uri|href|link|address|target_?url|page_?url|location)$",
+    r"^(?:url|uri|href|link|target_?url|page_?url)$",
     re.IGNORECASE,
 )
 
@@ -119,9 +104,7 @@ _URL_KEY_RE = re.compile(
 def _normalise_url_value(value: str) -> str:
     """Coerce a string tool argument into a valid URL when it's URL-shaped.
 
-    See module-level commentary above ``_MARKDOWN_LINK_RE`` for the
-    motivating field trace. Returns the input unchanged if it doesn't
-    look like a URL (so unrelated string args pass through untouched).
+    Returns the input unchanged if it does not look like a URL.
     """
     if not isinstance(value, str):
         return value
@@ -136,52 +119,67 @@ def _normalise_url_value(value: str) -> str:
     return s
 
 
-def _normalise_url_args(args: dict) -> dict:
-    """Apply :func:`_normalise_url_value` to every URL-keyed string arg.
+def _normalise_url_args(args: dict, properties: dict) -> dict:
+    """Normalise explicit URL keys and properties declaring a URI format.
 
-    Returns a new dict; non-URL keys and non-string values pass through
-    unchanged. Safe to call on any resolver output.
+    Literal place and address fields retain their values unless their
+    schema identifies them as URIs. Non-string values pass through.
     """
     if not isinstance(args, dict) or not args:
         return args
     out = dict(args)
     for k, v in args.items():
-        if isinstance(v, str) and _URL_KEY_RE.match(str(k)):
+        property_schema = properties.get(k)
+        uri_format = (
+            isinstance(property_schema, dict)
+            and property_schema.get("format") in ("uri", "uri-reference")
+        )
+        if isinstance(v, str) and (_URL_KEY_RE.match(str(k)) or uri_format):
             out[k] = _normalise_url_value(v)
     return out
 
 
 _PROMPT_TEMPLATE = (
-    "You are a planning assistant. You run BEFORE anything else: before "
-    "any memory lookup, before any tool is selected. Your job is to "
-    "decide — up front — what preparatory work the main assistant needs "
+    "You are a planning assistant. The tool router has selected the "
+    "available tools. You run BEFORE memory lookup and tool execution. "
+    "Your job is to "
+    "decide up front what preparatory work the main assistant needs "
     "(fetching past-conversation memory, calling external tools) and in "
     "what order. Decompose the user's query into a short ordered list "
     "of concrete sub-tasks, one per line.\n\n"
     "Rules:\n"
     "1. Each step is a single short imperative sentence (under 15 words).\n"
-    "2. PERSONALISED queries ALWAYS need memory FIRST. A query is "
+    "2. searchMemory is the user's prior-conversation memory, NOT an "
+    "encyclopaedia or a web search. PERSONALISED queries ALWAYS need "
+    "memory FIRST. A query is "
     "personalised when the answer depends on who the user is — their "
     "tastes, interests, history, habits, diet, preferences. The tell: "
     "swap 'me' for 'a random person' and the query stops making sense "
     "(e.g. 'news that might interest a random person' is incoherent; "
     "'what is the capital of France' is unchanged). For ANY such "
     "query, emit as the FIRST step: `searchMemory topic='<what to "
-    "look up>'`. Linguistic triggers that ALL qualify: 'for me', "
-    "'I'd like', 'I'd enjoy', 'interest me', 'suits me', "
-    "'recommend … (to me / for me)', 'suggest …', 'what should I "
-    "(watch/read/cook/do/eat/buy)', 'something I would'. YES-examples "
+    "look up>'`. Personalised wording includes 'for me', 'I'd like', "
+    "'I'd enjoy', 'interest me', 'suits me', 'recommend … for me', "
+    "'suggest something I'd enjoy', 'what should I "
+    "(watch/read/cook/do/eat/buy)', 'something I would'. These requests "
+    "need user preferences FIRST. Generic suggestions and instructions "
+    "that do not depend on user preferences omit memory. YES-examples "
     "(MUST start with searchMemory): 'news that might interest me' → "
     "searchMemory topic='user interests'; 'what should I watch "
     "tonight' → searchMemory topic='films the user has engaged with'; "
     "'what should I cook for dinner' → searchMemory topic='user food "
     "preferences and dietary restrictions'; 'suggest something I'd "
     "enjoy watching' → searchMemory topic='user viewing tastes'. "
-    "NO-examples (DO NOT emit searchMemory): 'who is Britney Spears', "
-    "'what is the capital of France', 'what's the weather today', "
+    "NO-examples (DO NOT emit searchMemory): a public biography, "
+    "a capital city, today's weather, 'suggest a variable name', "
     "'search the web for Possessor 2020'. If no prior-conversation "
     "memory is needed, OMIT this step entirely — every extra "
     "searchMemory directive costs a real LLM call.\n"
+    "A person's name alone never requires prior-conversation memory. "
+    "General facts about people, places and the world use available "
+    "tools or a reply, NEVER searchMemory. In contrast, 'what did I tell "
+    "you about my colleague' MUST start with searchMemory because it "
+    "asks for this user's earlier conversation, not public facts.\n"
     "3. Use external tools ONLY from the AVAILABLE TOOLS list below, "
     "by exact name. If no tool is needed (greeting, small-talk, "
     "opinion, a question about yourself, a fact already in the "
@@ -249,7 +247,7 @@ def _build_user_message(
         tool_lines = "\n".join(f"- {name}: {desc}" for name, desc in tools)
         parts.append(f"AVAILABLE TOOLS:\n{tool_lines}")
     else:
-        parts.append("AVAILABLE TOOLS: (none — plan a direct reply)")
+        parts.append("AVAILABLE TOOLS: (none)")
     if dialogue_context.strip():
         parts.append(f"DIALOGUE CONTEXT (most recent last):\n{dialogue_context.strip()}")
     else:
@@ -477,7 +475,8 @@ def plan_query(
             timeout_sec=effective_timeout,
             thinking=False,
             num_ctx=8192,
-            max_tokens=150,
+            max_tokens=_PLANNER_TOKEN_BUDGET,
+            temperature=0.0,
         )
     except Exception as exc:  # pragma: no cover — defensive
         debug_log(f"planner: LLM call failed — {exc}", "planning")
@@ -617,15 +616,16 @@ _PLAN_STEP_KV_RE = re.compile(
 def _parse_plan_step_concrete(
     next_step_text: str,
     allowed_names: Sequence[str],
-    allowed_props: dict,
+    property_schemas: dict[str, dict],
 ) -> Optional[Tuple[str, dict]]:
     """Deterministically parse ``toolName key='value' key2="value2"`` steps.
 
     Returns ``(name, args)`` when the step is fully concrete — tool name in
     the allow-list, arg keys match the tool's declared properties, and the
     text contains no ``<placeholder>`` that needs entity substitution from
-    prior results. Returns ``None`` otherwise so the caller falls back to
-    the LLM resolver.
+    prior results. Primitive values follow their declared JSON types;
+    strings and untyped values stay literal. Invalid or complex typed
+    values return ``None`` for the LLM resolver.
 
     Why this exists: small models occasionally flake on the resolver LLM
     call (timeout, empty output, spurious ``null``) even for trivially
@@ -651,27 +651,72 @@ def _parse_plan_step_concrete(
     if not rest_stripped:
         return name, {}
     args: dict = {}
+    properties = property_schemas.get(name, {})
+    cursor = 0
     for m in _PLAN_STEP_KV_RE.finditer(rest):
         key = m.group("key")
+        gap = rest[cursor:m.start()].strip()
+        if gap not in (("", ",") if args else ("",)) or key in args:
+            debug_log("planner: ambiguous concrete step needs resolver", "planning")
+            return None
+        bare = m.group("bare")
+        if bare and bare[0] in ("'", '"'):
+            debug_log("planner: incomplete concrete quote needs resolver", "planning")
+            return None
         value = m.group("sq")
         if value is None:
             value = m.group("dq")
         if value is None:
             value = m.group("bare") or ""
+        property_schema = properties.get(key)
+        kind = property_schema.get("type") if isinstance(property_schema, dict) else None
+        if kind is not None and kind != "string":
+            try:
+                parsed = json.loads(value)
+            except (ValueError, TypeError):
+                debug_log("planner: concrete typed argument needs resolver", "planning")
+                return None
+            valid = (
+                (kind == "boolean" and type(parsed) is bool)
+                or (kind == "integer" and type(parsed) is int)
+                or (kind == "number" and type(parsed) in (int, float)
+                    and (type(parsed) is int or math.isfinite(parsed)))
+                or (kind == "null" and parsed is None)
+            )
+            if not valid:
+                debug_log("planner: concrete typed argument needs resolver", "planning")
+                return None
+            value = parsed
         args[key] = value
+        cursor = m.end()
+    if rest[cursor:].strip() not in ("", "."):
+        debug_log("planner: unparsed concrete text needs resolver", "planning")
+        return None
     if not args:
         # Rest has content but no parseable key=value pairs — the step is
         # prose-shaped (e.g. `webSearch for the director's latest film`).
         # Defer to the LLM resolver which can infer the right shape.
         return None
-    declared = allowed_props.get(name, set())
+    declared = properties.keys()
     if declared:
-        unknown = set(args.keys()) - declared
+        unknown = args.keys() - declared
         if unknown:
             # The planner used key names that don't match the tool's
             # schema — surface to the LLM resolver which can remap them.
             return None
-    return name, _normalise_url_args(args)
+    return name, args
+
+
+def _has_required_arguments(name: str, args: dict, required_props: dict[str, set[str]]) -> bool:
+    """Only complete argument objects can leave the resolver for dispatch."""
+    missing = required_props.get(name, set()) - args.keys()
+    if missing:
+        debug_log(
+            f"planner.resolve_next_tool_call: missing required args {sorted(missing)!r} for {name!r}",
+            "planning",
+        )
+        return False
+    return True
 
 
 def resolve_next_tool_call(
@@ -686,8 +731,9 @@ def resolve_next_tool_call(
 
     Fast path: if the step is fully concrete (tool name + ``key='value'``
     args, no ``<placeholder>``), parse it deterministically and return
-    without an LLM call. Otherwise fall through to the LLM resolver which
-    handles placeholder substitution from prior results.
+    without an LLM call when every required field is present. Otherwise
+    use the LLM resolver for missing fields and placeholder substitution
+    from prior results.
 
     Returns ``(tool_name, arguments)`` or ``None`` if the step is a
     synthesis step, the LLM call fails, or the emitted JSON is invalid /
@@ -707,6 +753,8 @@ def resolve_next_tool_call(
     allowed_names: list[str] = []
     schema_lines: list[str] = []
     allowed_props: dict[str, set[str]] = {}
+    required_props: dict[str, set[str]] = {}
+    property_schemas: dict[str, dict] = {}
     for entry in tools_schema:
         fn = entry.get("function", {}) if isinstance(entry, dict) else {}
         name = fn.get("name") if isinstance(fn, dict) else None
@@ -722,21 +770,26 @@ def resolve_next_tool_call(
             prop_keys = set()
             keys = ""
         allowed_props[str(name)] = prop_keys
+        property_schemas[str(name)] = props if isinstance(props, dict) else {}
+        required = params.get("required") if isinstance(params, dict) else None
+        required_props[str(name)] = {
+            key for key in required if isinstance(key, str)
+        } if isinstance(required, list) else set()
         desc = (fn.get("description") or "").strip().splitlines()
         first = desc[0] if desc else ""
         schema_lines.append(f"- {name} (args: {keys}) — {first[:120]}")
 
     # Fast path: fully-concrete plan step parses deterministically.
     fast = _parse_plan_step_concrete(
-        next_step_text, allowed_names, allowed_props,
+        next_step_text, allowed_names, property_schemas,
     )
-    if fast is not None:
+    if fast is not None and _has_required_arguments(fast[0], fast[1], required_props):
         debug_log(
             f"planner.resolve_next_tool_call: fast-parsed "
             f"{fast[0]}({fast[1]!r}) without LLM",
             "planning",
         )
-        return fast
+        return fast[0], _normalise_url_args(fast[1], property_schemas[fast[0]])
 
     model = resolve_model(cfg, Tier.CHAT)
     if not model:
@@ -765,7 +818,7 @@ def resolve_next_tool_call(
             timeout_sec=effective_timeout,
             thinking=False,
             num_ctx=8192,
-            max_tokens=100,
+            max_tokens=_PLANNER_TOKEN_BUDGET,
         )
     except Exception as exc:  # pragma: no cover — defensive
         debug_log(f"planner.resolve_next_tool_call: LLM failed — {exc}", "planning")
@@ -807,9 +860,12 @@ def resolve_next_tool_call(
     if not isinstance(obj, dict):
         return None
     name = str(obj.get("name") or "").strip()
-    args = obj.get("arguments") or {}
-    if not isinstance(args, dict):
+    args = obj.get("arguments")
+    if args is None:
         args = {}
+    if not isinstance(args, dict):
+        debug_log("planner.resolve_next_tool_call: arguments must be an object", "planning")
+        return None
     if not name or name not in allowed_names:
         debug_log(
             f"planner.resolve_next_tool_call: rejected unknown tool {name!r}",
@@ -830,7 +886,9 @@ def resolve_next_tool_call(
                 "planning",
             )
         args = filtered
-    return name, _normalise_url_args(args)
+    if not _has_required_arguments(name, args, required_props):
+        return None
+    return name, _normalise_url_args(args, property_schemas[name])
 
 
 __all__ = [

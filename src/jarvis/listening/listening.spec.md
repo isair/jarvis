@@ -11,7 +11,11 @@ counts or sample rates trigger bounded retries on the same selected input:
 mono, stereo and the device's advertised maximum channel count, at the configured
 and native rates, without duplicate attempts. Access and device-availability
 errors are not retried as format failures. Both the Windows permission probe and
-continuous capture use this negotiation and input selection. Name matching skips
+continuous capture use this negotiation and input selection. The system default
+is resolved to a concrete input index before the permission probe and model
+loading, so changing the default during startup cannot redirect capture. An
+unavailable default produces Settings guidance without choosing another input.
+Name matching skips
 output-only devices; a missing named microphone produces an actionable error
 rather than silently selecting another input. Multichannel samples are averaged
 to mono before framing and speech detection.
@@ -32,20 +36,36 @@ Warnings are transition-based; dictation pauses suspend health checks. With
 peak level and capture rate, without saving microphone audio. Linux warnings
 point users to PipeWire/PulseAudio recording-source routing.
 
-Audio-frame processing is limited to VAD and utterance assembly. Completed
-utterances are enqueued for a single FIFO Whisper worker. Transcription results
-return to the listener loop in order, where transcript storage and intent
-processing remain serialised. The bounded transcription backlog reports an
-explicit warning when full rather than blocking microphone-frame consumption
-or silently losing an utterance. A dictation pause clears captured audio and
-invalidates transcription work started before the pause, including a decode
-that finishes after dictation resumes. Listener shutdown discards pending
-transcriptions and results; an in-progress Whisper call is given a bounded
-grace period and cannot dispatch a late transcript. Transcript echo flags use
-the utterance capture interval against TTS timing. The job carries that
-capture-time context through Whisper to echo rejection, stop-command handling
-and intent processing, so later TTS playback cannot reclassify an older
-utterance.
+Utterance assembly enforces `max_utterance_ms` during continuous speech as
+well as at silent endpoints. While TTS is speaking, `tts_max_utterance_ms`
+applies so interruption audio reaches Whisper promptly. Limits count complete
+native-rate frames, including pre-roll. Reaching a limit queues the captured
+chunk and allows the following frame to start the next utterance.
+
+Audio-frame processing runs on a dedicated serial worker, limited to VAD and
+utterance assembly. Intent judging and reply generation on the listener thread
+do not block frame consumption. The listener thread owns the PortAudio stream.
+Completed utterances are enqueued for a single FIFO Whisper worker.
+Transcription results return to the listener loop in order, where transcript
+storage and intent processing remain serialised. Both transcription queues are
+bounded. A full job backlog reports an explicit warning rather than blocking
+microphone-frame consumption or silently losing an utterance. A full result
+queue applies cancellable backpressure to Whisper without dropping results.
+A dictation pause immediately clears captured audio and invalidates work started
+before the pause, including a decode or intent decision that finishes after
+resumption. Callback blocks carry the audio generation from before their copy; stale blocks
+are discarded after a reset, including blocks already dequeued. Remaining
+frames in a dequeued batch cannot append after a buffer reset. Transcript
+processing retains the result generation through buffer storage. Listener shutdown discards pending transcriptions and results;
+workers receive bounded join grace periods. Invalidated voice queries cannot
+start a reply after waiting for the shared query lock, and an invalidated reply
+cannot produce speech or a spoken error, including invalidation during thinking
+tune teardown. Cancelled language work stops its thinking tune without
+overwriting an active dictation face state. In-flight model calls retain their
+configured deadlines. Transcript echo flags use the utterance capture interval
+against TTS timing. The job carries that capture-time context through Whisper
+to echo rejection, stop-command handling and intent processing, so later TTS
+playback cannot reclassify an older utterance.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -133,7 +153,7 @@ Instead of extracting post-wake-word audio, we:
 
 ### 2. Text-Based Wake Detection
 
-Wake word detection operates on the rolling transcript buffer. When Whisper produces text, it is checked for the configured wake word and aliases using fuzzy matching (`rapidfuzz`). This supports arbitrary wake words in any language.
+Wake detection checks the current transcript for case-insensitive, literal primary-name and alias matches at Unicode word boundaries. Empty names are ignored. Configured aliases represent known mishearings and require exact whole-name matches; their approximate neighbours are not wake signals. Only a single-word primary name participates in fuzzy token matching, using `wake_fuzzy_ratio`. Tokens may extend the primary name by at most one character; shorter forms use the configured similarity threshold. Fallback query extraction removes the same complete configured names while preserving names embedded inside other words. These rules use configured names without language-specific exclusions.
 
 ### 3. Context-Aware Intent Judge
 
@@ -146,7 +166,9 @@ The intent judge receives full context and makes intelligent decisions:
 
 **Alias normalisation:** Before the transcript is sent to the judge, every configured wake-word alias in each segment is replaced with the primary assistant name (case-insensitive, word-boundary-aware). Aliases are Whisper mishearings of the wake word (e.g. "Jervis", "Jaivis" for "Jarvis"); without this step the small judge model sees the alias, doesn't know it refers to the assistant, and can decide the user is addressing a different person. Normalisation happens at prompt-build time only — the raw transcript buffer is untouched.
 
-**Wake-word removal in the extracted query:** The wake word is addressed TO the assistant, never part of the query content. The judge prompt explicitly instructs removing every occurrence of the wake word from the extracted `query` — at the start, end, or middle of the sentence, including when it sits next to a named entity (e.g. "movie called Possessor Jarvis" → film is "Possessor", not "Possessor Jarvis"). The only exception is when the user is literally talking *about* the assistant as a subject ("tell me about Jarvis"). This is enforced by prompt rule + example rather than post-hoc string stripping, because the LLM already understands the semantic distinction and can handle cases a regex would mishandle (e.g. proper names that contain the wake word, like "Jarvis Cocker").
+**Wake-word removal in the extracted query:** When the assistant is addressed, its wake word is not part of the query content. The judge prompt explicitly instructs removing every occurrence of the wake word from the extracted `query` — at the start, end, or middle of the sentence, including when it sits next to a named entity (e.g. "movie called Possessor Jarvis" → film is "Possessor", not "Possessor Jarvis"). The only exception is when the user is literally talking *about* the assistant as a subject ("tell me about Jarvis"). This is enforced by prompt rule + example rather than post-hoc string stripping, because the LLM already understands the semantic distinction and can handle cases a regex would mishandle (e.g. proper names that contain the wake word, like "Jarvis Cocker").
+
+**Mention versus address in wake-word mode:** The judge determines the addressee before extracting a query. Explanations to another person about speaking to the assistant, such as "I'm talking to Jarvis, not you", are mentions and return `directed=false` with an empty query. The distinction applies across languages and normalised aliases. Outside the hot window, a high-confidence non-echo rejection stops query collection even if a wake word is present. Inconclusive or unavailable judgements retain wake-word fallback; hot-window and echo handling retain their own rules.
 
 **Model residency (`keep_alive`):** Each intent-judge request asks Ollama to keep the model resident after the call. The default duration is 30 minutes, which avoids cold reloads between utterances. When `cfg.low_power_mode` is true, the duration is 1 minute so the model can unload soon after an active exchange. The trade-off is latency: low-power sessions can pay a cold-load cost after idle periods, while default sessions keep the judge model (default `gemma4:e2b`, ~2 GB) in RAM/VRAM during active voice use.
 
@@ -208,9 +230,20 @@ After TTS finishes, allow wake-word-free follow-up.
 
 **Duration:** Configurable (default: 3 seconds)
 
+**Timer ownership:** Activation and expiry callbacks belong to the current
+scheduled window. Cancelled or superseded callbacks cannot clear a newer
+pending activation, open a cancelled window or expire a replacement window.
+State changes, timer replacement and shutdown are serialised under one
+reentrant lock. Expiry uses the remaining duration from activation, including
+notification time. Shutdown rejects further activation/reset scheduling and
+hot-window admission; manual expiry also cancels pending activation.
+
+
 **Behaviour:** Speech first passes through an early fuzzy echo check (rapidfuzz `partial_ratio`, threshold 70, with word-count guard to avoid catching mixed echo+speech). Pure echo is silently rejected **without calling the intent judge** — this keeps echo rejection instant and prevents it from blocking the audio loop. The hot window timer is **not** reset on echo rejection. Non-echo speech is sent to the intent judge, but if the judge rejects it, the rejection is overridden — all non-echo speech in the hot window is accepted as a follow-up query.
 
 **Mixed echo+speech handling:** When Whisper merges TTS echo and user speech into one chunk (e.g. mic picks up TTS then user speaks), the word-count guard detects the extra content and lets it through to the intent judge. The judge extracts the user's actual query from the mixed transcript. Post-judge echo checks also use the word-count guard and verify the judge's extracted query isn't itself echo before rejecting.
+
+**Extracted-query source guard:** A hot-window query containing at least the shared minimum salvage word count is rejected if its complete normalised word sequence occurs in the captured TTS text but not in the current utterance. This prevents an earlier assistant phrase from becoming a fresh query after mixed echo and user speech. Matching uses whole Unicode words and the echo normaliser. Current utterance quotes and non-echo semantic follow-ups remain eligible; rejected prior echo stops the thinking tune without opening query collection.
 
 **Early salvage for echo-prefixed follow-ups:** Before the early fuzzy check rejects a chunk as pure echo, the listener calls `cleanup_leading_echo` to strip any TTS-tail prefix. If exact-word cleanup fails (for example because Whisper mis-transcribed the first echo word — *"explores"* → *"laws"* — breaking the word-level comparison), the listener falls back to `salvage_after_echo_tail`, which scans heard-text word boundaries right-to-left looking for the rightmost 5-word window that fuzzy-matches the TTS tail (`partial_ratio >= 85`) and keeps everything after it. This preserves short follow-ups (*"Who made it?"*) that the existing fuzzy-prefix salvage would otherwise truncate by one word because it prefers the shortest suffix. If the surviving remainder has at least `EchoDetector.min_salvage_words` words (default 3), it replaces the transcript segment text and is treated as the user's follow-up. The same minimum-word threshold is shared by the during-TTS and post-TTS merged-chunk salvage paths so the policy is consistent across all three sites.
 
@@ -227,6 +260,7 @@ While TTS is playing, echo rejection and stop commands are handled with fast tex
 **Stop detection:**
 - Text-based: Check for "stop", "quiet", "shut up", etc.
 - Intent judge can also detect stop commands
+- During active TTS, a standalone configured stop phrase (including a fuzzy transcription) retains immediate interruption priority. Longer literal echoes of the current TTS text are rejected even when they contain a configured stop phrase. Unicode punctuation and casing are normalised without language-specific patterns; an appended user command remains eligible for interruption.
 
 **Echo handling:**
 - Transcripts during TTS are flagged with `is_during_tts=true`
@@ -371,10 +405,19 @@ them.
 
 Segments rejected by the earlier no-speech gate do not emit low-confidence
 events. Accepted segments and segments without confidence metadata retain their
-existing backend-specific filtering behaviour. These events do not trigger TTS,
-UI updates, transcript-buffer entries, or query dispatch; accepted speech in a
-mixed utterance continues through the normal pipeline. Without a callback, the
-listener filters and logs rejected segments without notifying any consumer.
+existing backend-specific filtering behaviour. The listener does not directly
+trigger TTS, update widgets, add transcript-buffer entries, or dispatch queries
+for these events. Accepted speech in a mixed utterance continues through the
+normal pipeline. Without a callback, the listener filters and logs rejected
+segments without notifying any consumer.
+
+The daemon registers a non-blocking consumer that coalesces notifications and
+wakes a dedicated notification worker. The worker delivers payload-free visual feedback
+independently of synchronous diary and graph processing
+through a bundled callback or desktop IPC. The rejected transcript remains in
+the listener result only and is not forwarded, logged by the feedback consumer
+or persisted. Headless operation emits no desktop protocol, and shutdown drops
+pending feedback.
 
 ## Configuration
 
@@ -473,9 +516,30 @@ MLX Whisper prepares files through Hugging Face's snapshot cache before loading 
 
 Startup distinguishes checking/downloading model files, loading into memory and warming up, and model readiness. Starting the listener thread is not reported as voice readiness. A failed download does not emit a loading or ready message.
 
+### Isolated faster-whisper downloads
+
+Every faster-whisper load, including cache and CPU recovery, prepares complete
+local model files before CTranslate2 initialisation. The installed downloader
+owns model aliases and Hub cache resolution. Cached files and user-supplied local
+directories require non-empty weights, configuration, tokeniser and vocabulary;
+an incomplete local directory produces an error rather than downloading a
+replacement or a tokeniser.
+
+Network preparation runs in a multiprocessing spawn child, compatible with the
+desktop's frozen-process bootstrap. It has a five-minute timeout, is terminated
+and reaped on failure, and returns a validated local path or a classified error.
+Child exit and timeout stop model loading without falling back to in-process
+network work. Visible rate-limit status is preserved through nested errors for bounded
+startup retries. Remote preparation that returns incomplete files also receives
+up to four retries with exponential backoff (2, 4, 8 and 16 seconds), including
+when an upstream cache fallback hides the remote error. An incomplete explicit
+local directory fails immediately. Every model constructor receives the
+local path and `local_files_only=True`. Cached files remain available after a
+failed attempt, retaining the Hub's download resume behaviour.
+
 ### Corrupted Cache Recovery
 
-If the HuggingFace model cache is corrupted (e.g. from an interrupted download), the system detects the CTranslate2 "unable to open file" error, deletes the parent `models--` cache directory, and retries the download once. If the retry also fails, a message guides the user to manually delete the cache.
+If the HuggingFace model cache is corrupted (e.g. from an interrupted download), the system detects the CTranslate2 "unable to open file" error, deletes the parent `models--` cache directory, and retries the download once. Recovery is attempted at most once per startup, across all device and compute fallbacks. Downloaded files from that attempt remain available to later fallbacks and restarts. Missing-file errors take priority over device and compute classification, including when the cache path contains those terms. If the retry also fails, a message guides the user to manually delete the cache, and the final failure reports the latest loading error.
 
 ### Rate Limit Retry (HTTP 429)
 
@@ -489,3 +553,18 @@ Currently, echo is handled at the transcript level via fuzzy text matching and t
 - Add 10-50ms latency
 
 **Current recommendation:** The transcript-level echo detection (fuzzy matching + intent judge) is sufficient and simpler. Consider AEC only if transcript-level detection proves inadequate in practice.
+
+### CUDA decode recovery
+
+- A faster-whisper CUDA runtime failure during warmup or transcription triggers one CPU recovery attempt per listener instance. Both eager failures and errors while consuming lazy segments are handled.
+- The loaded model name is retained. CPU decoding uses `float32` when configured, otherwise `int8`, and the CPU decoding optimisations apply immediately.
+- A successful recovery retries the current audio once and serves subsequent audio through the shared CPU model. A failed recovery is not retried for every utterance. CPU and unrelated transcription failures do not trigger model replacement.
+- Model replacement and lazy segment consumption hold the shared transcription lock. Dictation resolves its model reference under that lock.
+- Recovery logs the underlying error and displays a warning that CPU decoding may be slower.
+
+### Speech performance guidance
+
+- The serial transcription worker measures decode elapsed time with a monotonic clock, excluding queue waiting and startup warmup. Stale or empty results do not trigger guidance.
+- Three consecutive usable utterances of at least one second that each take at least two seconds and longer than their audio duration produce one warning per listener instance. Fast or short eligible samples reset the streak.
+- The warning recommends a smaller supported model while preserving English-only selection, states the accuracy trade-off, and points to the Setup Wizard or Whisper settings. The smallest or an unknown model gets hardware/load guidance instead. User configuration is never changed automatically.
+- Debug diagnostics record audio duration, decode duration and the loaded model while gathering samples.

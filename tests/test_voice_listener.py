@@ -9,6 +9,18 @@ import time
 import pytest
 
 
+def _mock_input_devices(audio, devices):
+    """Expose the sounddevice list, default-input and indexed-query contracts."""
+    devices = [dict(device, index=index) for index, device in enumerate(devices)]
+    def query(device=None, *, kind=None):
+        if device is not None:
+            return devices[device]
+        if kind == 'input':
+            return next(item for item in devices if item['max_input_channels'] > 0)
+        return devices
+    audio.query_devices.side_effect = query
+
+
 def _create_mock_config(**kwargs):
     """Create a mock config object with default values for voice listener tests."""
     mock_cfg = MagicMock()
@@ -27,6 +39,10 @@ def _create_mock_config(**kwargs):
     mock_cfg.voice_device = kwargs.get("voice_device", None)
     mock_cfg.voice_debug = kwargs.get("voice_debug", False)
     mock_cfg.vad_frame_ms = kwargs.get("vad_frame_ms", 20)
+    from jarvis.config import get_default_config
+    defaults = get_default_config()
+    mock_cfg.max_utterance_ms = kwargs.get("max_utterance_ms", defaults["max_utterance_ms"])
+    mock_cfg.tts_max_utterance_ms = kwargs.get("tts_max_utterance_ms", defaults["tts_max_utterance_ms"])
     mock_cfg.tune_enabled = kwargs.get("tune_enabled", False)
     return mock_cfg
 
@@ -46,7 +62,7 @@ class TestWhisperComputeTypeFallback:
                     with patch("jarvis.listening.listener.WhisperModel", return_value=mock_whisper_model) as mock_class:
                         with patch("jarvis.listening.listener.sd") as mock_sd:
                             # Mock query_devices to return a fake input device
-                            mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
+                            _mock_input_devices(mock_sd, [{"name": "Test Mic", "max_input_channels": 1}])
                             mock_sd.InputStream.side_effect = Exception("Stop test here")
 
                             from jarvis.listening.listener import VoiceListener
@@ -83,7 +99,7 @@ class TestWhisperComputeTypeFallback:
                 with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
                     with patch("jarvis.listening.listener.WhisperModel", side_effect=whisper_model_side_effect) as mock_class:
                         with patch("jarvis.listening.listener.sd") as mock_sd:
-                            mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
+                            _mock_input_devices(mock_sd, [{"name": "Test Mic", "max_input_channels": 1}])
                             mock_sd.InputStream.side_effect = Exception("Stop test here")
 
                             from jarvis.listening.listener import VoiceListener
@@ -121,7 +137,7 @@ class TestWhisperComputeTypeFallback:
                 with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
                     with patch("jarvis.listening.listener.WhisperModel", side_effect=whisper_model_side_effect) as mock_class:
                         with patch("jarvis.listening.listener.sd") as mock_sd:
-                            mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
+                            _mock_input_devices(mock_sd, [{"name": "Test Mic", "max_input_channels": 1}])
                             mock_sd.InputStream.side_effect = Exception("Stop test here")
 
                             from jarvis.listening.listener import VoiceListener
@@ -156,7 +172,7 @@ class TestWhisperComputeTypeFallback:
                         mock_class.side_effect = RuntimeError("Model not found: invalid_model")
 
                         with patch("jarvis.listening.listener.sd") as mock_sd:
-                            mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
+                            _mock_input_devices(mock_sd, [{"name": "Test Mic", "max_input_channels": 1}])
                             from jarvis.listening.listener import VoiceListener
 
                             mock_db = MagicMock()
@@ -185,7 +201,7 @@ class TestWhisperComputeTypeFallback:
                 with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
                     with patch("jarvis.listening.listener.WhisperModel", side_effect=whisper_model_side_effect) as mock_class:
                         with patch("jarvis.listening.listener.sd") as mock_sd:
-                            mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
+                            _mock_input_devices(mock_sd, [{"name": "Test Mic", "max_input_channels": 1}])
                             from jarvis.listening.listener import VoiceListener
 
                             mock_db = MagicMock()
@@ -216,7 +232,7 @@ class TestWhisperComputeTypeFallback:
                 with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
                     with patch("jarvis.listening.listener.WhisperModel", side_effect=whisper_model_side_effect) as mock_class:
                         with patch("jarvis.listening.listener.sd") as mock_sd:
-                            mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
+                            _mock_input_devices(mock_sd, [{"name": "Test Mic", "max_input_channels": 1}])
                             mock_sd.InputStream.side_effect = Exception("Stop test here")
 
                             from jarvis.listening.listener import VoiceListener
@@ -250,7 +266,7 @@ class TestWhisperComputeTypeFallback:
                         mock_class.side_effect = RuntimeError("Requested float32 compute type, but not supported.")
 
                         with patch("jarvis.listening.listener.sd") as mock_sd:
-                            mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
+                            _mock_input_devices(mock_sd, [{"name": "Test Mic", "max_input_channels": 1}])
                             from jarvis.listening.listener import VoiceListener
 
                             mock_db = MagicMock()
@@ -392,7 +408,7 @@ class TestLargeV3TurboFallback:
                     with patch("jarvis.listening.listener.WhisperModel", return_value=mock_whisper_model) as mock_class:
                         with patch("jarvis.listening.listener.sd") as mock_sd:
                             with patch("jarvis.listening.listener._is_faster_whisper_turbo_supported", return_value=False):
-                                mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
+                                _mock_input_devices(mock_sd, [{"name": "Test Mic", "max_input_channels": 1}])
                                 mock_sd.InputStream.side_effect = Exception("Stop test here")
 
                                 from jarvis.listening.listener import VoiceListener
@@ -421,7 +437,7 @@ class TestLargeV3TurboFallback:
                     with patch("jarvis.listening.listener.WhisperModel", return_value=mock_whisper_model) as mock_class:
                         with patch("jarvis.listening.listener.sd") as mock_sd:
                             with patch("jarvis.listening.listener._is_faster_whisper_turbo_supported", return_value=True):
-                                mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
+                                _mock_input_devices(mock_sd, [{"name": "Test Mic", "max_input_channels": 1}])
                                 mock_sd.InputStream.side_effect = Exception("Stop test here")
 
                                 from jarvis.listening.listener import VoiceListener
@@ -569,7 +585,7 @@ class TestCpuOptimisations:
                 with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
                     with patch("jarvis.listening.listener.WhisperModel", return_value=mock_whisper_model) as mock_class:
                         with patch("jarvis.listening.listener.sd") as mock_sd:
-                            mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
+                            _mock_input_devices(mock_sd, [{"name": "Test Mic", "max_input_channels": 1}])
                             mock_sd.InputStream.side_effect = Exception("Stop test here")
                             with patch("jarvis.listening.listener.os.cpu_count", return_value=8):
                                 from jarvis.listening.listener import VoiceListener
@@ -591,7 +607,7 @@ class TestCpuOptimisations:
                 with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
                     with patch("jarvis.listening.listener.WhisperModel", return_value=mock_whisper_model) as mock_class:
                         with patch("jarvis.listening.listener.sd") as mock_sd:
-                            mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
+                            _mock_input_devices(mock_sd, [{"name": "Test Mic", "max_input_channels": 1}])
                             mock_sd.InputStream.side_effect = Exception("Stop test here")
                             with patch("jarvis.listening.listener.os.cpu_count", return_value=12):
                                 from jarvis.listening.listener import VoiceListener
@@ -613,7 +629,7 @@ class TestCpuOptimisations:
                 with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
                     with patch("jarvis.listening.listener.WhisperModel", return_value=mock_whisper_model):
                         with patch("jarvis.listening.listener.sd") as mock_sd:
-                            mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
+                            _mock_input_devices(mock_sd, [{"name": "Test Mic", "max_input_channels": 1}])
                             mock_sd.InputStream.side_effect = Exception("Stop test here")
 
                             from jarvis.listening.listener import VoiceListener
@@ -638,7 +654,7 @@ class TestCpuOptimisations:
                 with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
                     with patch("jarvis.listening.listener.WhisperModel", return_value=mock_whisper_model):
                         with patch("jarvis.listening.listener.sd") as mock_sd:
-                            mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
+                            _mock_input_devices(mock_sd, [{"name": "Test Mic", "max_input_channels": 1}])
                             mock_sd.InputStream.side_effect = Exception("Stop test here")
 
                             from jarvis.listening.listener import VoiceListener
@@ -827,17 +843,9 @@ class TestCrossPlatformDeviceLogging:
                 with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
                     with patch("jarvis.listening.listener.WhisperModel", return_value=mock_whisper_model):
                         with patch("jarvis.listening.listener.sd") as mock_sd:
-                            mock_sd.query_devices.return_value = [
+                            _mock_input_devices(mock_sd, [
                                 {"name": "Linux PulseAudio Mic", "max_input_channels": 1}
-                            ]
-                            mock_default = MagicMock()
-                            mock_default.device = (0, 0)
-                            mock_sd.default = mock_default
-                            # query_devices with index returns specific device
-                            mock_sd.query_devices.side_effect = lambda *args: (
-                                {"name": "Linux PulseAudio Mic", "max_input_channels": 1}
-                                if args else [{"name": "Linux PulseAudio Mic", "max_input_channels": 1}]
-                            )
+                            ])
                             mock_sd.InputStream.side_effect = Exception("Stop test here")
 
                             from jarvis.listening.listener import VoiceListener
@@ -864,16 +872,9 @@ class TestCrossPlatformDeviceLogging:
                 with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
                     with patch("jarvis.listening.listener.WhisperModel", return_value=mock_whisper_model):
                         with patch("jarvis.listening.listener.sd") as mock_sd:
-                            mock_sd.query_devices.return_value = [
+                            _mock_input_devices(mock_sd, [
                                 {"name": "MacBook Pro Microphone", "max_input_channels": 1}
-                            ]
-                            mock_default = MagicMock()
-                            mock_default.device = (0, 0)
-                            mock_sd.default = mock_default
-                            mock_sd.query_devices.side_effect = lambda *args: (
-                                {"name": "MacBook Pro Microphone", "max_input_channels": 1}
-                                if args else [{"name": "MacBook Pro Microphone", "max_input_channels": 1}]
-                            )
+                            ])
                             mock_sd.InputStream.side_effect = Exception("Stop test here")
 
                             from jarvis.listening.listener import VoiceListener
@@ -904,16 +905,9 @@ class TestCrossPlatformAudioHealthWarning:
                 with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
                     with patch("jarvis.listening.listener.WhisperModel", return_value=mock_whisper_model):
                         with patch("jarvis.listening.listener.sd") as mock_sd:
-                            mock_sd.query_devices.return_value = [
+                            _mock_input_devices(mock_sd, [
                                 {"name": "Test Mic", "max_input_channels": 1}
-                            ]
-                            mock_default = MagicMock()
-                            mock_default.device = (0, 0)
-                            mock_sd.default = mock_default
-                            mock_sd.query_devices.side_effect = lambda *args: (
-                                {"name": "Test Mic", "max_input_channels": 1}
-                                if args else [{"name": "Test Mic", "max_input_channels": 1}]
-                            )
+                            ])
 
                             # Create a mock stream that is active
                             mock_stream = MagicMock()
@@ -1107,9 +1101,11 @@ class TestSampleRateFallback:
                                 if get_calls[0] == 1:
                                     audio = np.zeros((17640, input_channels), dtype=np.float32)
                                     audio[:, -1] = .1 * input_channels
-                                    return audio
+                                    from jarvis.listening.listener import _CapturedAudio
+                                    return _CapturedAudio(audio, listener._audio_generation)
                                 if get_calls[0] == 2:
-                                    return np.zeros((4410, input_channels), dtype=np.float32)
+                                    from jarvis.listening.listener import _CapturedAudio
+                                    return _CapturedAudio(np.zeros((4410, input_channels), dtype=np.float32), listener._audio_generation)
                                 listener._should_stop = True
                                 raise q.Empty()
 
@@ -1146,9 +1142,9 @@ class TestSampleRateFallback:
                 with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
                     with patch("jarvis.listening.listener.WhisperModel", return_value=mock_whisper_model):
                         with patch("jarvis.listening.listener.sd") as mock_sd:
-                            mock_sd.query_devices.return_value = [
+                            _mock_input_devices(mock_sd, [
                                 {"name": "Test Mic", "max_input_channels": 1}
-                            ]
+                            ])
                             mock_sd.InputStream.side_effect = Exception("Device access denied")
 
                             from jarvis.listening.listener import VoiceListener
@@ -1193,7 +1189,7 @@ class TestCorruptedWhisperCacheRecovery:
                 with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
                     with patch("jarvis.listening.listener.WhisperModel", side_effect=whisper_model_side_effect) as mock_class:
                         with patch("jarvis.listening.listener.sd") as mock_sd:
-                            mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
+                            _mock_input_devices(mock_sd, [{"name": "Test Mic", "max_input_channels": 1}])
                             mock_sd.InputStream.side_effect = Exception("Stop test here")
 
                             from jarvis.listening.listener import VoiceListener
@@ -1230,7 +1226,7 @@ class TestCorruptedWhisperCacheRecovery:
                         mock_class.side_effect = RuntimeError(error_msg)
 
                         with patch("jarvis.listening.listener.sd") as mock_sd:
-                            mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
+                            _mock_input_devices(mock_sd, [{"name": "Test Mic", "max_input_channels": 1}])
 
                             from jarvis.listening.listener import VoiceListener
 
@@ -1276,7 +1272,7 @@ class TestCorruptedWhisperCacheRecovery:
                 with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
                     with patch("jarvis.listening.listener.WhisperModel", side_effect=whisper_model_side_effect):
                         with patch("jarvis.listening.listener.sd") as mock_sd:
-                            mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
+                            _mock_input_devices(mock_sd, [{"name": "Test Mic", "max_input_channels": 1}])
                             mock_sd.InputStream.side_effect = Exception("Stop test here")
 
                             from jarvis.listening.listener import VoiceListener
@@ -1304,7 +1300,7 @@ class TestCorruptedWhisperCacheRecovery:
                         mock_class.side_effect = RuntimeError(error_msg)
 
                         with patch("jarvis.listening.listener.sd") as mock_sd:
-                            mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
+                            _mock_input_devices(mock_sd, [{"name": "Test Mic", "max_input_channels": 1}])
 
                             from jarvis.listening.listener import VoiceListener
 
@@ -1340,7 +1336,7 @@ class TestCorruptedWhisperCacheRecovery:
                         mock_class.side_effect = RuntimeError(error_msg)
 
                         with patch("jarvis.listening.listener.sd") as mock_sd:
-                            mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
+                            _mock_input_devices(mock_sd, [{"name": "Test Mic", "max_input_channels": 1}])
 
                             # Make shutil.rmtree raise OSError
                             with patch("shutil.rmtree", side_effect=OSError("Permission denied")):
@@ -1375,7 +1371,7 @@ class TestCorruptedWhisperCacheRecovery:
                         mock_class.side_effect = RuntimeError(error_msg)
 
                         with patch("jarvis.listening.listener.sd") as mock_sd:
-                            mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
+                            _mock_input_devices(mock_sd, [{"name": "Test Mic", "max_input_channels": 1}])
 
                             from jarvis.listening.listener import VoiceListener
 
@@ -1419,7 +1415,7 @@ class TestCorruptedWhisperCacheRecovery:
                 with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
                     with patch("jarvis.listening.listener.WhisperModel", side_effect=whisper_model_side_effect) as mock_class:
                         with patch("jarvis.listening.listener.sd") as mock_sd:
-                            mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
+                            _mock_input_devices(mock_sd, [{"name": "Test Mic", "max_input_channels": 1}])
                             mock_sd.InputStream.side_effect = Exception("Stop test here")
 
                             from jarvis.listening.listener import VoiceListener
@@ -1461,7 +1457,7 @@ class TestWhisperRateLimitRetry:
                 with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
                     with patch("jarvis.listening.listener.WhisperModel", side_effect=whisper_model_side_effect) as mock_class:
                         with patch("jarvis.listening.listener.sd") as mock_sd:
-                            mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
+                            _mock_input_devices(mock_sd, [{"name": "Test Mic", "max_input_channels": 1}])
                             mock_sd.InputStream.side_effect = Exception("Stop test here")
 
                             with patch("jarvis.listening.listener.time.sleep"):  # Skip actual sleep
@@ -1490,7 +1486,7 @@ class TestWhisperRateLimitRetry:
                         mock_class.side_effect = RuntimeError(error_msg)
 
                         with patch("jarvis.listening.listener.sd") as mock_sd:
-                            mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
+                            _mock_input_devices(mock_sd, [{"name": "Test Mic", "max_input_channels": 1}])
 
                             with patch("jarvis.listening.listener.time.sleep") as mock_sleep:
                                 from jarvis.listening.listener import VoiceListener
@@ -1535,7 +1531,7 @@ class TestWhisperRateLimitRetry:
                 with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
                     with patch("jarvis.listening.listener.WhisperModel", side_effect=whisper_model_side_effect) as mock_class:
                         with patch("jarvis.listening.listener.sd") as mock_sd:
-                            mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
+                            _mock_input_devices(mock_sd, [{"name": "Test Mic", "max_input_channels": 1}])
                             mock_sd.InputStream.side_effect = Exception("Stop test here")
 
                             with patch("jarvis.listening.listener.time.sleep"):
@@ -1564,7 +1560,7 @@ class TestWhisperRateLimitRetry:
                         mock_class.side_effect = RuntimeError(error_msg)
 
                         with patch("jarvis.listening.listener.sd") as mock_sd:
-                            mock_sd.query_devices.return_value = [{"name": "Test Mic", "max_input_channels": 1}]
+                            _mock_input_devices(mock_sd, [{"name": "Test Mic", "max_input_channels": 1}])
 
                             from jarvis.listening.listener import VoiceListener
 
@@ -1592,9 +1588,9 @@ def _make_listener_for_warmup(
     with patch("jarvis.listening.listener.FASTER_WHISPER_AVAILABLE", True):
         with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
             with patch("jarvis.listening.listener.sd") as mock_sd:
-                mock_sd.query_devices.return_value = [
+                _mock_input_devices(mock_sd, [
                     {"name": "Test Mic", "max_input_channels": 1}
-                ]
+                ])
 
                 from jarvis.listening.listener import VoiceListener
                 from jarvis.listening.intent_judge import IntentJudge, IntentJudgeConfig
@@ -1846,9 +1842,9 @@ class TestWhisperWarmup:
                         return_value=mock_whisper_model,
                     ):
                         with patch("jarvis.listening.listener.sd") as mock_sd:
-                            mock_sd.query_devices.return_value = [
+                            _mock_input_devices(mock_sd, [
                                 {"name": "Test Mic", "max_input_channels": 1}
-                            ]
+                            ])
                             # Skip actual audio streaming — we only care about init.
                             mock_sd.InputStream.side_effect = RuntimeError("stop here")
 
@@ -2055,3 +2051,76 @@ class TestWeatherBannerExample:
 
         listener2 = self._make_listener(location_enabled=False)
         assert "Helix?" in listener2._weather_example("Helix")
+
+
+@pytest.mark.unit
+class TestBoundedWhisperCacheRecovery:
+    @pytest.mark.parametrize("cache_name", ["models--Systran--medium", "models--local--int8-whisper"])
+    def test_recreated_cache_survives_later_device_fallbacks(self, tmp_path, capsys, cache_name):
+        """A failed recovery preserves downloaded files across device fallbacks."""
+        import jarvis.listening.listener as module
+
+        snapshot = tmp_path / cache_name / "snapshots" / "revision"
+        snapshot.mkdir(parents=True)
+        original = snapshot / "original.bin"
+        original.write_bytes(b"incomplete")
+        recovered = snapshot / "recovered.bin"
+        error = f"Unable to open file 'model.bin' in model '{snapshot}'"
+
+        def unavailable_model(*args, **kwargs):
+            if not original.exists():
+                # The recovery downloader leaves files useful for a later restart.
+                if recovered.exists():
+                    recovered.write_bytes(recovered.read_bytes() + b"x")
+                else:
+                    snapshot.mkdir(parents=True, exist_ok=True)
+                    recovered.write_bytes(b"x")
+            raise RuntimeError(error)
+
+        with patch.object(module, "FASTER_WHISPER_AVAILABLE", True), \
+             patch.object(module, "MLX_WHISPER_AVAILABLE", False), \
+             patch.object(module, "_probe_windows_cuda_libraries", return_value=("auto", [])), \
+             patch.object(module, "WhisperModel", side_effect=unavailable_model), \
+             patch.object(module.VoiceListener, "_start_llm_warmup", return_value=[]), \
+             patch.object(module, "sd") as audio:
+            _mock_input_devices(audio, [{"name": "Test Mic", "max_input_channels": 1}])
+            listener = module.VoiceListener(MagicMock(), _create_mock_config(), MagicMock(), MagicMock())
+            listener.run()
+
+        assert not original.exists()
+        assert len(recovered.read_bytes()) > 1, "Later fallbacks must retain the recovered cache"
+        assert listener.model is None
+        output = capsys.readouterr().out
+        assert output.count("attempting recovery") == 1
+        assert "manually deleting" in output
+
+    def test_failed_recovery_reports_latest_error(self, tmp_path, capsys):
+        """The final failure identifies the recovery error rather than a stale one."""
+        import jarvis.listening.listener as module
+
+        snapshot = tmp_path / "models--Systran--medium" / "snapshots" / "revision"
+        snapshot.mkdir(parents=True)
+        original_error = f"Unable to open file 'model.bin' in model '{snapshot}'"
+        def unavailable_model(*args, **kwargs):
+            if snapshot.exists():
+                raise RuntimeError(original_error)
+            raise RuntimeError("Recovery download disconnected")
+
+        with patch.object(module, "FASTER_WHISPER_AVAILABLE", True), \
+             patch.object(module, "MLX_WHISPER_AVAILABLE", False), \
+             patch.object(module, "WhisperModel", side_effect=unavailable_model), \
+             patch.object(module.VoiceListener, "_start_llm_warmup", return_value=[]), \
+             patch.object(module, "sd") as audio:
+            _mock_input_devices(audio, [{"name": "Test Mic", "max_input_channels": 1}])
+            listener = module.VoiceListener(MagicMock(), _create_mock_config(whisper_device="cpu", whisper_compute_type="float32"), MagicMock(), MagicMock())
+            listener.run()
+
+        final_failure = [line for line in capsys.readouterr().out.splitlines() if "❌ Failed to load Whisper model:" in line]
+        assert len(final_failure) == 1
+        assert "Recovery download disconnected" in final_failure[0]
+
+@pytest.fixture(autouse=True)
+def cached_whisper_files(monkeypatch):
+    """Model-loading tests use synthetic local files and never access the Hub."""
+    monkeypatch.setattr("jarvis.listening.model_download.prepare_faster_whisper_model",
+                        lambda name: name)

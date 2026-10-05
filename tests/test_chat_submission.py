@@ -66,18 +66,21 @@ def _wait_for_complete(events, timeout=5.0):
 
 def _wait_for_ipc_complete(capsys, timeout=5.0):
     """Block until a ``__CHAT__:`` ``complete`` event appears on stdout."""
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        out = capsys.readouterr().out
-        chat_lines = [
-            ln for ln in out.splitlines()
-            if ln.startswith(daemon.CHAT_IPC_PREFIX)
-        ]
-        for ln in chat_lines:
+    deadline = time.monotonic() + timeout
+    pending = ""
+    chat_lines = []
+    while time.monotonic() < deadline:
+        pending += capsys.readouterr().out
+        lines = pending.split("\n")
+        pending = lines.pop()
+        for line in lines:
+            if not line.startswith(daemon.CHAT_IPC_PREFIX):
+                continue
             try:
-                payload = json.loads(ln[len(daemon.CHAT_IPC_PREFIX):])
+                payload = json.loads(line[len(daemon.CHAT_IPC_PREFIX):])
             except json.JSONDecodeError:
                 continue
+            chat_lines.append(line)
             if payload.get("type") == "complete":
                 return chat_lines
         time.sleep(0.02)
@@ -757,3 +760,32 @@ class TestChatSessionControlsLockGuard:
         # Once the lock is free the same calls apply.
         assert daemon.rewind_chat_to_user(2) is True
         assert len(dm.all_messages()) == 2
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize('split', ['between-events', 'within-start', 'within-complete', 'empty-poll'])
+def test_ipc_capture_preserves_the_complete_event_sequence(monkeypatch, split):
+    """Polling retains earlier events and reconstructs lines split by capture reads."""
+    from types import SimpleNamespace
+
+    prefix = daemon.CHAT_IPC_PREFIX
+    start = prefix + json.dumps({'type': 'start', 'data': 'hello'}) + '\n'
+    complete = prefix + json.dumps({'type': 'complete', 'data': 'reply'}) + '\n'
+    if split == 'between-events':
+        chunks = [start, complete]
+    elif split == 'within-start':
+        chunks = [start[:len(prefix) + 5], start[len(prefix) + 5:], complete]
+    elif split == 'within-complete':
+        chunks = [start + complete[:len(prefix) + 5], complete[len(prefix) + 5:]]
+    else:
+        chunks = [start, '', complete]
+    reads = iter(['unrelated log line\n'] + chunks)
+    capture = SimpleNamespace(readouterr=lambda: SimpleNamespace(out=next(reads, '')))
+    monkeypatch.setattr(time, 'sleep', lambda seconds: None)
+
+    lines = _wait_for_ipc_complete(capture, timeout=0.1)
+    payloads = [json.loads(line[len(prefix):]) for line in lines]
+    assert payloads == [
+        {'type': 'start', 'data': 'hello'},
+        {'type': 'complete', 'data': 'reply'},
+    ]

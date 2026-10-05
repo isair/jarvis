@@ -120,6 +120,29 @@ Window visibility is user-controlled: starting or stopping the assistant never s
 
 **Face state follows the daemon lifecycle**: the face animates from states written by the daemon (`JarvisStateManager`, file-backed for cross-process use). Whenever the daemon goes down — the tray's Stop/Start Listening toggle, an unexpected exit, or the setup wizard pausing it — the tray resets the face to `ASLEEP` so it never looks awake while no daemon is running. Starting the daemon lets the daemon's own state writes take over again.
 
+### Rejected speech feedback
+
+- A rejected low-confidence segment produces a brief "Didn't catch that,
+  please repeat" subtitle in the face window. The subtitle clears after
+  approximately two seconds; another rejection refreshes its lifetime.
+- Subtitle space is reserved, so showing feedback does not compress the
+  face or resize the window. Feedback never opens a hidden window or changes
+  listening, thinking, speaking or dictation state.
+- The daemon coalesces rejection notifications without keeping transcript
+  text. The listener enqueues notifications; a stoppable notification worker
+  delivers them independently of diary processing.
+  Bundled mode uses a callback and a queued Qt signal. Subprocess mode uses
+  `__VOICE__:{"type":"low_confidence","data":null}` and the same Qt signal.
+  Protocol events do not appear in the ordinary log viewer.
+- Stop clears the subtitle immediately and stops notification delivery
+  with a bounded wait, discarding pending feedback. Queued notifications are
+  ignored while the daemon is stopped or stopping. Accepted segments do not
+  produce this feedback. No TTS is triggered.
+
+### macOS tray event safety
+
+The desktop installs a guard on Qt Cocoa tray activation callbacks after creating `QApplication` and before showing a tray icon. Non-mouse and missing AppKit events do not reach Qt's `clickCount` access. Ordinary mouse events retain the native activation reason and menu handling. Native implementation pointers are captured before replacement so repeated installation cannot recursively call the guard. The guard affects only Qt's tray delegate within the desktop process; it does not modify AppKit event classes, capture keyboard input, or post system events. If native guard installation is unavailable, the desktop records a diagnostic.
+
 ### Tray Menu: GPU Library Recovery (Windows)
 
 `cuda_recovery.py` exposes the `🎮 Reinstall GPU libraries` action. The tray adds it only when running on Windows, an NVIDIA driver is detected (`%SystemRoot%\System32\nvcuda.dll` exists), and the bundled `install_cuda.ps1` script is on disk. Clicking it confirms with the user, then re-runs `install_cuda.ps1` via `ShellExecuteW` with the `runas` verb so UAC elevates the process before it writes into `Program Files\Jarvis\cuda`. This is the only user-facing recovery path when the original Inno Setup install of cuBLAS/cuDNN fails — the installer's own task fires once per install and the script's marker file used to make subsequent reinstalls skip the CUDA step. The runtime probe in `jarvis.listening.listener._print_cuda_unavailable_hint` points users at this action by name when it falls back to CPU.
@@ -350,3 +373,9 @@ content and the report-issue body, so these aborts become diagnosable.
 | Database | `~/.local/share/jarvis/` | `%LOCALAPPDATA%\jarvis\` | `~/.local/share/jarvis/` |
 | Crash logs | `~/Library/Logs/Jarvis/` | `%LOCALAPPDATA%\Jarvis\` | `~/.jarvis/` |
 | Instance lock | `~/Library/Application Support/Jarvis/` | `%LOCALAPPDATA%\Jarvis\` | `~/.jarvis/` |
+
+## Apple Silicon speech packaging
+
+- macOS arm64 desktop builds include the MLX Whisper backend, its tokeniser/audio assets, native MLX libraries and `mlx/lib/mlx.metallib`. SciPy remains available for word alignment.
+- The MLX namespace is collected explicitly rather than recursively, and the optional PyTorch Whisper implementation is excluded from collection. Numba uses the PyInstaller dependency hook.
+- A missing Metal shader library stops the arm64 build. Intel Mac, Windows and Linux builds do not collect the Apple backend.

@@ -11,6 +11,7 @@ from typing import Dict, Any, Optional, List, Tuple
 from ...debug import debug_log
 from ..base import Tool, ToolContext
 from ..types import ToolExecutionResult
+from ..http_response import discard_redirect_body
 
 
 # Per-fetch deadline — tight enough that a worst-case 3-way cascade fits the
@@ -86,6 +87,7 @@ def _fetch_page_content(url: str, max_chars: int = 1500,
     """
     if not _is_public_url(url):
         return None
+    response: Optional[requests.Response] = None
     try:
         headers = {
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -95,11 +97,11 @@ def _fetch_page_content(url: str, max_chars: int = 1500,
         # Manual redirect walk so we can re-validate each hop against the SSRF
         # allowlist. Limit to _MAX_REDIRECTS to cap latency.
         current_url = url
-        response: Optional[requests.Response] = None
         for _ in range(_MAX_REDIRECTS + 1):
             response = requests.get(
                 current_url, headers=headers, timeout=timeout,
                 allow_redirects=False, stream=True,
+                hooks={"response": discard_redirect_body},
             )
             if response.is_redirect or response.is_permanent_redirect:
                 next_url = response.headers.get("Location", "")
@@ -163,6 +165,9 @@ def _fetch_page_content(url: str, max_chars: int = 1500,
     except Exception as e:
         debug_log(f"Failed to fetch page content from {url}: {e}", "web")
         return None
+    finally:
+        if response is not None:
+            response.close()
 
 
 # Minimum token length to count as a "content token" for query-relevance

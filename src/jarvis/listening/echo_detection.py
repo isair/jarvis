@@ -97,6 +97,19 @@ class EchoDetector:
 
         return normalized
 
+    def query_is_prior_echo(self, query: str, current_text: str, tts_text: str) -> bool:
+        """Identify an earlier spoken phrase absent from the current utterance."""
+        def words(text: str) -> list[str]:
+            return re.findall(r"\w+", self._normalize_for_comparison(text), re.UNICODE)
+
+        query_words = words(query)
+        if len(query_words) < self.min_salvage_words:
+            return False
+        phrase = " " + " ".join(query_words) + " "
+        spoken = " " + " ".join(words(tts_text)) + " "
+        current = " " + " ".join(words(current_text)) + " "
+        return phrase in spoken and phrase not in current
+
     def _check_text_similarity(self, heard_text: str, tts_text: str, threshold: int = 85) -> bool:
         """
         Check if heard text is similar to TTS text using fuzzy matching.

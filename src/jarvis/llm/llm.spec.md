@@ -83,7 +83,9 @@ Every LLM context runs on one of two models, resolved through `resolve_model(cfg
 | Tier | Field | Contexts | Default |
 |------|-------|----------|---------|
 | `Tier.FAST` | `cfg.fast_model` | intent judge, tool router, tool searcher, enrichment extractor, graph placement, max-turn digest, evaluator | `gemma4:e2b` on the Ollama chat path; the active chat model on an OpenAI-compatible provider (the Ollama pull-name does not exist there) |
-| `Tier.CHAT` | `cfg.llm_chat_model` | main reply loop, planner + plan-step resolver, summariser, graph extraction, tool-specific calls, memory/tool-result digests (size-gated passes on the chat model) | the model picked at setup |
+| `Tier.CHAT` | `cfg.llm_chat_model` | main reply loop, planner + plan-step resolver, summariser, graph extraction, tool-specific calls, memory/tool-result digests (size-gated passes on the chat model) | `gemma4:e4b`, adapted to detected memory at setup |
+
+Ollama setup counts shared models once. It retains E2B fast when it fits and can select E4B for both tiers when a separate E2B exceeds the budget. Explicit saved model choices take precedence over automatic chat recommendations.
 
 Fast-tier contexts take a few thousand tokens in and emit tiny strict-JSON answers, so latency dominates; chat-tier contexts produce long-form output, so quality dominates. Contexts state their tier instead of defining a per-context fallback chain, and any future routing logic lands in exactly one place.
 
@@ -106,6 +108,7 @@ The migration in `_migrate_config` runs once when `_config_version < 2`:
 ### Ollama (`OllamaBackend`)
 
 - Endpoints: `POST /api/chat`, `POST /api/embeddings`, `GET /api/tags`, `POST /api/generate` (used by `warm_up`).
+- GPT-OSS Ollama requests use named reasoning levels: boolean `thinking=False` selects `low`, and `True` selects `high`. Reasoning cannot be disabled for this model. Explicit named levels are preserved, including `extra_options["think"]` overrides applied before translation. Canonical `gpt-oss` names may include namespace prefixes and size tags; other model names retain their own controls.
 - Streaming: JSON-lines (`{...}\n`).
 - Tool calls: native `tools` parameter (Ollama 0.4+); arguments returned as a Python dict.
 - Prompt caching: every chat payload (`chat()`, `direct()`, `streaming()`) sets `cache_prompt: true` explicitly so the server retains the request's KV state and reuses it when the next request shares the same prefix. Callers keep prefixes cacheable by keeping system prompts byte-static and pushing per-call data (time, hints) to the tail of the prompt (see `docs/llm_contexts.md` "KV-cache discipline").

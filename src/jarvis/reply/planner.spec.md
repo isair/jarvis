@@ -41,14 +41,19 @@ integration in `src/jarvis/reply/engine.py`.
 - After the dialogue context is assembled, MCP tools are loaded, and
   the tool router has produced a narrowed catalogue. Memory search
   runs *after* the planner so it can be gated on its output.
+- Dialogue context contains the latest six non-empty user or assistant
+  messages, in chronological order, with at most 200 characters per message.
+  Other roles and empty messages do not consume this dialogue budget.
 - The planner sees the **router-narrowed** tool catalogue (name +
   one-line description), not the full 30+ list. It does not see memory
   content — it decides whether memory is needed, via the
-  `searchMemory` directive.
+  `searchMemory` directive. An empty external catalogue still allows
+  private-history preparation. The same personal-history rules apply with
+  or without external tools.
 - Only when the query is at least `MIN_QUERY_CHARS` long (default 4).
   Pure noise like "hi" / "ok" still short-circuits.
 - Only when `cfg.planner_enabled` is True (default).
-- Only when an `ollama_base_url` and a resolvable model are available.
+- Only when a resolvable chat model is available; calls use the configured LLM backend.
 
 ### Fast-path skip (engine-level)
 
@@ -59,6 +64,15 @@ The engine skips the planner entirely when **all** of these hold:
 - `planner_enabled` is True (the skip is an optimisation, not a feature-gate bypass).
 
 When skipped the engine injects `["Reply to the user."]` as the plan — a positive signal that no tools and no memory enrichment are needed. The warm-profile block is still injected, so the chat model sees user identity and preferences. Longer tool-free queries ("what do you know about my dietary preferences") still reach the planner so it can emit a `searchMemory` directive when the warm profile alone is insufficient.
+
+### Generation budget
+
+Planning and LLM step resolution share a bounded 1,024-token generation budget.
+This includes any reasoning emitted by the backend before its plan or JSON
+answer. The configured planner deadline still bounds each request; empty or
+invalid output keeps the existing fail-open behaviour. The five-step plan
+limit, tool allow-list and deterministic concrete-step fast path apply
+independently of the generation budget.
 
 ### Model resolution
 
@@ -86,6 +100,11 @@ The planner prompt instructs the model to emit:
   when** answering requires information the user shared in prior
   conversations. Omit otherwise — every extra directive is an
   avoidable LLM call downstream.
+  Personalised recommendations retrieve the user's tastes, interests,
+  diet or history first. General facts about named people or places,
+  utility requests and definitions use available tools or a direct reply
+  without searching private conversation history. Explicit requests for
+  what the user said about a named person still require memory.
 - Tool names from the provided catalog only (exact match), for any
   concrete tool step.
 - Concrete arguments composed against dialogue context, not the raw
@@ -102,6 +121,8 @@ The planner prompt instructs the model to emit:
 - A final synthesis/reply step when any `searchMemory` or tool step
   was planned.
 - Steps in the same language the user wrote the query in.
+- Zero-temperature sampling for the plan classification; execution and
+  synthesis keep their own sampling settings.
 - Never emit `stop` as a plan step. The main assistant decides
   when to stop at runtime; a pre-planned stop directive would
   produce a silent dismissal for many non-trivial queries.
@@ -187,16 +208,17 @@ The engine consumes the plan in two phases.
 
 ### resolve_next_tool_call
 
-- **Fast path**: if the step text is fully concrete (tool name in the
-  allow-list + `key='value'` / `key="value"` pairs matching the tool's
-  declared property keys, and no `<placeholder>`), parse it
-  deterministically and return without any LLM call. This removes the
-  resolver LLM as a failure surface for the common case — small models
-  occasionally flake (timeout, empty, spurious `null`) even on
-  trivially-concrete steps like `webSearch query='foo'`, which used to
-  fall back to the chat model and produce a refusal instead of the
-  search. The fast path is purely regex-driven, language-agnostic, and
-  never calls the model.
+- **Fast path**: the step names an allowed tool, uses `key='value'` or
+  `key="value"` pairs matching its declared property keys, supplies every
+  required field and has no `<placeholder>`. The resolver parses and
+  returns this concrete call without model inference. String and untyped
+  values stay literal; declared booleans, integers, finite numbers and null
+  values use their JSON types, including values in the planner's quote syntax.
+  Invalid primitive values, complex types and type unions use the LLM resolver.
+  Each property appears once and all argument text must be consumed, apart
+  from whitespace, commas between pairs and an optional final full stop.
+  Unmatched quotes or unparsed text use the LLM resolver rather than dispatching
+  a partial literal value.
 - **LLM path**: when the step contains a `<placeholder>`, uses unknown
   argument keys, or doesn't fit the `key=value` shape, the step is
   passed to the LLM resolver which can substitute entities from prior
@@ -208,7 +230,17 @@ The engine consumes the plan in two phases.
 - Filters the returned `arguments` against the tool's declared
   JSON-schema property keys; unknown keys are dropped before dispatch.
   Tools that declare no properties keep the args as-is (they are
-  free-form by design).
+  free-form by design). Required fields must remain present after filtering.
+- Incomplete concrete calls use the LLM resolver. If its argument object
+  still lacks required fields, return `None` for a normal chat-model turn.
+- Missing or null `arguments` represent an empty object for optional calls.
+  Arrays, strings, numbers and booleans are rejected rather than converted
+  into empty calls. Argument value types remain the tool implementation's
+  responsibility.
+- Both paths normalise Markdown links and bare domains for explicit URL
+  keys (`url`, `uri`, `href`, `link`, `target_url`, `page_url`) and properties
+  with JSON-schema `format: uri` or `uri-reference`. Literal `location` and
+  `address` values remain untouched unless their schema declares a URI format.
 - Tolerates markdown fences the model may add despite instructions.
 - Both planner LLM calls (`plan_query` and `resolve_next_tool_call`)
   request `num_ctx=8192` from Ollama so enriched memory and tool

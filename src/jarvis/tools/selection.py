@@ -59,6 +59,9 @@ _RELATIVE_THRESHOLD = 0.97
 # guarantees the downstream prompt stays compact regardless.
 _LLM_MAX_SELECTED = 5
 
+# Completion budgets include reasoning as well as the short tool-name answer.
+_ROUTER_TOKEN_BUDGET = 1024
+
 # Common English stop-words excluded from keyword matching.
 _STOP_WORDS = frozenset({
     "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
@@ -334,7 +337,7 @@ def _select_llm(
         resp = llm_backend.direct(
             llm_model, sys_prompt, user_prompt,
             timeout_sec=llm_timeout_sec,
-            max_tokens=50,
+            max_tokens=_ROUTER_TOKEN_BUDGET,
         )
     except Exception as e:
         debug_log(f"LLM tool selection failed: {e}, falling back to keyword strategy", "planning")

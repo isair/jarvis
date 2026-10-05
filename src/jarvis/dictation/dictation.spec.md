@@ -64,7 +64,7 @@ After transcription, text passes through these stages in order:
 
 ## Architecture
 
-- **`pynput`** for global hotkey detection (cross-platform).
+- **`pynput`** for global hotkey detection (cross-platform). On supported macOS releases, the listener enters the Quartz event loop directly and retains pynput character/modifier decoding. It does not open a Carbon keyboard-layout context on its worker thread: event characters come from `CGEventKeyboardGetUnicodeString`, and the unused context can trigger a fatal TSM main-queue assertion. The macOS 26+ safety guard remains in force.
 - **Clipboard-based paste** (`Ctrl+V` / `Cmd+V`) for text insertion — more
   reliable than character-by-character typing, handles Unicode.
 - **Shared Whisper model** via lazy reference (`lambda: voice_thread.model`)
@@ -99,6 +99,8 @@ After transcription, text passes through these stages in order:
 - The engine accepts an optional `voice_device` parameter, passed through from
   the daemon's configured device. Numeric indices and input-device names select
   that device; a missing named input fails instead of recording another device.
+  The default input is resolved once per dictation session. An unavailable
+  default produces Settings guidance and ends the session without recording.
 - The stream tries the selected device's native sample rate and mono input first.
   Unsupported formats trigger bounded channel-count and rate retries on the
   same input, including the Whisper target rate. Access and unavailable-device
@@ -125,7 +127,7 @@ After transcription, text passes through these stages in order:
 
 ## Thread Safety
 
-- `threading.Lock` around shared Whisper model transcription calls.
+- `threading.Lock` around shared Whisper model transcription calls. Model references are resolved under the lock so CPU recovery in the voice listener is visible to waiting dictation jobs.
 - Dedicated audio stream; never touches the listener's stream.
 - The `pynput` key handlers (`_on_key_press` / `_on_key_release`) must return
   quickly — Windows silently removes low-level keyboard hooks that take more

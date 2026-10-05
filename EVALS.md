@@ -2,6 +2,32 @@
 
 **Generated:** 2026-05-04 (gemma4:e2b column refreshed with retry-aware outcomes from a full `--single` run; gpt-oss:20b column inherited unchanged from the 2026-04-27 regen)
 
+## 🧰 Local evaluation endpoints
+
+The model under test and judge share `EVAL_JUDGE_MODEL` and `EVAL_JUDGE_BASE_URL`.
+Set `EVAL_JUDGE_PROVIDER=ollama` for a native Ollama endpoint on a custom port,
+or `openai_compatible` for a local OpenAI-compatible server. OpenAI-compatible
+URLs accept either the server root or a `/v1` suffix.
+
+```bash
+EVAL_JUDGE_PROVIDER=ollama EVAL_JUDGE_BASE_URL=http://127.0.0.1:11439 \
+EVAL_JUDGE_MODEL=gemma4:e2b python -m pytest evals/test_graph_branch_routing.py -q
+```
+
+An explicit provider selects that transport for both availability checks and
+judge calls. Without an override, judge calls detect the endpoint; the model
+fixture defaults to Ollama on port 11434 and OpenAI-compatible on other ports.
+Voice intent and listener suites use the selected model and transport, including
+model names exposed by an OpenAI-compatible server. Missing models are skipped;
+available models run their behavioural cases. Tool routing uses the selected
+chat transport; embedding filtering checks its configured embedding model
+independently of the chat model name. Filtering, context-aware and implicit-intent
+routing evaluations reject empty or irrelevant router answers even if keyword
+fallback selects the expected tool.
+
+Use an explicit provider for custom ports. The results below belong to the dated
+report above; a targeted local run does not refresh the full report.
+
 ## 📊 TL;DR
 
 **Overall:** 🟢 **340/354 passed (96.0%)** across all categories *(small-model column re-baselined from a fresh `gemma4:e2b` run with up to 3× retries; three new tests added in #352, one intent-judge regression introduced by `a8f133c` recovered by the prompt fix in this PR — see "Intent judge" below)*

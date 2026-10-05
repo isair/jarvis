@@ -17,12 +17,20 @@ Run: ./scripts/run_evals.sh
 import pytest
 from unittest.mock import patch
 
-from conftest import requires_judge_llm
+from evals.tool_routing import requires_judge_llm
 from helpers import (
-    MockConfig, ToolCallCapture,
+    ToolCallCapture,
     create_mock_tool_run,
-    JUDGE_MODEL,
+    voice_config, assert_not_fallback_reply,
 )
+
+
+def _assert_answer(response, context):
+    """Tool selection cannot substitute for a usable model answer."""
+    assert isinstance(response, str) and response.strip(), (
+        f"🗣️ {context}: the model returned no answer"
+    )
+    assert_not_fallback_reply(response, context)
 
 
 # =============================================================================
@@ -73,7 +81,7 @@ class TestTopicSwitching:
     Tests that the agent selects the correct tool when the conversation
     topic changes between turns.
 
-    Uses real LLM inference to test actual model behavior.
+    Uses real LLM inference to test actual model behaviour.
     Tool execution is mocked for consistent responses.
     """
 
@@ -92,8 +100,7 @@ class TestTopicSwitching:
         """
         from jarvis.reply.engine import run_reply_engine
 
-        mock_config.ollama_base_url = "http://localhost:11434"
-        mock_config.ollama_chat_model = JUDGE_MODEL
+        mock_config = voice_config()
 
         capture = ToolCallCapture()
         mock_tool_run = create_mock_tool_run(capture, {
@@ -121,6 +128,9 @@ class TestTopicSwitching:
                 dialogue_memory=eval_dialogue_memory
             )
             turn2_tools = capture.tool_sequence()
+
+        _assert_answer(response1, "first turn")
+        _assert_answer(response2, "follow-up turn")
 
         print(f"\n📊 Topic Switching - Weather → Store Hours:")
         print(f"   Turn 1 query: 'How's the weather today?'")
@@ -163,8 +173,7 @@ class TestTopicSwitching:
         """
         from jarvis.reply.engine import run_reply_engine
 
-        mock_config.ollama_base_url = "http://localhost:11434"
-        mock_config.ollama_chat_model = JUDGE_MODEL
+        mock_config = voice_config()
 
         capture = ToolCallCapture()
         mock_tool_run = create_mock_tool_run(capture, {
@@ -177,7 +186,7 @@ class TestTopicSwitching:
 
             # Turn 1: News search
             capture.clear()
-            run_reply_engine(
+            response1 = run_reply_engine(
                 db=eval_db, cfg=mock_config, tts=None,
                 text="What's the latest tech news?",
                 dialogue_memory=eval_dialogue_memory
@@ -192,6 +201,9 @@ class TestTopicSwitching:
                 dialogue_memory=eval_dialogue_memory
             )
             turn2_tools = capture.tool_sequence()
+
+        _assert_answer(response1, "first turn")
+        _assert_answer(response2, "follow-up turn")
 
         print(f"\n📊 Topic Switching - News → Weather:")
         print(f"   Turn 1 tools: {turn1_tools}")
@@ -238,8 +250,7 @@ class TestFollowUpContext:
         """
         from jarvis.reply.engine import run_reply_engine
 
-        mock_config.ollama_base_url = "http://localhost:11434"
-        mock_config.ollama_chat_model = JUDGE_MODEL
+        mock_config = voice_config()
 
         capture = ToolCallCapture()
         mock_tool_run = create_mock_tool_run(capture, {"getWeather": MOCK_WEATHER_RESPONSE})
@@ -265,6 +276,9 @@ class TestFollowUpContext:
             )
             turn2_tools = capture.tool_sequence()
 
+        _assert_answer(response1, "first turn")
+        _assert_answer(response2, "follow-up turn")
+
         print(f"\n📊 Follow-Up Context - Weather → Umbrella:")
         print(f"   Turn 1 tools: {turn1_tools}")
         print(f"   Turn 1 response: {response1[:80] if response1 else 'None'}...")
@@ -274,17 +288,16 @@ class TestFollowUpContext:
         # Turn 1 should fetch weather
         assert "getWeather" in turn1_tools, "Turn 1 should fetch weather"
 
-        # Turn 2: Check if response references weather context
-        # (It may or may not call getWeather again - both are acceptable)
-        if response2:
-            weather_terms = ["overcast", "cloud", "rain", "weather", "chilly", "cold", "7", "8"]
-            references_weather = any(term in response2.lower() for term in weather_terms)
-            print(f"   References weather context: {references_weather}")
-
-            # The response should acknowledge or use the weather context
-            # Not a hard fail if it doesn't, but we log it
-            if not references_weather:
-                print(f"   ⚠️ Response doesn't seem to reference weather context")
+        # Ground advice in the supplied fixture, including accepted paraphrases.
+        fields = dict(line.split(": ", 1) for line in MOCK_WEATHER_RESPONSE.splitlines()
+                      if ": " in line)
+        condition = fields["Conditions"].casefold()
+        temperature = fields["Temperature"].removesuffix("°C")
+        terms = (condition, temperature, temperature.replace(".", ","))
+        if condition == "overcast":
+            terms += ("cloud",)
+        grounded = any(term in response2.casefold() for term in terms)
+        assert grounded, f"🌦️ Umbrella advice did not use the supplied weather: {response2}"
 
 
 # =============================================================================
@@ -341,8 +354,7 @@ class TestSelfContainedToolArguments:
         """
         from jarvis.reply.engine import run_reply_engine
 
-        mock_config.ollama_base_url = "http://localhost:11434"
-        mock_config.ollama_chat_model = JUDGE_MODEL
+        mock_config = voice_config()
 
         capture = ToolCallCapture()
 
@@ -361,7 +373,7 @@ class TestSelfContainedToolArguments:
 
             # Turn 1: establish entity
             capture.clear()
-            run_reply_engine(
+            response1 = run_reply_engine(
                 db=eval_db, cfg=mock_config, tts=None,
                 text="Who is Harry Styles?",
                 dialogue_memory=eval_dialogue_memory
@@ -377,7 +389,10 @@ class TestSelfContainedToolArguments:
             )
             turn2_calls = list(capture.calls)
 
-        print(f"\n📊 Self-contained tool arguments — Harry Styles follow-up:")
+        _assert_answer(response1, "first turn")
+        _assert_answer(response2, "follow-up turn")
+
+        print(f"\n📊 Self-contained tool arguments: Harry Styles follow-up:")
         print(f"   Turn 1 calls: {turn1_calls}")
         print(f"   Turn 2 calls: {turn2_calls}")
         print(f"   Turn 2 response: {(response2 or '')[:120]}...")
@@ -431,8 +446,7 @@ class TestMultiTurnExtended:
         """
         from jarvis.reply.engine import run_reply_engine
 
-        mock_config.ollama_base_url = "http://localhost:11434"
-        mock_config.ollama_chat_model = JUDGE_MODEL
+        mock_config = voice_config()
 
         capture = ToolCallCapture()
         all_turns = []
@@ -468,6 +482,7 @@ class TestMultiTurnExtended:
                     text=query,
                     dialogue_memory=eval_dialogue_memory
                 )
+                _assert_answer(response, f"turn {len(all_turns) + 1}")
                 all_turns.append({
                     "query": query,
                     "expected": expected_tool,

@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 from jarvis import llm as _llm_module
+from jarvis.memory import graph_ops as _graph_ops_module
 
 
 # Map caller __qualname__ → graph context name. Matches the 13 contexts in
@@ -60,10 +61,13 @@ _CALLER_TO_CONTEXT: dict[str, str] = {
     "generate_conversation_summary": "summariser",
     # Context 11 — graph fact extraction
     "extract_graph_memories": "graph_extract",
+    "_review_graph_facts": "graph_fact_hygiene",
     # Context 12 — graph best-child picker
     "_llm_pick_best_child": "graph_best_child",
     # Context 13 — tool-specific LLM calls
     "_extract_place_from_user_text": "tool_weather",
+    "resolve_missing_context": "personal_context",
+    "_review_location_candidates": "personal_context_verify",
     "extract_and_log_meal": "tool_nutrition",
     "generate_followups_for_meal": "tool_nutrition",
 }
@@ -181,6 +185,10 @@ class TimingRecorder:
                     wrapped = self._wrap(name, originals[name])
                     setattr(mod, name, wrapped)
                     self._originals["_sites"].append((mod, name, originals[name]))
+        # Graph operations own a provider-dispatched direct-call boundary.
+        graph_direct = _graph_ops_module.call_llm_direct
+        _graph_ops_module.call_llm_direct = self._wrap("call_llm_direct", graph_direct)
+        self._originals["_sites"].append((_graph_ops_module, "call_llm_direct", graph_direct))
         # Also patch the canonical module so any late `from jarvis.llm import X`
         # after we enter the context sees the wrapper.
         for name in names:

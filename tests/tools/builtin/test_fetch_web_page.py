@@ -15,6 +15,8 @@ def _make_response_mock(**attrs) -> Mock:
     the connection is released deterministically).
     """
     resp = Mock(**attrs)
+    resp.iter_content = Mock(return_value=[attrs.get('content', attrs.get('text', '').encode())])
+    resp.encoding = attrs.get('encoding')
     resp.__enter__ = Mock(return_value=resp)
     resp.__exit__ = Mock(return_value=False)
     return resp

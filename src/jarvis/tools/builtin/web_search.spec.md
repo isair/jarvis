@@ -50,6 +50,12 @@ Redirects are walked manually (`allow_redirects=False`) up to
 with a `_MAX_FETCH_BYTES` (512 KB) cap so a hostile server can't exhaust
 memory by ferrying us to a firehose.
 
+The shared `tools/http_response.py` response hook closes redirect bodies before
+Requests prepares the next request, including when automatic redirects are
+disabled. Only headers are needed for the manual hop validation. Each final
+response is closed after extraction, byte-cap truncation, HTTP errors or parser
+failures. Streaming decompression uses urllib3 2.8 or later.
+
 ### Prompt-injection fence
 
 Fetched page content is attacker-controlled — any page on the web could

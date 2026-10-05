@@ -1,16 +1,9 @@
-"""Ollama implementation of :class:`LLMBackend`.
+"""Ollama HTTP transport for chat, native tools and embeddings.
 
-This module owns the original behaviour of the previous flat
-``src/jarvis/llm.py``: HTTP calls against ``/api/chat``,
-``/api/embeddings`` and ``/api/tags``, native tool calling with the
-``tools`` parameter (Ollama 0.4+), and the same fail-soft error
-handling (return ``None`` on timeouts / connection errors;
-:class:`ToolsNotSupportedError` on HTTP 400 with tools).
-
-Nothing about the wire shape, defaults, or response parsing has
-changed in this PR — the file is the previous implementation reshaped
-into a class so future PRs can drop in OpenAI-compatible and
-Anthropic-compatible siblings without touching call sites.
+Chat requests use local Ollama endpoints, optional reasoning controls and
+prompt caching. Responses expose assistant content separately from reasoning.
+Timeouts and unavailable services fail softly; unsupported native tools raise
+``ToolsNotSupportedError`` for the reply engine's text-based fallback.
 """
 
 from __future__ import annotations
@@ -76,6 +69,16 @@ def extract_text_from_response(data: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+def _thinking_level(chat_model: str, thinking: bool | str) -> bool | str:
+    """Translate boolean controls to GPT-OSS's supported reasoning levels."""
+    model_name = chat_model.rsplit("/", 1)[-1].partition(":")[0]
+    if model_name.casefold() == "gpt-oss" and isinstance(thinking, bool):
+        level = "high" if thinking else "low"
+        debug_log(f"GPT-OSS reasoning level: {level}", "llm")
+        return level
+    return thinking
+
+
 class OllamaBackend(LLMBackend):
     """:class:`LLMBackend` implementation that talks to a local Ollama server."""
 
@@ -136,7 +139,7 @@ class OllamaBackend(LLMBackend):
             "stream": False,
             "cache_prompt": True,
             "options": options,
-            "think": thinking,
+            "think": _thinking_level(chat_model, thinking),
         }
 
         try:
@@ -194,7 +197,7 @@ class OllamaBackend(LLMBackend):
             "stream": True,
             "cache_prompt": True,
             "options": {"num_ctx": 4096},
-            "think": thinking,
+            "think": _thinking_level(chat_model, thinking),
         }
 
         try:
@@ -277,6 +280,8 @@ class OllamaBackend(LLMBackend):
                             payload["options"][inner_key] = inner_value
                 else:
                     payload["options"][key] = value
+
+        payload["think"] = _thinking_level(chat_model, payload["think"])
 
         if tools and isinstance(tools, list) and len(tools) > 0:
             payload["tools"] = tools

@@ -113,15 +113,16 @@ class RuntimeStatusSignals(QObject):
 def _should_emit_as_log(line: str) -> bool:
     """Whether a daemon output line belongs in the general log viewer.
 
-    Chat IPC is carved out. Its ``complete`` event carries the whole
+    Voice feedback protocol is routed to the face rather than displayed as
+    a log line. Chat IPC is carved out. Its ``complete`` event carries the whole
     assistant reply, which can echo back whatever the user typed, and the
     log window is not covered by the redaction invariant the chat path
     maintains. Diary IPC stays: it carries progress and token deltas the
     log window exists to show.
     """
-    from jarvis.daemon import CHAT_IPC_PREFIX
+    from jarvis.daemon import CHAT_IPC_PREFIX, VOICE_IPC_PREFIX
 
-    return not line.startswith(CHAT_IPC_PREFIX)
+    return not line.startswith((CHAT_IPC_PREFIX, VOICE_IPC_PREFIX))
 
 
 def _collect_runtime_status_snapshot(
@@ -1177,6 +1178,7 @@ def acquire_single_instance_lock() -> bool:
 class LogSignals(QObject):
     """Signals for thread-safe log updates."""
     new_log = pyqtSignal(str)
+    low_confidence = pyqtSignal()
 
 
 class LogViewerWindow(QMainWindow):
@@ -1800,6 +1802,7 @@ class DaemonThread(KeepAliveWorker):
         import sys as sys_module
         old_stdout = sys_module.stdout
         old_stderr = sys_module.stderr
+        feedback_setter = None
 
         try:
             # Redirect stdout/stderr to capture logs
@@ -1809,7 +1812,9 @@ class DaemonThread(KeepAliveWorker):
 
             try:
                 # Import and run the daemon
-                from jarvis.daemon import main as daemon_main
+                from jarvis.daemon import main as daemon_main, set_voice_feedback_callback
+                feedback_setter = set_voice_feedback_callback
+                feedback_setter(self.log_signals.low_confidence.emit)
                 self.log_signals.new_log.emit("🚀 Jarvis daemon started\n")
                 self.log_signals.new_log.emit("📋 Initializing daemon components...\n")
 
@@ -1832,6 +1837,8 @@ class DaemonThread(KeepAliveWorker):
                 except Exception:
                     pass
             finally:
+                if feedback_setter is not None:
+                    feedback_setter(None)
                 sys_module.stdout = old_stdout
                 sys_module.stderr = old_stderr
         except Exception as e:
@@ -1882,6 +1889,9 @@ class JarvisSystemTray:
         # Note: Creating the face window also initializes the SpeakingState singleton
         # in the main thread, which is important for cross-thread signal delivery
         self.face_window = FaceWindow()
+        self.log_signals.low_confidence.connect(
+            self._on_low_confidence, Qt.ConnectionType.QueuedConnection,
+        )
 
         # Create dictation history window (hidden by default)
         from desktop_app.dictation_history import DictationHistoryWindow
@@ -1916,6 +1926,8 @@ class JarvisSystemTray:
         self.log_reader_threads = []
 
         # Create system tray icon
+        from desktop_app.macos_tray import install_macos_tray_event_guard
+        install_macos_tray_event_guard()
         self.tray_icon = QSystemTrayIcon()
         self.update_icon()
 
@@ -2472,10 +2484,27 @@ class JarvisSystemTray:
     def _set_face_asleep(self) -> None:
         """Reset the face to asleep so it doesn't look ready while the daemon is down."""
         try:
+            self.face_window.clear_voice_feedback()
             from desktop_app.face_widget import JarvisState, get_jarvis_state
             get_jarvis_state().set_state(JarvisState.ASLEEP)
         except Exception:
             pass
+
+    def _on_low_confidence(self) -> None:
+        """Render queued feedback only while the assistant is active."""
+        if self.is_listening and not self._daemon_stop_expected:
+            self.face_window.show_low_confidence()
+
+    def _on_voice_ipc_line(self, line: str) -> None:
+        """Decode payload-free speech feedback on the subprocess log reader."""
+        import json
+        from jarvis.daemon import VOICE_IPC_PREFIX
+        try:
+            event = json.loads(line[len(VOICE_IPC_PREFIX):])
+            if isinstance(event, dict) and event.get("type") == "low_confidence":
+                self.log_signals.low_confidence.emit()
+        except (ValueError, TypeError):
+            debug_log("invalid voice feedback event", "desktop")
 
     def toggle_listening(self) -> None:
         """Toggle the Jarvis daemon on/off."""
@@ -2691,7 +2720,7 @@ class JarvisSystemTray:
         if not self.daemon_process or not self.daemon_process.stdout:
             return
 
-        from jarvis.daemon import CHAT_IPC_PREFIX
+        from jarvis.daemon import CHAT_IPC_PREFIX, VOICE_IPC_PREFIX
 
         try:
             while True:
@@ -2709,6 +2738,8 @@ class JarvisSystemTray:
                 # (Qt widgets must be created on the GUI thread).
                 if line.startswith(CHAT_IPC_PREFIX):
                     self._chat_ipc_signals.line_received.emit(line)
+                elif line.startswith(VOICE_IPC_PREFIX):
+                    self._on_voice_ipc_line(line)
                 if _should_emit_as_log(line):
                     self.log_signals.new_log.emit(line)
         except Exception as e:
@@ -2753,6 +2784,7 @@ class JarvisSystemTray:
 
         try:
             self._daemon_stop_expected = True
+            self.face_window.clear_voice_feedback()
             self._set_chat_daemon_status("stopping")
             if self.is_bundled and self.daemon_thread:
                 # When running in a QThread, use the stop flag for graceful shutdown

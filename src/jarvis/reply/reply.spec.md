@@ -49,10 +49,12 @@ Design principles enforced by the engine:
 
 4. Conversation Memory Enrichment (gated)
    - Runs only when the planner emitted a `searchMemory` directive OR the planner returned an empty plan (fail-open). Skipped otherwise, along with the keyword-extractor LLM call, the diary and graph queries, and the memory-digest LLM call.
-   - Extract search parameters via `extract_search_params_for_memory(query, base_url, router_model, ..., context_hint=...)`.
+   - Extract search parameters via `extract_search_params_for_memory(query, cfg, router_model, ..., context_hint=...)`.
      - Runs on the fast tier (`resolve_model(cfg, Tier.FAST)`), not the big chat model. The extractor is a small classification-shaped task and rides the already-warm fast model instead of paging in the chat weights.
      - The planner's `topic` hint (when present) is appended to the query the extractor sees, so keyword selection anchors on what the planner actually wanted to look up.
-     - Output fields: `keywords: List[str]`, optional `from`, optional `to`, optional `questions: List[str]`.
+     - A 1024-token generation budget includes reasoning and complete parameter JSON; the configured tools timeout and two-attempt limit bound the wait.
+     - The prompt resolves the requested date/period before extracting topic keywords. The reference clock supplies the anchor and does not create a date filter for a timeless request.
+     - Prompt JSON slots: `from`, `to`, `keywords: List[str]`, `questions: List[str]`. Date slots are null for a timeless request and UTC timestamps for a requested interval. Personal questions cover missing user facts, excluding facts already visible in live context.
      - `context_hint` carries a compact summary of what is already live in the assistant's context (current time, location, short-term dialogue). The extractor uses it to skip implicit personal questions whose answers are already visible — those facts do not need to be pulled from long-term memory.
    - If `keywords` present, call `search_conversation_memory_by_keywords(db, keywords, from_time, to_time, ...)` to retrieve relevant snippets (bounded by configured max results).
    - Join snippets into a `conversation_context` string for inclusion in the system message.
@@ -122,7 +124,7 @@ Design principles enforced by the engine:
    - `toolSearchTool` is a builtin; see `src/jarvis/tools/builtin/tool_search.spec.md`.
 
    **Termination**: When the chat model produces natural-language content (non-tool-call response), the engine delivers it immediately. The planner's task list is the termination contract: all planned tool steps are direct-executed before the chat model is called for synthesis, so the synthesis turn is always the final turn. For plan-empty queries (short or trivial), the chat model's first content response is delivered directly.
-   - Max-turn digest: when the loop exhausts `agentic_max_turns` without ever producing a content turn (e.g. a pure tool-call loop), the engine calls `digest_loop_for_max_turns` in `enrichment.py`. This runs a single cheap LLM pass over the loop's accumulated activity (tool calls, tool result excerpts, any prose) and produces a short reply that begins with a caveat sentence noting the request was not fully completed. The caveat and the summary are generated in the same language as the user's request, not hardcoded English. On digest failure the engine falls back to the last candidate reply (if any) or a generic error message.
+   - Max-turn digest: when the loop exhausts `agentic_max_turns` without ever producing a content turn (e.g. a pure tool-call loop), the engine calls `digest_loop_for_max_turns` in `enrichment.py`. This runs a single cheap LLM pass over the loop's accumulated activity (tool calls, tool result excerpts, any prose) and produces a short reply that begins with a caveat sentence noting the request was not fully completed. The caveat and the summary are generated in the same language as the user's request, not hardcoded English. A 1024-token generation budget covers reasoning and the final partial reply; the configured digest timeout and 800-character reply cap (plus a truncation ellipsis) bound the call and its result. On digest failure the engine falls back to the last candidate reply (if any) or a generic error message.
 
 7. Tool and Planning Protocol
    - The LLM responds using standard OpenAI-compatible message format:
@@ -345,12 +347,13 @@ To mitigate both, `digest_memory_for_query` (in `src/jarvis/reply/enrichment.py`
 
 Behaviour:
 - **Gating**: `memory_digest_enabled` (config). `None` (default) means auto-on for SMALL models, off for LARGE. Explicit `true`/`false` forces.
+- **Generation budget**: each batch reserves 1024 tokens for reasoning and the final relevance note. The configured digest timeout, prompt and per-batch note length cap remain independent limits.
 - **Short-circuit**: if the raw block is below `_DIGEST_MIN_CHARS` (400 chars), it's passed through unchanged — the LLM round-trip costs more than it saves.
 - **Batching**: if the raw block exceeds `_DIGEST_BATCH_MAX_CHARS` (2000 chars, ~500 tokens), snippets are greedy-packed into batches, each distilled independently; surviving notes are joined. Single large snippets become their own oversized batch rather than being split mid-text.
 - **Graph is beta**: when no graph nodes are present, only diary entries are digested. When only graph nodes are present, graph nodes alone are digested. Either channel is optional.
 - **NONE sentinel**: the distil prompt instructs the model to reply `NONE` (or variants `(NONE)`, `[NONE]`, `N/A`) when nothing in the snippets is directly relevant. This maps to an empty digest — no memory block is injected at all.
 - **Engagement-as-preference for recommendation queries**: for recommendation / opinion / "what should I" queries (watch, cook, read, listen, visit, etc.), past user interactions with items in the same domain count as preference signals even when no preference was stated in plain words. The distil prompt surfaces the specific items the user has engaged with (and flags them as "already covered" so the assistant can avoid re-recommending them), rather than NONE-ing them out for lacking an explicit "I prefer X" statement. Domain-agnostic. Guarded by `evals/test_memory_digest_preferences.py`.
-- **Length cap**: per-batch digests are truncated to `_DIGEST_MAX_CHARS` (500 chars) with an ellipsis; the combined digest across batches is at most `_DIGEST_MAX_CHARS * num_batches`, but in practice most batches return NONE.
+- **Length cap**: per-batch digests are truncated to `_DIGEST_MAX_CHARS` (500 chars) with an ellipsis; the combined digest joins surviving notes with newline separators.
 - **User-facing logging**: prints `🧩 Memory digest: N chars — "preview"` when relevant, or `🧩 Memory digest: no directly-relevant past memory` when the distil returned NONE. Debug logs record raw→digest size and batch counts under the `memory` category.
 - **Identity-query rule**: when the current query asks who the user is or what the assistant knows about them ("what do you know about me", "tell me about myself", "what are my interests"), the distil prompt instructs the model to prefer user-stated facts about the user (location, interests, preferences, ongoing plans, biography) over past Q&A topics the user merely asked about, and to surface multiple such facts when present rather than picking one. A past Q&A about a maths problem or a film title is not a fact about the user unless the snippet explicitly says so. Guarded by `evals/test_memory_digest_identity.py`.
 
@@ -371,6 +374,7 @@ Behaviour:
 - **No new facts**: the distil is forbidden from adding facts not present in the tool output — no year, cast, director etc. unless they appear verbatim in the payload.
 - **NONE sentinel**: when the distil judges nothing relevant it returns NONE; the caller keeps the raw payload (suppressing it entirely is worse than a noisy substrate). A user-facing `🧩 Tool digest: no relevant facts — using raw payload (Nch)` line prints on this branch so the fallback is visible in the field.
 - **Length cap**: each per-batch digest is truncated to `_TOOL_DIGEST_MAX_CHARS` (600 chars) with an ellipsis.
+- **Generation allowance**: `_TOOL_DIGEST_TOKEN_BUDGET` (1,024 tokens) covers backend reasoning and the attributed note. The returned note retains its character cap.
 - **Timeout**: the memory digest, tool-result digest, and max-turn loop digest all share `llm_digest_timeout_sec` (default 8 s), kept separate from `llm_tools_timeout_sec` (which can reach minutes for long-running tool execution) so a hung distil can't stall the reply loop for five minutes per turn.
 - **User-facing logging**: prints `🧩 Tool digest: N chars — "preview…"` when the digest replaces the raw payload, or the NONE fallback line above. Debug logs under the `tools` category record raw→digest size plus batch counts.
 - **Raw payload preserved in debug**: the debug logs capture the original length so field captures can compare digested vs raw behaviour.
@@ -380,3 +384,12 @@ Behaviour:
 - Avoid excessive logging; logs must remain readable and privacy-preserving.
 
 
+
+## Tool-requested personal context
+
+Both planned direct execution and model-generated tool calls pass through
+`ContextualToolRunner`. A tool's typed missing-context request can trigger bounded
+local personal-context recall even when the planner omitted `searchMemory`.
+The wrapper retries once with a grounded argument and preserves its source note
+in the tool result. Ordinary tool errors retain their existing behaviour.
+See `personal_context.spec.md` for policies and bounds.

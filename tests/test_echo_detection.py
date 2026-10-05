@@ -819,3 +819,35 @@ class TestRightmostEchoBoundarySalvage:
         # No echo prefix at all — no salvage needed; caller keeps the text as-is.
         result = detector.salvage_after_echo_tail(heard)
         assert result is None
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize('query,current,spoken,expected', [
+    ('grasp what you mean by that statement', 'What the fuck?',
+     'I cannot grasp what you mean by that statement; please explain.', True),
+    ('grasp what you mean by that statement',
+     'Please explain: grasp what you mean by that statement.',
+     'I cannot grasp what you mean by that statement; please explain.', False),
+    ('can you elaborate further', 'Could you explain?',
+     'I cannot grasp what you mean by that statement.', False),
+    ('what the fuck', 'being described. What the fuck?',
+     'Some rather complex hierarchical dynamic is being described.', False),
+    ('bu cümleyi anlamıyorum', 'Ne oluyor?',
+     'Üzgünüm, bu cümleyi anlamıyorum.', True),
+    ('three separate words', 'three separate wordsworth',
+     'three separate wordsworth', False),
+])
+def test_prior_echo_query_uses_whole_current_and_spoken_words(query, current, spoken, expected):
+    detector = EchoDetector()
+    assert detector.query_is_prior_echo(query, current, spoken) is expected
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize('minimum', [2, 4])
+def test_prior_echo_query_obeys_shared_minimum(minimum):
+    detector = EchoDetector()
+    detector.min_salvage_words = minimum
+    phrase = ' '.join(f'word{i}' for i in range(minimum))
+    shorter = ' '.join(phrase.split()[:-1])
+    assert detector.query_is_prior_echo(phrase, 'new speech', phrase)
+    assert not detector.query_is_prior_echo(shorter, 'new speech', phrase)

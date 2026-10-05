@@ -22,10 +22,12 @@ from urllib.parse import urlsplit
 
 import requests
 
-from jarvis.config import SUPPORTED_CHAT_MODELS, DEFAULT_CHAT_MODEL
+from jarvis.debug import debug_log
+from jarvis.config import SUPPORTED_CHAT_MODELS, DEFAULT_CHAT_MODEL, DEFAULT_FAST_MODEL, SUPPORTED_FAST_MODEL_IDS
 from jarvis.utils.vram import (
     detect_total_vram_mb,
     get_recommended_model_id,
+    get_recommended_model_pair,
     required_vram_mb,
 )
 
@@ -212,18 +214,16 @@ def get_required_models() -> List[str]:
         # real-time passes, but is only an Ollama pull when the chat
         # provider is Ollama (config load resolves it per provider).
         if llm_provider != "openai_compatible":
-            fast_model = getattr(cfg, "fast_model", "gemma4:e2b")
+            fast_model = getattr(cfg, "fast_model", DEFAULT_FAST_MODEL)
             if fast_model and fast_model not in models:
                 models.append(fast_model)
 
         return models
     except Exception:
         # Default models if config can't be loaded
-        # Note: DEFAULT_CHAT_MODEL is gemma4:e2b which is also the intent judge model,
-        # so the default list is effectively just 2 unique models
         defaults = [DEFAULT_CHAT_MODEL, "nomic-embed-text"]
-        if "gemma4:e2b" not in defaults:
-            defaults.append("gemma4:e2b")
+        if DEFAULT_FAST_MODEL not in defaults:
+            defaults.append(DEFAULT_FAST_MODEL)
         return defaults
 
 
@@ -2137,7 +2137,7 @@ class ModelsPage(ScrollableWizardPage):
 
     MODEL_OPTIONS = SUPPORTED_CHAT_MODELS
     _ALL_MODELS = MODEL_OPTIONS
-    _FAST_MODEL_IDS = ["qwen3.5:0.8b", "gemma4:e2b"]
+    _FAST_MODEL_IDS = SUPPORTED_FAST_MODEL_IDS
 
     # VRAM overhead for always-running companion models (MB).
     # nomic-embed-text: ~1 GB for ~1.5K dim semantic search.
@@ -2166,7 +2166,7 @@ class ModelsPage(ScrollableWizardPage):
         self.setTitle("")
         self._linked = False
         self._chat_model = DEFAULT_CHAT_MODEL
-        self._fast_model = "gemma4:e2b"
+        self._fast_model = DEFAULT_FAST_MODEL
         self._detected_vram_mb = None
 
         layout = QVBoxLayout()
@@ -2322,18 +2322,12 @@ class ModelsPage(ScrollableWizardPage):
             # leaves room for embeddings + whisper alongside the chat model.
             overhead = self._EMBED_VRAM_MB + self._whisper_vram_mb()
             usable_mb = self._detected_vram_mb - overhead
-            rec = get_recommended_model_id(usable_mb if usable_mb > 0 else None)
+            rec, fast = get_recommended_model_pair(max(usable_mb, 0))
+            debug_log(f"Chat model memory recommendation: {rec} (available {usable_mb} MB)", "setup")
             if rec in self._ALL_MODELS:
                 self._chat_model = rec
-                # Fast model stays gemma4:e2b unless VRAM constrains it
-                cv = required_vram_mb(rec) or 0
-                fv = required_vram_mb(self._fast_model) or 0
-                if cv + fv + overhead > self._detected_vram_mb:
-                    for c in self._FAST_MODEL_IDS:
-                        rc = required_vram_mb(c) or 0
-                        if rc <= cv and cv + rc + overhead <= self._detected_vram_mb:
-                            self._fast_model = c
-                            break
+                self._fast_model = fast
+                self._constrain_fast_model()
                 self._sync_combo_states()
         self._refresh_vram_display()
         self._update_models_display()
@@ -2383,29 +2377,31 @@ class ModelsPage(ScrollableWizardPage):
             self._fast_model = mid
             self._fast_combo.setCurrentIndex(self._fast_combo.findData(mid))
         else:
-            # Auto-downgrade: if fast model needs more VRAM than chat model,
-            # or the total (chat + fast + embed + whisper) exceeds our GPU,
-            # pick the smallest fast-suitable model that fits.
-            overhead = self._EMBED_VRAM_MB + self._whisper_vram_mb()
-            cv = required_vram_mb(mid) or 0
-            fv = required_vram_mb(self._fast_model) or 0
-            exceeds_vram = (
-                self._detected_vram_mb is not None
-                and cv + fv + overhead > self._detected_vram_mb
-            )
-            if fv > cv or exceeds_vram:
-                for c in self._FAST_MODEL_IDS:
-                    rc = required_vram_mb(c) or 0
-                    fits_vram = (
-                        self._detected_vram_mb is None
-                        or cv + rc + overhead <= self._detected_vram_mb
-                    )
-                    if rc <= cv and fits_vram:
-                        self._fast_model = c
-                        self._fast_combo.setCurrentIndex(self._fast_combo.findData(c))
-                        break
+            self._constrain_fast_model()
+            self._fast_combo.setCurrentIndex(self._fast_combo.findData(self._fast_model))
         self._refresh_vram_display()
         self._update_models_display()
+
+    def _constrain_fast_model(self):
+        """Keep a fitting choice, or select a replacement with the smallest fallback."""
+        overhead = self._EMBED_VRAM_MB + self._whisper_vram_mb()
+        chat_mb = required_vram_mb(self._chat_model) or 0
+
+        def fits(model):
+            fast_mb = required_vram_mb(model) or 0
+            total = chat_mb + overhead
+            if model != self._chat_model:
+                total += fast_mb
+            return (fast_mb <= chat_mb
+                    and (self._detected_vram_mb is None or total <= self._detected_vram_mb))
+
+        if fits(self._fast_model):
+            return
+        candidates = sorted(self._FAST_MODEL_IDS,
+                            key=lambda model: required_vram_mb(model) or 0,
+                            reverse=True)
+        self._fast_model = next((model for model in candidates if fits(model)), candidates[-1])
+        debug_log(f"Fast model memory recommendation: {self._fast_model}", "setup")
 
     def _sync_combo_states(self):
         """Sync combo selections to reflect current model choices."""
@@ -2434,12 +2430,12 @@ class ModelsPage(ScrollableWizardPage):
             dg = self._detected_vram_mb / 1024
             self._vram_label.setText(
                 f"Total VRAM Required: {tg:.1f} GB    "
-                f"Your GPU: {dg:.1f} GB"
+                f"Available budget: {dg:.1f} GB"
             )
             if total > self._detected_vram_mb:
                 sg = (total - self._detected_vram_mb) / 1024
                 self._vram_detail.setText(
-                    f"Your GPU has {dg:.1f} GB VRAM but the selected "
+                    f"The available model budget is {dg:.1f} GB but the selected "
                     f"models need {tg:.1f} GB ({sg:.1f} GB over). "
                     "Switch to smaller models or use CPU fallback."
                 )
@@ -2502,32 +2498,24 @@ class ModelsPage(ScrollableWizardPage):
 
     def initializePage(self):
         cc = DEFAULT_CHAT_MODEL
-        fc = "gemma4:e2b"
+        fc = DEFAULT_FAST_MODEL
         try:
             c = load_settings()
             cc = c.ollama_chat_model
-            fc = getattr(c, "fast_model", "gemma4:e2b")
+            fc = getattr(c, "fast_model", DEFAULT_FAST_MODEL)
         except Exception:
             pass
         self._chat_model = cc if cc in self._ALL_MODELS else DEFAULT_CHAT_MODEL
-        self._fast_model = fc if fc in self._ALL_MODELS else "gemma4:e2b"
-        overhead = self._EMBED_VRAM_MB + self._whisper_vram_mb()
-        cv = required_vram_mb(self._chat_model) or 0
-        fv = required_vram_mb(self._fast_model) or 0
-        exceeds_vram = (
-            self._detected_vram_mb is not None
-            and cv + fv + overhead > self._detected_vram_mb
-        )
-        if fv > cv or exceeds_vram:
-            for c in self._FAST_MODEL_IDS:
-                rc = required_vram_mb(c) or 0
-                fits_vram = (
-                    self._detected_vram_mb is None
-                    or cv + rc + overhead <= self._detected_vram_mb
-                )
-                if rc <= cv and fits_vram:
-                    self._fast_model = c
-                    break
+        self._fast_model = fc if fc in self._ALL_MODELS else DEFAULT_FAST_MODEL
+        from jarvis.config import _load_json, default_config_path
+        saved = _load_json(default_config_path())
+        if self._detected_vram_mb is not None and cc == DEFAULT_CHAT_MODEL and "ollama_chat_model" not in saved:
+            usable_mb = self._detected_vram_mb - self._EMBED_VRAM_MB - self._whisper_vram_mb()
+            self._chat_model, recommended_fast = get_recommended_model_pair(max(usable_mb, 0))
+            if "fast_model" not in saved:
+                self._fast_model = recommended_fast
+            debug_log(f"Default chat memory recommendation: {self._chat_model}", "setup")
+        self._constrain_fast_model()
         # Default to unlinked — separate fast model is the recommended layout
         # even when both happen to be the same model ID.
         self._linked = False
@@ -2998,19 +2986,15 @@ class WhisperSetupPage(ScrollableWizardPage):
         options = self._get_current_model_options()
         n = len(options)
 
-        # Clear existing labels.  The labels are already properly parented
-        # to their container widget, and takeAt() removes the layout's
-        # reference — scheduling deleteLater() is enough.  Do NOT call
-        # setParent(None) here: on macOS that promotes each QLabel to a
-        # top-level widget mid-transition, which triggers a native
-        # NSWindow creation and can SIGABRT inside QWizard.exec().  On
-        # Windows the same reparent creates a native HWND and fast-fails
-        # (0xc0000409) inside Qt6Core.dll — see dictation_history.py
-        # where the same mistake crashed the history window.
+        # Hide removed labels immediately: deferred deletion can wait until
+        # the wizard's nested event loop returns. Keep their container parent
+        # until deletion; setParent(None) creates native top-level windows
+        # during page transitions and can crash on macOS and Windows.
         while self._labels_layout.count():
             item = self._labels_layout.takeAt(0)
             widget = item.widget()
             if widget is not None:
+                widget.hide()
                 widget.deleteLater()
             # Spacers are automatically cleaned up when the item goes out of scope.
 
@@ -3018,6 +3002,7 @@ class WhisperSetupPage(ScrollableWizardPage):
             item = self._size_layout.takeAt(0)
             widget = item.widget()
             if widget is not None:
+                widget.hide()
                 widget.deleteLater()
 
         # Add labels aligned with slider tick positions

@@ -21,10 +21,11 @@ from rapidfuzz import fuzz
 from contextlib import contextmanager
 
 from .echo_detection import EchoDetector
+from .model_download import ModelDownloadError
 from .state_manager import StateManager, ListeningState
 from ..utils.audio_lock import portaudio_lock
 from ..utils.audio_capture import mono_capture, open_input_stream, resolve_input_device
-from .wake_detection import is_wake_word_detected, extract_query_after_wake, is_stop_command
+from .wake_detection import is_wake_word_detected, extract_query_after_wake, is_stop_command, is_stop_command_echo
 from .transcript_buffer import TranscriptBuffer
 from .intent_judge import (
     IntentJudge,
@@ -60,6 +61,12 @@ def is_whisper_hallucination(no_speech_prob: float, threshold: float) -> bool:
     both backends apply identical policy.
     """
     return no_speech_prob >= threshold
+
+
+@dataclass(frozen=True)
+class _CapturedAudio:
+    audio: Any
+    generation: int
 
 
 @dataclass(frozen=True)
@@ -296,8 +303,11 @@ try:
     if _is_apple_silicon():
         import mlx_whisper
         MLX_WHISPER_AVAILABLE = True
-except Exception:
+        debug_log("mlx-whisper loaded successfully", "voice")
+except Exception as _mlx_err:
     mlx_whisper = None
+    if _is_apple_silicon():
+        debug_log(f"mlx-whisper unavailable, falling back to faster-whisper: {_mlx_err}", "voice")
 
 try:
     from faster_whisper import WhisperModel
@@ -387,6 +397,16 @@ def _clear_corrupted_whisper_cache(error_message: str) -> bool:
         return False
 
 
+def _load_faster_whisper_model(model_name: str, *, device: str, compute_type: str,
+                               cpu_threads: int):
+    """Load complete local files after isolated preparation on every load path."""
+    from .model_download import prepare_faster_whisper_model
+
+    path = prepare_faster_whisper_model(model_name)
+    print(f"     🎤 Loading Whisper '{model_name}' (device={device}, compute={compute_type})...", flush=True)
+    return WhisperModel(path, device=device, compute_type=compute_type,
+                        cpu_threads=cpu_threads, local_files_only=True)
+
 
 @contextmanager
 def _serialised_stream(stream):
@@ -451,11 +471,18 @@ class VoiceListener(threading.Thread):
         self._whisper_device: Optional[str] = None  # "cpu" or "cuda" (resolved from CTranslate2)
         self._mlx_model_repo: Optional[str] = None  # For MLX backend
         self.model: Optional[Any] = None  # WhisperModel for faster-whisper, None for MLX
+        self._whisper_model_name = getattr(cfg, "whisper_model", "small")
+        self._whisper_cpu_recovery_attempted = False
+        self._slow_transcription_streak = 0
+        self._slow_transcription_warned = False
         self.transcribe_lock = threading.Lock()  # Shared lock for Whisper model access
         self._audio_q: queue.Queue = queue.Queue(maxsize=64)
         self._transcription_jobs_q: queue.Queue = queue.Queue(maxsize=8)
-        self._transcription_results_q: queue.Queue = queue.Queue()
+        self._transcription_results_q: queue.Queue = queue.Queue(maxsize=8)
         self._transcription_worker_thread: Optional[threading.Thread] = None
+        self._audio_worker_thread: Optional[threading.Thread] = None
+        self._audio_state_lock = threading.RLock()
+        self._audio_generation = 0
         self._pre_roll: deque = deque()
 
         # Audio callback monitoring (for debugging)
@@ -527,9 +554,13 @@ class VoiceListener(threading.Thread):
 
     @_dictation_active.setter
     def _dictation_active(self, active: bool) -> None:
-        if active and not self._dictation_is_active:
-            self._dictation_generation += 1
-        self._dictation_is_active = active
+        with self._audio_state_lock:
+            if active and not self._dictation_is_active:
+                self._dictation_generation += 1
+                self._dictation_is_active = active
+                self._clear_audio_buffers()
+            else:
+                self._dictation_is_active = active
 
     def _start_thinking_tune(self) -> None:
         """Start the thinking tune when processing a query."""
@@ -547,7 +578,8 @@ class VoiceListener(threading.Thread):
             self._tune_player = None
             try:
                 from desktop_app.face_widget import get_jarvis_state, JarvisState
-                get_jarvis_state().set_state(JarvisState.IDLE)
+                if not self._dictation_active:
+                    get_jarvis_state().set_state(JarvisState.IDLE)
             except ImportError:
                 pass
             except Exception:
@@ -592,7 +624,7 @@ class VoiceListener(threading.Thread):
         debug_log(f"scheduling hot window activation (echo_tolerance={self.state_manager.echo_tolerance}s, hot_window={self.state_manager.hot_window_seconds}s)", "voice")
         self.state_manager.schedule_hot_window_activation(self.cfg.voice_debug)
 
-    def _process_transcript(self, text: str, utterance_energy: float = 0.0, utterance_start_time: float = 0.0, utterance_end_time: float = 0.0, *, captured_during_tts: bool, captured_tts_start_time: float) -> None:
+    def _process_transcript(self, text: str, utterance_energy: float = 0.0, utterance_start_time: float = 0.0, utterance_end_time: float = 0.0, *, generation: int, captured_during_tts: bool, captured_tts_start_time: float) -> None:
         """
         Process a transcript from speech recognition.
 
@@ -600,6 +632,8 @@ class VoiceListener(threading.Thread):
             text: Transcribed text from audio
             utterance_energy: Pre-calculated energy from the utterance frames
         """
+        if not self._transcription_is_current(generation):
+            return
         if not text or not text.strip():
             # Check for timeouts
             if self.state_manager.check_collection_timeout():
@@ -720,6 +754,10 @@ class VoiceListener(threading.Thread):
             # Stop command detection (fast, text-based)
             stop_commands = getattr(self.cfg, "stop_commands", ["stop", "quiet", "shush", "silence", "enough", "shut up"])
             if is_stop_command(text_lower, stop_commands):
+                if is_stop_command_echo(text_lower, self.echo_detector._last_tts_text, stop_commands):
+                    debug_log("ignored stop command contained in literal TTS echo", "echo")
+                    print(f'  🔇 Heard (echo): "{text_lower[:50]}"', flush=True)
+                    return
                 debug_log(f"stop command detected during TTS: {text_lower} (energy: {utterance_energy:.4f})", "voice")
                 self.tts.interrupt()
                 try:
@@ -858,6 +896,11 @@ class VoiceListener(threading.Thread):
                 current_text=text_lower,
             )
 
+            if not self._transcription_is_current(generation):
+                debug_log("discarded intent result after voice generation invalidation", "voice")
+                self._stop_thinking_tune()
+                return
+
             if intent_judgment is not None:
                 # Log intent judge decision for user visibility
                 mode_str = "hot window" if could_be_hot_window else "wake word"
@@ -979,6 +1022,12 @@ class VoiceListener(threading.Thread):
                         # song?" reaching webSearch verbatim). If the judge
                         # returns an empty query (rare), fall back to raw text.
                         judge_query = (intent_judgment.query or "").strip()
+                        if judge_query and self.echo_detector.query_is_prior_echo(
+                            judge_query, text_lower, last_tts_text
+                        ):
+                            debug_log("rejected prior TTS query absent from current hot-window speech", "voice")
+                            self._stop_thinking_tune()
+                            return
                         hot_query = judge_query or text_lower
                         if judge_query and judge_query.lower() != text_lower:
                             debug_log(
@@ -1194,27 +1243,11 @@ class VoiceListener(threading.Thread):
                                 pass
                             return
 
-                        # Outside hot window — check if wake word is actually present
-                        # before trusting the rejection. Small models sometimes
-                        # classify wake-worded statements ("the light is bright,
-                        # Jarvis") as "not directed" despite the prompt instructing
-                        # otherwise. When the wake word is present, fall through to
-                        # Priority 4 wake word detection as a safety net.
-                        ww_wake = getattr(self.cfg, "wake_word", "jarvis")
-                        ww_aliases = set(getattr(self.cfg, "wake_aliases", [])) | {ww_wake}
-                        has_real_wake = is_wake_word_detected(text_lower, ww_wake, list(ww_aliases))
-                        if has_real_wake:
-                            debug_log(
-                                f"⚠️ Intent judge rejected wake-worded utterance "
-                                f"(reasoning: {intent_judgment.reasoning}) — "
-                                f"falling through to wake word detection",
-                                "voice"
-                            )
-                            # Fall through to Priority 4: wake word detection
-                        else:
-                            debug_log(f"🚫 Intent judge rejected (not directed, high confidence): \"{text_lower}\"", "voice")
-                            self._stop_thinking_tune()
-                            return
+                        # A detected name can be a mention addressed to someone else.
+                        # Outside the hot window, a confident rejection takes priority.
+                        debug_log("intent judge rejected directedness in wake-word mode", "voice")
+                        self._stop_thinking_tune()
+                        return
                 else:
                     # For inconclusive results, fall through to wake word detection
                     debug_log(f"⏭️ Intent judge inconclusive ({intent_judgment.confidence}), checking wake word", "voice")
@@ -1280,6 +1313,9 @@ class VoiceListener(threading.Thread):
         Args:
             query: Complete user query to process
         """
+        generation = self._dictation_generation
+        if not self._transcription_is_current(generation):
+            return
         debug_log(f"dispatching query: '{query}'", "voice")
 
         # Clear audio buffers to prevent stale audio from next query
@@ -1305,6 +1341,10 @@ class VoiceListener(threading.Thread):
         # rather than being dropped (see daemon.query_lock).
         try:
             with query_lock():
+                if not self._transcription_is_current(generation):
+                    debug_log("discarded voice dispatch after waiting for query lock", "voice")
+                    self._stop_thinking_tune()
+                    return
                 reply = run_reply_engine(
                     self.db, self.cfg, None, query, self.dialogue_memory,
                     language=self._last_detected_language,
@@ -1315,8 +1355,13 @@ class VoiceListener(threading.Thread):
             debug_log(f"reply engine exception: {e}", "voice")
             self._stop_thinking_tune()
             # Provide user feedback via TTS
-            if self.tts and self.tts.enabled:
+            if self._transcription_is_current(generation) and self.tts and self.tts.enabled:
                 self.tts.speak("Sorry, I encountered an error processing your request.")
+            return
+
+        if not self._transcription_is_current(generation):
+            debug_log("discarded voice reply after voice generation invalidation", "voice")
+            self._stop_thinking_tune()
             return
 
         # Handle TTS with proper callbacks
@@ -1335,6 +1380,10 @@ class VoiceListener(threading.Thread):
                 debug_log(f"TTS exact duration: {duration:.2f}s", "voice")
                 if self.echo_detector:
                     self.echo_detector._tts_exact_duration = duration
+
+            if not self._transcription_is_current(generation):
+                debug_log("discarded voice speech after thinking-tune teardown", "voice")
+                return
 
             # Track TTS start for echo detection with actual text
             self.track_tts_start(reply)
@@ -1364,23 +1413,25 @@ class VoiceListener(threading.Thread):
         Call this on state transitions to prevent old audio from being
         incorrectly concatenated with new input.
         """
-        self._utterance_frames = []
-        self._pre_roll.clear()
-        self._pending_audio = None
-        self.is_speech_active = False
-        self._silence_frames = 0
+        with self._audio_state_lock:
+            self._audio_generation += 1
+            self._utterance_frames = []
+            self._pre_roll.clear()
+            self._pending_audio = None
+            self.is_speech_active = False
+            self._silence_frames = 0
 
-        # Clear wake detection state
-        self._wake_timestamp = None
+            # Clear wake detection state
+            self._wake_timestamp = None
 
-        # Drain the audio queue
-        try:
-            while not self._audio_q.empty():
-                self._audio_q.get_nowait()
-        except Exception:
-            pass
+            # Drain the audio queue
+            try:
+                while not self._audio_q.empty():
+                    self._audio_q.get_nowait()
+            except Exception:
+                pass
 
-        debug_log("audio buffers cleared", "voice")
+            debug_log("audio buffers cleared", "voice")
 
     def _is_speech_frame(self, frame) -> bool:
         """Determine if audio frame contains speech."""
@@ -1628,6 +1679,7 @@ class VoiceListener(threading.Thread):
                 return
             if not self._transcription_is_current(job.dictation_generation):
                 continue
+            decode_started = time.monotonic()
             try:
                 text, language, low_confidence_events = self._transcribe_audio(job.audio)
             except Exception as exc:
@@ -1635,18 +1687,57 @@ class VoiceListener(threading.Thread):
                 text, language, low_confidence_events = "", None, ()
             if not self._transcription_is_current(job.dictation_generation):
                 continue
-            self._transcription_results_q.put(
-                _TranscriptionResult(
-                    text=text,
-                    language=language,
-                    low_confidence_events=low_confidence_events,
-                    start_time=job.start_time,
-                    end_time=job.end_time,
-                    energy=job.energy,
-                    dictation_generation=job.dictation_generation,
-                    captured_during_tts=job.captured_during_tts,
-                    captured_tts_start_time=job.captured_tts_start_time,
+            if text or low_confidence_events:
+                self._report_transcription_performance(
+                    len(job.audio) / self._samplerate, time.monotonic() - decode_started,
                 )
+            result = _TranscriptionResult(
+                text=text, language=language, low_confidence_events=low_confidence_events,
+                start_time=job.start_time, end_time=job.end_time, energy=job.energy,
+                dictation_generation=job.dictation_generation,
+                captured_during_tts=job.captured_during_tts,
+                captured_tts_start_time=job.captured_tts_start_time,
+            )
+            while self._transcription_is_current(job.dictation_generation):
+                try:
+                    self._transcription_results_q.put(result, timeout=0.1)
+                    break
+                except queue.Full:
+                    continue
+
+    def _report_transcription_performance(self, audio_seconds: float, decode_seconds: float) -> None:
+        """Warn once when several usable speech samples decode slower than real time."""
+        if self._slow_transcription_warned:
+            return
+        if audio_seconds < 1.0:
+            self._slow_transcription_streak = 0
+            return
+        slow = decode_seconds > audio_seconds and decode_seconds >= 2.0
+        self._slow_transcription_streak = self._slow_transcription_streak + 1 if slow else 0
+        debug_log(
+            f"Whisper timing: audio={audio_seconds:.2f}s, decode={decode_seconds:.2f}s, "
+            f"model={self._whisper_model_name}", "voice",
+        )
+        if self._slow_transcription_streak < 3:
+            return
+        self._slow_transcription_warned = True
+        model_name = self._whisper_model_name
+        english_only = model_name.endswith(".en")
+        base_name = model_name.removesuffix(".en")
+        smaller = {"base": "tiny", "small": "base", "medium": "small",
+                   "large": "small", "large-v1": "small", "large-v2": "small",
+                   "large-v3": "small", "large-v3-turbo": "small"}.get(base_name)
+        print("  🐢 Whisper speech recognition is slower than real time on this machine.", flush=True)
+        if smaller:
+            recommendation = smaller + (".en" if english_only else "")
+            print(
+                f"     💡 Choose a smaller model such as '{recommendation}' in the Setup Wizard "
+                "or Whisper settings for faster responses (accuracy may be lower).", flush=True,
+            )
+        else:
+            print(
+                "     💡 Check other running applications and whether an accelerated "
+                "speech backend is available for your hardware.", flush=True,
             )
 
     def _finish_transcription_worker(self) -> None:
@@ -1705,6 +1796,7 @@ class VoiceListener(threading.Thread):
         )
         self._process_transcript(
             text, result.energy, result.start_time, result.end_time,
+            generation=result.dictation_generation,
             captured_during_tts=result.captured_during_tts,
             captured_tts_start_time=result.captured_tts_start_time,
         )
@@ -1731,9 +1823,10 @@ class VoiceListener(threading.Thread):
                 self._callback_status = str(status)
             if self._should_stop or self._dictation_active:
                 return
+            generation = self._audio_generation
             chunk = (indata.copy() if hasattr(indata, "copy") else indata)
             try:
-                self._audio_q.put_nowait(chunk)
+                self._audio_q.put_nowait(_CapturedAudio(chunk, generation))
             except queue.Full:
                 self._audio_dropped += 1
         except Exception as exc:
@@ -1776,6 +1869,7 @@ class VoiceListener(threading.Thread):
             "voice",
         )
         self._whisper_device = resolved_device
+        self._whisper_model_name = model_name
 
         if try_device != device and device in ("auto", "cuda"):
             print("     ⚠️  CUDA not available, using CPU (this may be slower)", flush=True)
@@ -1949,6 +2043,7 @@ class VoiceListener(threading.Thread):
         try:
             self._run()
         finally:
+            self._finish_audio_worker()
             if self._transcription_worker_thread is not None:
                 self._finish_transcription_worker()
 
@@ -1980,7 +2075,7 @@ class VoiceListener(threading.Thread):
             stream_kwargs = resolve_input_device(sd, self.cfg.voice_device, devices)
         except ValueError as exc:
             print(f'  ❌ {exc}', flush=True)
-            debug_log('configured input device did not match an available microphone', 'voice')
+            debug_log(f'microphone selection failed: {exc}', 'voice')
             return
 
         # Windows 11: Test microphone permission by attempting a brief recording
@@ -2185,13 +2280,13 @@ class VoiceListener(threading.Thread):
                     configs_to_try.append(("cpu", ct))
 
             last_error = None
+            cache_recovery_attempted = False
             used_device = device
             used_compute = compute
             for try_device, try_compute in configs_to_try:
                 try:
                     cpu_threads = (os.cpu_count() or 4) if try_device in ("cpu", "auto") else 0
-                    print(f"     🎤 Loading Whisper '{model_name}' (device={try_device}, compute={try_compute})...", flush=True)
-                    self.model = WhisperModel(
+                    self.model = _load_faster_whisper_model(
                         model_name, device=try_device, compute_type=try_compute,
                         cpu_threads=cpu_threads,
                     )
@@ -2216,14 +2311,16 @@ class VoiceListener(threading.Thread):
                         "compute type", "int8", "float16"
                     ])
 
-                    if is_cuda_error or is_compute_error:
+                    is_corrupted_cache = "unable to open file" in error_str
+                    if not is_corrupted_cache and (is_cuda_error or is_compute_error):
                         debug_log(f"config ({try_device}, {try_compute}) failed, trying fallback: {e}", "voice")
                         continue
 
-                    # Check for corrupted model cache (e.g. interrupted download)
-                    is_corrupted_cache = "unable to open file" in error_str
-
                     if is_corrupted_cache:
+                        if cache_recovery_attempted:
+                            debug_log("cache recovery already attempted; retaining cache for device fallback", "voice")
+                            continue
+                        cache_recovery_attempted = True
                         debug_log(f"detected corrupted Whisper model cache: {e}", "voice")
                         print("  ⚠️  Whisper model cache appears corrupted, attempting recovery...", flush=True)
 
@@ -2231,7 +2328,7 @@ class VoiceListener(threading.Thread):
                         if cache_cleared:
                             try:
                                 print(f"     🎤 Re-downloading Whisper '{model_name}'...", flush=True)
-                                self.model = WhisperModel(
+                                self.model = _load_faster_whisper_model(
                                     model_name, device=try_device, compute_type=try_compute,
                                     cpu_threads=cpu_threads,
                                 )
@@ -2245,8 +2342,13 @@ class VoiceListener(threading.Thread):
                                 last_error = None
                                 break
                             except Exception as retry_e:
+                                last_error = retry_e
                                 debug_log(f"retry after cache clear also failed: {retry_e}", "voice")
                                 print(f"  ❌ Failed to load Whisper model after cache recovery: {retry_e}", flush=True)
+                                print("  💡 Try manually deleting the Whisper model cache directory and restarting", flush=True)
+                                if (isinstance(retry_e, ModelDownloadError)
+                                        and retry_e.category not in ('rate_limit', 'incomplete_download')):
+                                    return
                                 debug_log("trying next device/compute fallback config", "voice")
                                 continue
                         else:
@@ -2257,28 +2359,35 @@ class VoiceListener(threading.Thread):
                     # Check for rate limiting (HTTP 429) — check string and response status code
                     # (HfHubHTTPError may carry the status on .response without "429" in str(e))
                     is_rate_limited = (
-                        any(x in error_str for x in ["429", "too many requests", "rate limit"])
+                        (isinstance(e, ModelDownloadError) and e.category == 'rate_limit')
+                        or any(x in error_str for x in ["429", "too many requests", "rate limit"])
                         or getattr(getattr(e, "response", None), "status_code", None) == 429
                     )
 
-                    if is_rate_limited:
+                    incomplete_download = (
+                        isinstance(e, ModelDownloadError)
+                        and e.category == 'incomplete_download'
+                    )
+                    if is_rate_limited or incomplete_download:
                         _max_retries = 4
                         _backoff = 2
-                        debug_log(f"rate limited loading Whisper model: {e}", "voice")
+                        retry_reason = ('Rate limited by HuggingFace' if is_rate_limited
+                                        else 'Whisper download is incomplete')
+                        debug_log(f"retryable Whisper preparation failure: {e}", "voice")
                         retry_succeeded = False
                         for retry_num in range(1, _max_retries + 1):
                             wait = _backoff ** retry_num
-                            print(f"  ⏳ Rate limited by HuggingFace, retrying in {wait}s ({retry_num}/{_max_retries})...", flush=True)
+                            print(f"  ⏳ {retry_reason}, retrying in {wait}s ({retry_num}/{_max_retries})...", flush=True)
                             time.sleep(wait)
                             try:
-                                self.model = WhisperModel(
+                                self.model = _load_faster_whisper_model(
                                     model_name, device=try_device, compute_type=try_compute,
                                     cpu_threads=cpu_threads,
                                 )
                                 self._apply_whisper_load_success(
                                     model_name, try_device, try_compute,
                                     device, compute, cpu_threads,
-                                    context="rate-limit retry",
+                                    context="download retry",
                                 )
                                 used_device = try_device
                                 used_compute = try_compute
@@ -2286,13 +2395,20 @@ class VoiceListener(threading.Thread):
                                 retry_succeeded = True
                                 break
                             except Exception as retry_e:
-                                debug_log(f"rate-limit retry {retry_num} failed: {retry_e}", "voice")
+                                debug_log(f"download retry {retry_num} failed: {retry_e}", "voice")
                                 last_error = retry_e
+                                if (isinstance(retry_e, ModelDownloadError)
+                                        and retry_e.category not in ('rate_limit', 'incomplete_download')):
+                                    print(f"  ❌ Failed to prepare Whisper model: {retry_e}", flush=True)
+                                    return
                         if retry_succeeded:
                             break
-                        debug_log(f"gave up after {_max_retries} rate-limit retries", "voice")
+                        debug_log(f"gave up after {_max_retries} download retries", "voice")
                         print(f"  ❌ Failed to load Whisper model after {_max_retries} retries: {last_error}", flush=True)
-                        print("  💡 HuggingFace is rate limiting downloads. Please wait a few minutes and restart.", flush=True)
+                        if is_rate_limited:
+                            print("  💡 HuggingFace is rate limiting downloads. Please wait a few minutes and restart.", flush=True)
+                        else:
+                            print("  💡 Check connectivity and free disk space, then restart to resume the download.", flush=True)
                         return
                     else:
                         # For other errors (model not found, etc.), don't try fallbacks
@@ -2313,21 +2429,9 @@ class VoiceListener(threading.Thread):
             # path are all exercised here instead of on the user's first word.
             if np is not None and self.model is not None:
                 try:
-                    cpu_mode = self._whisper_device == "cpu"
                     rng = np.random.default_rng(0)
                     warmup_audio = rng.standard_normal(self._samplerate).astype(np.float32) * 0.01
-                    try:
-                        segments_iter, _ = self.model.transcribe(
-                            warmup_audio,
-                            language=None,
-                            vad_filter=False,
-                            condition_on_previous_text=not cpu_mode,
-                            without_timestamps=cpu_mode,
-                        )
-                    except TypeError:
-                        segments_iter, _ = self.model.transcribe(warmup_audio, language=None)
-                    for _ in segments_iter:
-                        pass
+                    self._decode_faster_whisper(warmup_audio)
                     debug_log("faster-whisper warmup transcription complete", "voice")
                 except Exception as e:
                     debug_log(f"faster-whisper warmup failed: {e}", "voice")
@@ -2357,17 +2461,6 @@ class VoiceListener(threading.Thread):
             debug_log(f"Unsupported VAD frame duration {frame_ms}; using 20 ms", "voice")
             frame_ms = 20
         self._frame_samples = max(1, int(self._samplerate * frame_ms / 1000))
-        pre_roll_ms = int(getattr(self.cfg, "vad_pre_roll_ms", 240))
-        endpoint_silence_ms = int(getattr(self.cfg, "endpoint_silence_ms", 800))
-        max_utt_ms = int(getattr(self.cfg, "max_utterance_ms", 12000))
-        tts_max_utt_ms = int(getattr(self.cfg, "tts_max_utterance_ms", 3000))
-
-        pre_roll_max_frames = max(1, int(pre_roll_ms / frame_ms))
-        endpoint_silence_frames = max(1, int(endpoint_silence_ms / frame_ms))
-        # max_utt_frames will be calculated dynamically based on TTS state
-        normal_max_utt_frames = max(1, int(max_utt_ms / frame_ms))
-        tts_max_utt_frames = max(1, int(tts_max_utt_ms / frame_ms))
-
         debug_log(f"audio params: sample_rate={self._samplerate}, frame_ms={frame_ms}, frame_samples={self._frame_samples}", "voice")
         debug_log(f"VAD: enabled={bool(self._vad is not None)}, aggressiveness={getattr(self.cfg, 'vad_aggressiveness', 2)}", "voice")
 
@@ -2387,20 +2480,12 @@ class VoiceListener(threading.Thread):
             except Exception:
                 pass
 
-        # Log which device will be used
+        # Log the resolved input used by both capture phases.
         try:
-            if "device" in stream_kwargs:
-                dev = sd.query_devices(stream_kwargs["device"])
-                device_name = dev.get('name', 'Unknown')
-                debug_log(f"using input device: {device_name} (index {stream_kwargs['device']})", "voice")
-                print(f"  🎤 Using audio device: {device_name}", flush=True)
-            else:
-                debug_log("using system default input device", "voice")
-                try:
-                    default_dev = sd.query_devices(sd.default.device[0])
-                    print(f"  🎤 Using default device: {default_dev.get('name', 'Unknown')}", flush=True)
-                except Exception:
-                    print("  🎤 Using system default input device", flush=True)
+            dev = sd.query_devices(stream_kwargs["device"])
+            device_name = dev.get('name', 'Unknown')
+            debug_log(f"using input device: {device_name} (index {stream_kwargs['device']})", "voice")
+            print(f"  🎤 Using audio device: {device_name}", flush=True)
         except Exception:
             pass
 
@@ -2509,44 +2594,80 @@ class VoiceListener(threading.Thread):
             except Exception:
                 pass
 
-            dictation_paused = False
+            self._start_audio_worker(frame_ms)
             while not self._should_stop:
                 if self._dictation_active:
-                    if not dictation_paused:
-                        self._clear_audio_buffers()
-                        dictation_paused = True
                     while True:
                         try:
                             self._transcription_results_q.get_nowait()
                         except queue.Empty:
                             break
-                    self._check_audio_health()
                     time.sleep(0.05)
                     continue
-                dictation_paused = False
                 try:
-                    result = self._transcription_results_q.get_nowait()
+                    result = self._transcription_results_q.get(timeout=0.2)
                 except queue.Empty:
                     pass
                 else:
                     self._handle_transcription_result(result)
-
-                if self._should_stop or self._dictation_active:
-                    continue
-
-                self._check_audio_health()
-
-                try:
-                    item = self._audio_q.get(timeout=0.2)
-                except queue.Empty:
-                    # Critical: Check timeouts even when no audio is being received
-                    # This ensures hot window expiry fires reliably
+                if not self._should_stop and not self._dictation_active:
                     self._check_query_timeout()
-                    continue
 
-                if self._should_stop or self._dictation_active:
-                    continue
+    def _start_audio_worker(self, frame_ms: int) -> None:
+        if self._should_stop or self._audio_worker_thread is not None:
+            return
+        self._audio_worker_thread = threading.Thread(
+            target=self._run_audio_worker, args=(frame_ms,), daemon=True,
+            name="jarvis-audio-frames",
+        )
+        self._audio_worker_thread.start()
+        debug_log("started serial audio-frame worker", "voice")
 
+    def _run_audio_worker(self, frame_ms: int) -> None:
+        try:
+            self._consume_audio_frames(frame_ms)
+        except Exception as exc:
+            debug_log(f"audio-frame worker failed ({type(exc).__name__})", "voice")
+            print("  ❌ Audio-frame processing stopped. Restart Jarvis to resume listening.", flush=True)
+            self.stop()
+
+    def _finish_audio_worker(self) -> None:
+        self._should_stop = True
+        worker = self._audio_worker_thread
+        if worker is None:
+            return
+        worker.join(timeout=0.5)
+        self._audio_worker_thread = None
+        if worker.is_alive():
+            debug_log("audio-frame worker still finishing after listener shutdown", "voice")
+        else:
+            debug_log("finished audio-frame processing", "voice")
+
+    def _consume_audio_frames(self, frame_ms: int) -> None:
+        pre_roll_ms = int(getattr(self.cfg, "vad_pre_roll_ms", 240))
+        endpoint_silence_ms = int(getattr(self.cfg, "endpoint_silence_ms", 800))
+        max_utt_ms = int(getattr(self.cfg, "max_utterance_ms", 12000))
+        tts_max_utt_ms = int(getattr(self.cfg, "tts_max_utterance_ms", 3000))
+        pre_roll_max_frames = max(1, int(pre_roll_ms / frame_ms))
+        endpoint_silence_frames = max(1, int(endpoint_silence_ms / frame_ms))
+        normal_max_utt_frames = max(1, int(max_utt_ms / frame_ms))
+        tts_max_utt_frames = max(1, int(tts_max_utt_ms / frame_ms))
+        while not self._should_stop:
+            if self._dictation_active:
+                self._check_audio_health()
+                time.sleep(0.05)
+                continue
+            self._check_audio_health()
+
+            try:
+                item = self._audio_q.get(timeout=0.2)
+            except queue.Empty:
+                continue
+
+            if self._should_stop or self._dictation_active:
+                continue
+
+            with self._audio_state_lock:
                 if item is None:
                     # Reset marker
                     self._pending_audio = None
@@ -2559,8 +2680,15 @@ class VoiceListener(threading.Thread):
                 if np is None:
                     continue
 
-                frame_timestamp = time.time()  # Timestamp for this batch of frames
-                for frame in self._audio_frames(item):
+                if item.generation != self._audio_generation:
+                    continue
+                frames = self._audio_frames(item.audio)
+                audio_generation = item.generation
+            for frame in frames:
+                with self._audio_state_lock:
+                    if (self._should_stop or self._dictation_active
+                            or audio_generation != self._audio_generation):
+                        break
                     # VAD decision
                     is_voice = self._is_speech_frame(frame)
                     self._speech_frames_seen += int(is_voice)
@@ -2596,14 +2724,15 @@ class VoiceListener(threading.Thread):
                             self._silence_frames = 0
                         else:
                             self._silence_frames += 1
-                            # Use shorter timeout during TTS for quick stop command detection
-                            current_max_frames = tts_max_utt_frames if (self.tts and self.tts.is_speaking()) else normal_max_utt_frames
-                            if self._silence_frames >= endpoint_silence_frames or len(self._utterance_frames) >= current_max_frames:
-                                self._finalize_utterance()
-                                self._pre_roll.clear()
+                    if self.is_speech_active:
+                        # Bound continuous speech as well as silent endpoints.
+                        current_max_frames = tts_max_utt_frames if (self.tts and self.tts.is_speaking()) else normal_max_utt_frames
+                        if self._silence_frames >= endpoint_silence_frames or len(self._utterance_frames) >= current_max_frames:
+                            if len(self._utterance_frames) >= current_max_frames:
+                                debug_log(f"utterance reached capture limit ({current_max_frames * frame_ms} ms)", "voice")
+                            self._finalize_utterance()
+                            self._pre_roll.clear()
 
-                    # Check for query timeouts
-                    self._check_query_timeout()
 
     def _finalize_utterance(self) -> None:
         """Queue a completed utterance for serial transcription."""
@@ -2684,6 +2813,49 @@ class VoiceListener(threading.Thread):
             print("  ⚠️  Whisper is behind; this utterance was not transcribed.", flush=True)
             self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
 
+    def _decode_faster_whisper(self, audio):
+        """Decode under the shared lock, recovering once from a CUDA runtime error."""
+        with self.transcribe_lock:
+            try:
+                return self._decode_faster_whisper_locked(audio)
+            except Exception as error:
+                message = str(error).lower()
+                cuda_failure = any(token in message for token in ("cuda", "cublas", "cudnn"))
+                if (self._whisper_device != "cuda" or not cuda_failure
+                        or self._whisper_cpu_recovery_attempted):
+                    raise
+                self._whisper_cpu_recovery_attempted = True
+                debug_log(f"CUDA transcription failed; attempting CPU recovery: {error}", "voice")
+                print("  ⚠️ CUDA speech recognition failed, switching to CPU (this may be slower)", flush=True)
+                compute = getattr(self.cfg, "whisper_compute_type", "int8")
+                cpu_compute = "float32" if compute == "float32" else "int8"
+                cpu_threads = os.cpu_count() or 4
+                # Publish the replacement only after a successful load. Dictation
+                # resolves its shared model reference while holding this lock.
+                model = _load_faster_whisper_model(
+                    self._whisper_model_name, device="cpu", compute_type=cpu_compute,
+                    cpu_threads=cpu_threads,
+                )
+                self.model = model
+                self._apply_whisper_load_success(
+                    self._whisper_model_name, "cpu", cpu_compute, "cpu", cpu_compute,
+                    cpu_threads, context="runtime recovery",
+                )
+                return self._decode_faster_whisper_locked(audio)
+
+    def _decode_faster_whisper_locked(self, audio):
+        """Consume lazy segments before releasing the shared model lock."""
+        cpu_mode = self._whisper_device == "cpu"
+        try:
+            segments, info = self.model.transcribe(
+                audio, language=None, vad_filter=False,
+                condition_on_previous_text=not cpu_mode,
+                without_timestamps=cpu_mode,
+            )
+        except TypeError:
+            segments, info = self.model.transcribe(audio, language=None)
+        return list(segments), info
+
     def _transcribe_audio(self, audio) -> tuple[str, Optional[str], tuple[LowConfidenceEvent, ...]]:
         """Run Whisper and return filtered text, language and rejection events."""
         detected = None
@@ -2743,19 +2915,7 @@ class VoiceListener(threading.Thread):
                     # Fallback to full text if no segments
                     text = result.get("text", "").strip()
             else:
-                # faster-whisper transcription
-                # CPU mode: skip timestamps and disable context carry-over for speed
-                cpu_mode = self._whisper_device == "cpu"
-                with self.transcribe_lock:
-                    try:
-                        segments, _info = self.model.transcribe(
-                            audio, language=None, vad_filter=False,
-                            condition_on_previous_text=not cpu_mode,
-                            without_timestamps=cpu_mode,
-                        )
-                    except TypeError:
-                        segments, _info = self.model.transcribe(audio, language=None)
-                    segments_list = list(segments)
+                segments_list, _info = self._decode_faster_whisper(audio)
                 # Capture the detected language (faster-whisper exposes it
                 # on the info object). Guard against older API variants
                 # where the attribute may be absent.

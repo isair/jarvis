@@ -3,13 +3,16 @@ High-performance vector store implementation using FAISS for fast vector search.
 This replaces the slow pure Python vector store with a much faster C++ implementation.
 """
 
-import json
 import numpy as np
 from typing import List, Tuple, Optional, Dict, Any
 import sqlite3
 from pathlib import Path
 import threading
 import logging
+from weakref import WeakValueDictionary
+from .embedding_vector import normalise_embedding
+from .vector_persistence import persist_vector
+from ..debug import debug_log
 
 try:
     import faiss  # type: ignore
@@ -39,6 +42,7 @@ class FAISSVectorStore:
     
     def _load_vectors(self) -> None:
         """Load vectors from SQLite database and build FAISS index."""
+        conn = None
         try:
             conn = sqlite3.connect(self.db_path)
             cur = conn.cursor()
@@ -59,21 +63,27 @@ class FAISSVectorStore:
                 summary_ids = []
                 
                 for summary_id, vector_blob in rows:
-                    # Convert blob back to numpy array
-                    vector = np.frombuffer(vector_blob, dtype=np.float32)
-                    if len(vector) == self.dimension:
-                        vectors.append(vector)
-                        summary_ids.append(summary_id)
+                    try:
+                        vector = normalise_embedding(
+                            np.frombuffer(vector_blob, dtype=np.float32), self.dimension,
+                        )
+                    except (TypeError, ValueError, OverflowError):
+                        debug_log('Skipping an unusable persisted FAISS embedding', 'memory')
+                        continue
+                    vectors.append(vector)
+                    summary_ids.append(summary_id)
                 
                 if vectors:
                     # Build FAISS index
                     self._build_index(np.array(vectors), summary_ids)
             
-            conn.close()
         except Exception as e:
             logging.warning(f"Failed to load FAISS vectors: {e}")
             # Start with empty index
             self._build_empty_index()
+        finally:
+            if conn is not None:
+                conn.close()
     
     def _build_empty_index(self) -> None:
         """Build an empty FAISS index."""
@@ -107,38 +117,34 @@ class FAISSVectorStore:
             self.summary_id_to_index = {summary_id: i for i, summary_id in enumerate(summary_ids)}
             self.index_to_summary_id = {i: summary_id for i, summary_id in enumerate(summary_ids)}
     
-    def _save_vector(self, summary_id: int, vector: np.ndarray) -> None:
+    def _save_vector(self, summary_id: int, vector: np.ndarray, source_text) -> bool:
         """Persist a single vector to SQLite."""
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cur = conn.cursor()
-            # Convert numpy array to blob
-            vector_blob = vector.astype(np.float32).tobytes()
-            cur.execute(
-                "INSERT OR REPLACE INTO faiss_vector_store (summary_id, vector_blob) VALUES (?, ?)",
-                (summary_id, vector_blob)
-            )
-            conn.commit()
-            conn.close()
-        except Exception as e:
-            logging.warning(f"Failed to save vector to database: {e}")
+        return persist_vector(self.db_path, 'faiss', summary_id, vector.astype(np.float32).tobytes(), source_text)
     
     def add_vector(self, summary_id: int, vector: List[float]) -> None:
         """Add or update a vector for a summary."""
+        self._add_vector(summary_id, vector, None)
+
+    def add_summary_vector(self, summary_id: int, vector: List[float], source_text: str) -> bool:
+        """Refresh a diary vector only while the embedding source is current."""
+        if not isinstance(source_text, str):
+            raise ValueError('Embedding source must be a string')
+        if self.db_path == ':memory:':
+            raise ValueError('Guarded vector writes require a file-backed diary')
+        return self._add_vector(summary_id, vector, source_text)
+
+    def _add_vector(self, summary_id: int, vector: List[float], source_text) -> bool:
         with self._lock:
-            vec_array = np.array(vector, dtype=np.float32)
+            vec_array = normalise_embedding(vector, self.dimension)
             
-            # Normalize vector for cosine similarity
-            norm = np.linalg.norm(vec_array)
-            if norm > 0:
-                vec_array = vec_array / norm
-            
+            # Save to database
+            if not self._save_vector(summary_id, vec_array, source_text):
+                debug_log('Skipping a superseded FAISS diary embedding', 'memory')
+                return False
+
             # If summary already exists, mark for rebuild
             if summary_id in self.summary_id_to_index:
                 self._needs_rebuild = True
-            
-            # Save to database
-            self._save_vector(summary_id, vec_array)
             
             # If index is empty or needs rebuild, rebuild from database
             if self.index is None or self.index.ntotal == 0 or self._needs_rebuild:
@@ -153,6 +159,7 @@ class FAISSVectorStore:
                 self.index.add(vec_array)
                 self.summary_id_to_index[summary_id] = index_pos
                 self.index_to_summary_id[index_pos] = summary_id
+            return True
     
     def search(self, query_vector: List[float], top_k: int = 10) -> List[Tuple[int, float]]:
         """
@@ -163,8 +170,11 @@ class FAISSVectorStore:
             if self.index is None or self.index.ntotal == 0:
                 return []
             
-            # Prepare query vector
-            query_array = np.array(query_vector, dtype=np.float32).reshape(1, -1)
+            try:
+                query_array = normalise_embedding(query_vector, self.dimension).reshape(1, -1)
+            except ValueError:
+                debug_log('Skipping semantic search for an unusable query embedding', 'memory')
+                return []
             
             # Normalize query vector
             faiss.normalize_L2(query_array)
@@ -217,22 +227,26 @@ class FAISSVectorStore:
             }
 
 
-# Global instance
-_faiss_vector_store: Optional[FAISSVectorStore] = None
+_faiss_stores: WeakValueDictionary[tuple[str, int], FAISSVectorStore] = WeakValueDictionary()
+_faiss_stores_lock = threading.RLock()
 
 
 def get_faiss_vector_store(db_path: str, dimension: int = 768) -> Optional[FAISSVectorStore]:
-    """Get or create the global FAISS vector store instance."""
-    global _faiss_vector_store
+    """Share an index only for the same database file and vector dimension."""
     
     if not FAISS_AVAILABLE:
         return None
     
-    if _faiss_vector_store is None:
-        try:
-            _faiss_vector_store = FAISSVectorStore(db_path, dimension)
-        except Exception as e:
-            logging.warning(f"Failed to create FAISS vector store: {e}")
-            return None
-    
-    return _faiss_vector_store
+    try:
+        if str(db_path) == ':memory:':
+            return FAISSVectorStore(db_path, dimension)
+        key = (str(Path(db_path).resolve()), dimension)
+        with _faiss_stores_lock:
+            store = _faiss_stores.get(key)
+            if store is None:
+                store = FAISSVectorStore(key[0], dimension)
+                _faiss_stores[key] = store
+            return store
+    except Exception as e:
+        logging.warning(f"Failed to create FAISS vector store: {e}")
+        return None

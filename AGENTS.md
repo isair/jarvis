@@ -21,10 +21,12 @@ Any code change must either adhere to our spec files perfectly or you should ask
 | `src/jarvis/reply/reply.spec.md` | LLM reply generation, tool use, profiles | Tools return raw data; profiles handle formatting |
 | `src/jarvis/reply/evaluator.spec.md` | **Deprecated** — evaluator no longer runs in the reply engine; preserved for reference | Replaced by the planner; see planner.spec.md |
 | `src/jarvis/reply/planner.spec.md` | Task-list planner: pre-loop query decomposition + direct-exec step resolver for small models | Fail-open; rides warm small model chain; advisory for large models, direct-exec for small |
+| `src/jarvis/tools/builtin/local_files.spec.md` | Local file operations and listing boundaries | Home-directory confinement; literal UTF-8 content; boolean recursion |
 | `src/jarvis/tools/builtin/tool_search.spec.md` | toolSearchTool escape hatch for mid-loop tool routing | Re-runs the same router; never removes stop/self; capped per reply |
 | `src/jarvis/tools/external/mcp_runtime.spec.md` | Persistent MCP runtime: per-server long-lived stdio session, queue-based dispatch, retry on transient session loss | One worker per server keyed by config; calls to the same server serialise; `MCPServerSessionError` for session-level failures; opt-in `idle_timeout_sec` for stateless servers |
 | `src/jarvis/reply/prompts/prompts.spec.md` | System/user prompt templates | — |
 | `src/jarvis/tools/builtin/web_search.spec.md` | webSearch tool: cascade fetch, SSRF guard, prompt-injection fence, links-only envelope | Untrusted web content is fenced as data, not instructions; rank preference over speed; honest failure over confabulation |
+| `src/jarvis/tools/builtin/fetch_web_page.spec.md` | Supplied-URL page fetching, bounded download, HTML and raw-text extraction | Stream decoded content before parsing; reject oversized pages without partial results |
 | `src/jarvis/tools/builtin/nutrition/log_meal.spec.md` | logMeal tool: single-property schema for planner fast-path, internal nutrition extraction, untrusted-data fence, follow-ups | Public schema is a single optional `meal` string; nutrition fields are internal; user text is fenced as data |
 | `src/jarvis/utils/location.spec.md` | GeoIP location detection | Privacy-first; local GeoLite2 DB only |
 | `src/jarvis/memory/graph.spec.md` | Node graph memory (v2), self-organising tree, UI explorer | Dynamic structure; access-aware; auto-split/merge (future) |
@@ -85,6 +87,12 @@ README priorities (in order of importance):
 7. **Troubleshooting** - Common issues with solutions
 
 Keep sections concise. Use collapsible `<details>` for lengthy content. Avoid documenting internal implementation details - the README is for end users, not developers.
+
+README style:
+- Lead with what Jarvis lets people do. Keep wording direct, clear and brief.
+- Cover the useful capabilities and show what makes them impressive through concrete examples, without hype or repeated claims.
+- Explain user-visible outcomes. Keep prompt rules, extraction stages, source attribution mechanics and other internal details in specs or technical docs.
+- A fix does not need another README sentence when the existing description already covers the capability. Prefer tightening or replacing text over adding more.
 
 ---
 

@@ -43,6 +43,24 @@ except Exception as _pynput_import_error:
     debug_log(f"pynput unavailable, dictation hotkey disabled: {_pynput_import_error!r}", "dictation")
 
 
+def _create_keyboard_listener(*, on_press, on_release):
+    """Create a hotkey listener with Quartz-native character decoding on macOS."""
+    listener_class = pynput_keyboard.Listener
+    if sys.platform == "darwin":
+        from pynput._util.darwin import ListenerMixin
+
+        class QuartzKeyboardListener(listener_class):
+            def _run(self):
+                # Key characters come from CGEventKeyboardGetUnicodeString.
+                # The keyboard-layout context is unused by the event decoder
+                # and its Carbon TSM query requires the main dispatch queue.
+                ListenerMixin._run(self)
+
+        listener_class = QuartzKeyboardListener
+        debug_log("using Quartz hotkey listener without Carbon keyboard-layout queries", "dictation")
+    return listener_class(on_press=on_press, on_release=on_release)
+
+
 # ---------------------------------------------------------------------------
 # Beep generation
 # ---------------------------------------------------------------------------
@@ -698,11 +716,9 @@ class DictationEngine:
         if self._started:
             return
 
-        # macOS 26+ enforces that TSM (Text Services Manager) calls happen on
-        # the main dispatch queue.  pynput's keyboard Listener runs a CGEventTap
-        # on a background thread whose callback triggers TSM input-source
-        # queries, violating this assertion and crashing the process (SIGTRAP).
-        # Disable pynput on macOS 26+ until an alternative backend is available.
+        # macOS 26+ hotkey support is disabled by the platform safety policy.
+        # Synthetic Quartz decoding checks do not establish that live event
+        # taps work safely on this release with Accessibility permission.
         if sys.platform == "darwin":
             try:
                 mac_ver = platform.mac_ver()[0]
@@ -721,7 +737,7 @@ class DictationEngine:
                 )
                 return
 
-        self._listener = pynput_keyboard.Listener(
+        self._listener = _create_keyboard_listener(
             on_press=self._on_key_press,
             on_release=self._on_key_release,
         )
@@ -935,10 +951,7 @@ class DictationEngine:
 
         # Query native sample rate
         try:
-            if "device" in stream_kwargs:
-                dev_info = sd.query_devices(stream_kwargs["device"])
-            else:
-                dev_info = sd.query_devices(kind="input")
+            dev_info = sd.query_devices(stream_kwargs["device"])
             native_rate = int(dev_info.get("default_samplerate", self._target_sample_rate))
         except Exception:
             native_rate = self._target_sample_rate
@@ -1134,10 +1147,9 @@ class DictationEngine:
 
     def _transcribe(self, audio) -> str:
         """Transcribe audio using the shared Whisper model."""
-        backend = self._whisper_backend_ref()
-        model = self._whisper_model_ref()
-
         with self._transcribe_lock:
+            backend = self._whisper_backend_ref()
+            model = self._whisper_model_ref()
             if backend == "mlx":
                 return self._transcribe_mlx(audio)
             elif model is not None:

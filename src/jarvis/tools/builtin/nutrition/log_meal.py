@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import json
+import math
 from typing import Dict, Any, Optional
 from datetime import datetime, timezone
 
@@ -10,6 +11,10 @@ from ....memory.db import Database
 from ....llm import get_llm_backend
 from ...base import Tool, ToolContext
 from ...types import ToolExecutionResult
+
+
+# Shared generation room includes reasoning and the structured or coaching answer.
+_NUTRITION_TOKEN_BUDGET = 1024
 
 
 def call_llm_direct(*, cfg, chat_model, system_prompt, user_content,
@@ -53,7 +58,8 @@ def _safe_float(x: Any) -> Optional[float]:
     try:
         if x is None:
             return None
-        return float(x)
+        value = float(x)
+        return value if math.isfinite(value) else None
     except Exception:
         return None
 
@@ -85,11 +91,7 @@ def extract_and_log_meal(db: Database, cfg: Any, original_text: str, source_app:
         user_content=user_prompt,
         timeout_sec=cfg.llm_chat_timeout_sec,
         thinking=getattr(cfg, 'llm_thinking_enabled', False),
-        # JSON with ~11 fields (description, macros, micros dict, confidence);
-        # a multi-item meal with a filled micros dict can legitimately reach
-        # ~120 tokens. 200 gives margin so the meal is never dropped by a
-        # truncated JSON parse.
-        max_tokens=200,
+        max_tokens=_NUTRITION_TOKEN_BUDGET,
     ) or ""
     text = (raw or "").strip()
     if text.upper() == "NONE":
@@ -101,23 +103,25 @@ def extract_and_log_meal(db: Database, cfg: Any, original_text: str, source_app:
     except Exception as e:
         debug_log(f"logMeal extractor JSON parse failed: {e!r}; raw={text[:200]!r}", "nutrition")
         return None
-    ts = datetime.now(timezone.utc).isoformat()
-    meal_id = db.insert_meal(
-        ts_utc=ts,
-        source_app=source_app,
-        description=str(data.get("description") or "meal"),
-        calories_kcal=_safe_float(data.get("calories_kcal")),
-        protein_g=_safe_float(data.get("protein_g")),
-        carbs_g=_safe_float(data.get("carbs_g")),
-        fat_g=_safe_float(data.get("fat_g")),
-        fiber_g=_safe_float(data.get("fiber_g")),
-        sugar_g=_safe_float(data.get("sugar_g")),
-        sodium_mg=_safe_float(data.get("sodium_mg")),
-        potassium_mg=_safe_float(data.get("potassium_mg")),
-        micros_json=json.dumps(data.get("micros")) if isinstance(data.get("micros"), dict) else None,
-        confidence=_safe_float(data.get("confidence")),
+    if not isinstance(data, dict):
+        debug_log("⚠️ logMeal extractor returned a non-object payload", "nutrition")
+        return None
+    numeric_fields = (
+        'calories_kcal', 'protein_g', 'carbs_g', 'fat_g', 'fiber_g',
+        'sugar_g', 'sodium_mg', 'potassium_mg', 'confidence',
     )
-    # Build a brief confirmation + guidance
+    invalid_fields = []
+    for field in numeric_fields:
+        raw_value = data.get(field)
+        value = _safe_float(raw_value)
+        if raw_value is not None and value is None:
+            invalid_fields.append(field)
+        data[field] = value
+    if invalid_fields:
+        debug_log(f"⚠️ logMeal ignored invalid numeric fields: {', '.join(invalid_fields)}", "nutrition")
+
+    description = str(data.get("description") or "meal")
+    # Format the saved fields before committing the meal.
     cals = data.get("calories_kcal")
     prot = data.get("protein_g")
     carbs = data.get("carbs_g")
@@ -126,21 +130,45 @@ def extract_and_log_meal(db: Database, cfg: Any, original_text: str, source_app:
     conf = data.get("confidence")
     summary_bits = []
     if cals is not None:
-        summary_bits.append(f"~{int(round(float(cals)))} kcal")
+        summary_bits.append(f"~{int(round(cals))} kcal")
     if prot is not None:
-        summary_bits.append(f"{int(round(float(prot)))}g protein")
+        summary_bits.append(f"{int(round(prot))}g protein")
     if carbs is not None:
-        summary_bits.append(f"{int(round(float(carbs)))}g carbs")
+        summary_bits.append(f"{int(round(carbs))}g carbs")
     if fat is not None:
-        summary_bits.append(f"{int(round(float(fat)))}g fat")
+        summary_bits.append(f"{int(round(fat))}g fat")
     if fiber is not None:
-        summary_bits.append(f"{int(round(float(fiber)))}g fiber")
+        summary_bits.append(f"{int(round(fiber))}g fiber")
     approx = ", ".join(summary_bits) if summary_bits else "approximate macros logged"
-    conf_str = f" (confidence {float(conf):.0%})" if isinstance(conf, (int, float)) else ""
+    conf_str = f" (confidence {conf:.0%})" if conf is not None else ""
 
-    # Ask for healthy follow-ups for the rest of the day given this meal
-    follow_text = generate_followups_for_meal(cfg, str(data.get('description') or 'meal'), approx)
-    return f"Logged meal #{meal_id}: {data.get('description')} — {approx}{conf_str}.\nFollow-ups: {follow_text}"
+    ts = datetime.now(timezone.utc).isoformat()
+    meal_id = db.insert_meal(
+        ts_utc=ts,
+        source_app=source_app,
+        description=description,
+        calories_kcal=data.get("calories_kcal"),
+        protein_g=data.get("protein_g"),
+        carbs_g=data.get("carbs_g"),
+        fat_g=data.get("fat_g"),
+        fiber_g=data.get("fiber_g"),
+        sugar_g=data.get("sugar_g"),
+        sodium_mg=data.get("sodium_mg"),
+        potassium_mg=data.get("potassium_mg"),
+        micros_json=json.dumps(data.get("micros")) if isinstance(data.get("micros"), dict) else None,
+        confidence=data.get("confidence"),
+    )
+    confirmation = f"Logged meal #{meal_id}: {description}: {approx}{conf_str}."
+    # Coaching is optional after the database commit. Its failure cannot retry
+    # the extraction/write or turn a saved meal into a reported failure.
+    try:
+        follow_text = generate_followups_for_meal(cfg, description, approx)
+    except Exception as exc:
+        debug_log(f"⚠️ logMeal coaching unavailable: {type(exc).__name__}", "nutrition")
+        follow_text = ''
+    if not follow_text:
+        return confirmation
+    return f"{confirmation}\nFollow-ups: {follow_text}"
 
 
 def generate_followups_for_meal(cfg: Any, description: str, approx: str) -> str:
@@ -160,7 +188,7 @@ def generate_followups_for_meal(cfg: Any, description: str, approx: str) -> str:
         user_content=follow_user,
         timeout_sec=cfg.llm_chat_timeout_sec,
         thinking=getattr(cfg, 'llm_thinking_enabled', False),
-        max_tokens=100,
+        max_tokens=_NUTRITION_TOKEN_BUDGET,
     ) or ""
     return (follow_text or "").strip()
 

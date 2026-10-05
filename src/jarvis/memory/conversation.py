@@ -4,12 +4,43 @@ import re
 import time
 import threading
 from collections import OrderedDict
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Iterator, Optional, List, Tuple, Union, Callable
 from .db import Database
 from ..llm import get_embedding_backend, get_llm_backend
 from ..debug import debug_log
 from ..utils.redact import redact, scrub_secrets
+
+
+_DIARY_SUMMARY_TOKEN_BUDGET = 1024
+_DIARY_SUMMARY_CHUNK_LIMIT = 10
+
+
+@dataclass
+class _DiarySummaryProgress:
+    """Private, memory-only progress for one captured dialogue snapshot."""
+
+    owner: DialogueMemory
+    chunks: List[str]
+    snapshot_timestamp: float
+    context: Optional[tuple] = None
+    next_offset: int = 0
+    summary: Optional[str] = None
+    topics: Optional[str] = None
+
+    def is_current(self) -> bool:
+        with self.owner._lock:
+            return self.owner._diary_progress is self
+
+    def commit(self, db: Database, today: str, summary: str, topics: str, source_app: str) -> Optional[int]:
+        # Session mutations and the save watermark share this short lock.
+        with self.owner._lock:
+            if self.owner._diary_progress is not self:
+                return None
+            ident = db.upsert_conversation_summary(today, summary, topics, source_app)
+            self.owner.mark_saved_up_to(self.snapshot_timestamp)
+            return ident
 
 
 def _direct_llm(cfg, system_prompt: str, user_content: str, *,
@@ -180,8 +211,8 @@ def rewrite_all_diary_summaries(
     of when each summary was *originally* written must survive a
     maintenance pass.
 
-    Regenerates the row's vector embedding inline when the DB has VSS
-    enabled. Embedding regeneration is *best-effort*: if the embedding
+    Regenerates the row's vector embedding inline when an embedding model
+    and any local vector index are available. Embedding regeneration is *best-effort*: if the embedding
     service fails we still keep the cleaned summary, since the FTS index
     stays consistent via SQLite triggers regardless.
 
@@ -202,7 +233,7 @@ def rewrite_all_diary_summaries(
 
     Mirrors ``optimise_diary_topics`` for shape and privacy guarantees.
     """
-    can_reembed = bool(cfg.embedding_model and db.is_vss_enabled)
+    can_reembed = bool(cfg.embedding_model and db.has_vector_store)
 
     rows = db.get_all_conversation_summaries()
     for row in rows:
@@ -293,13 +324,12 @@ def rewrite_all_diary_summaries(
 
         if can_reembed:
             try:
-                text_for_embedding = f"{cleaned_stripped} {row['topics'] or ''}"
+                text_for_embedding = db.get_summary_embedding_text(summary_id)
                 vec = _embed_text(
                     text_for_embedding, cfg, timeout_sec=embed_timeout_sec,
-                )
+                ) if text_for_embedding is not None else None
                 if vec is not None:
-                    db.upsert_summary_embedding(summary_id, vec)
-                    embedding_refreshed = True
+                    embedding_refreshed = db.upsert_summary_embedding(summary_id, vec, text_for_embedding) is not None
             except Exception as e:
                 # Best-effort. Cleaned summary is already persisted;
                 # FTS stays consistent via triggers. A stale embedding
@@ -492,7 +522,7 @@ def optimise_diary_topics(
         return
 
     # Apply the mapping to each row.
-    can_reembed = bool(cfg.embedding_model and db.is_vss_enabled)
+    can_reembed = bool(cfg.embedding_model and db.has_vector_store)
     for row in rows:
         date_utc = row["date_utc"]
         original_topics = row["topics"] or ""
@@ -553,13 +583,12 @@ def optimise_diary_topics(
 
             if can_reembed:
                 try:
-                    text_for_embedding = f"{row['summary'] or ''} {new_topics}"
+                    text_for_embedding = db.get_summary_embedding_text(summary_id)
                     vec = _embed_text(
                         text_for_embedding, cfg, timeout_sec=embed_timeout_sec,
-                    )
+                    ) if text_for_embedding is not None else None
                     if vec is not None:
-                        db.upsert_summary_embedding(summary_id, vec)
-                        embedding_refreshed = True
+                        embedding_refreshed = db.upsert_summary_embedding(summary_id, vec, text_for_embedding) is not None
                 except Exception as e:
                     debug_log(
                         f"diary topic optimise: embedding refresh failed for "
@@ -760,6 +789,8 @@ class DialogueMemory:
         # Messages with timestamp <= this value have been processed
         self._last_saved_timestamp: float = 0.0
         self._lock = threading.RLock()  # Reentrant lock for thread safety
+        self._diary_flush_lock = threading.Lock()
+        self._diary_progress: Optional[_DiarySummaryProgress] = None
         # Track the last profile used for follow-up detection
         self._last_profile: Optional[str] = None
 
@@ -850,6 +881,7 @@ class DialogueMemory:
                 if role and content:
                     fresh.append((now + i * 0.001, role, content))
             self._messages = fresh
+            self._diary_progress = None
             self._last_ts = now + len(fresh) * 0.001
             self._last_activity_time = self._last_ts
             self._tool_turns = []
@@ -859,6 +891,7 @@ class DialogueMemory:
         """Drop the entire conversation and its caches (new session)."""
         with self._lock:
             self._messages = []
+            self._diary_progress = None
             self._tool_turns = []
             self._hot_cache = OrderedDict()
             self._last_activity_time = time.time()
@@ -887,6 +920,7 @@ class DialogueMemory:
             if keep_until is None:
                 return False
             self._messages = self._messages[:keep_until]
+            self._diary_progress = None
             self._tool_turns = []
             self._hot_cache = OrderedDict()
             return True
@@ -1129,6 +1163,16 @@ class DialogueMemory:
         with self._lock:
             return any(ts > self._last_saved_timestamp for ts, _, _ in self._messages)
 
+    def _get_pending_diary_work(self) -> _DiarySummaryProgress:
+        """Freeze a pending snapshot and resume it while newer turns accumulate."""
+        with self._lock:
+            chunks, timestamp = self.get_pending_chunks_with_snapshot()
+            progress = self._diary_progress
+            if progress is None or not progress.chunks or chunks[:len(progress.chunks)] != progress.chunks:
+                progress = _DiarySummaryProgress(self, chunks, timestamp)
+                self._diary_progress = progress
+            return progress
+
     def should_update_diary(self) -> bool:
         """Check if diary should be updated based on inactivity timeout.
 
@@ -1169,6 +1213,7 @@ class DialogueMemory:
         """
         with self._lock:
             self._last_saved_timestamp = max(self._last_saved_timestamp, timestamp)
+            self._diary_progress = None
             self._cleanup_old_messages()
 
     def _cleanup_old_messages(self) -> None:
@@ -1193,6 +1238,7 @@ class DialogueMemory:
         Kept for backward compatibility.
         """
         with self._lock:
+            self._diary_progress = None
             if self._messages:
                 # Mark all current messages as saved
                 max_ts = max(ts for ts, _, _ in self._messages)
@@ -1222,7 +1268,7 @@ def generate_conversation_summary(
     Returns:
         Tuple of (summary, topics) where topics is comma-separated
     """
-    chunks_text = "\n".join(recent_chunks[-10:])  # Last 10 chunks to keep context manageable
+    chunks_text = "\n".join(recent_chunks[-_DIARY_SUMMARY_CHUNK_LIMIT:])  # Last 10 chunks to keep context manageable
 
     system_prompt = """You are a conversation summariser for a personal AI assistant. Your job is to create concise daily summaries of conversations that will be stored in a diary for future reference.
 
@@ -1230,7 +1276,13 @@ Create a summary that:
 1. Captures the key topics discussed and important information shared
 2. Is concise but informative (max 200 words)
 3. Focuses on facts, decisions, and context that would be useful for future conversations
-4. Includes any personal information, preferences, or important events mentioned
+4. Preserves explicit USER FACTS separately from the task or question that contains them. A user may state their identity, residence, preferences, constraints, plans or circumstances as a reason for asking something. Retain the declaration as a standalone factual sentence, then summarise the request/result separately. Do not reduce the declaration to a task parameter or topic.
+   - First identify what the user explicitly asserted about themselves; preserve that subject, relationship and status. Prioritise these facts over incidental assistant wording within the word budget.
+   - Example: "I am vegetarian, suggest dinner" means "The user is vegetarian. They requested dinner suggestions", not merely "The user requested vegetarian dinner suggestions".
+   - A requested option or destination alone does NOT establish a personal fact. "Suggest a vegetarian dinner" does not establish that the user is vegetarian. Asking for weather in a city does not establish that they live there.
+   - Preserve who a statement is about. Facts about relatives, quoted speakers or hypothetical people must not become facts about the user.
+   - Preserve temporal status: residence is distinct from a current visit or future plan. A current visit must not become a home. Keep current and former facts in separate sentences when recording a correction, clearly marking which is former and which is current.
+   - Apply this to declarations embedded anywhere in a request, in every language, and retain those relationships when combining with an earlier summary.
 5. Maintains a neutral, factual tone
 6. CRITICAL — never narrate the assistant's own failures, deflections, hesitations, or limitations. The diary records what the user shared and what was established as true. The assistant's own missteps are conversational noise. If preserved, they are retrieved by future sessions as "history" and prime the model to repeat the same failure.
 
@@ -1274,7 +1326,7 @@ Create a summary that:
    - Never paraphrase an attributed claim into an unattributed assertion. "The assistant said Possessor is a 2006 film by Brandon Cronenberg" is fine (attribution preserved). "Possessor is a 2006 film by Brandon Cronenberg" is NOT (attribution stripped — now reads as established fact).
    - If the user later corrects the assistant, record both: the initial claim AND the correction. That's how the final state becomes recoverable — never delete earlier claims when a correction comes in.
    - Weather, time, location, calculator results, and other clearly tool-grounded data can be recorded as fact without attribution caveats — the tool output is the authority.
-   - User-stated facts about themselves (preferences, biography, plans, decisions) are always safe to record verbatim as user facts.
+   - Explicit real-user declarations about themselves (preferences, biography, plans, decisions) are safe to record as user facts. First-person statements supplied as task text are not real-user declarations; preserve the enclosing translation, explanation, editing or role-play request instead.
 
    Example — attributed assistant claim (preserves information, flags provenance):
      GOOD: "The user asked about the movie Possessor; the assistant said it is a 2006 science fiction film directed by Brandon Cronenberg."
@@ -1297,6 +1349,16 @@ Create a summary that:
 
    This rule applies in any language.
 
+9. CRITICAL speech-act rule: first identify what the user is doing with supplied text. A sentence submitted for translation, explanation, editing, quotation or role-play belongs to that task. Its first-person speaker is not established as the actual user. Summarise the TASK with the supplied sentence attributed to it; do not also create a standalone declaration from its contents. This rule takes precedence over personal-fact preservation.
+   - Input: User: Translate this sentence: I live in X.
+     GOOD: "The user requested translation of the sentence 'I live in X'."
+     BAD: "The user lives in X. They requested translation of 'I live in X'."
+   - Input: User: Explain the phrase 'I am vegetarian'.
+     GOOD: "The user requested an explanation of the phrase 'I am vegetarian'."
+     BAD: "The user is vegetarian. They requested an explanation."
+   - A real declaration outside supplied task text remains a user fact: "I am vegetarian, suggest dinner" means the user is vegetarian and requested dinner suggestions.
+   Apply the speech-act distinction to every relationship and every language.
+
 Also extract 3-5 main topics as comma-separated keywords."""
 
     if previous_summary:
@@ -1305,7 +1367,7 @@ Also extract 3-5 main topics as comma-separated keywords."""
 Recent conversation chunks:
 {chunks_text}
 
-Update the summary to include the new information. Provide:
+Combine the earlier and recent conversation into one summary. Retain the earlier user-stated facts, preferences, plans and attributed claims as well as the new information. A fact does not become irrelevant merely because it is absent from the recent chunks. Preserve correction chains. Provide:
 1. Updated summary (max 200 words)
 2. Main topics (comma-separated)
 
@@ -1335,11 +1397,8 @@ TOPICS: [topic1, topic2, topic3]"""
             response = _direct_llm(
                 cfg, system_prompt, user_prompt,
                 timeout_sec=timeout_sec, thinking=thinking,
-                # Prompt allows a 200-word summary (≈260 tokens) plus the
-                # SUMMARY:/TOPICS: labels and 3-5 topics. 400 gives headroom
-                # so a full-length summary is never truncated — a cut here
-                # would persist a partial summary or skip the day entirely.
-                max_tokens=400,
+                # Bounded room includes reasoning, the summary and its topics.
+                max_tokens=_DIARY_SUMMARY_TOKEN_BUDGET,
             )
 
         if not response:
@@ -1378,6 +1437,7 @@ def update_daily_conversation_summary(
     timeout_sec: float = 30.0,
     on_token: Optional[Callable[[str], None]] = None,
     thinking: bool = False,
+    progress: Optional[_DiarySummaryProgress] = None,
 ) -> Optional[int]:
     """
     Update the conversation summary for today with new chunks.
@@ -1407,17 +1467,63 @@ def update_daily_conversation_summary(
         existing = db.get_conversation_summary(today, source_app)
         previous_summary = existing['summary'] if existing else None
 
-        # Generate updated summary using redacted chunks
-        summary, topics = generate_conversation_summary(
-            redacted_chunks, previous_summary, cfg,
-            timeout_sec=timeout_sec, on_token=on_token, thinking=thinking,
-        )
+        # Build the complete pending snapshot through bounded inputs. Keep
+        # intermediate summaries local until every batch has succeeded.
+        deadline = time.monotonic() + float(timeout_sec)
+        summary = previous_summary
+        topics = None
+        first_offset = 0
+        if progress is not None:
+            if not progress.is_current():
+                debug_log("⚠️ diary snapshot replaced; no write", "memory")
+                return None
+            context = (
+                db, today, source_app, existing, tuple(redacted_chunks), thinking,
+                tuple(getattr(cfg, name, None) for name in (
+                    'llm_provider', 'llm_base_url', 'ollama_base_url', 'llm_chat_model', 'llm_api_key',
+                )),
+            )
+            if progress.context != context:
+                progress.context = context
+                progress.next_offset = 0
+                progress.summary = previous_summary
+                progress.topics = None
+            first_offset = progress.next_offset
+            summary, topics = progress.summary, progress.topics
+            debug_log(f"📔 diary snapshot resumes after {first_offset} chunks", "memory")
+            if first_offset == len(redacted_chunks) and on_token:
+                on_token(f"SUMMARY: {summary}\nTOPICS: {topics}")
+        for offset in range(first_offset, len(redacted_chunks), _DIARY_SUMMARY_CHUNK_LIMIT):
+            if progress is not None and not progress.is_current():
+                debug_log("⚠️ diary snapshot replaced; no write", "memory")
+                return None
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                debug_log("⚠️ diary generation deadline exhausted; no write", "memory")
+                return None
+            batch = redacted_chunks[offset:offset + _DIARY_SUMMARY_CHUNK_LIMIT]
+            debug_log(f"📔 diary summary batch: {len(batch)} chunks, {remaining:.1f}s remaining", "memory")
+            # Stream only the final pass to the UI; earlier drafts stay local.
+            batch_on_token = on_token
+            if on_token and offset + len(batch) < len(redacted_chunks):
+                batch_on_token = lambda token: None
+            summary, topics = generate_conversation_summary(
+                batch, summary, cfg,
+                timeout_sec=remaining, on_token=batch_on_token, thinking=thinking,
+            )
+            if summary is None or topics is None:
+                debug_log("⚠️ diary summary batch incomplete; no write", "memory")
+                return None
+            if progress is not None:
+                progress.next_offset = offset + len(batch)
+                progress.summary, progress.topics = summary, topics
+            if time.monotonic() >= deadline:
+                debug_log("⚠️ diary generation deadline exhausted; no write", "memory")
+                return None
 
-        # Skip summarization if LLM failed
-        if summary is None or topics is None:
-            debug_log("conversation summary skipped - LLM failed to generate summary", "memory")
-            return  # Skip summarization entirely
-
+        if time.monotonic() >= deadline:
+            debug_log("⚠️ diary generation deadline exhausted; no write", "memory")
+            return None
         # Debug: Log the generated summary and topics
         summary_preview = summary[:200] + "..." if len(summary) > 200 else summary
         debug_log("conversation memory updated to:", "memory")
@@ -1430,22 +1536,30 @@ def update_daily_conversation_summary(
             debug_log("  previous summary: (none)", "memory")
 
         # Store the summary
-        summary_id = db.upsert_conversation_summary(
-            date_utc=today,
-            summary=summary,
-            topics=topics,
-            source_app=source_app,
-        )
+        if progress is None:
+            summary_id = db.upsert_conversation_summary(
+                date_utc=today, summary=summary, topics=topics, source_app=source_app,
+            )
+        else:
+            summary_id = progress.commit(db, today, summary, topics, source_app)
+            if summary_id is None:
+                debug_log("⚠️ diary snapshot replaced; no write", "memory")
+                return None
 
         # Generate and store embedding for semantic search. Gate on a
         # configured embedding model too (matching the search paths) so an
         # empty model never burns a doomed embed round-trip.
-        if db.is_vss_enabled and cfg.embedding_model:
-            # Combine summary and topics for embedding
-            text_for_embedding = f"{summary} {topics}"
-            vec = _embed_text(text_for_embedding, cfg, timeout_sec=15.0)
-            if vec is not None:
-                db.upsert_summary_embedding(summary_id, vec)
+        if db.has_vector_store and cfg.embedding_model:
+            try:
+                text_for_embedding = db.get_summary_embedding_text(summary_id)
+                vec = _embed_text(text_for_embedding, cfg, timeout_sec=15.0) if text_for_embedding is not None else None
+                if vec is not None:
+                    db.upsert_summary_embedding(summary_id, vec, text_for_embedding)
+            except Exception as e:
+                debug_log(
+                    f"⚠️ diary embedding refresh failed: {type(e).__name__}",
+                    "memory",
+                )
 
         return summary_id
 
@@ -1752,6 +1866,9 @@ def update_diary_from_dialogue_memory(
         debug_log("diary update skipped: should_update_diary=False and force=False", "memory")
         return None
 
+    if not dialogue_memory._diary_flush_lock.acquire(blocking=False):
+        debug_log("📔 diary flush already in progress", "memory")
+        return None
     try:
         # Atomically capture pending chunks AND the snapshot timestamp.
         # Using ``_last_ts`` (via get_pending_chunks_with_snapshot) rather
@@ -1763,9 +1880,8 @@ def update_diary_from_dialogue_memory(
         # land on the same tick, producing identical timestamps. The new
         # message then fails the ``ts > snapshot`` test in
         # ``get_pending_chunks`` and is wrongly treated as already saved.
-        pending_chunks, snapshot_timestamp = (
-            dialogue_memory.get_pending_chunks_with_snapshot()
-        )
+        progress = dialogue_memory._get_pending_diary_work()
+        pending_chunks, snapshot_timestamp = progress.chunks, progress.snapshot_timestamp
         debug_log(f"diary update: got {len(pending_chunks)} pending chunks from dialogue_memory", "memory")
 
         if not pending_chunks:
@@ -1784,6 +1900,7 @@ def update_diary_from_dialogue_memory(
             timeout_sec=timeout_sec,
             on_token=on_token,
             thinking=thinking,
+            progress=progress,
         )
 
         debug_log(f"update_daily_conversation_summary returned: {summary_id}", "memory")
@@ -1791,7 +1908,8 @@ def update_diary_from_dialogue_memory(
         # Mark only the messages that existed at snapshot time as saved
         # New messages that arrived during summarization remain pending
         if summary_id is not None:
-            dialogue_memory.mark_saved_up_to(snapshot_timestamp)
+            if progress.is_current():
+                dialogue_memory.mark_saved_up_to(snapshot_timestamp)
             debug_log(f"marked messages saved up to timestamp {snapshot_timestamp}", "memory")
 
             # Graph memory (v2): extract facts and store in the node graph.
@@ -1872,3 +1990,5 @@ def update_diary_from_dialogue_memory(
     except Exception as e:
         debug_log(f"update_diary_from_dialogue_memory error: {e}", "memory")
         return None
+    finally:
+        dialogue_memory._diary_flush_lock.release()

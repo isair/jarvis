@@ -11,6 +11,7 @@ import sys
 
 import pytest
 
+from jarvis.config import DEFAULT_CHAT_MODEL
 from jarvis.utils.vram import (
     detect_total_vram_mb,
     get_recommended_model_id,
@@ -47,7 +48,7 @@ class TestRecommendation:
     def test_recommends_default_when_unknown(self):
         """Unknown VRAM (None) should recommend the default safely."""
         rec = get_recommended_model_id(None)
-        assert rec == "gemma4:e2b"
+        assert rec == DEFAULT_CHAT_MODEL
 
 
 class TestFormatWarning:

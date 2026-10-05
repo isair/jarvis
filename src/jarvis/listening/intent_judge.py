@@ -166,8 +166,9 @@ class IntentJudge:
 Two modes:
 
 WAKE WORD MODE:
+- Decide who the speaker is addressing before extracting a query. The name "{name}" can be mentioned while speaking TO another person. A name mention is not an invitation to reply, even when the speaker says they are talking to the assistant. For example, "I'm talking to {name}, not you" explains the situation to another person: directed=false, query="". This addressee distinction applies in every language. Only extract a query when the current speech addresses the assistant.
 - Extract complete query from segment containing "{name}" — may be a question, plain declarative statement (e.g. "{name} I just ate a burger", "{name} I'm tired"), or command/imperative (e.g. "set a timer", "remind me to...", "play music"). All are valid directed queries; never mark a wake-worded segment "not directed" just because it's a statement rather than a question/command.
-- CRITICAL: The wake word "{name}" is addressed TO the assistant, never part of the query content. Remove every occurrence of "{name}" from the extracted query, whether it appears at the start, end, or middle of the sentence — including when it sits next to a named entity (e.g. "movie called Possessor Jarvis" → the film is "Possessor", not "Possessor Jarvis"). Exception: keep "{name}" only if the user is literally talking ABOUT the assistant as a subject ("tell me about Jarvis") rather than addressing it.
+- For directed speech, the wake word "{name}" addresses the assistant and is not part of the query content. Remove every occurrence of "{name}" from the extracted query, whether it appears at the start, end, or middle of the sentence — including when it sits next to a named entity (e.g. "movie called Possessor Jarvis" → the film is "Possessor", not "Possessor Jarvis"). Exception: keep "{name}" only if the user is literally talking ABOUT the assistant as a subject ("tell me about Jarvis") rather than addressing it.
 - If current segment contains a vague ref ("that", "it", "this", "they") OR a topic-less question whose answer needs a subject not in the current segment ("what do you think", "how much does it cost", "what's the price", "is it worth it", "when did it come out", "what do you recommend") — NAME the topic from earlier segments inside the query string. Do NOT output the vague/open form literally.
 - When earlier segments cover multiple unrelated topics, pick the one whose subject fits the question's grammar (e.g. "what's the price" -> a purchasable thing, not a sports game). Ignore unrelated threads.
 - Example: "I made carbonara" + "Jarvis find recipe for that" -> "find recipe for carbonara"
@@ -201,13 +202,14 @@ STOP DETECTION:
 
 NOT DIRECTED:
 - No wake word AND not hot window -> directed=false
-- Wake word used only as a narrative mention ("I told my friend about {name}") -> directed=false
+- Wake word mentioned while addressing another person, including explanations about talking to the assistant ("I told my friend about {name}", "I'm talking to {name}, not you") -> directed=false, query=""
 - (INVALID) "statement about [topic], not a command or question" — with the wake word present to ADDRESS {name}, EVERY statement is directed. "Not a command or question" is never a valid reason for directed=false. Only the two rules above are valid reasons.
 
 Output JSON only:
 {{"directed": true/false, "query": "...", "stop": true/false, "confidence": "high/medium/low", "reasoning": "brief"}}
 
 Examples:
+- "I'm talking to {name}, not you" -> {{"directed": false, "query": "", "stop": false, "confidence": "high", "reasoning": "explaining to another person; assistant only mentioned"}}
 - "Jarvis what time is it" -> {{"directed": true, "query": "what time is it", "stop": false, "confidence": "high", "reasoning": "wake word + question"}}
 - "what do you know about the movie called Possessor Jarvis" -> {{"directed": true, "query": "what do you know about the movie called Possessor", "stop": false, "confidence": "high", "reasoning": "wake word at end; entity is Possessor, not Possessor Jarvis"}}
 - "I just ate a big Mac Jarvis" -> {{"directed": true, "query": "I just ate a big Mac", "stop": false, "confidence": "high", "reasoning": "wake word at end; 'Mac' is part of the brand name 'Big Mac', not a compound surname with Jarvis"}}

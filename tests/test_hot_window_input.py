@@ -118,6 +118,7 @@ def _process_transcript(listener, text, **kwargs):
         text,
         captured_during_tts=bool(listener.tts and listener.tts.is_speaking()),
         captured_tts_start_time=listener.echo_detector._tts_start_time,
+        generation=listener._dictation_generation,
         **kwargs,
     )
 
@@ -966,28 +967,15 @@ class TestEarlyBeepFeedback:
 
     @patch("builtins.print")
     def test_beep_stops_when_intent_judge_rejects(self, _print):
-        """Early beep continues when intent judge rejects a wake-worded utterance.
-
-        The safety net catches wake-worded statements the judge incorrectly
-        flags as not directed — the wake word is present so the query is
-        accepted and the beep continues.
-        """
+        """Confident mention rejection stops feedback without collecting a query."""
         listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=3.0)
         listener.cfg.tune_enabled = True
-
-        # Install judge that rejects — speech has wake word so early beep fires,
-        # but the safety net catches it and falls through to wake word detection.
         _install_intent_judge(listener, _make_judgment(
             directed=False, query="", confidence="high",
             reasoning="narrative mention"))
-
         _process_transcript(listener, "jarvis is a cool name", utterance_energy=0.01)
-
-        # Query should be accepted (safety net catches wake-worded utterances
-        # the judge incorrectly rejects)
-        assert _accepted_query(listener) == "is a cool name"
-        # Beep should continue — wake word was present
-        assert _is_beeping(listener)
+        assert _accepted_query(listener) == ""
+        assert not _is_beeping(listener)
         listener.state_manager.stop()
 
     @patch("builtins.print")
@@ -1445,26 +1433,19 @@ class TestStaleWakeTimestampAcrossUtterances:
         utterance that lacks a wake word."""
         listener, _ = _create_listener(echo_tolerance=0.3, hot_window_seconds=3.0)
 
-        # First utterance: has "jarvis", judge rejects as not directed.
-        # The safety net catches this and accepts the query via wake word detection.
+        # First utterance contains the name but addresses someone else.
         _install_intent_judge(listener, _make_judgment(
             directed=False, query="", confidence="high",
             reasoning="statement to self, not directed"))
 
         now = time.time()
         _process_transcript(listener,
-            "jarvis i want you to remember that my other office days are thursdays",
+            "i am talking to jarvis, not you",
             utterance_energy=0.01,
             utterance_start_time=now,
             utterance_end_time=now + 2.0,
         )
-        # Safety net accepts the query since the wake word is present
-        assert _accepted_query(listener) != "", (
-            "Wake-worded utterance should be accepted by safety net")
-
-        # Reset state as if the assistant processed the query (simulates
-        # the natural reply cycle that clears state between utterances)
-        listener.state_manager.clear_collection()
+        assert _accepted_query(listener) == "", "Confident mention rejection must be respected"
         # Second utterance: no wake word, judge hallucinates directed=true
         # (e.g. because the earlier "jarvis" is still in its context buffer)
         _install_intent_judge(listener, _make_judgment(
@@ -1595,4 +1576,23 @@ class TestIntentJudgeGating:
         )
 
         assert mock_judge.judge.call_count == 1
+        listener.state_manager.stop()
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize('heard', ['What the fuck?', 'being described. What the fuck?'])
+def test_hot_window_does_not_collect_an_earlier_tts_fragment_as_new_query(heard):
+    listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=3.0)
+    spoken = ("I am afraid I don't quite grasp what you mean by that statement; "
+              "perhaps you could rephrase it for me? It sounds as though some "
+              "rather complex hierarchical dynamic is being described.")
+    listener.echo_detector.track_tts_start(spoken)
+    _simulate_tts_finish(listener)
+    assert _wait_for_hot_window_active(listener)
+    _install_intent_judge(listener, _make_judgment(directed=True,
+        query='grasp what you mean by that statement', confidence='high'))
+    try:
+        _process_transcript(listener, heard, utterance_energy=0.01)
+        assert _accepted_query(listener) == '', 'Earlier assistant speech became a new query'
+    finally:
         listener.state_manager.stop()
