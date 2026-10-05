@@ -120,24 +120,12 @@ Window visibility is user-controlled: starting or stopping the assistant never s
 
 **Face state follows the daemon lifecycle**: the face animates from states written by the daemon (`JarvisStateManager`, file-backed for cross-process use). Whenever the daemon goes down — the tray's Stop/Start Listening toggle, an unexpected exit, or the setup wizard pausing it — the tray resets the face to `ASLEEP` so it never looks awake while no daemon is running. Starting the daemon lets the daemon's own state writes take over again.
 
-### Rejected speech feedback
+### Rejected speech
 
-- A rejected low-confidence segment produces a brief "Didn't catch that,
-  please repeat" subtitle in the face window. The subtitle clears after
-  approximately two seconds; another rejection refreshes its lifetime.
-- Subtitle space is reserved, so showing feedback does not compress the
-  face or resize the window. Feedback never opens a hidden window or changes
-  listening, thinking, speaking or dictation state.
-- The daemon coalesces rejection notifications without keeping transcript
-  text. The listener enqueues notifications; a stoppable notification worker
-  delivers them independently of diary processing.
-  Bundled mode uses a callback and a queued Qt signal. Subprocess mode uses
-  `__VOICE__:{"type":"low_confidence","data":null}` and the same Qt signal.
-  Protocol events do not appear in the ordinary log viewer.
-- Stop clears the subtitle immediately and stops notification delivery
-  with a bounded wait, discarding pending feedback. Queued notifications are
-  ignored while the daemon is stopped or stopping. Accepted segments do not
-  produce this feedback. No TTS is triggered.
+Low-confidence transcription is a listener diagnostic, not evidence of an
+addressed user request. It does not produce face text, reserve subtitle space,
+change face state, raise the window or trigger TTS. The face contains only its
+animation; rejected segments remain filtered and logged by the listener.
 
 ### macOS tray event safety
 

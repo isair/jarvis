@@ -34,7 +34,7 @@ import threading
 import time as _time
 from typing import Optional, List, Tuple
 from enum import Enum
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QApplication, QLabel
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QApplication
 from PyQt6.QtGui import QPainter, QPen, QColor, QBrush, QPainterPath, QLinearGradient, QRadialGradient
 from PyQt6.QtCore import Qt, QTimer, QPointF, pyqtSignal, QObject
 
@@ -1067,16 +1067,6 @@ class FaceWindow(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 10)
 
-        # Reserve subtitle space so feedback never compresses the face.
-        self.feedback_label = QLabel("")
-        self.feedback_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.feedback_label.setFixedHeight(self.feedback_label.fontMetrics().height() + 8)
-        self.feedback_label.setStyleSheet(f"color: {LowPolyFaceWidget.PRIMARY_COLOR.name()};")
-        layout.addWidget(self.feedback_label)
-        self._feedback_timer = QTimer(self)
-        self._feedback_timer.setSingleShot(True)
-        self._feedback_timer.timeout.connect(self.clear_voice_feedback)
-
         # Face widget
         self.face = LowPolyFaceWidget()
         layout.addWidget(self.face)
@@ -1104,14 +1094,3 @@ class FaceWindow(QWidget):
     def set_expression(self, expression: Expression):
         """Set the face expression."""
         self.face.set_expression(expression)
-
-    def show_low_confidence(self) -> None:
-        """Briefly acknowledge rejected speech without changing assistant state."""
-        self.feedback_label.setText("Didn't catch that, please repeat")
-        self._feedback_timer.start(2000)
-        debug_log("low-confidence visual feedback shown", "desktop")
-
-    def clear_voice_feedback(self) -> None:
-        """Dismiss feedback on expiry or daemon shutdown."""
-        self._feedback_timer.stop()
-        self.feedback_label.clear()
