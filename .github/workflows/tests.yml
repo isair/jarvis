@@ -26,3 +26,18 @@ jobs:
         run: |
           python -m pytest -q -m unit
 
+
+  daemon-lock:
+    name: Daemon lock (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Verify native daemon ownership
+        run: python tests/fixtures/daemon_lock_probe.py

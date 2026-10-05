@@ -829,15 +829,40 @@ def _check_and_update_diary(
 def main(smoke_test: bool = False) -> None:
     """Main daemon entry point.
 
+    The per-user OS lock covers initialisation, the event loop and cleanup.
+    Contenders return before any runtime globals or stop flags are changed.
+
     Args:
         smoke_test: If True, initialise all components, print a success
             marker, and return without entering the main event loop.
             Used by CI smoke tests to verify the build is not broken.
     """
+    from .daemon_lock import acquire_daemon_lock, lock_holder_pid, release_daemon_lock
+
+    lock = acquire_daemon_lock()
+    if lock is None:
+        pid = lock_holder_pid()
+        print(
+            f"⚠️ Another Jarvis daemon is already running{f' (pid {pid})' if pid else ''}. "
+            "Stop it before starting Jarvis again.",
+            flush=True,
+        )
+        debug_log("daemon start refused: another daemon holds the lock", "jarvis")
+        if smoke_test:
+            raise RuntimeError("Another Jarvis daemon is already running; smoke initialisation was not performed")
+        return
+    try:
+        _run_daemon(smoke_test)
+    finally:
+        release_daemon_lock(lock)
+
+
+def _run_daemon(smoke_test: bool = False) -> None:
+    """Initialise and run the daemon while holding its single-instance lock."""
     global _global_dialogue_memory, _global_stop_requested, _global_tts_engine, _global_dictation_engine
     global _warm_profile_graph_listener
 
-    # Reset stop flag at start (in case of restart)
+    # The lock prevents contenders from resetting a stopping runtime.
     _global_stop_requested = False
     _voice_feedback_pending.clear()
 

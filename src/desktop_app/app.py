@@ -1907,6 +1907,7 @@ class JarvisSystemTray:
         self._chat_submit_fn = None
         self._chat_control_fn = None
         self._daemon_stop_expected = False
+        self._daemon_stuck = False
 
         # Main-thread signal bridge for chat IPC. The log reader thread emits
         # ``line_received`` (a queued connection) so the chat window is created
@@ -2513,8 +2514,29 @@ class JarvisSystemTray:
         else:
             self.start_daemon()
 
+    def _daemon_alive(self) -> bool:
+        """True while a daemon this app started is still running (or stuck stopping)."""
+        if self._daemon_stop_expected:
+            return True
+        thread = getattr(self, "daemon_thread", None)
+        if thread is not None and not thread.isFinished():
+            return True
+        process = getattr(self, "daemon_process", None)
+        return process is not None and process.poll() is None
+
     def start_daemon(self) -> None:
         """Start the Jarvis daemon."""
+        # A retained owner or active shutdown blocks replacement.
+        if self._daemon_alive():
+            if getattr(self, "_daemon_stuck", False):
+                self.log_signals.new_log.emit(
+                    "⚠️ The previous daemon is still shutting down. Wait for it to finish before starting again.\n"
+                )
+            else:
+                self.log_signals.new_log.emit("ℹ️ Jarvis is already running.\n")
+            debug_log("start_daemon ignored: a daemon is still alive", "desktop")
+            return
+        self._daemon_stuck = False
         self._daemon_stop_expected = False
         self._set_chat_daemon_status("starting")
         try:
@@ -2525,8 +2547,9 @@ class JarvisSystemTray:
                 # slot runs on the main thread (the finished signal is emitted
                 # from the worker's OS thread) and the KeepAliveWorker registry
                 # keeps the object alive until that thread has fully exited.
+                worker = self.daemon_thread
                 self.daemon_thread.finished.connect(
-                    self._on_daemon_finished,
+                    lambda: self._on_daemon_finished(worker),
                     Qt.ConnectionType.QueuedConnection,
                 )
                 self.daemon_thread.start()
@@ -2674,19 +2697,22 @@ class JarvisSystemTray:
                 3000
             )
 
-    def _on_daemon_finished(self) -> None:
-        """Called when daemon thread finishes."""
+    def _on_daemon_finished(self, worker: DaemonThread) -> None:
+        """Retire the owning worker without disturbing a replacement runtime."""
+        if worker is not self.daemon_thread or not worker.isFinished():
+            return
+        self.daemon_thread = None
+        self._daemon_stuck = False
+        # stop_daemon owns the UI transition while it processes Qt events.
+        if self._daemon_stop_expected:
+            return
         if self.is_listening:
-            status = "stopped" if self._daemon_stop_expected else "crashed"
             self.is_listening = False
             self._chat_submit_fn = None
             self.toggle_action.setText("▶️ Start Listening")
             self.status_action.setText("⚪ Status: Stopped")
             self.update_icon()
-            self.daemon_thread = None
-            self._set_chat_daemon_status(status)
-            self._daemon_stop_expected = False
-            # Reset face to asleep so it doesn't look ready while daemon is down
+            self._set_chat_daemon_status("crashed")
             self._set_face_asleep()
 
     def _read_daemon_logs(self) -> None:
@@ -2744,6 +2770,10 @@ class JarvisSystemTray:
         Args:
             show_diary_dialog: If True (and bundled), shows a dialog with live diary update progress.
         """
+        if self._daemon_stop_expected:
+            return
+        worker = self.daemon_thread
+
         # Timeout must be longer than SHUTDOWN_DIARY_TIMEOUT_SEC (45s) in daemon.py
         # to allow the diary update LLM call to complete before force-killing
         shutdown_wait_timeout_sec = 60
@@ -2760,7 +2790,7 @@ class JarvisSystemTray:
             self._daemon_stop_expected = True
             self.face_window.clear_voice_feedback()
             self._set_chat_daemon_status("stopping")
-            if self.is_bundled and self.daemon_thread:
+            if self.is_bundled and worker:
                 # When running in a QThread, use the stop flag for graceful shutdown
                 # This ensures the daemon's finally block runs (for diary update)
                 self.log_signals.new_log.emit("⏸️ Stopping Jarvis daemon...\n")
@@ -2807,7 +2837,7 @@ class JarvisSystemTray:
                     # If the daemon doesn't stop gracefully, it will be killed on process exit
                     start_time = time.time()
                     warned = False
-                    while not self.daemon_thread.isFinished():
+                    while not worker.isFinished():
                         self.app.processEvents()
                         elapsed = time.time() - start_time
                         if elapsed > shutdown_wait_timeout_sec and not warned:
@@ -2835,13 +2865,21 @@ class JarvisSystemTray:
                     from jarvis.daemon import request_stop
                     request_stop()
 
-                    if not self.daemon_thread.wait(shutdown_wait_timeout_sec * 1000):
+                    if not worker.wait(shutdown_wait_timeout_sec * 1000):
                         self.log_signals.new_log.emit("⚠️ Daemon taking longer than expected...\n")
                         debug_log("daemon thread not responding to stop request", "desktop")
                         # Wait up to 3x timeout total before giving up
-                        self.daemon_thread.wait(shutdown_wait_timeout_sec * 2000)
+                        worker.wait(shutdown_wait_timeout_sec * 2000)
 
-                self.daemon_thread = None
+                if worker.isFinished():
+                    self.daemon_thread = None
+                else:
+                    # Retain the owner until its OS thread has finished.
+                    self._daemon_stuck = True
+                    self.log_signals.new_log.emit(
+                        "⚠️ The daemon is still shutting down. Starting is blocked until it finishes.\n"
+                    )
+                    debug_log("daemon thread still alive after give-up; marked stuck", "desktop")
             elif self.daemon_process:
                 # For subprocess mode, show diary dialog with IPC-based updates
                 # The existing log reader thread emits signals; we use a queue to collect lines
@@ -2984,6 +3022,7 @@ class JarvisSystemTray:
             debug_log(f"failed to stop daemon: {e}", "desktop")
             self.log_signals.new_log.emit(f"❌ Failed to stop: {str(e)}\n")
         finally:
+            self._daemon_stop_expected = False
             # Ensure dialog is closed
             if diary_dialog:
                 diary_dialog.close()
@@ -2991,17 +3030,18 @@ class JarvisSystemTray:
     def check_daemon_status(self) -> None:
         """Check if the daemon process/thread is still running."""
         if self.is_bundled and self.daemon_thread:
-            # Check if QThread is still running
-            if self.daemon_thread.isFinished() and self.is_listening:
-                # Thread has terminated
-                self._on_daemon_finished()
-                self.tray_icon.showMessage(
-                    "Jarvis Stopped",
-                    "Voice assistant process ended unexpectedly",
-                    QSystemTrayIcon.MessageIcon.Warning,
-                    3000
-                )
-                debug_log("daemon thread ended unexpectedly", "desktop")
+            worker = self.daemon_thread
+            if worker.isFinished():
+                unexpected = self.is_listening and not self._daemon_stop_expected
+                self._on_daemon_finished(worker)
+                if unexpected:
+                    self.tray_icon.showMessage(
+                        "Jarvis Stopped",
+                        "Voice assistant process ended unexpectedly",
+                        QSystemTrayIcon.MessageIcon.Warning,
+                        3000
+                    )
+                    debug_log("daemon thread ended unexpectedly", "desktop")
         elif self.daemon_process:
             # Check if process is still alive
             poll = self.daemon_process.poll()

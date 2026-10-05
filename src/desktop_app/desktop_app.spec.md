@@ -223,6 +223,21 @@ completion signals use other names (`check_done`, `completed`, `done`).
 and the slot mutates Qt UI state (menu actions, tray icon, face state), so
 it must run on the main thread.
 
+### Daemon ownership and shutdown
+
+Starting is blocked while an owned thread or subprocess is alive, or while
+Stop is processing Qt events. The core daemon also holds a per-user OS lock
+across initialisation and cleanup (see `src/jarvis/daemon_lock.spec.md`).
+
+A bundled shutdown that exhausts its wait retains the worker handle and
+blocks replacement until that worker finishes. Its completion callback is
+queued on the GUI thread and identifies the originating worker. A delayed
+callback cannot reset a replacement daemon's UI or drop its handle. Stop
+uses its captured worker reference while processing events; completion can
+safely retire the tray's reference. Re-entrant Stop requests return without
+starting another shutdown. The status timer also retires finished workers,
+including those whose shutdown timed out.
+
 ### Daemon Callbacks
 
 The desktop app registers callbacks with the daemon for:
