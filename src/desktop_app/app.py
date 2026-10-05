@@ -121,7 +121,7 @@ def _should_emit_as_log(line: str) -> bool:
     """
     from jarvis.daemon import CHAT_IPC_PREFIX
 
-    return not line.startswith((CHAT_IPC_PREFIX))
+    return not line.startswith(CHAT_IPC_PREFIX)
 
 
 def _collect_runtime_status_snapshot(
