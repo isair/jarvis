@@ -97,7 +97,6 @@ def test_start_is_refused_while_stop_processes_completion(tray, monkeypatch):
 def test_queued_qthread_completion_preserves_live_replacement(tray, monkeypatch, qapp):
     """Deliver the real Qt signal after restarting a finished worker."""
     import threading
-    from PyQt6.QtCore import QThread
 
     gates = []
     class ControlledDaemon(app_mod.DaemonThread):

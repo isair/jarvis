@@ -1,12 +1,19 @@
 """Dependency-free native OS ownership probe for CI and manual checks."""
 from pathlib import Path
 import os
+import importlib.util
 import subprocess
 import sys
 import tempfile
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
-from jarvis.daemon_lock import acquire_daemon_lock, lock_holder_pid, release_daemon_lock
+# Load the stdlib-only module without importing Jarvis's configuration deps.
+source = Path(__file__).resolve().parents[2] / "src" / "jarvis" / "daemon_lock.py"
+spec = importlib.util.spec_from_file_location("daemon_lock", source)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+acquire_daemon_lock = module.acquire_daemon_lock
+lock_holder_pid = module.lock_holder_pid
+release_daemon_lock = module.release_daemon_lock
 
 
 def main():
