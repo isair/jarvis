@@ -116,7 +116,7 @@ The central controller that manages:
 - Missing optional location support is reported once at startup with a pointer to Setup, without printing the full installation guide.
 - Missing optional location support is a warning, rendered in yellow because it degrades available functionality.
 
-Window visibility is user-controlled: starting or stopping the assistant never shows or hides the log viewer or the face window. The windows open automatically once at app launch; after that the tray menu's `📝 View Logs` and `👤 Show Face` actions are the only controls over their visibility (the diary dialog shown while stopping is raised on top but leaves those windows' visibility untouched).
+Window visibility is user-controlled: starting or stopping the assistant never shows or hides the log viewer or the face window. The windows open automatically once at app launch; after that the tray menu's `📝 View Logs` and `👤 Show Face` actions open them, while window close controls and the face's `Hide face` menu can hide them (the diary dialog shown while stopping is raised on top but leaves those windows' visibility untouched).
 
 ### Desktop face presence
 

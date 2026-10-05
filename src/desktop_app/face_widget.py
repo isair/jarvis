@@ -232,7 +232,7 @@ class LowPolyFaceWidget(QWidget):
         self._listening_rings: List[float] = []  # Active ring expansions (0.0 to 1.0)
         self._dictation_pulse_phase = 0.0  # Steady pulse phase for DICTATING state
 
-        # Connect to global Jarvis state
+        # Read shared Jarvis state on animation ticks
         self._state_manager = get_jarvis_state()
 
         # Animation timer
