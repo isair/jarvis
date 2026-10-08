@@ -18,17 +18,29 @@ from typing import Any, Optional
 from .backend import LLMBackend
 from .ollama import OllamaBackend
 from .openai_compatible import OpenAICompatibleBackend
+from .providers import Provider, get_provider, register_provider
 
 
-_OLLAMA = "ollama"
-_OPENAI_COMPATIBLE = "openai_compatible"
+_OLLAMA = Provider.OLLAMA.value
 _DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
+
+
+register_provider(
+    Provider.OLLAMA.value,
+    lambda base_url, _api_key=None: OllamaBackend(base_url),
+)
+register_provider(
+    Provider.OPENAI_COMPATIBLE.value,
+    lambda base_url, api_key=None: OpenAICompatibleBackend(
+        base_url, api_key=api_key
+    ),
+)
 
 
 def _resolve_provider(value: Any) -> str:
     if isinstance(value, str):
         v = value.strip().lower()
-        if v in (_OLLAMA, _OPENAI_COMPATIBLE):
+        if get_provider(v) is not None:
             return v
     return _OLLAMA
 
@@ -39,9 +51,10 @@ def _str_attr(settings: Any, name: str, default: str = "") -> str:
 
 
 def _build(provider: str, base_url: str, api_key: Optional[str]) -> LLMBackend:
-    if provider == _OPENAI_COMPATIBLE:
-        return OpenAICompatibleBackend(base_url, api_key=api_key)
-    return OllamaBackend(base_url)
+    adapter = get_provider(provider) or get_provider(_OLLAMA)
+    if adapter is None:  # pragma: no cover - built-ins register at import time
+        raise RuntimeError("no default LLM provider is registered")
+    return adapter.constructor(base_url, api_key)
 
 
 def get_llm_backend(settings: Any) -> LLMBackend:
@@ -53,7 +66,7 @@ def get_llm_backend(settings: Any) -> LLMBackend:
     backend pointed at a stale OpenAI-compatible URL.
     """
     provider = _resolve_provider(getattr(settings, "llm_provider", None))
-    if provider == _OPENAI_COMPATIBLE:
+    if provider != _OLLAMA:
         base_url = _str_attr(settings, "llm_base_url") or _str_attr(
             settings, "ollama_base_url", _DEFAULT_OLLAMA_URL
         )
@@ -79,7 +92,7 @@ def get_embedding_backend(settings: Any) -> LLMBackend:
 
     base_url = _str_attr(settings, "embedding_base_url")
     if not base_url:
-        if provider == _OPENAI_COMPATIBLE:
+        if provider != _OLLAMA:
             base_url = _str_attr(settings, "llm_base_url")
         else:
             base_url = _str_attr(settings, "ollama_base_url", _DEFAULT_OLLAMA_URL)
