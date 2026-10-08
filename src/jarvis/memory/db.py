@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS meals (
   micros_json   TEXT,
   confidence    REAL
 );
+CREATE INDEX IF NOT EXISTS idx_meals_ts_utc ON meals(ts_utc);
 
 -- Conversation summaries for diary/memory system
 CREATE TABLE IF NOT EXISTS conversation_summaries (
@@ -43,6 +44,8 @@ CREATE TABLE IF NOT EXISTS conversation_summaries (
   source_app TEXT NOT NULL,  -- Source app that generated the conversation
   UNIQUE(date_utc, source_app)
 );
+CREATE INDEX IF NOT EXISTS idx_conversation_summaries_date_utc
+  ON conversation_summaries(date_utc);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS summaries_fts USING fts5(
   summary,
