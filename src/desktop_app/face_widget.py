@@ -127,10 +127,10 @@ def get_jarvis_state() -> JarvisStateManager:
 
 
 class FaceWidget(QWidget):
-    """A warm amber outline with quiet, time-based expressions.
+    """An angular light-beam mask with quiet, time-based expressions.
 
-    Only the contour, eyes and mouth paint over the desktop. Motion stays
-    within that silhouette, apart from a close-fitting interaction echo.
+    Only the connected beams, junctions, eyes and mouth paint over the desktop.
+    Motion stays within that silhouette, apart from a close-fitting interaction echo.
     """
 
     state_observed = pyqtSignal(str)
@@ -284,7 +284,9 @@ class FaceWidget(QWidget):
         self._draw_state_contour(painter, cx, cy, width, height)
         contour = self._face_contour(cx, cy, width, height)
         self._stroke(painter, contour, 1.65, 0.46 + 0.4 * self._activation_level)
-        self._draw_thinking_light(painter, contour)
+        self._draw_mask_junctions(painter, contour)
+        self._draw_accent_lines(painter, cx, cy, width, height)
+        self._draw_beam_flow(painter, contour)
         eye_y = cy - height * 0.12
         for is_left in (True, False):
             eye_x = cx + (-1 if is_left else 1) * width * 0.24
@@ -305,26 +307,45 @@ class FaceWidget(QWidget):
 
     @staticmethod
     def _face_contour(cx: float, cy: float, width: float, height: float) -> QPainterPath:
-        """A continuous, softly faceted silhouette with a rounded chin."""
+        """The angular crown, temples and tapered jaw of the light-beam mask."""
         hw, hh = width / 2, height / 2
         vertices = [QPointF(cx + x * hw, cy + y * hh) for x, y in (
-            (0, -1), (0.53, -0.88), (0.89, -0.53), (1, -0.06),
-            (0.80, 0.48), (0.43, 0.89), (0, 1), (-0.43, 0.89),
-            (-0.80, 0.48), (-1, -0.06), (-0.89, -0.53), (-0.53, -0.88),
+            (0, -1), (0.5, -0.85), (0.8, -0.5), (1, -0.1),
+            (0.9, 0.3), (0.6, 0.7), (0.3, 0.9), (0, 1),
+            (-0.3, 0.9), (-0.6, 0.7), (-0.9, 0.3), (-1, -0.1),
+            (-0.8, -0.5), (-0.5, -0.85),
         )]
-        path = QPainterPath()
-        for index, vertex in enumerate(vertices):
-            previous = vertices[index - 1]
-            following = vertices[(index + 1) % len(vertices)]
-            enter = vertex + (previous - vertex) * 0.30
-            leave = vertex + (following - vertex) * 0.30
-            if index == 0:
-                path.moveTo(enter)
-            else:
-                path.lineTo(enter)
-            path.quadTo(vertex, leave)
+        path = QPainterPath(vertices[0])
+        for vertex in vertices[1:]:
+            path.lineTo(vertex)
         path.closeSubpath()
         return path
+
+    def _draw_mask_junctions(self, painter: QPainter, contour: QPainterPath):
+        """Small fixed lights join the beams without wandering beyond the mask."""
+        painter.save()
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setOpacity(0.46 + 0.4 * self._activation_level)
+        for index in range(contour.elementCount() - 1):
+            vertex = contour.elementAt(index)
+            glow = QRadialGradient(vertex.x, vertex.y, 4)
+            light = QColor(self.PRIMARY_COLOUR)
+            light.setAlpha(90)
+            glow.setColorAt(0, light)
+            glow.setColorAt(1, QColor(0, 0, 0, 0))
+            painter.setBrush(glow)
+            painter.drawEllipse(QPointF(vertex.x, vertex.y), 4, 4)
+            painter.setBrush(self.PRIMARY_COLOUR.lighter(150))
+            painter.drawEllipse(QPointF(vertex.x, vertex.y), 1.8, 1.8)
+        painter.restore()
+
+    def _draw_accent_lines(self, painter: QPainter, cx: float, cy: float,
+                           width: float, height: float):
+        """Short cheek beams give the transparent mask its geometric structure."""
+        for side in (-1, 1):
+            path = QPainterPath(QPointF(cx + side * width * 0.35, cy + height * 0.05))
+            path.lineTo(cx + side * width * 0.20, cy + height * 0.05 + width * 0.045)
+            self._stroke(painter, path, 1, 0.25 + 0.35 * self._activation_level)
 
     def _stroke(self, painter: QPainter, path: QPainterPath, width: float,
                 opacity: float, colour: Optional[QColor] = None):
@@ -339,7 +360,7 @@ class FaceWidget(QWidget):
         painter.setPen(pen)
         painter.drawPath(path)
         glow = QColor(colour or self.PRIMARY_COLOUR)
-        glow.setAlpha(24)
+        glow.setAlpha(36)
         pen.setColor(glow)
         pen.setWidthF(width + 3.0)
         painter.setPen(pen)
@@ -357,11 +378,17 @@ class FaceWidget(QWidget):
         pen.setWidthF(width)
         painter.setPen(pen)
         painter.drawPath(path)
+        core = QColor(colour or self.PRIMARY_COLOUR.lighter(185))
+        core.setAlpha(170)
+        pen.setColor(core)
+        pen.setWidthF(max(0.45, width * 0.35))
+        painter.setPen(pen)
+        painter.drawPath(path)
         painter.restore()
 
     def _draw_eye(self, painter: QPainter, ex: float, ey: float,
                   size: float, blink_factor: float, is_left: bool):
-        """Round, open eyes and relaxed closed lids, with no filled backdrop."""
+        """Diamond eye beams retain the mask identity through expressions and blinks."""
         openness = self._activation_level * (1.0 - blink_factor)
         height = size * (0.86 + self._listening * 0.10)
         if self._expression == Expression.HAPPY:
@@ -377,15 +404,13 @@ class FaceWidget(QWidget):
         height *= openness
         path = QPainterPath(QPointF(ex - size, ey))
         if openness < 0.05:
-            path.quadTo(ex, ey + size * 0.30, ex + size, ey)
+            path.lineTo(ex + size, ey)
             self._stroke(painter, path, 1.5, 0.52 + self._activation_level * 0.48)
             return
-        path.cubicTo(ex - size * 0.90, ey - height * 0.62,
-                     ex - size * 0.36, ey - height, ex + size * 0.18, ey - height)
-        path.cubicTo(ex + size * 0.68, ey - height,
-                     ex + size, ey - height * 0.44, ex + size, ey)
-        path.cubicTo(ex + size * 0.74, ey + height * 0.72,
-                     ex - size * 0.58, ey + height * 0.80, ex - size, ey)
+        path.lineTo(ex, ey - height)
+        path.lineTo(ex + size, ey)
+        path.lineTo(ex, ey + height * 0.5)
+        path.closeSubpath()
         opacity = 0.52 + self._activation_level * 0.48
         self._stroke(painter, path, 1.8, opacity)
         if openness < 0.15:
@@ -403,32 +428,31 @@ class FaceWidget(QWidget):
         painter.setBrush(pupil)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawEllipse(QPointF(pupil_x, pupil_y), pupil_size, pupil_size)
-        painter.setBrush(QColor(COLORS['text_primary']))
-        painter.drawEllipse(QPointF(pupil_x - pupil_size * 0.25, pupil_y - pupil_size * 0.3),
-                            pupil_size * 0.20, pupil_size * 0.20)
         painter.restore()
 
-    def _draw_thinking_light(self, painter: QPainter, contour: QPainterPath):
-        """A short travelling rim glint leaves the eyes available for expression."""
-        if self._thinking < 0.001:
+    def _draw_beam_flow(self, painter: QPainter, contour: QPainterPath):
+        """Coherent energy flows through fixed beams, brighter during processing."""
+        if self._activation_level < 0.001:
             return
-        phase = self._state_elapsed / 3.6 % 1.0
-        for index in range(12):
-            start = (phase - index * 0.004) % 1.0
-            end = (start + 0.004) % 1.0
-            if end < start:
-                continue
-            glint = QPainterPath(contour.pointAtPercent(start))
-            glint.lineTo(contour.pointAtPercent(end))
-            self._stroke(painter, glint, 1.8, self._thinking * (1 - index / 12) * 0.7,
-                         self.PRIMARY_COLOUR.lighter(175))
+        # Continuous phase avoids a jump when the assistant changes state.
+        phase = self._elapsed / 12 % 1.0
+        intensity = self._activation_level * (0.22 + self._thinking * 0.48)
+        for offset in (0.0, 0.5):
+            for index in range(16):
+                start = (phase + offset - index * 0.004) % 1.0
+                end = (start + 0.004) % 1.0
+                if end < start:
+                    continue
+                glint = QPainterPath(contour.pointAtPercent(start))
+                glint.lineTo(contour.pointAtPercent(end))
+                self._stroke(painter, glint, 2.2, intensity * (1 - index / 16),
+                             self.PRIMARY_COLOUR.lighter(190))
 
     def _draw_mouth(self, painter: QPainter, cx: float, cy: float,
                     face_width: float, face_height: float):
-        """A slight smile opens into a quiet, tapered speaking waveform."""
+        """A straight mask seam opens into a quiet, tapered speaking waveform."""
         half_width = face_width * (0.16 + self._speaking * 0.075)
         mouth_y = cy + face_height * 0.20
-        smile = face_height * 0.03 * (1.0 - self._speaking * 0.7)
         amplitude = face_height * 0.035 * self._speaking
         path = QPainterPath(QPointF(cx - half_width, mouth_y))
         for step in range(1, 49):
@@ -436,7 +460,7 @@ class FaceWidget(QWidget):
             envelope = math.sin(t * math.pi)
             wave = (math.sin(t * math.tau * 2 - self._elapsed * 9)
                     + 0.25 * math.sin(t * math.tau * 3 + self._elapsed * 6)) / 1.25
-            y = mouth_y + smile * envelope + amplitude * wave * envelope ** 2
+            y = mouth_y + amplitude * wave * envelope ** 2
             path.lineTo(cx - half_width + 2 * half_width * t, y)
         self._stroke(painter, path, 1.6, 0.48 + self._activation_level * 0.48)
 
