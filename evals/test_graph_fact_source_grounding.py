@@ -18,6 +18,12 @@ pytestmark = [pytest.mark.eval, requires_judge_llm]
     ('The user said "I live in Bristol" and requested tomorrow\'s weather.', 'USER', 'The user lives in Bristol.', True),
     ('The user is vegetarian and requested dinner suggestions.', 'USER', 'The user is vegetarian.', True),
     ('The user told the assistant to reply briefly.', 'DIRECTIVES', 'Always reply briefly.', True),
+    ('The user asked to explain the phrase "I am allergic to eggs".', 'USER', 'The user is allergic to eggs.', False),
+    ('The user said "I am allergic to eggs" and requested dinner suggestions.', 'USER', 'The user is allergic to eggs.', True),
+    ('La usuaria pidió corregir la frase "Tengo una gata llamada Miso".', 'USER', 'The user has a cat named Miso.', False),
+    ('Kullanıcı "Öğretmen olarak çalışıyorum" cümlesini çevirmemi istedi.', 'USER', 'The user works as a teacher.', False),
+    ('Der Benutzer bat um ein Rollenspiel als Lehrer.', 'USER', 'The user works as a teacher.', False),
+    ('The user is visiting Bristol for the weekend.', 'USER', 'The user lives in Bristol.', False),
 ])
 def test_review_checks_candidate_relationship_against_source(monkeypatch, summary, branch, fact, supported):
     from jarvis.memory import graph_ops

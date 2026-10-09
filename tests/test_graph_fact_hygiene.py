@@ -19,7 +19,7 @@ CANDIDATES = [
 
 def test_transient_and_interaction_candidates_are_not_returned(mock_config):
     with patch('jarvis.memory.graph_ops.call_llm_direct', side_effect=[
-        json.dumps(CANDIDATES), '0 TRANSIENT\n1 DURABLE\n2 INTERACTION\n3 DURABLE',
+        json.dumps(CANDIDATES), json.dumps({'0': 'TRANSIENT', '1': 'DURABLE', '2': 'INTERACTION', '3': 'DURABLE'}),
     ]):
         assert extract_graph_memories('Mixed summary', mock_config, 'local-model') == [
             ('user', CANDIDATES[1]['fact']), ('directives', CANDIDATES[3]['fact']),
@@ -27,9 +27,13 @@ def test_transient_and_interaction_candidates_are_not_returned(mock_config):
 
 
 @pytest.mark.parametrize('verdict', [
-    None, '', '1 DURABLE', '0 DURABLE\n0 DURABLE\n2 DURABLE\n3 DURABLE',
-    '0 DURABLE\n1 DURABLE\n2 UNKNOWN\n3 DURABLE',
-    '0 DURABLE\n1 DURABLE\n2 DURABLE\n4 DURABLE',
+    None, '', '{"1": "DURABLE"}',
+    '{"0": "DURABLE", "0": "DURABLE", "1": "DURABLE", "2": "DURABLE", "3": "DURABLE"}',
+    '{"0": "DURABLE", "1": "DURABLE", "2": "UNKNOWN", "3": "DURABLE"}',
+    '{"0": "DURABLE", "1": "DURABLE", "2": "DURABLE", "4": "DURABLE"}',
+    '[]', 'null',
+    '{"0": false, "1": "DURABLE", "2": "INTERACTION", "3": "DURABLE"}',
+    '{"0": {}, "1": "DURABLE", "2": "INTERACTION", "3": "DURABLE"}',
     'All entries are valid',
 ])
 def test_incomplete_or_invalid_review_does_not_store_unreviewed_facts(mock_config, verdict):
@@ -50,7 +54,7 @@ def test_durable_facts_keep_their_original_branch_text_and_date(mock_config):
         {'branch': 'WORLD', 'fact': '[2026-10-03] Trenches Boxing Club offers evening classes'},
     ]
     with patch('jarvis.memory.graph_ops.call_llm_direct', side_effect=[
-        json.dumps(candidates), '0 DURABLE\n1 DURABLE',
+        json.dumps(candidates), json.dumps({'0': 'DURABLE', '1': 'DURABLE'}),
     ]):
         assert extract_graph_memories('Summary', mock_config, 'local-model', date_utc='2026-10-03') == [
             ('directives', '[2026-10-03] Réponds brièvement'),
@@ -58,9 +62,9 @@ def test_durable_facts_keep_their_original_branch_text_and_date(mock_config):
         ]
 
 
-def test_colon_separated_verdicts_preserve_durable_facts(mock_config):
+def test_unordered_verdicts_preserve_durable_facts_in_original_order(mock_config):
     with patch('jarvis.memory.graph_ops.call_llm_direct', side_effect=[
-        json.dumps(CANDIDATES), '0: TRANSIENT\n1: DURABLE\n2: INTERACTION\n3: DURABLE',
+        json.dumps(CANDIDATES), json.dumps({'3': 'DURABLE', '1': 'DURABLE', '0': 'TRANSIENT', '2': 'INTERACTION'}),
     ]):
         assert extract_graph_memories('Mixed summary', mock_config, 'local-model') == [
             ('user', CANDIDATES[1]['fact']), ('directives', CANDIDATES[3]['fact']),
@@ -85,7 +89,7 @@ def test_review_shares_the_remaining_extraction_budget(mock_config):
             time.sleep(budget / 5)
             return json.dumps(CANDIDATES)
         assert kwargs['timeout_sec'] <= budget - (time.monotonic() - started) + 0.005
-        return '0 TRANSIENT\n1 DURABLE\n2 INTERACTION\n3 DURABLE'
+        return json.dumps({'0': 'TRANSIENT', '1': 'DURABLE', '2': 'INTERACTION', '3': 'DURABLE'})
     with patch('jarvis.memory.graph_ops.call_llm_direct', side_effect=backend):
         assert extract_graph_memories('Summary', mock_config, 'local-model', timeout_sec=budget) == [
             ('user', CANDIDATES[1]['fact']), ('directives', CANDIDATES[3]['fact']),
@@ -105,7 +109,7 @@ def test_source_relationship_review_preserves_only_supported_candidates(mock_con
         if kwargs['user_content'].startswith('Extract'):
             return json.dumps(candidates)
         source = json.loads(kwargs['user_content'])['summary']
-        return '0: UNSUPPORTED\n1: DURABLE' if source == summary else ''
+        return json.dumps({'0': 'UNSUPPORTED', '1': 'DURABLE'}) if source == summary else ''
     with patch('jarvis.memory.graph_ops.call_llm_direct', side_effect=infer):
         assert extract_graph_memories(summary, mock_config, 'local-model') == [
             ('user', 'The user is vegetarian'),
