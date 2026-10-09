@@ -16,6 +16,15 @@ geocoding endpoint. Detection/extraction failure requests a city from the user;
 the helper does not invent coordinates or produce weather data. Explicit
 location arguments and successfully detected coordinates retain precedence.
 
+## Tool-call guidance
+
+The tool description and schema tell the reply model to pass an explicitly
+named place in `location`, preserving its geographic qualifiers. That place
+takes precedence over the user's detected or remembered location. With no
+named place, the model calls with empty arguments and lets the tool resolve
+location before asking for clarification. Date and time phrases are not
+location arguments.
+
 ## Missing personal context
 
 When explicit arguments, detected coordinates and current-utterance extraction
