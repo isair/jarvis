@@ -388,6 +388,48 @@ Get API key at [composio.dev](https://composio.dev)
 
 </details>
 
+<details>
+<summary><strong>You.com</strong> - Live web search with cited sources</summary>
+
+Adds a `you-search` tool (and a `you-discover` tool for finding agents, MCP
+servers, and skills) without touching Jarvis's built-in web tools. The free
+profile needs no API key:
+
+```json
+{
+  "mcps": {
+    "you": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "https://api.you.com/mcp?profile=free"]
+    }
+  }
+}
+```
+
+With a You.com API key ([you.com/platform/api-keys](https://you.com/platform/api-keys))
+for the authenticated profile:
+
+```json
+{
+  "mcps": {
+    "you": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote",
+        "https://api.you.com/mcp",
+        "--header",
+        "Authorization: Bearer YOUR_API_KEY"
+      ]
+    }
+  }
+}
+```
+
+More setup options and skills: [youdotcom-oss/agent-skills](https://github.com/youdotcom-oss/agent-skills)
+
+</details>
+
 ## Troubleshooting
 
 **Warmup passes but intent detection times out?** Warmup checks model loading with a small request, not a full intent decision. Intent detection has its own `intent_judge_timeout_sec` (6 seconds by default), separate from chat. A timeout does not necessarily mean your server is offline; the log shows the configured limit.
