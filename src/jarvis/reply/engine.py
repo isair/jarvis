@@ -724,6 +724,20 @@ def _bounded_resource_records(references) -> list[dict]:
     return records
 
 
+_TOOL_ERROR_PREVIEW_CHAR_LIMIT = 240
+
+
+def _report_tool_error(tool_name: str, message: str) -> None:
+    """Expose one bounded diagnostic line without altering model-facing data."""
+    text = " ".join(message.split())
+    preview = (
+        text if len(text) <= _TOOL_ERROR_PREVIEW_CHAR_LIMIT
+        else text[:_TOOL_ERROR_PREVIEW_CHAR_LIMIT - 3] + "..."
+    )
+    print(f"    ❌ {tool_name} error: {preview}", flush=True)
+    debug_log(f"tool error: {preview}", "planning")
+
+
 def _tool_result_content(
     cfg, query: str, tool_name: str, result: ToolExecutionResult,
 ) -> tuple[str, list[dict]]:
@@ -2074,6 +2088,11 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                                 max_retries=1,
                                 language=language,
                             )
+                            if not _plan_result.success or not _plan_result.reply_text:
+                                _report_tool_error(
+                                    _name, _plan_result.error_message
+                                    or _plan_result.reply_text or "(no result)",
+                                )
                             if _plan_result.reply_text:
                                 _plan_text, _plan_resources = _tool_result_content(
                                     cfg, redacted, _name, _plan_result,
@@ -2081,15 +2100,6 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                             else:
                                 _plan_err = (
                                     _plan_result.error_message or "(no result)"
-                                )
-                                _plan_err_preview = (
-                                    _plan_err
-                                    if len(_plan_err) <= 240
-                                    else _plan_err[:237] + "..."
-                                )
-                                print(
-                                    f"    ❌ {_name} error: {_plan_err_preview}",
-                                    flush=True,
                                 )
                                 _plan_text = f"Error: {_plan_err}"
                                 _plan_resources = []
@@ -2413,6 +2423,10 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 return None
 
             # Append tool result
+            if not result.success or not result.reply_text:
+                _report_tool_error(
+                    tool_name, result.error_message or result.reply_text or "(no result)",
+                )
             if not result.success:
                 _enter_plan_recovery()
             recovery_hint = _PLAN_RECOVERY_HINT if _plan_in_recovery else ""
@@ -2571,8 +2585,6 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     pass
             else:
                 err = result.error_message or "(no result)"
-                _err_preview = err if len(err) <= 240 else err[:237] + "..."
-                print(f"    ❌ {tool_name} error: {_err_preview}", flush=True)
                 if use_text_tools:
                     messages.append({
                         "role": "user",
@@ -2588,7 +2600,6 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                         "content": f"Error: {err}" + recovery_hint,
                         "tool_failed": True,
                     })
-                debug_log(f"    ❌ tool error: {err}", "planning")
             # Reuse outcomes for identical calls, including error-only results.
             recent_tool_signatures.append(signature)
             recent_tool_signatures = recent_tool_signatures[-5:]
