@@ -35,7 +35,7 @@ resident for the daemon's lifetime.
 | Server config changes | Old worker is shut down; a fresh worker replaces it. |
 | Worker raises `_WorkerDeadError` | Runtime drops it and retries the call once with a new worker. Second failure surfaces as `MCPServerSessionError` to the public layer. |
 | `idle_timeout_sec` set on a server config | Worker self-terminates after that long without activity. Next call spawns a new worker. |
-| Daemon shutdown calls `shutdown_runtime()` | Each worker is asked to exit (sentinel `None`); any wedged task is cancelled. The loop is stopped, the thread is joined with a 5s timeout. |
+| Daemon shutdown calls `shutdown_runtime()` | Each worker is asked to exit (sentinel `None`) and its asynchronous session cleanup is awaited. Wedged work is cancelled after a short grace period, with a bounded cleanup wait. The loop drains remaining cancellation cleanup before closing; the thread is joined with a 5s timeout. |
 
 ## Invariants
 
@@ -78,6 +78,7 @@ Each server entry in `config.mcps` is a dict consumed by
 Behavioural tests live in `tests/test_mcp_client.py`. The contract
 verified there:
 
+- Shutdown finishes asynchronous session and connection cleanup before returning when cleanup completes within its deadline. An interrupted in-flight caller is released.
 - A second `invoke_tool` does not open a new stdio connection.
 - `list_tools` followed by `invoke_tool` shares one stdio connection.
 - A `_WorkerDeadError` from a worker triggers exactly one retry, which
