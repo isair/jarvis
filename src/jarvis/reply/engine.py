@@ -86,6 +86,14 @@ _PLAN_RECOVERY_HINT = (
 )
 
 
+_EMPTY_REPLY_RECOVERY_HINT = (
+    "[Model recovery] Produce a visible answer or valid tool call for the user's "
+    "original request. Use the current tool protocol and available tools, "
+    "preserving the user's requested values and actual prior tool results. "
+    "Do not invent readings or claim an unexecuted action happened."
+)
+
+
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
 
@@ -1947,6 +1955,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     last_candidate_reply: Optional[str] = None
     max_turns = cfg.agentic_max_turns
     turn = 0
+    empty_response_retry_used = False
 
     # Per-reply session id used to group prompt dumps on disk when
     # JARVIS_DUMP_PROMPTS=1 is set. Generated unconditionally so the
@@ -2251,9 +2260,19 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 debug_log("  🧠 Thinking step (no action needed)", "planning")
                 continue
 
-            debug_log("  ⚠️ Empty assistant response with no tool calls", "planning")
-            if turn > 3:
-                debug_log("  🚨 Force exit - too many empty responses", "planning")
+            empty_message = llm_resp.get("message") if isinstance(llm_resp, dict) else None
+            recoverable_empty = (
+                isinstance(empty_message, dict)
+                and isinstance(empty_message.get("content"), str)
+                and empty_message.get("role", "assistant") == "assistant"
+            )
+            if recoverable_empty and not empty_response_retry_used and turn < max_turns:
+                empty_response_retry_used = True
+                messages.append({"role": "user", "content": _EMPTY_REPLY_RECOVERY_HINT})
+                debug_log("empty assistant response, requesting one recovery turn within the reply budget", "planning")
+                print("    🔁 Empty model response, requesting one recovery turn.", flush=True)
+                continue
+            debug_log("no usable assistant output; empty-response recovery unavailable or exhausted", "planning")
             break
 
         if t_name:
