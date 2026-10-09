@@ -44,14 +44,30 @@ def _complete_faster_whisper_model(path: str) -> bool:
 
 
 def _download_error_category(error: Exception) -> str:
-    """Retain rate-limit status through the Hub's cache fallback exceptions."""
+    """Classify structured failures through the Hub's nested cache errors."""
+    import errno
+
     seen = set()
+    errors = []
     current = error
     while current is not None and id(current) not in seen:
         seen.add(id(current))
-        if getattr(getattr(current, 'response', None), 'status_code', None) == 429:
-            return 'rate_limit'
+        errors.append(current)
         current = current.__cause__ or current.__context__
+    if any(getattr(getattr(item, 'response', None), 'status_code', None) == 429
+           for item in errors):
+        return 'rate_limit'
+    filesystem_errors = [item for item in errors if isinstance(item, OSError)]
+    disk_errors = {errno.ENOSPC}
+    if hasattr(errno, 'EDQUOT'):
+        disk_errors.add(errno.EDQUOT)
+    if any(item.errno in disk_errors or getattr(item, 'winerror', None) in (39, 112)
+           for item in filesystem_errors):
+        return 'disk_space'
+    if any(item.errno in (errno.EACCES, errno.EPERM, errno.EROFS)
+           or getattr(item, 'winerror', None) in (5, 1314)
+           for item in filesystem_errors):
+        return 'cache_access'
     return 'download'
 
 
@@ -144,7 +160,13 @@ def prepare_faster_whisper_model(model_name: str) -> str:
         path = _run_download_worker(model_name)
     except ModelDownloadError as error:
         debug_log(f'Whisper download failed: {error.category}', 'voice')
-        if error.category in ('timeout', 'worker_exit'):
+        if error.category == 'disk_space':
+            print('  💡 Free space on the model cache drive, or choose a smaller Whisper model '
+                  'in Settings, then restart Jarvis. Any cached files have been kept.', flush=True)
+        elif error.category == 'cache_access':
+            print('  💡 Access was denied while preparing the speech model. Check cache folder permissions '
+                  'and security software, then restart Jarvis. Any cached files have been kept.', flush=True)
+        elif error.category in ('timeout', 'worker_exit'):
             print('  💡 Any cached files have been kept. Check your connection and restart Jarvis '
                   'to resume the speech model download.', flush=True)
             if error.category == 'timeout':

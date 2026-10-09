@@ -264,7 +264,7 @@ def test_hub_metadata_fallback_to_partial_cache_remains_retryable(tmp_path, monk
     assert connection.value[0:2] == ('error', 'incomplete_download')
 
 
-@pytest.mark.parametrize('category', ['worker_exit', 'timeout', 'download'])
+@pytest.mark.parametrize('category', ['worker_exit', 'timeout', 'download', 'disk_space', 'cache_access'])
 def test_retry_stops_when_preparation_becomes_non_retryable(monkeypatch, capsys, category):
     listener, module = listener_for_loading(monkeypatch)
     outcomes = iter([model_download.ModelDownloadError('incomplete_download', 'partial cache'),
