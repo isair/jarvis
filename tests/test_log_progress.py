@@ -190,15 +190,21 @@ def test_loading_then_failure_is_not_reported_as_ready(qapp):
     window.close()
 
 
-def test_report_redacts_progress_details(qapp, monkeypatch):
+def test_report_preview_redacts_progress_details(qapp, monkeypatch):
     from desktop_app.app import LogViewerWindow
-    from urllib.parse import parse_qs, urlparse
+    from desktop_app.issue_report import IssueReportDialog
     window = LogViewerWindow()
     window.append_log("weights.npz: 20%|xx| 2M/10M · token=private-value\n")
-    opened = []
-    monkeypatch.setattr('desktop_app.app.webbrowser.open', opened.append)
+    reviewed = []
+    def inspect_preview(dialog):
+        dialog.problem_input.setPlainText('The download is stuck')
+        dialog.review_button.click()
+        dialog.details_button.click()
+        reviewed.append(dialog.technical_preview.toPlainText())
+        dialog.reject()
+    monkeypatch.setattr(IssueReportDialog, 'exec', inspect_preview)
     window._report_issue()
-    body = parse_qs(urlparse(opened[0]).query)['body'][0]
+    body = reviewed[0]
     assert 'private-value' not in body
     assert '2M/10M' in body
     assert '[REDACTED]' in body
