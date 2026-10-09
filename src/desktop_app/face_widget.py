@@ -12,7 +12,7 @@ from PyQt6.QtGui import QPainter, QPen, QColor, QPainterPath, QPainterPathStroke
 from PyQt6.QtCore import Qt, QTimer, QPointF, pyqtSignal, QObject
 
 from jarvis.debug import debug_log
-from desktop_app.themes import COLORS
+from desktop_app.themes import COLORS, apply_theme
 
 
 class Expression(Enum):
@@ -479,7 +479,8 @@ class FaceWindow(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow)
         self.setStyleSheet("background: transparent;")
         self.setAccessibleName("Jarvis face")
-        self.setToolTip("Drag to move. Right-click to hide.")
+        self.setToolTip("Drag to move. Right-click for Jarvis controls.")
+        self._tray_menu: Optional[QMenu] = None
         self._drag_offset = None
 
         layout = QVBoxLayout(self)
@@ -544,9 +545,18 @@ class FaceWindow(QWidget):
         self._drag_offset = None
         super().mouseReleaseEvent(event)
 
+    def set_tray_menu(self, menu: QMenu) -> None:
+        """Share live actions with the tray, including platform-specific controls."""
+        self._tray_menu = menu
+
     def contextMenuEvent(self, event) -> None:
         menu = QMenu(self)
         menu.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
-        menu.addAction("Hide face", self.hide)
+        apply_theme(menu)
+        menu.addAction("👤 Hide Face", self.hide)
+        if self._tray_menu is not None:
+            menu.addSeparator()
+            menu.addActions(self._tray_menu.actions())
+        debug_log("face context menu opened", "desktop")
         menu.popup(event.globalPos())
         event.accept()

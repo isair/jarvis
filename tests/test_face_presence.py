@@ -151,3 +151,92 @@ def test_eye_surroundings_stay_transparent(face, state, expression,
         assert image.pixelColor(gap_x, round((centre - size * 0.2) * scale)).alpha() == 0
     assert any(image.pixelColor(x, y).alpha() > 0
                for x in range(image.width()) for y in range(image.height()))
+
+
+@pytest.fixture
+def face_tray(face, monkeypatch):
+    """Build the real tray menu without starting a daemon or external windows."""
+    from unittest.mock import Mock
+    from desktop_app.app import JarvisSystemTray
+    from PyQt6.QtGui import QAction
+
+    tray = object.__new__(JarvisSystemTray)
+    tray.face_window = face
+    tray.tray_icon = Mock()
+    for name in ('show_log_viewer', 'show_memory_viewer', 'show_dictation_history',
+                 'show_chat', 'show_setup_wizard', 'show_settings', 'show_runtime_status',
+                 'check_for_updates', 'open_config_directory', 'open_data_directory',
+                 'toggle_listening', 'quit_app'):
+        monkeypatch.setattr(tray, name, Mock())
+
+    def add_platform_action():
+        tray.cuda_recovery_action = QAction('🎮 Reinstall GPU libraries')
+        tray.menu.addAction(tray.cuda_recovery_action)
+
+    monkeypatch.setattr(tray, '_maybe_add_cuda_recovery_action', add_platform_action)
+    tray.opened_windows = []
+    monkeypatch.setattr(tray, 'show_chat', lambda: tray.opened_windows.append('chat'))
+    tray.create_menu()
+    face.set_tray_menu(tray.menu)
+    yield tray
+    tray._voice_pause_timer.stop()
+    tray.menu.close()
+    tray.menu.deleteLater()
+
+
+def open_face_menu(face, qapp):
+    event = QContextMenuEvent(QContextMenuEvent.Reason.Mouse, QPoint(20, 20),
+                             face.mapToGlobal(QPoint(20, 20)))
+    face.contextMenuEvent(event)
+    qapp.processEvents()
+    return next(menu for menu in face.findChildren(QMenu) if menu.isVisible())
+
+
+def test_face_menu_exposes_every_tray_action_and_uses_its_callbacks(face, face_tray, qapp):
+    menu = open_face_menu(face, qapp)
+    assert set(face_tray.menu.actions()) <= set(menu.actions())
+    assert face_tray.cuda_recovery_action in menu.actions()
+    next(action for action in menu.actions() if action is face_tray.chat_action).trigger()
+    assert face_tray.opened_windows == ['chat']
+    assert face_tray.status_action in menu.actions()
+    assert not face_tray.status_action.isEnabled()
+    menu.close()
+
+
+def test_open_face_menu_tracks_live_listening_state(face, face_tray, qapp):
+    menu = open_face_menu(face, qapp)
+    face_tray.voice_pause_action.setText('▶️ Resume Voice Listening')
+    face_tray.voice_pause_action.setEnabled(True)
+    assert any(action.text() == '▶️ Resume Voice Listening' and action.isEnabled()
+               for action in menu.actions())
+    menu.close()
+
+
+def test_face_menu_has_an_opaque_surface_while_face_stays_transparent(face, face_tray, qapp):
+    from PyQt6.QtGui import QColor
+    from desktop_app.themes import COLORS
+    menu = open_face_menu(face, qapp)
+    image = menu.grab().toImage()
+    background = image.pixelColor(2, image.height() // 2)
+    assert background.alpha() == 255
+    assert background == QColor(COLORS['bg_card'])
+    assert menu.height() <= face.screen().availableGeometry().height()
+    assert face.grab().toImage().pixelColor(0, 0).alpha() == 0
+    menu.close()
+
+
+def test_long_face_menu_keeps_final_action_reachable_on_screen(face, face_tray, qapp):
+    from PyQt6.QtTest import QTest
+    for index in range(50):
+        face_tray.menu.addAction(f'Additional action {index}')
+    menu = open_face_menu(face, qapp)
+    last_action = menu.actions()[-1]
+    menu.setActiveAction(None)
+    for action in menu.actions():
+        if action.isEnabled() and not action.isSeparator():
+            QTest.keyClick(menu, Qt.Key.Key_Down)
+    qapp.processEvents()
+    assert menu.activeAction() is last_action
+    assert len({menu.actionGeometry(action).left() for action in menu.actions()}) == 1
+    assert menu.rect().contains(menu.actionGeometry(last_action))
+    menu.close()

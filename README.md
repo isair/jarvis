@@ -46,7 +46,7 @@ Your conversation and all data stays solely on your computer. Sensitive informat
 
 > “Jarvis, help me think through my day.”
 
-Open **Chat** from the tray menu when you would rather type. Text replies are silent.
+Right-click the face or use the tray menu to open **Chat**. Text replies are silent.
 
 <details>
 <summary><strong>Hardware and model choices</strong></summary>

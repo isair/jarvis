@@ -66,7 +66,7 @@ except ImportError:
 from jarvis.debug import debug_log
 from jarvis.config import default_config_path, _default_db_path, SUPPORTED_CHAT_MODELS, get_supported_model_ids
 from desktop_app.diary_dialog import DiaryUpdateDialog
-from desktop_app.themes import JARVIS_THEME_STYLESHEET, COLORS
+from desktop_app.themes import JARVIS_THEME_STYLESHEET, COLORS, apply_theme
 from desktop_app.log_output import LogStream, clean_log, parse_progress
 from desktop_app.face_widget import FaceWindow
 
@@ -1897,6 +1897,7 @@ class JarvisSystemTray:
 
         # Create context menu
         self.create_menu()
+        self.face_window.set_tray_menu(self.menu)
 
         # Set up status checking timer
         self.status_timer = QTimer()
@@ -2045,6 +2046,7 @@ class JarvisSystemTray:
         self.quit_action.triggered.connect(self.quit_app)
         self.menu.addAction(self.quit_action)
 
+        apply_theme(self.menu)
         self.tray_icon.setContextMenu(self.menu)
 
     def _maybe_add_cuda_recovery_action(self) -> None:
