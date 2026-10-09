@@ -177,6 +177,16 @@ backgrounds using isolated in-memory state and a fixed clock.
 
 **Face state follows the daemon lifecycle**: the face animates from states written by the daemon (`JarvisStateManager`, file-backed for cross-process use). Whenever the daemon goes down — the tray's Stop/Start Listening toggle, an unexpected exit, or the setup wizard pausing it — the tray resets the face to `ASLEEP` so it never looks awake while no daemon is running. Starting the daemon lets the daemon's own state writes take over again.
 
+### Face context menu
+
+Right-clicking the face opens a themed, opaque menu with a Hide Face action
+and every tray action, in tray order with the same separators. The actions are
+shared with the tray, so status labels, enabled states, callbacks and
+platform-specific recovery controls stay consistent while either menu is open.
+The popup uses the desktop's dark surface, amber selection and muted disabled
+items. Long menus scroll in one column within the available screen instead of
+spreading into clipped columns. The face retains its transparent background and non-activating presence.
+
 ### Rejected speech
 
 Low-confidence transcription is a listener diagnostic, not evidence of an
