@@ -108,8 +108,9 @@ def test_listener_imports_without_portaudio():
     'OSError("fixture shared library unavailable")',
     'ValueError("fixture optional module metadata unavailable")',
 ])
-def test_text_submission_survives_unavailable_speech_backend(error):
-    """An optional recognition backend cannot prevent a typed reply."""
+@pytest.mark.parametrize('dependency', ['faster_whisper', 'sounddevice', 'webrtcvad', 'numpy'])
+def test_text_submission_survives_unavailable_speech_backend(error, dependency):
+    """An unavailable audio dependency cannot prevent a typed reply."""
     extra = r'''
 import threading
 from unittest.mock import patch
@@ -131,6 +132,49 @@ with patch('jarvis.reply.engine.run_reply_engine', text_engine):
     assert completed.wait(5), 'Typed query never completed'
 assert replies == ['Typed reply: hello Jarvis'], replies
 '''
-    result = _run('jarvis.daemon', dep='faster_whisper', error=error,
+    result = _run('jarvis.daemon', dep=dependency, error=error,
                   attr='_global_db', extra=extra)
     _assert_ok(result)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize('error', [
+    'ImportError("fixture VAD native binary blocked")',
+    'OSError("fixture VAD shared library unavailable")',
+    'RuntimeError("fixture VAD initialisation unavailable")',
+])
+def test_listener_uses_energy_detection_when_optional_vad_cannot_import(error):
+    """Unavailable optional VAD preserves capture and rejects silent frames."""
+    extra = r'''
+from collections import deque
+from types import SimpleNamespace
+import numpy as np
+
+listener = m.VoiceListener.__new__(m.VoiceListener)
+listener.cfg = SimpleNamespace(voice_min_energy=0.02)
+listener._recent_audio_energy = deque(maxlen=20)
+listener._vad = None
+assert not listener._is_speech_frame(np.zeros(320, dtype=np.float32)), 'Silence accepted as speech'
+assert not listener._is_speech_frame(np.ones(320, dtype=np.float32) * listener.cfg.voice_min_energy / 2), 'Below-threshold noise accepted'
+assert listener._is_speech_frame(np.ones(320, dtype=np.float32) * listener.cfg.voice_min_energy * 2), 'Audible frame rejected'
+assert m.sd is not None, 'Optional VAD failure disabled microphone capture'
+'''
+    result = _run('jarvis.listening.listener', dep='webrtcvad', error=error,
+                  attr='webrtcvad', extra=extra)
+    _assert_ok(result)
+    assert 'PortAudio' not in result.stdout
+
+
+@pytest.mark.unit
+def test_listener_without_numpy_reports_unavailable_processing():
+    """Capture cannot run without its required array-processing dependency."""
+    extra = r'''
+listener = m.VoiceListener.__new__(m.VoiceListener)
+listener._run()
+'''
+    result = _run('jarvis.listening.listener', dep='numpy',
+                  error='ImportError("fixture array processing unavailable")',
+                  attr='np', extra=extra)
+    _assert_ok(result)
+    assert 'audio processing' in result.stdout.lower()
+    assert 'PortAudio' not in result.stdout

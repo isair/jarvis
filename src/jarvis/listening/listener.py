@@ -95,34 +95,31 @@ class _TranscriptionResult:
 # Audio processing imports (optional)
 try:
     import sounddevice as sd
+except Exception as e:
+    sd = None
+    debug_log(f"audio capture import unavailable ({type(e).__name__}): {e}", "voice")
+    print(f"  ❌ Audio capture unavailable: {e}", flush=True)
+    print("     🔧 Check the application's audio libraries and drivers", flush=True)
+    if sys.platform == 'linux':
+        print("     🐧 On Linux, ensure PortAudio is installed: sudo apt install libportaudio2", flush=True)
+
+try:
+    import numpy as np
+except Exception as e:
+    np = None
+    debug_log(f"audio processing import unavailable ({type(e).__name__}): {e}", "voice")
+    print("  ❌ Audio processing unavailable. Reinstall the application's audio dependencies.", flush=True)
+
+try:
     import warnings
     with warnings.catch_warnings():
         warnings.filterwarnings('ignore', message='pkg_resources is deprecated',
                                 category=UserWarning, module='webrtcvad')
         import webrtcvad
-    import numpy as np
-except ImportError as e:
-    sd = None
+except Exception as e:
     webrtcvad = None
-    np = None
-    # Log import error for debugging
-    print(f"  ⚠️  Audio import error: {e}", flush=True)
-    print("     This may indicate PortAudio is not found", flush=True)
-    import sys as _sys
-    if _sys.platform == 'linux':
-        print("     On Linux, ensure PortAudio is installed: sudo apt install libportaudio2", flush=True)
-    del _sys
-except OSError as e:
-    # PortAudio loading errors appear as OSError
-    sd = None
-    webrtcvad = None
-    np = None
-    print(f"  ❌ PortAudio initialisation failed: {e}", flush=True)
-    print("     Please reinstall the application or check audio drivers", flush=True)
-    import sys as _sys
-    if _sys.platform == 'linux':
-        print("     On Linux, ensure PortAudio is installed: sudo apt install libportaudio2", flush=True)
-    del _sys
+    debug_log(f"optional VAD import unavailable ({type(e).__name__}): {e}", "voice")
+    print("  ⚠️ Advanced speech detection unavailable; using audio-level detection.", flush=True)
 
 # Whisper backend imports - try MLX first on Apple Silicon, fall back to faster-whisper
 MLX_WHISPER_AVAILABLE = False
@@ -2050,6 +2047,10 @@ class VoiceListener(threading.Thread):
 
     def _run(self) -> None:
         """Main voice listening loop."""
+        if np is None:
+            debug_log("audio processing not available", "voice")
+            print("  ❌ Voice listening unavailable because audio processing could not load.", flush=True)
+            return
         if sd is None:
             debug_log("sounddevice not available", "voice")
             print("  ❌ Audio system not available - sounddevice failed to load", flush=True)
