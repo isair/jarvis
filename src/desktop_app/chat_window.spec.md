@@ -184,8 +184,10 @@ A `QMainWindow` styled as a futuristic phone with a single contact:
   messages additionally carry a subtle `⟲` rewind button (see **Rewind**
   below) to the left of the bubble. Whenever any user, assistant, or local
   notice message is added, the transcript scrolls to the bottom after layout
-  so the latest message stays visible. The transcript mirrors the single
-  conversation's message list and is rebuilt atomically on rewind.
+  so the latest message stays visible. Initial and rebuilt transcripts share
+  one layout whose size constraints preserve usable message heights as rows
+  are added, allowing the scroll area to track growing content. The transcript
+  mirrors the single conversation's message list and is rebuilt atomically on rewind.
 - A multi-line input box with send button. Enter sends; Shift+Enter inserts a
   newline (multi-line input).
 - The inset composer uses labelled, keyboard-accessible icon controls and a
