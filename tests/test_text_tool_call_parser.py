@@ -9,6 +9,8 @@ Only calls matching a declared tool are eligible for execution.
 
 import pytest
 
+pytestmark = pytest.mark.unit
+
 
 def _extract(content: str, tool_name: str = "webSearch"):
     import jarvis.reply.engine as engine_mod
@@ -226,3 +228,31 @@ class TestTextToolCallGuidancePrompt:
             "an example would reinforce the exact behaviour we want to "
             "stop."
         )
+
+
+@pytest.mark.parametrize("tool_name", [
+    "local-browser__navigate_page",
+    "local.files__read",
+    "outil-écriture__ouvrir",
+    "tool+name__run",
+])
+@pytest.mark.parametrize("call_format", ["colon", "function"])
+def test_simplified_calls_preserve_exact_registered_names(tool_name, call_format):
+    content = (
+        f"{tool_name}: path: /tmp/notes.txt"
+        if call_format == "colon"
+        else f'{tool_name}({{"path": "/tmp/notes.txt"}})'
+    )
+    name, args, _ = _extract(content, tool_name)
+    assert (name, args) == (tool_name, {"path": "/tmp/notes.txt"})
+
+
+@pytest.mark.parametrize("content", [
+    "toolXname__run: path: /tmp/notes.txt",
+    'toolXname__run({"path": "/tmp/notes.txt"})',
+    "tool+name__runExtra: path: /tmp/notes.txt",
+    'tool+name__runExtra({"path": "/tmp/notes.txt"})',
+    "Please run tool+name__run: path: /tmp/notes.txt",
+])
+def test_simplified_calls_reject_unregistered_names_and_prose(content):
+    assert _extract(content, "tool+name__run") == (None, None, None)
