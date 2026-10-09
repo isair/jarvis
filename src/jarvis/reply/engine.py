@@ -202,7 +202,7 @@ def _text_tool_call_guidance(allowed_names: list[str]) -> str:
         "\nExact tool-call syntax (copy this shape — emit nothing else on a "
         "tool-calling turn):\n"
         'tool_calls: [{"id": "call_1", "type": "function", "function": '
-        '{"name": "webSearch", "arguments": {"query": "example query"}}}]\n'
+        '{"name": "webSearch", "arguments": {"search_query": "example query"}}}]\n'
         "Notes:\n"
         "- `arguments` is a JSON object containing the tool's input fields. "
         "Copy the object shape above without double-encoding it as a string.\n"
