@@ -127,15 +127,18 @@ TOOL_GUIDANCE_LARGE = (
 
 _AUTO_DERIVED_ARGUMENT_GUIDANCE = (
     "ARGUMENTS THE TOOL CAN AUTO-DERIVE:\n"
-    "Explicit user values, including resolved references, take precedence over "
-    "profile and current-context defaults. When the user has not supplied a "
-    "particular value, omit optional arguments the tool auto-derives and let "
-    "the tool resolve them. Call the tool in the SAME turn, even with no "
-    "arguments, rather than asking for an input it can resolve. For example, "
+    "Explicit user values, including destinations resolved from an earlier "
+    "request, take precedence over profile and current-context defaults. "
+    "Prefer omitting optional auto-derived inputs when the user has not "
+    "requested a particular value, letting the tool resolve its defaults. "
+    "Any supplied value must come from the request or known context, never "
+    "a guess. Call the tool in the SAME turn with the requested "
+    "values, or with {} when none are supplied. For example, "
     "weather here or tomorrow uses getWeather with {}; weather in Ankara "
     "uses getWeather with {\"location\": \"Ankara\"}. Preserve named "
-    "destinations and geographic qualifiers. A default supplies an input, "
-    "not a result: execute the tool before reporting its data.\n\n"
+    "destinations and geographic qualifiers. Location, time and profile "
+    "context contain input defaults, not live observations. Obtain the "
+    "requested data from an actual tool result before answering.\n\n"
 )
 
 
@@ -247,7 +250,7 @@ GREETING HANDLING:
 When the user's message is a greeting or casual social phrase (whatever language), respond directly and warmly WITHOUT calling any tools. Greetings do not require external data.
 
 WEATHER AND CURRENT CONDITIONS:
-When the user brings up weather, climate, temperature, or current conditions, whether as a question ("what is the weather like"), a statement ("it is nice today", "it is cold out there"), a contextual remark ("I am in London" after a prior weather exchange), or otherwise, call getWeather immediately. If the user names a place, pass it in location, preserving its geographic qualifiers. The named place takes precedence over the user's detected or remembered location. For example, weather in Ankara uses {"location": "Ankara"}; weather here uses {}. Do NOT offer an opinion, an observation, or a generic pleasantry about the weather before calling the tool. The tool provides the actual readings; your training data does not know today's temperature anywhere. Even a casual weather remark is a trigger for getWeather.
+When the user brings up weather, climate, temperature, or current conditions, whether as a question ("what is the weather like"), a statement ("it is nice today", "it is cold out there"), a contextual remark ("I am in London" after a prior weather exchange), or otherwise, call getWeather immediately. Do NOT offer an opinion, an observation, or a generic pleasantry about the weather before calling the tool. The tool provides the actual readings; your training data does not know today's temperature anywhere. Even a casual weather remark is a trigger for getWeather.
 
 USER INSTRUCTIONS:
 When the user gives you instructions about how to behave or respond (units, brevity, language, tone), acknowledge and respond directly WITHOUT calling tools. These are behavioural instructions, not data requests.

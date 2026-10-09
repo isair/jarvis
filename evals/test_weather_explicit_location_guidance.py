@@ -4,11 +4,20 @@ from unittest.mock import patch
 import pytest
 
 from evals.conftest import requires_judge_llm
-from evals.helpers import voice_config
+from evals.helpers import voice_config, judge_pass_fail
 from jarvis.reply import engine
 from jarvis.tools.types import ToolExecutionResult
 
 pytestmark = [pytest.mark.eval, requires_judge_llm]
+_DEFAULT_CITY = 'London'
+_DETECTED_LOCATION = 'London, UK'
+_TEMPERATURE = 15
+_READING_CRITERIA = (
+    f'PASS requires reporting the actual recorded temperature of {_TEMPERATURE} '
+    'degrees Celsius and clear conditions, in any language. Any named place '
+    'must agree with the recorded location. Missing, invented or contradictory '
+    'readings require FAIL.'
+)
 
 
 @pytest.mark.parametrize('query,expected,previous', [
@@ -40,17 +49,38 @@ def test_requested_city_is_not_replaced_by_detected_home(eval_db, eval_dialogue_
             return ToolExecutionResult(success=False, reply_text='No additional tools available.')
         location = (tool_args or {}).get('location')
         locations.append(location)
-        return ToolExecutionResult(success=True, reply_text=f'Weather for {location or "London"}: 15 C, clear.')
+        return ToolExecutionResult(success=True, reply_text=f'Weather for {location or _DETECTED_LOCATION}: {_TEMPERATURE} C, clear.')
     with patch.object(engine, 'chat_with_messages', side_effect=capture_reply), \
             patch.object(engine, 'run_tool_with_retries', side_effect=fixture_weather), \
             patch.object(engine, 'select_tools', return_value=['getWeather', 'stop']), \
             patch.object(engine, 'plan_query', return_value=[]), \
-            patch.object(engine, 'get_location_context_with_timezone', return_value=('Location: London, UK', None)), \
+            patch.object(engine, 'get_location_context_with_timezone', return_value=(f'Location: {_DETECTED_LOCATION}', None)), \
             patch.object(engine, 'extract_search_params_for_memory', return_value={'keywords': []}):
         reply = engine.run_reply_engine(eval_db, cfg, None, query, eval_dialogue_memory)
     assert locations, f'No weather lookup executed: {reply}; model outputs: {responses!r}'
+    fold = lambda text: ''.join(c for c in str(text or '').casefold() if c.isalnum())
     if expected:
-        fold = lambda text: ''.join(c for c in str(text or '').casefold() if c.isalnum())
         assert all(fold(expected) in fold(location) for location in locations), (query, locations, reply)
     else:
-        assert all(not location for location in locations), (query, locations, reply)
+        allowed_defaults = {fold(_DEFAULT_CITY), fold(_DETECTED_LOCATION)}
+        assert all(not location or fold(location) in allowed_defaults for location in locations), (query, locations, reply)
+    verdict = judge_pass_fail(
+        _READING_CRITERIA,
+        f'Request: {query}\nRecorded location: {expected or _DETECTED_LOCATION}\n'
+        f'Recorded temperature: {_TEMPERATURE} C, clear.\nRecorded answer: {reply}',
+    )
+    assert verdict == 'PASS', (query, reply, verdict)
+
+
+@pytest.mark.parametrize('place,temperature,expected', [
+    (_DETECTED_LOCATION, _TEMPERATURE, 'PASS'),
+    ('Paris', _TEMPERATURE, 'FAIL'),
+    (_DETECTED_LOCATION, _TEMPERATURE + 3, 'FAIL'),
+])
+def test_weather_verifier_rejects_wrong_place_or_reading(place, temperature, expected):
+    verdict = judge_pass_fail(
+        _READING_CRITERIA,
+        f'Recorded location: {_DETECTED_LOCATION}\nRecorded temperature: {_TEMPERATURE} C, clear.\n'
+        f'Recorded answer: {place} is {temperature} C and clear.',
+    )
+    assert verdict == expected
