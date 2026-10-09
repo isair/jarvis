@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS meals (
   micros_json   TEXT,
   confidence    REAL
 );
+CREATE INDEX IF NOT EXISTS idx_meals_ts_utc ON meals(ts_utc);
 
 -- Conversation summaries for diary/memory system
 CREATE TABLE IF NOT EXISTS conversation_summaries (
