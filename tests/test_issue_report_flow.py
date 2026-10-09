@@ -3,7 +3,6 @@
 import urllib.parse
 
 import pytest
-from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QDialog, QLineEdit, QPlainTextEdit, QPushButton
 
 pytestmark = pytest.mark.unit
@@ -99,9 +98,8 @@ def test_log_viewer_report_requires_description_before_opening(qapp, monkeypatch
     monkeypatch.setattr(app_module.webbrowser, 'open', lambda url: opened.append(url) or True)
     window = LogViewerWindow()
     window.log_display.setPlainText('password=secretvalue\n📝 Heard: hello Jarvis')
-    def complete_form():
-        dialog = qapp.activeModalWidget()
-        assert dialog is not None
+    from desktop_app.issue_report import IssueReportDialog
+    def complete_form(dialog):
         assert not opened
         edits = dialog.findChildren(QLineEdit)
         assert edits
@@ -112,7 +110,7 @@ def test_log_viewer_report_requires_description_before_opening(qapp, monkeypatch
         dialog.findChild(QPushButton, 'review_report').click()
         button = dialog.findChild(QPushButton, 'open_github')
         button.click()
-    QTimer.singleShot(0, complete_form)
+    monkeypatch.setattr(IssueReportDialog, 'exec', complete_form)
     window._report_issue()
     assert len(opened) == 1
     body = urllib.parse.parse_qs(urllib.parse.urlparse(opened[0]).query)['body'][0]
@@ -146,7 +144,8 @@ def test_cancelling_log_report_does_not_open_browser_or_change_logs(qapp, monkey
     window = LogViewerWindow()
     original = '📝 Heard: private conversation'
     window.log_display.setPlainText(original)
-    QTimer.singleShot(0, lambda: qapp.activeModalWidget().reject())
+    from desktop_app.issue_report import IssueReportDialog
+    monkeypatch.setattr(IssueReportDialog, 'exec', lambda dialog: dialog.reject())
     window._report_issue()
     assert not opened
     assert window.log_display.toPlainText() == original
