@@ -915,14 +915,9 @@ def auto_split_node(
 
 
 class GraphUpdateResult(NamedTuple):
-    """Result of a graph update pass.
+    """Newly stored facts and the number of exact branch duplicates skipped.
 
-    ``stored`` lists newly-appended facts so the CLI can show *what* was
-    learned. ``skipped`` counts facts the picker routed to a node that
-    already contained them — surfacing this lets callers print a status
-    line on every flush, even when the cumulative diary re-extraction
-    produces only duplicates (#282 dedupe would otherwise silence the
-    "knowledge graph: learned N facts" log).
+    Duplicate-only flushes retain a count for visible pipeline status.
     """
 
     stored: "list[tuple[str, str]]"
@@ -948,9 +943,8 @@ def update_graph_from_dialogue(
 
     Returns a ``GraphUpdateResult`` with a ``stored`` list of
     ``(fact, node_name)`` tuples for each newly-appended fact and a
-    ``skipped`` count of duplicates the picker landed on. Callers must
-    unpack via ``result.stored`` / ``result.skipped`` (or tuple
-    destructuring) — the NamedTuple does not masquerade as the old list.
+    ``skipped`` count of duplicates in the same branch. Callers must
+    access these through ``result.stored`` and ``result.skipped``.
     """
     # Step 1: Extract discrete branch-tagged facts from the summary
     facts = extract_graph_memories(
@@ -968,17 +962,20 @@ def update_graph_from_dialogue(
 
     debug_log(f"graph update: placing {len(facts)} facts into knowledge graph", "memory")
 
-    # Step 2: Place — resolve the destination node for every fact up
-    # front, applying the cheap exact-match dedupe fast-path along the
-    # way. Then group surviving facts by node so the merge step below
-    # rewrites each node at most once per flush instead of once per
-    # fact. Without batching, a 5-fact flush against a populated User
-    # node fires 5 small-model rewrites of the same `data`; with
-    # batching, it's one rewrite that incorporates all five.
+    # Place only novel branch facts, then batch destinations so each
+    # populated node needs one merge call per flush.
     pending: list[tuple[str, str, str]] = []  # (branch_id, fact, node_id)
-    seen_keys_per_node: dict[str, set[str]] = {}
+    known_keys_per_branch: dict[str, set[str]] = {}
     skipped = 0
     for branch_id, fact in facts:
+        if branch_id not in known_keys_per_branch:
+            known_keys_per_branch[branch_id] = store.get_branch_fact_keys(branch_id)
+        branch_keys = known_keys_per_branch[branch_id]
+        key = normalise_fact(fact)
+        if key and key in branch_keys:
+            skipped += 1
+            debug_log(f"graph update: skipped duplicate in branch {branch_id}", "memory")
+            continue
         try:
             node_id = find_best_node(
                 store=store,
@@ -994,38 +991,10 @@ def update_graph_from_dialogue(
             debug_log(f"graph update: traversal failed for '{fact[:50]}...' — {e}", "memory")
             continue
 
-        # Exact-match dedupe (fast-path, no LLM): skip facts already
-        # stored verbatim on the chosen node. Cumulative daily summaries
-        # re-extract the same facts on every flush; the SQL-only check
-        # short-circuits the merge LLM call for the most common no-op
-        # case. Re-extractions are not fresh learning — we don't report
-        # them as newly stored and we don't touch the access score.
-        # Skips are still counted so callers can log "nothing new (N
-        # duplicates skipped)" on all-duplicate flushes.
-        if store.node_contains_fact(node_id, fact):
-            target = store.get_node(node_id)
-            target_name = target.name if target else node_id[:8]
-            skipped += 1
-            debug_log(
-                f"graph update: skipped duplicate '{fact[:50]}...' → "
-                f"'{target_name}' [{branch_id}]",
-                "memory",
-            )
-            continue
-
-        # Within a single flush, two extractor outputs that fold to the
-        # same key should also dedupe against each other before reaching
-        # the merge step.
-        key = normalise_fact(fact)
-        node_keys = seen_keys_per_node.setdefault(node_id, set())
-        if key and key in node_keys:
-            debug_log(
-                f"graph update: skipped intra-flush duplicate '{fact[:50]}...'",
-                "memory",
-            )
-            continue
+        # Claim the pending key only after routing succeeds, so a later
+        # occurrence can still be stored if this traversal failed.
         if key:
-            node_keys.add(key)
+            branch_keys.add(key)
 
         pending.append((branch_id, fact, node_id))
 
