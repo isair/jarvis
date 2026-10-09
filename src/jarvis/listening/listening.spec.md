@@ -534,7 +534,13 @@ local path and `local_files_only=True`. Cached files remain available after a
 failed attempt, retaining the Hub's download resume behaviour. Timeout and
 child-exit failures explain cache retention and restarting to resume. Timeout
 guidance also points to a smaller Whisper model in Settings; repeated child
-exits point to Report Issue in Logs.
+exits point to Report Issue in Logs. Structured disk-full, disk-quota and cache
+access failures retain their category through nested exceptions without exposing
+private paths in the child result. Disk-space guidance directs users to free
+space on the cache drive or choose a smaller model in Settings. Cache-access
+guidance directs users to check folder permissions and security software. Both
+stop automatic retries and retain cached files for a restart after the resource
+problem is addressed.
 
 ### Corrupted Cache Recovery
 
