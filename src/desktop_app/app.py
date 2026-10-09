@@ -2026,8 +2026,8 @@ class JarvisSystemTray:
 
         self.menu.addSeparator()
 
-        # Toggle listening action
-        self.toggle_action = QAction("▶️ Start Listening")
+        # Assistant power action
+        self.toggle_action = QAction("▶️ Turn On")
         self.toggle_action.triggered.connect(self.toggle_listening)
         self.menu.addAction(self.toggle_action)
 
@@ -2729,7 +2729,7 @@ class JarvisSystemTray:
                 self.log_signals.new_log.emit("🚀 Jarvis daemon started\n")
 
             self.is_listening = True
-            self.toggle_action.setText("⏸️ Stop Listening")
+            self.toggle_action.setText("⏻ Turn Off")
             self.status_action.setText("🟢 Status: Listening")
             self.update_icon()
             self._set_chat_daemon_status("running")
@@ -2767,7 +2767,7 @@ class JarvisSystemTray:
         if self.is_listening:
             self.is_listening = False
             self._chat_submit_fn = None
-            self.toggle_action.setText("▶️ Start Listening")
+            self.toggle_action.setText("▶️ Turn On")
             self.status_action.setText("⚪ Status: Stopped")
             self.update_icon()
             self._set_chat_daemon_status("crashed")
@@ -3058,7 +3058,7 @@ class JarvisSystemTray:
 
             self._daemon_stop_expected = False
             self.is_listening = False
-            self.toggle_action.setText("▶️ Start Listening")
+            self.toggle_action.setText("▶️ Turn On")
             self.status_action.setText("⚪ Status: Stopped")
             self.update_icon()
             self._set_chat_daemon_status("stopped")
@@ -3109,7 +3109,7 @@ class JarvisSystemTray:
                 self._chat_submit_fn = None
                 if self.is_listening:
                     self.is_listening = False
-                    self.toggle_action.setText("▶️ Start Listening")
+                    self.toggle_action.setText("▶️ Turn On")
                     self.status_action.setText("⚪ Status: Stopped")
                     self.update_icon()
                     self._set_chat_daemon_status("crashed")

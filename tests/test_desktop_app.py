@@ -1617,9 +1617,7 @@ class TestRuntimeStatusDialog:
 
 
 class TestTrayMenuLayout:
-    """The tray menu groups the listening controls together: the
-    Start/Stop Listening toggle sits directly above the listening Status
-    line in the same section of the menu."""
+    """The tray menu groups assistant power, voice capture and status controls."""
 
     def _tray_menu(self, qapp):
         from desktop_app.app import JarvisSystemTray
@@ -1630,21 +1628,22 @@ class TestTrayMenuLayout:
         tray.create_menu()
         return tray.menu
 
-    def test_listening_toggle_is_above_status_in_same_section(self, qapp):
+    def test_power_toggle_is_above_voice_pause_and_status_in_same_section(self, qapp):
         menu = self._tray_menu(qapp)
         actions = list(menu.actions())
 
         toggle_idx = next(
-            i for i, a in enumerate(actions) if "Listening" in a.text()
+            i for i, a in enumerate(actions) if a.text() == "▶️ Turn On"
         )
         status_idx = next(
             i for i, a in enumerate(actions) if "Status:" in a.text()
         )
 
-        assert toggle_idx < status_idx
+        voice_idx = next(i for i, a in enumerate(actions) if "Voice Listening" in a.text())
+        assert toggle_idx < voice_idx < status_idx
         between = actions[toggle_idx + 1 : status_idx]
         assert not any(a.isSeparator() for a in between), (
-            "Start/Stop Listening and the Status line must share one menu section"
+            "Power and the Status line must share one menu section"
         )
 
 class TestListeningWindowVisibility:
@@ -1692,6 +1691,15 @@ class TestListeningWindowVisibility:
         # No real reader thread in a unit test.
         monkeypatch.setattr(app_mod.threading, "Thread", MagicMock())
         return tray
+
+    def test_start_daemon_offers_turn_off(self, qapp, monkeypatch):
+        from PyQt6.QtGui import QAction
+
+        tray = self._tray_for_start(monkeypatch)
+        tray.toggle_action = QAction("▶️ Turn On")
+        tray.start_daemon()
+        assert tray.is_listening is True
+        assert tray.toggle_action.text() == "⏻ Turn Off"
 
     def test_start_daemon_does_not_show_log_viewer(self, qapp, monkeypatch):
         tray = self._tray_for_start(monkeypatch)
@@ -1776,6 +1784,17 @@ class TestListeningWindowVisibility:
         monkeypatch.setattr(app_mod.time, "sleep", MagicMock())
         return tray, fake_dialog
 
+    @pytest.mark.parametrize("bundled", [False, True])
+    def test_stop_daemon_offers_turn_on(self, qapp, monkeypatch, bundled):
+        from PyQt6.QtGui import QAction
+
+        setup = self._tray_for_stop_bundled if bundled else self._tray_for_stop_subprocess
+        tray, _ = setup(monkeypatch)
+        tray.toggle_action = QAction("⏻ Turn Off")
+        tray.stop_daemon(show_diary_dialog=False)
+        assert tray.is_listening is False
+        assert tray.toggle_action.text() == "▶️ Turn On"
+
     def _patch_face_state(self, monkeypatch):
         """Monkeypatch get_jarvis_state with a mock state manager.
 
@@ -1813,6 +1832,7 @@ class TestListeningWindowVisibility:
     def test_check_daemon_status_subprocess_crash_puts_face_asleep(self, qapp, monkeypatch):
         """An unexpected subprocess exit also puts the face back to sleep."""
         import desktop_app.app as app_mod
+        from PyQt6.QtGui import QAction
 
         tray = app_mod.JarvisSystemTray.__new__(app_mod.JarvisSystemTray)
         tray.is_bundled = False
@@ -1825,7 +1845,7 @@ class TestListeningWindowVisibility:
         tray.face_window = MagicMock()
         tray.log_signals = MagicMock()
         tray.tray_icon = MagicMock()
-        tray.toggle_action = MagicMock()
+        tray.toggle_action = QAction("⏻ Turn Off")
         tray.status_action = MagicMock()
         tray.update_icon = MagicMock()
         tray._set_chat_daemon_status = MagicMock()
@@ -1836,6 +1856,7 @@ class TestListeningWindowVisibility:
         fake_state, JarvisState = self._patch_face_state(monkeypatch)
         tray.check_daemon_status()
         assert tray.is_listening is False
+        assert tray.toggle_action.text() == "▶️ Turn On"
         fake_state.set_state.assert_called_once_with(JarvisState.ASLEEP)
 
     def test_stop_daemon_subprocess_does_not_hide_windows(self, qapp, monkeypatch):

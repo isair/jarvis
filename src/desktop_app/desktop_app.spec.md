@@ -90,7 +90,8 @@ The central controller that manages:
 - **Daemon lifecycle** (start/stop the Jarvis voice assistant)
 - **Voice pause**: Pause Voice Listening / Resume Voice Listening controls
   assistant capture without stopping the daemon, models, MCP sessions, text
-  chat or intentional dictation. Stop Listening retains full shutdown.
+  chat or intentional dictation. Turn Off shuts down the assistant. The
+  assistant power action reads Turn On while stopped and Turn Off while running.
 - **Window management** (log viewer, memory viewer, face window)
 - **Update checking** on startup and on-demand
 - **Runtime diagnostics** (`🩺 Runtime Status`): shows whether the assistant is listening, the daemon mode/PID, whether Low Power Mode is active, whether Ollama is needed/running, whether Jarvis owns the current Ollama runtime, active chat/embedding models, and configured MCP server count. The dialog is informational and never starts or stops services.
@@ -175,7 +176,7 @@ faces use a lower refresh rate, with a 250 ms state check when fully asleep.
 `scripts/capture_face_preview.py` renders the actual widget on light and dark
 backgrounds using isolated in-memory state and a fixed clock.
 
-**Face state follows the daemon lifecycle**: the face animates from states written by the daemon (`JarvisStateManager`, file-backed for cross-process use). Whenever the daemon goes down — the tray's Stop/Start Listening toggle, an unexpected exit, or the setup wizard pausing it — the tray resets the face to `ASLEEP` so it never looks awake while no daemon is running. Starting the daemon lets the daemon's own state writes take over again.
+**Face state follows the daemon lifecycle**: the face animates from states written by the daemon (`JarvisStateManager`, file-backed for cross-process use). Whenever the daemon goes down — the tray's Turn Off / Turn On control, an unexpected exit, or the setup wizard pausing it — the tray resets the face to `ASLEEP` so it never looks awake while no daemon is running. Starting the daemon lets the daemon's own state writes take over again.
 
 ### Face context menu
 
