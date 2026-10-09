@@ -3,6 +3,7 @@ import pytest
 from PyQt6.QtCore import Qt, QPoint, QPointF
 from PyQt6.QtGui import QContextMenuEvent, QMouseEvent
 from PyQt6.QtWidgets import QMenu
+from desktop_app.face_widget import Expression, JarvisState
 
 pytestmark = pytest.mark.unit
 
@@ -111,3 +112,42 @@ def test_subprocess_state_file_updates_presence_without_a_qt_signal(face):
     face.face._animate()
     assert face.windowOpacity() > before
     assert face.face._listening_started_at is not None
+
+
+@pytest.mark.parametrize('state', list(JarvisState))
+@pytest.mark.parametrize('expression', list(Expression))
+@pytest.mark.parametrize('blink_factor', [0.0, 1.0])
+@pytest.mark.parametrize('scale', [1, 2])
+def test_eye_surroundings_stay_transparent(face, state, expression,
+                                         blink_factor, scale):
+    """Only eye strokes and pupils cover the desktop, including at high DPI."""
+    from PyQt6.QtGui import QImage, QPainter
+
+    widget = face.face
+    widget._jarvis_state = state
+    widget._expression = expression
+    widget._activation_level = 0.0 if state == JarvisState.ASLEEP else 1.0
+    size = 20
+    centre = size * 2
+    image = QImage(centre * 2 * scale, centre * 2 * scale,
+                   QImage.Format.Format_ARGB32_Premultiplied)
+    image.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(image)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.scale(scale, scale)
+    try:
+        widget._draw_eye(painter, centre, centre, size, blink_factor, is_left=True)
+    finally:
+        painter.end()
+
+    # The horizontal margin is outside every expression's outline, but close
+    # enough to catch a filled halo behind an open or closed eye.
+    margin_x = round((centre + size * 1.2) * scale)
+    assert all(image.pixelColor(margin_x, y).alpha() == 0
+               for y in range(image.height()))
+    if expression == Expression.NEUTRAL and blink_factor == 0.0 and state != JarvisState.ASLEEP:
+        # Desktop content is visible between the pupil and the eye outline.
+        gap_x = round((centre + size * 0.6) * scale)
+        assert image.pixelColor(gap_x, centre * scale).alpha() == 0
+    assert any(image.pixelColor(x, y).alpha() > 0
+               for x in range(image.width()) for y in range(image.height()))

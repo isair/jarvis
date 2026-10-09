@@ -125,6 +125,9 @@ accepting focus or activating when shown. macOS keeps the tool window visible
 when another application is active. It paints only the amber face and its
 animation, with an ink-only shadow for contrast on light backgrounds. There is
 no background panel, grid, title bar, subtitle area or persistent toolbar.
+Eyes paint only their outlines and pupils (or thinking arcs), with transparent
+interiors and surroundings. The contrast shadow follows those strokes; there
+is no filled eye halo to obscure desktop content.
 
 The default footprint is 220 × 280 logical pixels, with zero layout margins.
 Vector strokes, glows and motion scale together with the face geometry.
