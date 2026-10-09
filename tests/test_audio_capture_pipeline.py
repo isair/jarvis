@@ -814,3 +814,50 @@ def test_speech_reaches_whisper_at_configured_boundary(
     assert len(jobs) == expected_count, 'Speech must be submitted at its capture boundary'
     assert all(len(job.audio) == frame_samples * expected_frames for job in jobs)
     np.testing.assert_array_equal(np.concatenate([job.audio for job in jobs]), speech)
+
+
+@pytest.mark.parametrize('reset', ['dictation_cycle', 'query_boundary', 'callback_status'])
+def test_callback_interleaved_with_reset_does_not_relabel_old_audio_as_fresh(monkeypatch, reset):
+    """A state transition during admission cannot revive pre-transition speech."""
+    obj = listener(16000)
+    paused = VoiceListener._dictation_active
+    first_admission = True
+
+    def interrupted_pause_read(instance):
+        nonlocal first_admission
+        active = paused.fget(instance)
+        if first_admission and reset != 'callback_status':
+            first_admission = False
+            if reset == 'dictation_cycle':
+                paused.fset(instance, True)
+                paused.fset(instance, False)
+            else:
+                instance._clear_audio_buffers()
+        return active
+
+    class ResetDuringStatus:
+        def __str__(self):
+            obj._clear_audio_buffers()
+            return 'input overflow'
+
+    status = ResetDuringStatus() if reset == 'callback_status' else None
+    with monkeypatch.context() as scoped:
+        scoped.setattr(VoiceListener, '_dictation_active', property(interrupted_pause_read, paused.fset))
+        obj._on_audio(np.ones((320, 1), dtype=np.float32) * .1, 320, None, status)
+
+    obj._on_audio(np.ones((320, 1), dtype=np.float32) * .2, 320, None, None)
+    admitted = []
+    obj._is_speech_frame = lambda frame: admitted.append(float(np.mean(frame))) or False
+    obj._check_audio_health = lambda: None
+
+    queued = obj._audio_q
+    class DrainThenStop:
+        def get(self, **kwargs):
+            if queued.empty():
+                obj._should_stop = True
+                raise queue.Empty
+            return queued.get_nowait()
+    obj._audio_q = DrainThenStop()
+    obj._consume_audio_frames(20)
+
+    assert admitted == pytest.approx([.2])

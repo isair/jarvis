@@ -1815,13 +1815,13 @@ class VoiceListener(threading.Thread):
     def _on_audio(self, indata, frames, time_info, status):
         """Audio callback from sounddevice."""
         try:
+            generation = self._audio_generation
             self._last_audio_callback = time.monotonic()
             self._callback_count += 1
             if status:
                 self._callback_status = str(status)
             if self._should_stop or self._dictation_active:
                 return
-            generation = self._audio_generation
             chunk = (indata.copy() if hasattr(indata, "copy") else indata)
             try:
                 self._audio_q.put_nowait(_CapturedAudio(chunk, generation))

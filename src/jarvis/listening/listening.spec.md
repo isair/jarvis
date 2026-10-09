@@ -61,7 +61,9 @@ microphone-frame consumption or silently losing an utterance. A full result
 queue applies cancellable backpressure to Whisper without dropping results.
 A dictation pause immediately clears captured audio and invalidates work started
 before the pause, including a decode or intent decision that finishes after
-resumption. Callback blocks carry the audio generation from before their copy; stale blocks
+resumption. Callback blocks snapshot the audio generation at callback entry,
+before status bookkeeping, pause checks or sample copies; a reset during
+admission cannot relabel old audio as fresh. Stale blocks
 are discarded after a reset, including blocks already dequeued. Remaining
 frames in a dequeued batch cannot append after a buffer reset. Transcript
 processing retains the result generation through buffer storage. Listener shutdown discards pending transcriptions and results;
