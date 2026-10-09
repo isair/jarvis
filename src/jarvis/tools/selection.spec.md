@@ -50,21 +50,25 @@ Note: embedding is **not** the default strategy because nomic-embed-text produce
 
 ### LLM Strategy (default)
 
-1. Build a catalogue of `- name: description` lines (descriptions truncated to 120 chars) for every registered tool except always-included ones.
-2. Send through the supplied `llm_backend.direct()` with a system prompt asking for the **top 5 most relevant** tool names as a comma-separated list. The prompt instructs the router to prefer 1–3 tools for narrow queries and to return `"none"` for greetings/small talk.
-3. Parse the response, matching tokens against known tool names (unknowns are dropped silently).
+1. Build a catalogue of `- name: description` lines (descriptions truncated to 120 chars) for every registered tool except always-included ones, including required input names from its schema.
+2. Send through the supplied `llm_backend.direct()` with a system prompt asking for a JSON object containing `requested_operation` (a non-empty English translation of the user's requested action, preserving its verb and target) and `tools` (an array of exact tool names). The router identifies the operation before selecting up to five capabilities that perform it, prefers 1–3 tools for narrow queries, and returns an empty array for greetings/small talk or facts already visible in context.
+3. Validate the JSON object and field types, then match names from `tools` literally against the registered catalogue, preserving rank and removing duplicates. Operation prose cannot contribute tool names. Unknown names are dropped.
 4. Apply a hard `_LLM_MAX_SELECTED` (5) cap regardless of what the router returned, to guard against chatty routers that echo the whole catalogue.
 5. Append always-included tools.
-6. If the router replies `"none"`, return only the always-included tools.
-7. On timeout, empty response, or parse failure (no token in the response matched a known tool name), fall back to the **keyword strategy** rather than to the full catalogue. Reasoning: the catalogue can grow to 30–40 tools once an MCP server like `chrome-devtools` is enabled, and exposing all of them to a small chat model (gemma4:e2b class) overwhelms tool selection, producing empty replies. Keyword scoring narrows on query/name overlap deterministically, and the engine's `toolSearchTool` escape hatch still lets the chat model widen mid-loop if the keyword pick missed.
+6. If the router's `tools` array is empty, return only the always-included tools.
+7. On timeout, empty response, invalid JSON/field shape, or a non-empty selection containing no known tool names, fall back to the **keyword strategy** rather than to the full catalogue. Reasoning: the catalogue can grow to 30–40 tools once an MCP server like `chrome-devtools` is enabled, and exposing all of them to a small chat model (gemma4:e2b class) overwhelms tool selection, producing empty replies. Keyword scoring narrows on query/name overlap deterministically, and the engine's `toolSearchTool` escape hatch still lets the chat model widen mid-loop if the keyword pick missed.
 
-The completion budget is `_ROUTER_TOKEN_BUDGET` (1024 tokens), including reasoning and the tool-name answer. It applies to every backend. The request timeout and selected-tool cap remain independent bounds.
+Routing uses temperature zero. The completion budget is `_ROUTER_TOKEN_BUDGET` (1024 tokens), including reasoning and the tool-name answer. It applies to every backend. The request timeout and selected-tool cap remain independent bounds.
+
+The router prefers capabilities whose required inputs can be supplied from the
+request or context. Operations that depend on unknown record identifiers include
+a retrieval capability rather than relying on invented identifiers.
 
 #### Context-aware routing
 
 When the reply engine passes a `context_hint`, it is split into two labelled semantic slots in the router system prompt:
 
-- **KNOWN FACTS** — things the assistant can already see (current time, detected location). If the query is answerable purely from these, the router should return `none`.
+- **KNOWN FACTS** — things the assistant can already see (current time, detected location). If the query is answerable purely from these, the router should return an empty `tools` array.
 - **RECENT DIALOGUE** — recent user/assistant turns. The router is instructed to read the current query as a continuation of this exchange, so short follow-ups (e.g. "I'm in London" after "which city?") route to the tool that answers the combined intent across turns rather than being treated as idle chatter.
 
 The split is the exact marker `"Recent dialogue (short-term memory):"` — any content before it is known facts, content after it is recent dialogue. If no dialogue marker is present, the whole hint is treated as known facts.
