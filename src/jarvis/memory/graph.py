@@ -533,21 +533,24 @@ class GraphMemoryStore:
             _notify_graph_mutation("delete", node_id, branch)
         return deleted
 
-    def node_contains_fact(self, node_id: str, fact: str) -> bool:
-        """True if ``fact`` matches any line of the node's data after
-        ``normalise_fact`` folding. Used to dedupe graph appends when the
-        cumulative daily summary re-seeds the same facts across diary flushes.
-        """
-        node = self.get_node(node_id)
-        if node is None or not node.data:
-            return False
-        target = normalise_fact(fact)
-        if not target:
-            return False
-        for line in node.data.split("\n"):
-            if normalise_fact(line) == target:
-                return True
-        return False
+    def get_branch_fact_keys(self, branch_id: str) -> set[str]:
+        """Snapshot folded fact lines from a fixed branch and all descendants."""
+        if branch_id not in FIXED_BRANCH_IDS:
+            return set()
+        with self._lock:
+            rows = self.conn.execute(
+                """WITH RECURSIVE branch_nodes(id) AS (
+                    SELECT id FROM memory_nodes WHERE id = ?
+                    UNION
+                    SELECT child.id FROM memory_nodes AS child
+                    JOIN branch_nodes AS parent ON child.parent_id = parent.id
+                )
+                SELECT data FROM memory_nodes
+                WHERE id IN (SELECT id FROM branch_nodes)""",
+                (branch_id,),
+            ).fetchall()
+        return {key for row in rows for line in row["data"].splitlines()
+                if (key := normalise_fact(line))}
 
     def append_to_node(self, node_id: str, text: str) -> bool:
         """Append text to a node's data field.

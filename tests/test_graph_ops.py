@@ -468,55 +468,37 @@ class TestAppendToNode:
 
 
 @pytest.mark.unit
-class TestNodeContainsFact:
-    """Tests for GraphMemoryStore.node_contains_fact (dedupe primitive)."""
+class TestBranchFactKeys:
+    """Branch snapshots fold complete fact lines without changing graph state."""
 
-    def test_returns_false_for_empty_node(self, store):
-        node = store.create_node(name="T", description="T", data="", parent_id="root")
-        assert store.node_contains_fact(node.id, "anything") is False
+    def test_empty_branch_has_no_keys(self, store):
+        assert store.get_branch_fact_keys(BRANCH_USER) == set()
 
-    def test_returns_false_for_nonexistent_node(self, store):
-        assert store.node_contains_fact("nope", "anything") is False
+    @pytest.mark.parametrize("branch", ["nope", "root", ""])
+    def test_only_fixed_branches_are_snapshotted(self, store, branch):
+        store.create_node(name="T", description="T", data="a fact", parent_id="root")
+        assert store.get_branch_fact_keys(branch) == set()
 
-    def test_returns_false_for_empty_fact(self, store):
-        node = store.create_node(name="T", description="T", data="hello", parent_id="root")
-        assert store.node_contains_fact(node.id, "   ") is False
+    def test_full_lines_from_nested_descendants_remain_branch_scoped(self, store):
+        parent = store.create_node(name="T", description="T", data="Line A", parent_id=BRANCH_USER)
+        child = store.create_node(name="Nested", description="Nested", data="Line B\n \nLine C", parent_id=parent.id)
+        store.create_node(name="World", description="World", data="Line D", parent_id=BRANCH_WORLD)
+        access_before = store.get_node(child.id).access_count
+        assert store.get_branch_fact_keys(BRANCH_USER) == {"line a", "line b", "line c"}
+        assert store.get_node(child.id).access_count == access_before
 
-    def test_exact_line_match(self, store):
-        node = store.create_node(
-            name="T", description="T", data="Line A\nLine B", parent_id="root"
-        )
-        assert store.node_contains_fact(node.id, "Line A") is True
-        assert store.node_contains_fact(node.id, "Line B") is True
-        assert store.node_contains_fact(node.id, "Line C") is False
+    @pytest.mark.parametrize("original,folded", [
+        ("  Justin   Bieber  is Canadian.  ", "justin bieber is canadian."),
+        ("İstanbul is large.", "i̇stanbul is large."),
+        ("Straße", "strasse"),
+    ])
+    def test_unicode_and_whitespace_fold(self, store, original, folded):
+        store.update_node(BRANCH_USER, data=original)
+        assert store.get_branch_fact_keys(BRANCH_USER) == {folded}
 
-    def test_case_and_whitespace_insensitive(self, store):
-        node = store.create_node(
-            name="T", description="T", data="Justin Bieber is Canadian.", parent_id="root"
-        )
-        assert store.node_contains_fact(node.id, "justin bieber is canadian.") is True
-        assert store.node_contains_fact(node.id, "  Justin   Bieber  is Canadian.  ") is True
-
-    def test_turkish_dotted_i_folds(self, store):
-        """Locale-naive .lower() returns the wrong key for Turkish İ; the
-        store must use casefold + NFKC so İstanbul / i̇stanbul collide."""
-        node = store.create_node(
-            name="T", description="T", data="İstanbul is large.", parent_id="root"
-        )
-        assert store.node_contains_fact(node.id, "i̇stanbul is large.") is True
-
-    def test_german_sharp_s_folds_to_ss(self, store):
-        node = store.create_node(
-            name="T", description="T", data="Straße", parent_id="root"
-        )
-        assert store.node_contains_fact(node.id, "strasse") is True
-
-    def test_substring_is_not_a_match(self, store):
-        """Dedupe is line-equality, not substring — avoid false positives."""
-        node = store.create_node(
-            name="T", description="T", data="Justin Bieber is Canadian.", parent_id="root"
-        )
-        assert store.node_contains_fact(node.id, "Justin Bieber") is False
+    def test_substring_is_not_a_fact_key(self, store):
+        store.update_node(BRANCH_USER, data="Justin Bieber is Canadian.")
+        assert "justin bieber" not in store.get_branch_fact_keys(BRANCH_USER)
 
 
 # ── update_graph_from_dialogue (end-to-end) ────────────────────────────

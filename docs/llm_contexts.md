@@ -154,7 +154,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 ## 11. Knowledge Graph Best-Child Picker
 
 - **File**: [src/jarvis/memory/graph_ops.py](src/jarvis/memory/graph_ops.py) — `_llm_pick_best_child()` (~line 167).
-- **Trigger**: during graph insertion, per fact, to place it under the best existing category. Background.
+- **Trigger**: during graph insertion, per novel fact, to place it under the best existing category. Before traversal, a branch-wide SQLite snapshot plus pending branch keys skips exact Unicode-folded duplicates, including facts stored in sibling destinations. Background.
 - **Model**: `picker_model` when passed through from `update_graph_from_dialogue` (daemon resolves it via `resolve_model(cfg, Tier.FAST)` → small model when available); falls back to `cfg.llm_chat_model`. Factory-dispatched.
 - **Inputs**: fact text + numbered list of candidate child nodes (name + description).
 - **System prompt**: inline (~lines 156-161) — answer with number or `NONE`.
@@ -163,7 +163,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 ## 11b. Knowledge Graph Node Merge (rewrite-on-write consolidation)
 
 - **File**: [src/jarvis/memory/graph_ops.py](src/jarvis/memory/graph_ops.py) — `merge_node_data()` (system prompt at `_MERGE_SYSTEM_PROMPT`).
-- **Trigger**: **once per (node, flush)** during `update_graph_from_dialogue`. The orchestrator first applies the exact-match dedupe fast-path, then groups the remaining facts by their resolved `node_id` so a 5-fact flush hitting the User node fires one rewrite, not five. Cold-start writes (empty target node) skip straight to plain append. Also invoked with `new_facts=[]` by the `consolidate_all_populated_nodes` maintenance op (powering the memory viewer's 🧹 button) to re-apply current rules to historical data.
+- **Trigger**: **once per (node, flush)** during `update_graph_from_dialogue`. The orchestrator first skips exact persisted and pending branch duplicates before traversal, then groups the remaining facts by their resolved `node_id` so a 5-fact flush hitting the User node fires one rewrite, not five. Cold-start writes (empty target node) skip straight to plain append. Also invoked with `new_facts=[]` by the `consolidate_all_populated_nodes` maintenance op (powering the memory viewer's 🧹 button) to re-apply current rules to historical data.
 - **Model**: same `picker_model` as #11 (the fast tier when the caller resolves it, falling back to `cfg.llm_chat_model`). Factory-dispatched. Temperature 0 — the task is rule-following classification.
 - **Inputs**: existing node `data` + the batch of new facts (zero or more) routed to that node in this flush.
 - **System prompt**: defines an ordered rule set — contradiction/reversal drops the old version, near-duplicate phrasings collapse to one, repeated daily activities consolidate into patterns, independent attributes coexist (visible contradictions are NOT silently dropped), common-knowledge facts are pruned. Demands a bare `{"facts": [...]}` JSON object. Parser tries direct `json.loads` first, then a scoped regex (no greedy `\{.*\}`) before giving up.
