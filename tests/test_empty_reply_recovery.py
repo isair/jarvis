@@ -23,6 +23,7 @@ def _reply(cfg, db, memory, responses):
         operations.append((tool_name, tool_args))
         return ToolExecutionResult(success=True, reply_text='Ankara: 24 C, clear.')
     with patch.object(engine, 'chat_with_messages', side_effect=lambda **kwargs: next(answers)), \
+            patch.object(engine, 'digest_loop_for_max_turns', return_value=None), \
             patch.object(engine, 'run_tool_with_retries', side_effect=run_tool), \
             patch.object(engine, 'select_tools', return_value=['getWeather', 'stop']), \
             patch.object(engine, 'plan_query', return_value=[]), \
