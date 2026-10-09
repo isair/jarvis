@@ -122,12 +122,15 @@ Window visibility is user-controlled: starting or stopping the assistant never s
 
 The face is a compact frameless, translucent tool window, always on top without
 accepting focus or activating when shown. macOS keeps the tool window visible
-when another application is active. It paints a softly faceted amber contour,
-rounded expressive eyes and a small relaxed smile. Fine strokes use the shared
-theme's amber palette with directional highlights and a narrow ink outline for
-contrast on light backgrounds. There is
+when another application is active. It paints an angular amber mask made from
+straight connected light beams, small illuminated junctions, diamond eyes,
+cheek accents and a straight mouth seam. Slow paired energy highlights travel
+around the fixed beams on a twelve-second cycle, with greater intensity during
+processing. Fine strokes use the shared theme's amber palette with directional
+highlights, bright narrow cores and a narrow ink outline for contrast on light
+backgrounds. There is
 no background panel, grid, title bar, subtitle area or persistent toolbar.
-Eyes paint only their outlines and softly lit pupils, with transparent
+Eyes paint only their outlines and small lit pupils, with transparent
 interiors and surroundings. Contrast and glow follow those strokes; there is
 no filled eye halo to obscure desktop content.
 
@@ -150,11 +153,11 @@ apart. Idle glances last 3.2 seconds, stay within 2.5 logical pixels horizontall
 and one vertically, and are separated by 9 to 15 seconds of rest. The face
 does not track the pointer or analyse the desktop.
 
-- **Asleep:** relaxed closed eyelids and a still, dim silhouette after settling.
-- **Idle:** soft breathing, a slight smile and occasional blinks and glances.
+- **Asleep:** straight closed eye beams and a still, dim silhouette after settling.
+- **Idle:** soft breathing, a straight mask seam and occasional blinks and glances.
 - **Listening:** receptive eyes and a close-fitting amber echo on a two-second cycle.
-- **Thinking:** pupils look gently upwards while a short highlight travels along the rim.
-- **Speaking:** the smile opens into a small, smoothly tapered waveform. It indicates
+- **Thinking:** pupils look gently upwards while the flowing beam highlights intensify.
+- **Speaking:** the mouth seam opens into a small, smoothly tapered waveform. It indicates
   the speaking state without measuring or recording audio.
 - **Dictation:** a close-fitting coral outline breathes during recording; processing
   combines that outline with the thinking expression.

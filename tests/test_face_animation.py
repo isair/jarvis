@@ -66,8 +66,8 @@ def advance(scene, state, seconds, fps=30):
         window.face._animate()
 
 
-def test_idle_mouth_is_a_small_relaxed_smile(scene):
-    """The resting expression reads as welcoming at actual desktop size."""
+def test_idle_mouth_is_a_straight_mask_seam(scene):
+    """The resting mask has a straight light seam rather than a human smile."""
     window, _, _ = scene
     advance(scene, JarvisState.IDLE, 2)
     image = QImage(220, 280, QImage.Format.Format_ARGB32_Premultiplied)
@@ -82,7 +82,7 @@ def test_idle_mouth_is_a_small_relaxed_smile(scene):
     rows = np.arange(alpha.shape[0])
     heights = [np.average(rows, weights=alpha[:, x])
                for x in (occupied_x[0] + 3, centre, occupied_x[-1] - 3)]
-    assert heights[1] > max(heights[0], heights[2]) + 2
+    assert max(heights) - min(heights) < 0.5
     assert occupied_x[-1] - occupied_x[0] < 154 * 0.5
 
 
@@ -178,3 +178,34 @@ def test_rendered_states_match_the_reviewed_light_and_dark_appearance(scene, sta
     difference = np.abs(on_desktop(actual) - on_desktop(expected))
     assert difference.mean() < 0.5
     assert np.mean(np.max(difference, axis=2) > 20) < 0.005
+
+
+def test_mask_has_connected_straight_beams_and_lit_junctions(scene):
+    """The original angular mask remains recognisable at desktop size."""
+    window, _, _ = scene
+    advance(scene, JarvisState.IDLE, 2)
+    widget = window.face
+    alpha = pixels(render(widget))[:, :, 3]
+    cx, cy = window.width() / 2, window.height() / 2
+    hw = widget.FACE_WIDTH * widget._breathing_scale / 2
+    hh = widget.FACE_HEIGHT * widget._breathing_scale / 2
+    # Original crown and temple junctions, and the straight beam joining them.
+    for x, y in ((0.5, -0.85), (0.8, -0.5), (0.65, -0.675)):
+        px, py = round(cx + x * hw), round(cy + y * hh)
+        assert alpha[py-1:py+2, px-1:px+2].max() > 150
+
+
+def test_awake_beams_have_slow_flow_without_moving_the_mask(scene):
+    window, _, _ = scene
+    advance(scene, JarvisState.IDLE, 2)
+    window.face._breathing_scale = 1.0
+    window.face._activation_level = 1.0
+    first = pixels(render(window))
+    advance(scene, JarvisState.IDLE, 1)
+    window.face._breathing_scale = 1.0
+    window.face._activation_level = 1.0
+    second = pixels(render(window))
+    # Exclude eyes and mouth: energy should travel through the outer beams.
+    edge = np.ones(first.shape[:2], dtype=bool)
+    edge[115:215, 65:155] = False
+    assert np.abs(first[edge].astype(int) - second[edge].astype(int)).sum() > 1000
