@@ -138,6 +138,20 @@ def mock_config():
     return MockConfig()
 
 
+@pytest.fixture(scope="session")
+def runtime_temp_root(tmp_path_factory):
+    return tmp_path_factory.mktemp("jarvis_runtime_sandbox")
+
+
+@pytest.fixture(autouse=True)
+def _isolate_runtime_tempfiles(runtime_temp_root, monkeypatch):
+    """Keep temporary IPC state separate from a running user's Jarvis instance."""
+    import tempfile
+    monkeypatch.setattr(tempfile, "tempdir", str(runtime_temp_root))
+    for variable in ("TMPDIR", "TEMP", "TMP"):
+        monkeypatch.setenv(variable, str(runtime_temp_root))
+
+
 @pytest.fixture
 def db():
     """Provide an in-memory database for unit tests."""

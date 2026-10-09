@@ -506,6 +506,19 @@ class StateManager:
                 except Exception:
                     pass
 
+    def reset_engagement(self) -> None:
+        """Discard collection, timers and historical follow-up spans."""
+        with self._state_lock:
+            self.clear_collection()
+            self.expire_hot_window()
+            self._state = ListeningState.WAKE_WORD
+            self._last_voice_time = 0.0
+            self._collect_start_time = 0.0
+            self._hot_window_start_time = 0.0
+            self._hot_window_span_start = 0.0
+            self._hot_window_span_end = 0.0
+        debug_log("engagement context reset", "state")
+
     def stop(self) -> None:
         """Stop the state manager and cancel all timers."""
         with self._state_lock:

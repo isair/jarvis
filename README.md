@@ -113,7 +113,7 @@ Choose models, tune speech recognition, configure tools and enable Low Power Mod
 
 ### A quiet companion to voice
 
-When speaking is inconvenient, open Chat from the tray. It picks up the same conversation and memory, without reading text replies aloud.
+Open Chat for silent replies in the same conversation. **Pause Voice Listening** stops room transcription during meetings while chat and dictation stay available.
 
 <p align="center">
   <img src="docs/img/chat-window.png" alt="Jarvis companion chat in its rounded graphite phone-style window, showing illustrative messages and an amber composer" width="480">

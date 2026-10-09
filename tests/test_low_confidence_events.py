@@ -201,8 +201,8 @@ def test_invalidated_transcription_does_not_emit_events(
     try:
         assert started.wait(timeout=1)
         if invalidation == "dictation":
-            listener._dictation_active = True
-            listener._dictation_active = False
+            listener.set_capture_paused('dictation', True)
+            listener.set_capture_paused('dictation', False)
         else:
             listener.stop()
     finally:
@@ -220,7 +220,7 @@ def test_callback_that_starts_dictation_suppresses_remaining_events(make_listene
 
     def start_dictation(event):
         events.append(event)
-        listener._dictation_active = True
+        listener.set_capture_paused('dictation', True)
 
     listener.on_low_confidence = start_dictation
     threshold = listener.cfg.whisper_min_confidence

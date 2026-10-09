@@ -88,6 +88,9 @@ The central controller that manages:
 
 - **System tray icon** with context menu
 - **Daemon lifecycle** (start/stop the Jarvis voice assistant)
+- **Voice pause**: Pause Voice Listening / Resume Voice Listening controls
+  assistant capture without stopping the daemon, models, MCP sessions, text
+  chat or intentional dictation. Stop Listening retains full shutdown.
 - **Window management** (log viewer, memory viewer, face window)
 - **Update checking** on startup and on-demand
 - **Runtime diagnostics** (`🩺 Runtime Status`): shows whether the assistant is listening, the daemon mode/PID, whether Low Power Mode is active, whether Ollama is needed/running, whether Jarvis owns the current Ollama runtime, active chat/embedding models, and configured MCP server count. The dialog is informational and never starts or stops services.
@@ -305,6 +308,20 @@ In subprocess mode, the daemon runs as a separate process. IPC is achieved via s
 - Chat IPC lines are marshalled onto the Qt main thread via `ChatIpcSignals`, then `_on_chat_ipc_line()` forwards them to `ChatWindow.process_ipc_line()`
 - When the daemon starts, stops, or a subprocess exits unexpectedly, the tray updates any open ChatWindow lifecycle banner and clears or refreshes its subprocess stdin submit function so the window never writes to a dead pipe.
 - Same UI experience as bundled mode
+
+Voice pause uses the core `set_voice_listening_paused` API in bundled mode.
+Subprocess mode sends `__VOICE_PAUSE__:` JSON with a Boolean `paused` and unique
+`request_id`; the daemon returns `__VOICE_STATUS__:` status data carrying the
+same identity, availability and applied user-pause state. These protocol lines
+are hidden from the activity log and marshalled onto the Qt main thread.
+The tray changes its paused/resumed status only after a matching valid
+acknowledgement. Pending requests disable the action. After ten seconds without
+confirmation, or a broken pipe/unavailable capture, it reports an unknown voice
+state and permits a fresh pause attempt. Late identities and events from another
+daemon process cannot affect the current runtime. Shutdown disables the action;
+a replacement daemon begins with unpaused capture. Pause is runtime state and is
+not saved to configuration. The hardware capture stream remains warm while
+assistant input is discarded; this control does not claim to release the device.
 
 ## Theme System
 

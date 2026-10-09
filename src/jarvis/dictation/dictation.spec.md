@@ -77,8 +77,9 @@ After transcription, text passes through these stages in order:
   and backend info — no double memory usage.
 - **Separate `sounddevice.InputStream`** for dictation audio — avoids
   modifying the complex listener code.
-- **Pause flag** on the main listener to prevent dictation speech being
-  interpreted as commands.
+- **Independent capture pause reason** on the main listener to prevent dictation
+  speech being interpreted as commands. Dictation completion releases only its
+  own reason and cannot resume a user-paused assistant.
 - **No PortAudio work on the pynput hook thread.** The hotkey callbacks only
   flip state; stream open/start runs on a worker thread (`_begin_recording`)
   and stop/transcribe already ran on one. Windows silently unhooks slow hook

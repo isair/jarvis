@@ -113,15 +113,15 @@ class RuntimeStatusSignals(QObject):
 def _should_emit_as_log(line: str) -> bool:
     """Whether a daemon output line belongs in the general log viewer.
 
-    Chat IPC is carved out. Its ``complete`` event carries the whole
-    assistant reply, which can echo back whatever the user typed, and the
+    Chat and voice-control IPC are excluded. Chat's ``complete`` event carries
+    the whole assistant reply, which can echo back whatever the user typed, and the
     log window is not covered by the redaction invariant the chat path
     maintains. Diary IPC stays: it carries progress and token deltas the
     log window exists to show.
     """
-    from jarvis.daemon import CHAT_IPC_PREFIX
+    from jarvis.daemon import CHAT_IPC_PREFIX, VOICE_STATUS_IPC_PREFIX
 
-    return not line.startswith(CHAT_IPC_PREFIX)
+    return not line.startswith((CHAT_IPC_PREFIX, VOICE_STATUS_IPC_PREFIX))
 
 
 def _collect_runtime_status_snapshot(
@@ -1177,6 +1177,7 @@ def acquire_single_instance_lock() -> bool:
 class LogSignals(QObject):
     """Signals for thread-safe log updates."""
     new_log = pyqtSignal(str)
+    voice_status = pyqtSignal(object, str)
 
 
 class LogViewerWindow(QMainWindow):
@@ -1845,6 +1846,7 @@ class JarvisSystemTray:
         self.log_viewer = LogViewerWindow()
         self.log_signals = LogSignals()
         self.log_signals.new_log.connect(self.log_viewer.append_log)
+        self.log_signals.voice_status.connect(self._on_voice_pause_status)
 
         # Create memory viewer window (hidden by default)
         self.memory_viewer = MemoryViewerWindow()
@@ -2027,6 +2029,9 @@ class JarvisSystemTray:
         self.toggle_action = QAction("▶️ Start Listening")
         self.toggle_action.triggered.connect(self.toggle_listening)
         self.menu.addAction(self.toggle_action)
+
+        self._initialise_voice_pause_controls()
+        self.menu.addAction(self.voice_pause_action)
 
         # Status action (non-clickable)
         self.status_action = QAction("⚪ Status: Stopped")
@@ -2450,6 +2455,114 @@ class JarvisSystemTray:
         except Exception:
             pass
 
+    def _initialise_voice_pause_controls(self) -> None:
+        self._voice_pause_state = False
+        self._voice_pause_request_id = None
+        self._voice_pause_owner = None
+        self._voice_pause_timer = QTimer()
+        self._voice_pause_timer.setSingleShot(True)
+        self._voice_pause_timer.setInterval(10000)
+        self._voice_pause_timer.timeout.connect(self._voice_pause_timed_out)
+        self.voice_pause_action = QAction("⏸️ Pause Voice Listening")
+        self.voice_pause_action.setToolTip("Keep text chat and dictation available while voice listening is paused")
+        self.voice_pause_action.setEnabled(False)
+        self.voice_pause_action.triggered.connect(self.toggle_voice_pause)
+
+    def _sync_voice_pause_controls(self) -> None:
+        owner = self.daemon_thread if self.is_bundled else self.daemon_process
+        active = self.is_listening and not self._daemon_stop_expected and owner is not None
+        if not active or owner is not self._voice_pause_owner:
+            self._voice_pause_timer.stop()
+            self._voice_pause_request_id = None
+            self._voice_pause_state = False
+            self._voice_pause_owner = owner if active else None
+            self.voice_pause_action.setText("⏸️ Pause Voice Listening")
+            if active:
+                self.status_action.setText("🟢 Status: Listening")
+            elif not self.is_listening:
+                self.status_action.setText("⚪ Status: Stopped")
+        self.voice_pause_action.setEnabled(active and self._voice_pause_request_id is None)
+
+    def toggle_voice_pause(self) -> None:
+        import json
+        import uuid
+        from jarvis.daemon import VOICE_PAUSE_IPC_PREFIX, set_voice_listening_paused
+        self._sync_voice_pause_controls()
+        if not self.voice_pause_action.isEnabled():
+            return
+        paused = not self._voice_pause_state
+        request_id = str(uuid.uuid4())
+        self._voice_pause_request_id = request_id
+        self.voice_pause_action.setEnabled(False)
+        self.voice_pause_action.setText("⏳ Pausing Voice Listening…" if paused else "⏳ Resuming Voice Listening…")
+        self._voice_pause_timer.start()
+        debug_log(f"requesting voice pause: {paused}", "desktop")
+        try:
+            if self.is_bundled:
+                result = set_voice_listening_paused(paused)
+                self._apply_voice_pause_status({
+                    'request_id': request_id, 'available': result is not None, 'paused': result,
+                })
+            else:
+                self.daemon_process.stdin.write(VOICE_PAUSE_IPC_PREFIX + json.dumps({
+                    'paused': paused, 'request_id': request_id,
+                }) + '\n')
+                self.daemon_process.stdin.flush()
+        except Exception as exc:
+            debug_log(f"voice pause control failed ({type(exc).__name__})", "desktop")
+            self._voice_pause_unknown("Voice listening could not confirm the change. Try again or restart Jarvis.")
+
+    def _on_voice_pause_status(self, owner, line: str) -> None:
+        import json
+        from jarvis.daemon import VOICE_STATUS_IPC_PREFIX
+        if (self.is_bundled or owner is not self.daemon_process
+                or not self.is_listening or self._daemon_stop_expected):
+            return
+        try:
+            if not line.startswith(VOICE_STATUS_IPC_PREFIX):
+                return
+            payload = json.loads(line[len(VOICE_STATUS_IPC_PREFIX):])
+            if not isinstance(payload, dict) or payload.get('type') != 'status':
+                return
+            self._apply_voice_pause_status(payload.get('data'))
+        except (ValueError, TypeError):
+            debug_log("invalid voice pause acknowledgement", "desktop")
+
+    def _apply_voice_pause_status(self, status) -> None:
+        if (not isinstance(status, dict) or self._voice_pause_request_id is None
+                or status.get('request_id') != self._voice_pause_request_id
+                or not isinstance(status.get('available'), bool)):
+            return
+        if not status['available']:
+            self._voice_pause_unknown("Voice listening is unavailable. Try again after startup or restart Jarvis.")
+            return
+        if not isinstance(status.get('paused'), bool):
+            return
+        self._voice_pause_timer.stop()
+        self._voice_pause_request_id = None
+        self._voice_pause_state = status['paused']
+        self.voice_pause_action.setText("▶️ Resume Voice Listening" if status['paused'] else "⏸️ Pause Voice Listening")
+        self.voice_pause_action.setEnabled(True)
+        self.status_action.setText("🟠 Status: Voice paused (chat available)" if status['paused'] else "🟢 Status: Listening")
+        self.tray_icon.setToolTip("Jarvis: voice paused" if status['paused'] else "Jarvis: listening")
+        self.log_signals.new_log.emit("⏸️ Voice listening paused. Text chat and dictation remain available.\n"
+                                      if status['paused'] else "🎤 Voice listening resumed.\n")
+        debug_log(f"voice pause confirmed: {status['paused']}", "desktop")
+
+    def _voice_pause_unknown(self, message: str) -> None:
+        self._voice_pause_timer.stop()
+        self._voice_pause_request_id = None
+        self._voice_pause_state = None
+        self.voice_pause_action.setText("⏸️ Pause Voice Listening")
+        self.voice_pause_action.setEnabled(self.is_listening and not self._daemon_stop_expected)
+        self.status_action.setText("⚠️ Status: Voice state unknown")
+        self.tray_icon.setToolTip("Jarvis: voice state unknown")
+        self.log_signals.new_log.emit(f"⚠️ {message}\n")
+
+    def _voice_pause_timed_out(self) -> None:
+        if self._voice_pause_request_id is not None:
+            self._voice_pause_unknown("Voice listening did not confirm the change. Try again or restart Jarvis.")
+
     def toggle_listening(self) -> None:
         """Toggle the Jarvis daemon on/off."""
         if self.is_listening:
@@ -2663,11 +2776,12 @@ class JarvisSystemTray:
         if not self.daemon_process or not self.daemon_process.stdout:
             return
 
-        from jarvis.daemon import CHAT_IPC_PREFIX
+        from jarvis.daemon import CHAT_IPC_PREFIX, VOICE_STATUS_IPC_PREFIX
+        process = self.daemon_process
 
         try:
             while True:
-                line = self.daemon_process.stdout.readline()
+                line = process.stdout.readline()
                 if not line:
                     # EOF - process has ended
                     debug_log("log reader: EOF reached, daemon stdout closed", "desktop")
@@ -2681,6 +2795,8 @@ class JarvisSystemTray:
                 # (Qt widgets must be created on the GUI thread).
                 if line.startswith(CHAT_IPC_PREFIX):
                     self._chat_ipc_signals.line_received.emit(line)
+                elif line.startswith(VOICE_STATUS_IPC_PREFIX):
+                    self.log_signals.voice_status.emit(process, line)
                 if _should_emit_as_log(line):
                     self.log_signals.new_log.emit(line)
         except Exception as e:
@@ -3006,6 +3122,8 @@ class JarvisSystemTray:
                     )
 
                     debug_log("daemon process ended unexpectedly", "desktop")
+
+        self._sync_voice_pause_controls()
 
     def quit_app(self, skip_diary: bool = False) -> None:
         """Quit the desktop app.

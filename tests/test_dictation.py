@@ -985,11 +985,11 @@ class TestThreadSafety:
 
 
 # ---------------------------------------------------------------------------
-# Listener pause flag
+# Listener capture pause
 # ---------------------------------------------------------------------------
 
 class TestListenerPauseFlag:
-    """Tests for the dictation pause flag on VoiceListener."""
+    """Tests for the independent dictation capture pause on VoiceListener."""
 
     @pytest.fixture()
     def listener(self):
@@ -1002,10 +1002,9 @@ class TestListenerPauseFlag:
         cfg.stop_commands = ["stop"]
         return VoiceListener(MagicMock(), cfg, MagicMock(), MagicMock())
 
-    def test_voice_listener_has_dictation_active_flag(self, listener):
-        """VoiceListener should initialise _dictation_active = False."""
-        assert hasattr(listener, "_dictation_active")
-        assert listener._dictation_active is False
+    def test_voice_listener_starts_with_capture_unpaused(self, listener):
+        """Voice capture is available before any consumer pauses it."""
+        assert listener.capture_paused is False
 
     def test_voice_listener_has_transcribe_lock(self, listener):
         """VoiceListener should expose a transcribe_lock."""

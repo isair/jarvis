@@ -69,6 +69,7 @@ _global_dictation_engine = None  # Dictation engine reference for history UI
 # submission path so voice and text are one conversation against one store.
 _global_cfg = None
 _global_db = None
+_global_voice_listener = None
 
 # Shutdown timeout for diary update (shorter than normal to allow reasonable quit time)
 # Desktop app's stop_daemon() should wait at least this long + buffer
@@ -111,6 +112,40 @@ CHAT_CANCEL_IPC_PREFIX = "__CHAT_CANCEL__"
 CHAT_NEW_SESSION_IPC_PREFIX = "__CHAT_NEW_SESSION__"
 CHAT_REWIND_IPC_PREFIX = "__CHAT_REWIND__:"
 CHAT_RESTORE_IPC_PREFIX = "__CHAT_RESTORE__:"
+VOICE_PAUSE_IPC_PREFIX = "__VOICE_PAUSE__:"
+VOICE_STATUS_IPC_PREFIX = "__VOICE_STATUS__:"
+
+
+def set_voice_listening_paused(paused: bool) -> Optional[bool]:
+    """Apply a user capture pause, returning None when no live voice path exists."""
+    if not isinstance(paused, bool):
+        raise ValueError("Voice pause requires a Boolean")
+    voice = _global_voice_listener
+    if voice is None or _global_stop_requested or not voice.is_alive() or voice._should_stop:
+        return None
+    voice.set_capture_paused('user', paused)
+    return voice.is_capture_paused('user')
+
+
+def handle_voice_pause_stdin_line(line: str) -> bool:
+    """Apply a validated capture request and acknowledge its applied state."""
+    if not line.startswith(VOICE_PAUSE_IPC_PREFIX):
+        return False
+    import json
+    try:
+        payload = json.loads(line[len(VOICE_PAUSE_IPC_PREFIX):])
+        if not isinstance(payload, dict) or not isinstance(payload.get('paused'), bool):
+            raise ValueError("Invalid voice pause state")
+        request_id = payload.get('request_id')
+        if not isinstance(request_id, str) or not request_id or len(request_id) > 128:
+            raise ValueError("Invalid voice pause identity")
+        paused = set_voice_listening_paused(payload['paused'])
+        _emit_ipc_event(VOICE_STATUS_IPC_PREFIX, 'status', {
+            'request_id': request_id, 'available': paused is not None, 'paused': paused,
+        }, 'voice_control')
+    except Exception as exc:
+        debug_log(f"voice pause request rejected ({type(exc).__name__})", 'voice')
+    return True
 
 def request_stop() -> None:
     """Request the daemon to stop gracefully."""
@@ -760,6 +795,7 @@ def main(smoke_test: bool = False) -> None:
             marker, and return without entering the main event loop.
             Used by CI smoke tests to verify the build is not broken.
     """
+    global _global_voice_listener
     from .daemon_lock import acquire_daemon_lock, lock_holder_pid, release_daemon_lock
 
     lock = acquire_daemon_lock()
@@ -777,6 +813,7 @@ def main(smoke_test: bool = False) -> None:
     try:
         _run_daemon(smoke_test)
     finally:
+        _global_voice_listener = None
         release_daemon_lock(lock)
 
 
@@ -784,6 +821,7 @@ def _run_daemon(smoke_test: bool = False) -> None:
     """Initialise and run the daemon while holding its single-instance lock."""
     global _global_dialogue_memory, _global_stop_requested, _global_tts_engine, _global_dictation_engine
     global _warm_profile_graph_listener
+    global _global_voice_listener
 
     # The lock prevents contenders from resetting a stopping runtime.
     _global_stop_requested = False
@@ -964,6 +1002,7 @@ def _run_daemon(smoke_test: bool = False) -> None:
         db, cfg, tts, _global_dialogue_memory,
     )
     voice_thread.start()
+    _global_voice_listener = voice_thread
 
     # Initialize dictation engine (hold-to-dictate)
     dictation = None
@@ -972,7 +1011,7 @@ def _run_daemon(smoke_test: bool = False) -> None:
             from .dictation.dictation_engine import DictationEngine as _DE  # noqa: F811
 
             def _on_dictation_start():
-                voice_thread._dictation_active = True
+                voice_thread.set_capture_paused('dictation', True)
                 try:
                     from desktop_app.face_widget import JarvisState, get_jarvis_state
                     get_jarvis_state().set_state(JarvisState.DICTATING)
@@ -989,7 +1028,7 @@ def _run_daemon(smoke_test: bool = False) -> None:
                 debug_log("dictation processing started — transcribing captured audio", "dictation")
 
             def _on_dictation_end():
-                voice_thread._dictation_active = False
+                voice_thread.set_capture_paused('dictation', False)
                 try:
                     from desktop_app.face_widget import JarvisState, get_jarvis_state
                     get_jarvis_state().set_state(JarvisState.IDLE)
@@ -1103,6 +1142,8 @@ def _run_daemon(smoke_test: bool = False) -> None:
                     break
                 # Chat query-in (subprocess mode). Returns False for any other
                 # line, which we silently ignore.
+                if handle_voice_pause_stdin_line(stripped):
+                    continue
                 if handle_chat_cancel_stdin_line(stripped):
                     continue
                 if handle_chat_new_session_stdin_line(stripped):
