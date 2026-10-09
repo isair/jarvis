@@ -209,8 +209,17 @@ The engine consumes the plan in two phases.
   the tool directly, bypassing the chat model for that turn. This
   keeps small models on-rails without relying on their native
   tool-call reliability.
-- The chat model still runs the final synthesis turn so the reply is
-  phrased in the daemon's voice using its own profile and persona.
+- A current-reply tool result with `success=False` suspends direct plan
+  execution for the remainder of that reply. The failed result is retained,
+  without a next-step or completion claim. The system message replaces the
+  execution plan with tasks to reassess. Task-reassessment guidance asks the
+  reply model to choose a grounded alternative, correct arguments, ask for
+  missing information or explain a blocker before any dependent action.
+  Subsequent results retain reassessment guidance rather than counting calls
+  as completed tasks. Earlier-turn failures do not trigger this state.
+- The chat model runs synthesis and failure recovery using its own profile
+  and persona. The existing allow-list, duplicate suppression, tool-search
+  limit, model deadlines and maximum turn count bound recovery.
 
 ### resolve_next_tool_call
 
@@ -270,8 +279,8 @@ The engine consumes the plan in two phases.
 
 ## Non-goals
 
-- The planner does not re-plan mid-turn. If the emitted plan is wrong,
-  the engine still progresses via the chat model's native tool calls.
+- The planner is not rerun mid-turn. The reply model reassesses tasks after
+  a tool failure using the original request, plan and accumulated outcomes.
   When the chat model produces natural-language content the loop
   terminates immediately.
 - The planner does not validate semantic correctness of the plan; it
