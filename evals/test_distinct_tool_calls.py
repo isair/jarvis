@@ -5,7 +5,7 @@ from unittest.mock import patch
 import pytest
 
 from evals.conftest import requires_judge_llm
-from evals.helpers import call_judge_llm, voice_config
+from evals.helpers import judge_pass_fail, voice_config
 from jarvis.reply import engine
 from jarvis.tools.types import ToolExecutionResult
 from jarvis.tools.registry import BUILTIN_TOOLS
@@ -17,7 +17,7 @@ pytestmark = [pytest.mark.eval, requires_judge_llm]
 
 _COMPARISON_VERDICT_RULES = (
     'Judge the recorded assistant answer, do not answer the original request. '
-    'Output exactly one token: PASS or FAIL. PASS requires explicitly reporting '
+    'PASS requires explicitly reporting '
     'every city with its actual recorded temperature. Side-by-side readings '
     'count as a comparison; ranking or warmer/cooler wording is not required. '
     'Judge the grounding of these measured readings. Opinions, humour and '
@@ -65,11 +65,11 @@ def test_live_model_finishes_third_distinct_search(eval_db, eval_dialogue_memory
             patch.object(engine, 'extract_search_params_for_memory', return_value={'keywords': []}):
         reply = engine.run_reply_engine(eval_db, cfg, None, query, eval_dialogue_memory)
     assert checked == set(temperatures), f'Missing actual searches: {checked}; reply={reply}'
-    verdict = call_judge_llm(
+    verdict = judge_pass_fail(
         _COMPARISON_VERDICT_RULES,
         f'Query: {query}\nRecorded temperatures: {temperatures}\nReply: {reply}',
     )
-    assert verdict and verdict.strip().upper() == 'PASS', f'Comparison not grounded: {reply}; judge={verdict}'
+    assert verdict == 'PASS', f'Comparison not grounded: {reply}; judge={verdict}'
 
 
 @pytest.mark.parametrize('variant,expected', [('complete', 'PASS'), ('with-comment', 'PASS'), ('missing', 'FAIL'), ('swapped', 'FAIL')])
@@ -83,5 +83,5 @@ def test_comparison_judge_requires_complete_correct_readings(variant, expected):
     reply = ' | '.join(f'{city}: {temperature} C, clear' for city, temperature in rows)
     if variant == 'with-comment':
         reply += '. It seems quite consistent across the three locations today.'
-    verdict = call_judge_llm(_COMPARISON_VERDICT_RULES, f'Query: Compare all three cities.\nRecorded temperatures: {temperatures}\nReply: {reply}')
-    assert verdict and verdict.strip().upper() == expected, (reply, verdict)
+    verdict = judge_pass_fail(_COMPARISON_VERDICT_RULES, f'Query: Compare all three cities.\nRecorded temperatures: {temperatures}\nReply: {reply}')
+    assert verdict == expected, (reply, verdict)
