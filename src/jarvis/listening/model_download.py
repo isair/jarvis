@@ -46,18 +46,35 @@ def _complete_faster_whisper_model(path: str) -> bool:
 def _download_error_category(error: Exception) -> str:
     """Classify structured failures through the Hub's nested cache errors."""
     import errno
+    import ssl
+
+    from requests.exceptions import (
+        ConnectionError as RequestConnectionError, RequestException, Timeout,
+    )
+    from urllib3.exceptions import (
+        NewConnectionError, ProtocolError, SSLError as UrllibSSLError,
+        TimeoutError as UrllibTimeoutError,
+    )
 
     seen = set()
     errors = []
-    current = error
-    while current is not None and id(current) not in seen:
+    pending = [error]
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
         seen.add(id(current))
         errors.append(current)
-        current = current.__cause__ or current.__context__
+        # Requests and urllib3 also store underlying exceptions in args/reason.
+        pending.extend(item for item in (
+            current.__cause__, current.__context__, getattr(current, 'reason', None),
+            *current.args,
+        ) if isinstance(item, BaseException))
     if any(getattr(getattr(item, 'response', None), 'status_code', None) == 429
            for item in errors):
         return 'rate_limit'
-    filesystem_errors = [item for item in errors if isinstance(item, OSError)]
+    filesystem_errors = [item for item in errors if isinstance(item, OSError)
+                         and not isinstance(item, (ssl.SSLError, RequestException))]
     disk_errors = {errno.ENOSPC}
     if hasattr(errno, 'EDQUOT'):
         disk_errors.add(errno.EDQUOT)
@@ -68,6 +85,17 @@ def _download_error_category(error: Exception) -> str:
            or getattr(item, 'winerror', None) in (5, 1314)
            for item in filesystem_errors):
         return 'cache_access'
+    if any(isinstance(item, ssl.SSLCertVerificationError) for item in errors):
+        return 'certificate'
+    network_errors = (
+        RequestConnectionError, Timeout, NewConnectionError, ProtocolError,
+        UrllibSSLError, UrllibTimeoutError, ssl.SSLError, TimeoutError,
+    )
+    network_codes = {errno.ETIMEDOUT, errno.ECONNRESET, errno.ECONNREFUSED,
+                     errno.ENETUNREACH, errno.EHOSTUNREACH, errno.ECONNABORTED}
+    if (any(isinstance(item, network_errors) for item in errors)
+            or any(item.errno in network_codes for item in filesystem_errors)):
+        return 'network'
     return 'download'
 
 
@@ -166,6 +194,13 @@ def prepare_faster_whisper_model(model_name: str) -> str:
         elif error.category == 'cache_access':
             print('  💡 Access was denied while preparing the speech model. Check cache folder permissions '
                   'and security software, then restart Jarvis. Any cached files have been kept.', flush=True)
+        elif error.category == 'certificate':
+            print('  💡 The speech model download could not verify the server certificate. '
+                  'Check your proxy or security software certificate trust with your administrator, '
+                  'then restart Jarvis. Any cached files have been kept.', flush=True)
+        elif error.category == 'network':
+            print('  💡 The speech model download connection failed. Check your connection, proxy '
+                  'and firewall, then restart Jarvis to resume. Any cached files have been kept.', flush=True)
         elif error.category in ('timeout', 'worker_exit'):
             print('  💡 Any cached files have been kept. Check your connection and restart Jarvis '
                   'to resume the speech model download.', flush=True)

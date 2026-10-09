@@ -542,6 +542,15 @@ guidance directs users to check folder permissions and security software. Both
 stop automatic retries and retain cached files for a restart after the resource
 problem is addressed.
 
+Download classification follows structured causes, contexts and nested transport
+exceptions, with cycle detection. Certificate verification failures retain a
+distinct category and direct users to proxy or security-software certificate
+trust checks with their administrator. Connection interruptions and transport
+timeouts direct users to connection, proxy and firewall checks before restarting
+to resume. Both retain cached files and stop automatic startup retries. Raw
+exception messages, request URLs and private paths are excluded from the child
+error result. Certificate verification remains enabled.
+
 ### Corrupted Cache Recovery
 
 If the HuggingFace model cache is corrupted (e.g. from an interrupted download), the system detects the CTranslate2 "unable to open file" error, deletes the parent `models--` cache directory, and retries the download once. Recovery is attempted at most once per startup, across all device and compute fallbacks. Downloaded files from that attempt remain available to later fallbacks and restarts. Missing-file errors take priority over device and compute classification, including when the cache path contains those terms. If the retry also fails, a message guides the user to manually delete the cache, and the final failure reports the latest loading error.
