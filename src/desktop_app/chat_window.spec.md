@@ -23,6 +23,8 @@ Optional audio and speech-recognition import failures do not prevent daemon
 initialisation or text submission. The listener owns audio and speech-backend
 availability and reports the affected dependency; typed replies do not require
 microphone capture, array processing, VAD or Whisper.
+Pausing voice listening keeps text submission and its daemon lifecycle state
+available. User and dictation capture pauses do not stop or restart text chat.
 
 ### `submit_text_query(text: str) -> None` (in `jarvis.daemon`)
 

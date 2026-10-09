@@ -28,7 +28,7 @@ def process(text, spoken, commands):
     start=listener.echo_detector._tts_start_time
     listener._process_transcript(text,utterance_energy=0.005,
                                  utterance_start_time=start+0.2,utterance_end_time=start+1,
-                                 captured_during_tts=True,captured_tts_start_time=start, generation=listener._dictation_generation)
+                                 captured_during_tts=True,captured_tts_start_time=start, generation=listener._capture_generation)
     listener.state_manager.stop()
     return tts.speaking
 

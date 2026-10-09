@@ -1830,6 +1830,8 @@ class TestListeningWindowVisibility:
         tray.update_icon = MagicMock()
         tray._set_chat_daemon_status = MagicMock()
         tray._chat_submit_fn = lambda text: None
+        tray._daemon_stop_expected = False
+        tray._initialise_voice_pause_controls()
 
         fake_state, JarvisState = self._patch_face_state(monkeypatch)
         tray.check_daemon_status()

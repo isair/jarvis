@@ -16,7 +16,7 @@ Any code change must either adhere to our spec files perfectly or you should ask
 | `src/desktop_app/settings_window.spec.md` | Auto-generated settings UI from config metadata | Metadata-driven; only non-default values written; preserves unknown keys |
 | `src/desktop_app/setup_wizard.spec.md` | First-run wizard (Ollama, models, Whisper, location) | Minimal friction; only shown when user action required; doesn't configure everything |
 | `src/desktop_app/chat_window.spec.md` | Text chat interface alongside voice; shared conversation, no TTS, bundled callbacks + subprocess IPC | One conversation for voice + text; text never speaks; redaction shared with voice path |
-| `src/jarvis/dictation/dictation.spec.md` | Hold-to-dictate engine, hotkey, clipboard paste | Independent from assistant pipeline; shared Whisper model; pause flag on listener |
+| `src/jarvis/dictation/dictation.spec.md` | Hold-to-dictate engine, hotkey, clipboard paste | Independent from assistant pipeline; shared Whisper model; independent capture pause reason |
 | `src/jarvis/listening/listening.spec.md` | Voice listener, wake word detection, audio pipeline | — |
 | `src/jarvis/reply/reply.spec.md` | LLM reply generation, tool use, profiles | Tools return raw data; profiles handle formatting |
 | `src/jarvis/reply/evaluator.spec.md` | **Deprecated** — evaluator no longer runs in the reply engine; preserved for reference | Replaced by the planner; see planner.spec.md |

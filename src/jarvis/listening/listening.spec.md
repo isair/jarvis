@@ -31,7 +31,7 @@ VAD errors emit a single warning and use the configured energy threshold instead
 of silently discarding speech. Capture health is checked every five seconds with
 a monotonic clock. Missing callbacks, silent samples, callback errors, PortAudio
 status flags and dropped queue blocks are reported outside the audio callback.
-Warnings are transition-based; dictation pauses suspend health checks. With
+Warnings are transition-based; capture pauses suspend health checks. With
 `voice_debug`, diagnostics include callback/frame counts, speech-frame counts,
 peak level and capture rate, without saving microphone audio. Linux warnings
 point users to PipeWire/PulseAudio recording-source routing.
@@ -59,9 +59,16 @@ storage and intent processing remain serialised. Both transcription queues are
 bounded. A full job backlog reports an explicit warning rather than blocking
 microphone-frame consumption or silently losing an utterance. A full result
 queue applies cancellable backpressure to Whisper without dropping results.
-A dictation pause immediately clears captured audio and invalidates work started
-before the pause, including a decode or intent decision that finishes after
-resumption. Callback blocks snapshot the audio generation at callback entry,
+Capture pause reasons are independent: ending dictation cannot clear a user
+pause, and user resume cannot clear an active dictation pause. Every reason
+transition immediately clears audio and advances the capture generation,
+invalidating a decode, intent decision or voice reply that spans the transition.
+Resume clears the rolling transcript, pending query collection, hot-window timers and historical window spans
+on the serial listener thread before fresh input or collection timeouts are
+processed. Timeout dispatch retains its input generation. Speech completion
+from an invalidated generation cannot schedule a new follow-up window. Models, text chat and intentional dictation remain available; pause
+discards assistant capture without releasing the hardware stream.
+Callback blocks snapshot the audio generation at callback entry,
 before status bookkeeping, pause checks or sample copies; a reset during
 admission cannot relabel old audio as fresh. Stale blocks
 are discarded after a reset, including blocks already dequeued. Remaining
