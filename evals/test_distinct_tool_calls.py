@@ -26,6 +26,17 @@ _COMPARISON_VERDICT_RULES = (
     'swapped values. Judge meaning in any language.'
 )
 
+def _record_fixture_search(temperatures, checked, tool_name, tool_args):
+    if tool_name != 'webSearch':
+        return ToolExecutionResult(success=False, reply_text='No additional tools available.')
+    term = str((tool_args or {}).get(_SEARCH_ARGUMENT, '')).casefold()
+    for city, temperature in temperatures.items():
+        if city.casefold() in term:
+            checked.add(city)
+            return ToolExecutionResult(success=True, reply_text=f'{city}: {temperature} C, clear.')
+    return ToolExecutionResult(success=False, reply_text='The search requires a supported city.')
+
+
 @pytest.mark.parametrize('query', [
     'Search separately for the weather in London, Paris and Ankara, then compare all three.',
     'Londra, Paris ve Ankara için hava durumunu ayrı ayrı ara, sonra üçünü karşılaştır.',
@@ -36,12 +47,7 @@ def test_live_model_finishes_third_distinct_search(eval_db, eval_dialogue_memory
     checked = set()
     temperatures = {'London': 12, 'Paris': 18, 'Ankara': 24}
     def search(db, cfg, tool_name, tool_args, **kwargs):
-        term = str((tool_args or {}).get(_SEARCH_ARGUMENT, '')).casefold()
-        for city, temperature in temperatures.items():
-            if city.casefold() in term:
-                checked.add(city)
-                return ToolExecutionResult(success=True, reply_text=f'{city}: {temperature} C, clear.')
-        return ToolExecutionResult(success=False, reply_text='The search requires a supported city.')
+        return _record_fixture_search(temperatures, checked, tool_name, tool_args)
     plan = [f"webSearch {_SEARCH_ARGUMENT}='{city} weather'" for city in temperatures] + ['Compare all three recorded results.']
     live_chat = engine.chat_with_messages
     first_requests = iter(('London', 'Paris'))
