@@ -418,6 +418,10 @@ def _extract_text_tool_call(content_field: str, known_names: set):
             if name_match:
                 name = name_match.group(1).strip()
                 if name in known_names:
+                    id_match = re.search(r'"id"\s*:\s*"([^"]+)"', raw_literal)
+                    tool_call_id = id_match.group(1) if id_match else f"call_{uuid.uuid4().hex[:8]}"
+                    if len(re.findall(r'"function"\s*:', raw_literal)) > 1:
+                        return name, None, tool_call_id
                     args_match = re.search(
                         r'"arguments"\s*:\s*(\{.*?\}|"(?:[^"\\]|\\.)*")',
                         raw_literal,
@@ -463,8 +467,6 @@ def _extract_text_tool_call(content_field: str, known_names: set):
                             parsed_args = _recover_unterminated_argument_string(
                                 raw_literal[start.end():]
                             )
-                    id_match = re.search(r'"id"\s*:\s*"([^"]+)"', raw_literal)
-                    tool_call_id = id_match.group(1) if id_match else f"call_{uuid.uuid4().hex[:8]}"
                     return name, parsed_args, tool_call_id
 
     if not known_names:

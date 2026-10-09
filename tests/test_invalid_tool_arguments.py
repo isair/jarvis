@@ -116,3 +116,10 @@ def test_invalid_native_arguments_retain_valid_provider_wire_shape(arguments):
     assert isinstance(encoded, str), 'Provider history requires JSON strings, even for failed calls'
     assert json.loads(encoded) == arguments
     assert result['message']['content'] == 'Please correct the arguments.'
+
+
+def test_ambiguous_multi_call_envelope_cannot_mix_names_and_arguments():
+    content = 'tool_calls: [{"function": {"name": "getWeather"}}, {"function": {"name": "localFiles", "arguments": {"path": "report.txt"}}}'
+    name, arguments, _ = engine._extract_text_tool_call(content, {'getWeather', 'localFiles'})
+    assert name == 'getWeather'
+    assert arguments is None, 'Later function arguments must never be attached to an earlier tool'
