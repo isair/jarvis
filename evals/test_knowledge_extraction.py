@@ -22,10 +22,10 @@ from typing import List, Optional
 import pytest
 
 from evals.conftest import requires_judge_llm
+from evals import helpers
 from evals.helpers import (
     MockConfig,
     JUDGE_MODEL,
-    call_judge_llm,
     JudgeVerdict,
 )
 
@@ -276,18 +276,12 @@ def _judge_extraction_quality(
         f"Extracted facts:\n{facts_text}"
     )
 
-    response = call_judge_llm(system_prompt, user_prompt, timeout_sec=120.0)
+    response = helpers.call_judge_llm(system_prompt, user_prompt, timeout_sec=120.0)
 
-    if not response:
-        return JudgeVerdict(
-            is_passed=False,
-            score=0.0,
-            reasoning="Judge LLM unavailable",
-        )
-
-    # Parse structured response
-    from evals.helpers import _parse_judge_response
-    return _parse_judge_response(response)
+    return helpers._parse_judge_response(
+        response,
+        required_criteria=('novelty', 'self_contained', 'no_assistant_voice', 'no_stale_data', 'completeness'),
+    )
 
 
 # =============================================================================
