@@ -4,7 +4,7 @@ from unittest.mock import patch
 import pytest
 
 from evals.conftest import requires_judge_llm
-from evals.helpers import voice_config, call_judge_llm
+from evals.helpers import voice_config, judge_pass_fail
 from jarvis.reply import engine
 from jarvis.tools.types import ToolExecutionResult
 
@@ -41,6 +41,6 @@ def test_recoverable_read_preserves_arguments_without_empty_defaults(eval_db, ev
             patch.object(engine, 'extract_search_params_for_memory', return_value={'keywords': []}):
         reply = engine.run_reply_engine(eval_db, cfg, None, query, eval_dialogue_memory)
     assert executed and all(args.get('operation') == 'read' and args.get('path') == 'report.txt' for args in executed), (executed, reply)
-    verdict = call_judge_llm('Output PASS or FAIL only. PASS requires reporting that the project review is on Friday at 10:00 using the actual report contents, in any language.',
+    verdict = judge_pass_fail('PASS requires reporting that the project review is on Friday at 10:00 using the actual report contents, in any language.',
                              f'Query: {query}\nActual contents: Project review is on Friday at 10:00.\nReply: {reply}')
-    assert verdict and verdict.strip().upper() == 'PASS', (reply, verdict)
+    assert verdict == 'PASS', (reply, verdict)

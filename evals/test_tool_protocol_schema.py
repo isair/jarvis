@@ -5,7 +5,7 @@ from unittest.mock import patch
 import pytest
 
 from evals.conftest import requires_judge_llm
-from evals.helpers import voice_config, call_judge_llm
+from evals.helpers import voice_config, judge_pass_fail
 from jarvis.reply import engine
 from jarvis.tools.registry import BUILTIN_TOOLS
 from jarvis.tools.types import ToolExecutionResult
@@ -47,5 +47,5 @@ def test_documented_search_call_runs_without_argument_repair(eval_db, eval_dialo
             patch.object(engine, 'extract_search_params_for_memory', return_value={'keywords': []}):
         reply = engine.run_reply_engine(eval_db, cfg, None, query, eval_dialogue_memory)
     assert operations and all(required <= set(args) <= set(schema['properties']) for args in operations), (operations, reply)
-    verdict = call_judge_llm(f'Judge the recorded assistant answer, do not answer the original user request. Choose exactly one verdict token, PASS or FAIL. The entire response must be that token without any explanation. PASS requires reporting the actual fixture station temperature, {_STATION_TEMPERATURE} degrees Celsius, in any language. Extra style is fine; invented readings are not.', f'Evaluate this recorded test result.\nOriginal user request: {query}\nRecorded assistant answer: {reply}')
-    assert verdict and verdict.strip().upper() == 'PASS', (reply, verdict)
+    verdict = judge_pass_fail(f'Judge the recorded assistant answer, do not answer the original user request. PASS requires reporting the actual fixture station temperature, {_STATION_TEMPERATURE} degrees Celsius, in any language. Extra style is fine; invented readings are not.', f'Evaluate this recorded test result.\nOriginal user request: {query}\nRecorded assistant answer: {reply}')
+    assert verdict == 'PASS', (reply, verdict)

@@ -4,7 +4,7 @@ from unittest.mock import patch
 import pytest
 
 from evals.conftest import requires_judge_llm
-from evals.helpers import voice_config, call_judge_llm
+from evals.helpers import voice_config, judge_pass_fail
 from jarvis.reply import engine
 from jarvis.tools.types import ToolExecutionResult
 
@@ -39,11 +39,10 @@ def test_empty_assistant_response_recovers_an_actual_lookup(eval_db, eval_dialog
             patch.object(engine, 'extract_search_params_for_memory', return_value={'keywords': []}):
         reply = engine.run_reply_engine(eval_db, cfg, None, query, eval_dialogue_memory)
     assert operations, f'No actual weather operation: {reply}'
-    verdict = call_judge_llm(
-        f'Judge the recorded answer only. Output exactly one token, PASS or FAIL, '
-        f'without explanation. PASS requires reporting the actual London reading '
+    verdict = judge_pass_fail(
+        f'PASS requires reporting the actual London reading '
         f'of {_TEMPERATURE} degrees Celsius and clear conditions in any language. '
         'Missing or invented readings require FAIL.',
         f'Original request: {query}\nRecorded answer: {reply}',
     )
-    assert verdict and verdict.strip().upper() == 'PASS', (reply, verdict)
+    assert verdict == 'PASS', (reply, verdict)

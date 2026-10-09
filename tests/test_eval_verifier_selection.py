@@ -28,4 +28,5 @@ def test_verifier_override_preserves_the_model_under_evaluation(monkeypatch, pro
         verdict = helpers.call_judge_llm('Judge only.', 'Recorded answer.')
     assert verdict == 'PASS'
     assert requests[0]['model'] == ((verifier_model or '').strip() or helpers.JUDGE_MODEL)
+    assert 'format' not in requests[0] and 'response_format' not in requests[0]
     assert helpers.voice_config().llm_chat_model == actor_model
