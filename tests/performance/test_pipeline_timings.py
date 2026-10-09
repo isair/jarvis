@@ -3,7 +3,7 @@
 Runs ``run_reply_engine`` N times against a live Ollama with a fixed tiny
 prompt, records per-context timings via the monkey-patching recorder, and
 asserts a few relative-shape invariants so the test fails when the pipeline
-shape drifts (e.g. the evaluator becomes more expensive than the main turn).
+shape drifts (for example, tool routing costs more than the main turn).
 
 Also includes a micro-benchmark that calls each configured model with a
 tiny fixed prompt, giving a hardware baseline to diff against.
@@ -79,8 +79,7 @@ def _make_cfg():
     cfg.ollama_base_url = OLLAMA_URL
     cfg.ollama_chat_model = PERF_MODEL
     cfg.fast_model = PERF_MODEL
-    # Let size-aware defaults kick in (evaluator + digests ON for small).
-    cfg.evaluator_enabled = None
+    # Use the model-size defaults for optional digests.
     cfg.memory_digest_enabled = None
     cfg.tool_result_digest_enabled = None
     # Force the LLM-based router so its timing shows up in the report.
@@ -168,15 +167,8 @@ def test_micro_benchmark_tiny_prompt():
 def test_pipeline_timings_by_context():
     """Run the full reply pipeline N times, record per-context timings.
 
-    Relative-shape invariants (not absolute numbers):
-      1. If the evaluator fires, it must be cheaper on average than the main
-         chat turn — otherwise we're paying more for the decision than for
-         the answer. This is the whole reason the evaluator uses a small
-         model.
-      2. The tool router, if it fires, must be cheaper than a main chat
-         turn on p50 — it's a classification call on the warm small model.
-      3. Enrichment extractor, if it fires, must run on the router chain
-         (same model as the router). This locks in the demotion we just did.
+    Tool routing should cost less than the main chat turn. Enrichment extraction
+    uses the same model as routing.
     """
     from jarvis.memory.db import Database
     from jarvis.memory.conversation import DialogueMemory
@@ -209,12 +201,6 @@ def test_pipeline_timings_by_context():
     # Shape invariants
     main_p50 = rec.p50("main_chat_turn")
     if main_p50 > 0:
-        ev_p50 = rec.p50("evaluator")
-        if ev_p50 > 0:
-            assert ev_p50 <= main_p50 * 1.5, (
-                f"evaluator p50 ({ev_p50:.2f}s) exceeds main chat turn p50 "
-                f"({main_p50:.2f}s) by >50% — evaluator should be cheaper"
-            )
         router_p50 = rec.p50("tool_router")
         if router_p50 > 0:
             assert router_p50 <= main_p50 * 1.5, (

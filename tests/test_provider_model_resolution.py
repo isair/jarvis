@@ -1,6 +1,6 @@
 """Provider-aware model resolution for the auxiliary LLM contexts.
 
-Every auxiliary context (intent judge, tool router, planner, evaluator,
+Every auxiliary context (intent judge, tool router, planner,
 loop digest) rides the chat provider's backend, so the model name it
 resolves to must be one the chat provider actually serves. On the Ollama
 path the small-model chain (gemma4:e2b etc.) is correct; on an

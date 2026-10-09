@@ -2,7 +2,7 @@
 
 Monkey-patches the three entry points in ``jarvis.llm`` (``call_llm_direct``,
 ``call_llm_streaming``, ``chat_with_messages``) to record per-call timings
-grouped by the context that issued the call (evaluator, intent judge, tool
+grouped by the context that issued the call (intent judge, tool
 router, etc.). The context is inferred from the caller's ``__qualname__`` on
 the Python call stack, so no instrumentation is needed at the call site.
 
@@ -10,7 +10,7 @@ Usage:
     with TimingRecorder() as rec:
         run_reply_engine(...)
     rec.print_report()
-    assert rec.p95("evaluator") < rec.p95("main_chat_turn")  # shape check
+    assert rec.p95("tool_router") < rec.p95("main_chat_turn")  # shape check
 """
 
 from __future__ import annotations
@@ -26,45 +26,41 @@ from jarvis import llm as _llm_module
 from jarvis.memory import graph_ops as _graph_ops_module
 
 
-# Map caller __qualname__ → graph context name. Matches the 13 contexts in
-# docs/llm_contexts.md. Anything not listed gets lumped into "other" so we
-# notice new call sites drift in without us updating the doc.
+# Map caller __qualname__ to context names from docs/llm_contexts.md.
+# Unmapped callers are reported as "other" so new contexts remain visible.
 #
 # ⚠️  This mapping mirrors docs/llm_contexts.md. When you add, remove, or
 # rename an LLM context per the CLAUDE.md rule, update both in the same PR
 # — the perf harness silently buckets unknown callers into "other:<qualname>"
 # so drift here is visible but not loud.
 _CALLER_TO_CONTEXT: dict[str, str] = {
-    # Context 1 — main chat loop uses chat_with_messages
+    # main chat loop uses chat_with_messages
     "run_reply_engine": "main_chat_turn",
-    # Context 2 — intent judge (calls via internal helper)
+    # intent judge (calls via internal helper)
     "IntentJudge.evaluate": "intent_judge",
     "IntentJudge._call_llm": "intent_judge",
-    # Context 3 — evaluator
-    "evaluate_turn": "evaluator",
-    # Context 4 — memory enrichment extractor
+    # memory enrichment extractor
     "extract_search_params_for_memory": "enrichment_extract",
-    # Context 5 — memory digest (per batch)
+    # memory digest (per batch)
     "_distil_batch": "memory_digest",
     "digest_memory_for_query": "memory_digest",
-    # Context 6 — tool-result digest (per batch)
+    # tool-result digest (per batch)
     "_distil_tool_batch": "tool_result_digest",
     "digest_tool_result_for_query": "tool_result_digest",
     "_maybe_digest_tool_result": "tool_result_digest",
-    # Context 7 — max-turn loop digest
+    # max-turn loop digest
     "digest_loop_for_max_turns": "max_turn_digest",
-    # Context 8 — tool router
-    # (Context 9 — tool searcher — reuses select_tools_with_llm so it falls
-    # under the same bucket; that's intentional per docs/llm_contexts.md.)
+    # tool router
+    # Tool searcher reuses select_tools_with_llm and shares this bucket.
     "select_tools_with_llm": "tool_router",
-    # Context 10 — conversation summariser
+    # conversation summariser
     "generate_conversation_summary": "summariser",
-    # Context 11 — graph fact extraction
+    # graph fact extraction
     "extract_graph_memories": "graph_extract",
     "_review_graph_facts": "graph_fact_hygiene",
-    # Context 12 — graph best-child picker
+    # graph best-child picker
     "_llm_pick_best_child": "graph_best_child",
-    # Context 13 — tool-specific LLM calls
+    # tool-specific LLM calls
     "_extract_place_from_user_text": "tool_weather",
     "resolve_missing_context": "personal_context",
     "_review_location_candidates": "personal_context_verify",

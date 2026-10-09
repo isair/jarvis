@@ -170,8 +170,7 @@ class TestExtractorPromptRendering:
         """No chat model configured ⇒ no LLM call burned. A confused or
         partially-configured user otherwise pays for an Ollama "model is
         required" round-trip on every reply that passes through enrichment.
-        Other resolvers (planner, evaluator) gate explicitly; this one must
-        too for parity."""
+        An empty model must skip extraction before backend dispatch."""
         with patch("jarvis.reply.enrichment.call_llm_direct") as mock_call:
             result = extract_search_params_for_memory(
                 "q", _cfg(), "", timeout_sec=0.1,

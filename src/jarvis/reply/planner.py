@@ -763,9 +763,7 @@ def resolve_next_tool_call(
     # Build a compact allowed-tool schema: just names + short description +
     # parameter keys so the resolver can't waste tokens echoing descriptions.
     # Also record each tool's declared property keys so we can strip
-    # unknown keys out of the resolved arguments before dispatch — the
-    # evaluator direct-exec path has a similar guard; this keeps the
-    # planner direct-exec path on par.
+    # unknown keys out of the resolved arguments before dispatch.
     allowed_names: list[str] = []
     schema_lines: list[str] = []
     allowed_props: dict[str, set[str]] = {}

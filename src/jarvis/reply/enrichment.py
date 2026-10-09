@@ -38,7 +38,7 @@ def extract_search_params_for_memory(query: str, cfg, chat_model: str,
     so it can still resolve relative time expressions.
     """
     if not (chat_model or "").strip():
-        # Mirror the planner/evaluator gate: no model configured ⇒ skip the
+        # No model configured means the extractor skips the
         # round-trip. Without this guard the OpenAI/Ollama backends would burn
         # one HTTP call per reply that lands here, cost a "model is required"
         # error, and silently fall through to ``return {}`` after the broad
