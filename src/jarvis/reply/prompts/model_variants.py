@@ -125,6 +125,20 @@ TOOL_GUIDANCE_LARGE = (
     "The links are provenance, not a substitute for an answer."
 )
 
+_AUTO_DERIVED_ARGUMENT_GUIDANCE = (
+    "ARGUMENTS THE TOOL CAN AUTO-DERIVE:\n"
+    "Explicit user values, including resolved references, take precedence over "
+    "profile and current-context defaults. When the user has not supplied a "
+    "particular value, omit optional arguments the tool auto-derives and let "
+    "the tool resolve them. Call the tool in the SAME turn, even with no "
+    "arguments, rather than asking for an input it can resolve. For example, "
+    "weather here or tomorrow uses getWeather with {}; weather in Ankara "
+    "uses getWeather with {\"location\": \"Ankara\"}. Preserve named "
+    "destinations and geographic qualifiers. A default supplies an input, "
+    "not a result: execute the tool before reporting its data.\n\n"
+)
+
+
 # Large models also confabulate on named entities — e.g. qwen3.8:27b produces a
 # confident but wrong cast list for the film "Possessor" without calling
 # webSearch. The anti-confabulation rule is therefore not a small-model-only
@@ -155,18 +169,8 @@ TOOL_CONSTRAINTS_LARGE = (
     "Any phrasing that requests information about a named entity (\"tell me about X\", "
     "\"have you heard of X\", and equivalents in any language) is a search trigger, "
     "not a capability question about yourself.\n\n"
-    "ARGUMENTS THE TOOL CAN AUTO-DERIVE:\n"
-    "Tools may state in their description that an argument has a sensible default "
-    "(for example getWeather uses the user's current location when none is given). "
-    "Call the tool in the SAME turn with whatever arguments you have — even zero — "
-    "and let it fill the rest. A default supplies an input, not a result; "
-    "execute the tool before reporting its data. Preserve values the user explicitly supplies; "
-    "defaults fill missing arguments and never replace explicit values with "
-    "the user's profile or current context. Do NOT reply with a clarifying question like \"which "
-    "location?\" for an argument the tool auto-derives. Concretely: \"how's the "
-    "weather today\" must trigger getWeather immediately with no arguments, not a "
-    "question back to the user.\n\n"
-    "SELF-CONTAINED TOOL ARGUMENTS:\n"
+    + _AUTO_DERIVED_ARGUMENT_GUIDANCE
+    + "SELF-CONTAINED TOOL ARGUMENTS:\n"
     "When you call any tool with a free-form text argument (search queries, lookup "
     "strings, question fields — whatever the tool calls them), the string you pass "
     "must be a self-contained version of the user's intent. Resolve pronouns, "
@@ -236,7 +240,7 @@ TOOL_GUIDANCE_SMALL = (
 # the BEHAVIOURS to avoid, not English tokens that happen to express them.
 # Small models still get enough structure to follow because each rule is
 # stated in imperative form with a concrete trigger + action.
-_TOOL_CONSTRAINTS_BASE = """ACTION REQUESTS — NEVER REFUSE BEFORE CHECKING:
+_TOOL_CONSTRAINTS_BASE = ("""ACTION REQUESTS — NEVER REFUSE BEFORE CHECKING:
 When the user asks for an action (open something, navigate somewhere, send a message, look something up, play something, fetch data), scan your available tools FIRST and call the one whose description covers that action. Do NOT apologise, do NOT say "I cannot do that", do NOT describe your limitations — just call the tool. If nothing in your current tool list obviously fits, call `toolSearchTool` with a short description of the action before giving up. A false refusal when a tool exists is the worst possible reply; calling a tool that turns out not to help is recoverable. Treat "I cannot" as a last resort reserved for when both your tool list AND `toolSearchTool` have been exhausted.
 
 GREETING HANDLING:
@@ -255,11 +259,11 @@ Any phrasing that requests information about a named entity is a search trigger 
 
 Only skip the lookup if you can state concrete facts about the exact entity (title, year, creator, plot) without guessing. A diary or memory mention of the entity's name only confirms the topic came up — it does NOT give you facts you can state. Never invent plot, cast, release year, themes, or other specifics from prior knowledge. If you do not have facts from a tool result in this turn, you must call webSearch.
 
-ARGUMENTS THE TOOL CAN AUTO-DERIVE:
-If a tool's description says it has a default for some argument (for example getWeather uses the user's current location when none is given), call the tool in the SAME turn with whatever arguments you do have — even zero — and let the tool fill the rest. A default supplies an input, not a result: execute the tool before reporting its data. Preserve values the user explicitly supplies: defaults fill only missing arguments and never replace explicit values with the user's profile or current context. Do NOT ask the user to supply that argument. Do NOT reply with a clarifying question like "which location?" or "where are you?" when the tool's description already states it auto-derives that argument. Concretely: a message like "how's the weather today" must trigger getWeather immediately with no arguments, NOT a question back to the user. Asking for an argument the tool auto-derives wastes a turn and frustrates the user.
+"""
+    + _AUTO_DERIVED_ARGUMENT_GUIDANCE
+    + """SELF-CONTAINED TOOL ARGUMENTS:
+Whenever you call any tool with a free-form text argument (a search query, lookup string, question field — whatever the tool names it), the string you pass MUST be a self-contained restatement of the user's intent. Resolve pronouns, ellipsis, and implicit references from earlier turns yourself — the tool does NOT see the conversation history, it only sees the argument you pass. If the previous turn was about "Harry Styles" and the user now asks "what are his most famous songs?", the argument must be something like "Harry Styles most famous songs", NOT "what are his most famous songs". Prefer a compact keyword phrase over a conversational sentence. Never pass the user's literal utterance through when it contains unresolved pronouns, "that", "those", "it", "his", "her", "their", or similar references. This applies to every tool — webSearch, Wikipedia, MCP tools, all of them.""")
 
-SELF-CONTAINED TOOL ARGUMENTS:
-Whenever you call any tool with a free-form text argument (a search query, lookup string, question field — whatever the tool names it), the string you pass MUST be a self-contained restatement of the user's intent. Resolve pronouns, ellipsis, and implicit references from earlier turns yourself — the tool does NOT see the conversation history, it only sees the argument you pass. If the previous turn was about "Harry Styles" and the user now asks "what are his most famous songs?", the argument must be something like "Harry Styles most famous songs", NOT "what are his most famous songs". Prefer a compact keyword phrase over a conversational sentence. Never pass the user's literal utterance through when it contains unresolved pronouns, "that", "those", "it", "his", "her", "their", or similar references. This applies to every tool — webSearch, Wikipedia, MCP tools, all of them."""
 
 # Repeat the constraints twice for better instruction-following in small models
 TOOL_CONSTRAINTS_SMALL = _TOOL_CONSTRAINTS_BASE + "\n\n" + _TOOL_CONSTRAINTS_BASE

@@ -11,16 +11,21 @@ from jarvis.tools.types import ToolExecutionResult
 pytestmark = [pytest.mark.eval, requires_judge_llm]
 
 
-@pytest.mark.parametrize('query,expected', [
-    ('What is the weather in Ankara?', 'Ankara'),
-    ('Wie ist das Wetter in Nürnberg?', 'Nürnberg'),
-    ('Paris hava durumu nasıl?', 'Paris'),
-    ('What is the weather in Washington D.C.?', 'Washington D.C.'),
-    ('What is the weather in Cambridge, Massachusetts?', 'Cambridge Massachusetts'),
-    ('How is the weather here?', None),
-    ('Yarın hava nasıl olacak?', None),
+@pytest.mark.parametrize('query,expected,previous', [
+    ('What is the weather in Ankara?', 'Ankara', None),
+    ('Wie ist das Wetter in Nürnberg?', 'Nürnberg', None),
+    ('Paris hava durumu nasıl?', 'Paris', None),
+    ('What is the weather in Washington D.C.?', 'Washington D.C.', None),
+    ('What is the weather in Cambridge, Massachusetts?', 'Cambridge Massachusetts', None),
+    ('How is the weather here?', None, None),
+    ('Yarın hava nasıl olacak?', None, None),
+    ('How is the weather there?', 'Paris', 'I will visit Paris tomorrow.'),
+    ('Orada hava nasıl olacak?', 'Ankara', 'Yarın Ankara şehrine gideceğim.'),
 ])
-def test_requested_city_is_not_replaced_by_detected_home(eval_db, eval_dialogue_memory, query, expected):
+def test_requested_city_is_not_replaced_by_detected_home(eval_db, eval_dialogue_memory, query, expected, previous):
+    if previous:
+        eval_dialogue_memory.add_message('user', previous)
+        eval_dialogue_memory.add_message('assistant', 'Okay.')
     cfg = voice_config()
     cfg.location_enabled = True
     locations = []
