@@ -36,10 +36,10 @@ SQLite writer transaction shared across database owners. A failed rebuild rolls
 back without a marker, allowing a later open to retry. Diary text and vector
 rows are unchanged by the rebuild; orphaned vectors are not reassociated.
 
-The database maintains indexes on `meals.ts_utc` and
-`conversation_summaries.date_utc` for the meal time-range and summary date
-retrieval paths. They are created idempotently whenever a database is opened,
-including databases created by earlier versions.
+Meal time-range lookups use an index on `meals.ts_utc`, created idempotently
+on opening fresh or existing diaries. Summary date lookups use the existing
+unique index on `(date_utc, source_app)`, including date-only ranges and ordering.
+Opening a diary preserves stored records and their IDs.
 
 `upsert_summary_embedding` writes the sqlite-vss vector and its summary mapping
 in one transaction under the database lock. A failed write rolls back the index

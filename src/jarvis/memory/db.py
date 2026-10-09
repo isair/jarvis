@@ -44,8 +44,6 @@ CREATE TABLE IF NOT EXISTS conversation_summaries (
   source_app TEXT NOT NULL,  -- Source app that generated the conversation
   UNIQUE(date_utc, source_app)
 );
-CREATE INDEX IF NOT EXISTS idx_conversation_summaries_date_utc
-  ON conversation_summaries(date_utc);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS summaries_fts USING fts5(
   summary,
