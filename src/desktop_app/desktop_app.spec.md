@@ -126,9 +126,11 @@ when another application is active. It paints an angular amber mask made from
 straight connected light beams, small illuminated junctions, diamond eyes,
 cheek accents and a straight mouth seam. Slow paired energy highlights travel
 around the fixed beams on a twelve-second cycle, with greater intensity during
-processing. Fine strokes use the shared theme's amber palette with directional
-highlights, bright narrow cores and a narrow ink outline for contrast on light
-backgrounds. There is
+processing. Fine amber strokes and fixed glowing junctions define the mask,
+with a narrow ink outline for contrast on light backgrounds. The mask is 70%
+of the design width and 1.3 times as tall as it is wide. Diamond eyes sit 15%
+of its height above the centre, and the mouth spans 70% of its width at 25%
+of its height below the centre. Pupils are flat amber lights. There is
 no background panel, grid, title bar, subtitle area or persistent toolbar.
 Eyes paint only their outlines and small lit pupils, with transparent
 interiors and surroundings. Contrast and glow follow those strokes; there is

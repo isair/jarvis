@@ -83,7 +83,7 @@ def test_idle_mouth_is_a_straight_mask_seam(scene):
     heights = [np.average(rows, weights=alpha[:, x])
                for x in (occupied_x[0] + 3, centre, occupied_x[-1] - 3)]
     assert max(heights) - min(heights) < 0.5
-    assert occupied_x[-1] - occupied_x[0] < 154 * 0.5
+    assert 154 * 0.65 < occupied_x[-1] - occupied_x[0] < 154 * 0.8
 
 
 @pytest.mark.parametrize('state', [JarvisState.LISTENING, JarvisState.THINKING, JarvisState.SPEAKING])
@@ -209,3 +209,27 @@ def test_awake_beams_have_slow_flow_without_moving_the_mask(scene):
     edge = np.ones(first.shape[:2], dtype=bool)
     edge[115:215, 65:155] = False
     assert np.abs(first[edge].astype(int) - second[edge].astype(int)).sum() > 1000
+
+
+def test_mask_features_keep_the_established_portrait_proportions(scene):
+    """The diamond eyes sit above a wide mouth on the tall mask."""
+    window, _, _ = scene
+    advance(scene, JarvisState.IDLE, 2)
+    window.face._breathing_scale = 1.0
+    alpha = pixels(render(window))[:, :, 3]
+    # Crown, upper diamond tip and mouth centre in the established portrait.
+    for x, y in ((0.5, 0.143), (0.325, 0.327), (0.5, 0.679)):
+        px, py = round(window.width() * x), round(window.height() * y)
+        assert alpha[py-1:py+2, px-1:px+2].max() > 150
+
+
+def test_pupils_are_flat_lights_rather_than_shaded_eyeballs(scene):
+    window, _, _ = scene
+    advance(scene, JarvisState.IDLE, 2)
+    image = QImage(80, 80, QImage.Format.Format_ARGB32_Premultiplied)
+    image.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(image)
+    window.face._draw_eye(painter, 40, 40, 20, 0, True)
+    painter.end()
+    core = pixels(image)[38:42, 38:42, :3]
+    assert np.max(np.ptp(core.astype(int), axis=(0, 1))) == 0

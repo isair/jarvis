@@ -8,7 +8,7 @@ import time as _time
 from typing import Optional
 from enum import Enum
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QApplication, QMenu
-from PyQt6.QtGui import QPainter, QPen, QColor, QPainterPath, QPainterPathStroker, QLinearGradient, QRadialGradient, QBrush, QRegion
+from PyQt6.QtGui import QPainter, QPen, QColor, QPainterPath, QPainterPathStroker, QRadialGradient, QRegion
 from PyQt6.QtCore import Qt, QTimer, QPointF, pyqtSignal, QObject
 
 from jarvis.debug import debug_log
@@ -137,10 +137,9 @@ class FaceWidget(QWidget):
 
     DESIGN_WIDTH = 220
     DESIGN_HEIGHT = 280
-    FACE_WIDTH = 142.0
-    FACE_HEIGHT = 177.0
+    FACE_WIDTH = DESIGN_WIDTH * 0.7
+    FACE_HEIGHT = FACE_WIDTH * 1.3
     PRIMARY_COLOUR = QColor(COLORS["accent_secondary"])
-    SECONDARY_COLOUR = QColor(COLORS["accent_primary"])
     INK_COLOUR = QColor(COLORS["bg_primary"])
 
     def __init__(self, parent=None):
@@ -283,14 +282,14 @@ class FaceWidget(QWidget):
         cx, cy, width, height = 0.0, 0.0, self.FACE_WIDTH, self.FACE_HEIGHT
         self._draw_state_contour(painter, cx, cy, width, height)
         contour = self._face_contour(cx, cy, width, height)
-        self._stroke(painter, contour, 1.65, 0.46 + 0.4 * self._activation_level)
+        self._stroke(painter, contour, 1.4, 0.46 + 0.4 * self._activation_level)
         self._draw_mask_junctions(painter, contour)
         self._draw_accent_lines(painter, cx, cy, width, height)
         self._draw_beam_flow(painter, contour)
-        eye_y = cy - height * 0.12
+        eye_y = cy - height * 0.15
         for is_left in (True, False):
-            eye_x = cx + (-1 if is_left else 1) * width * 0.24
-            self._draw_eye(painter, eye_x, eye_y, width * 0.14, self._blink_factor, is_left)
+            eye_x = cx + (-1 if is_left else 1) * width * 0.25
+            self._draw_eye(painter, eye_x, eye_y, width * 0.12, self._blink_factor, is_left)
         self._draw_mouth(painter, cx, cy, width, height)
         painter.end()
 
@@ -328,15 +327,15 @@ class FaceWidget(QWidget):
         painter.setOpacity(0.46 + 0.4 * self._activation_level)
         for index in range(contour.elementCount() - 1):
             vertex = contour.elementAt(index)
-            glow = QRadialGradient(vertex.x, vertex.y, 4)
+            glow = QRadialGradient(vertex.x, vertex.y, 5.6)
             light = QColor(self.PRIMARY_COLOUR)
-            light.setAlpha(90)
+            light.setAlpha(140)
             glow.setColorAt(0, light)
             glow.setColorAt(1, QColor(0, 0, 0, 0))
             painter.setBrush(glow)
-            painter.drawEllipse(QPointF(vertex.x, vertex.y), 4, 4)
-            painter.setBrush(self.PRIMARY_COLOUR.lighter(150))
-            painter.drawEllipse(QPointF(vertex.x, vertex.y), 1.8, 1.8)
+            painter.drawEllipse(QPointF(vertex.x, vertex.y), 5.6, 5.6)
+            painter.setBrush(self.PRIMARY_COLOUR)
+            painter.drawEllipse(QPointF(vertex.x, vertex.y), 2.1, 2.1)
         painter.restore()
 
     def _draw_accent_lines(self, painter: QPainter, cx: float, cy: float,
@@ -365,23 +364,8 @@ class FaceWidget(QWidget):
         pen.setWidthF(width + 3.0)
         painter.setPen(pen)
         painter.drawPath(path)
-        if colour is None:
-            bounds = path.boundingRect()
-            light = QLinearGradient(bounds.topLeft(), bounds.bottomRight())
-            light.setColorAt(0.0, self.PRIMARY_COLOUR.lighter(165))
-            light.setColorAt(0.28, self.PRIMARY_COLOUR.lighter(120))
-            light.setColorAt(0.66, self.SECONDARY_COLOUR)
-            light.setColorAt(1.0, self.PRIMARY_COLOUR.lighter(125))
-            pen.setBrush(QBrush(light))
-        else:
-            pen.setColor(colour)
+        pen.setColor(colour or self.PRIMARY_COLOUR)
         pen.setWidthF(width)
-        painter.setPen(pen)
-        painter.drawPath(path)
-        core = QColor(colour or self.PRIMARY_COLOUR.lighter(185))
-        core.setAlpha(170)
-        pen.setColor(core)
-        pen.setWidthF(max(0.45, width * 0.35))
         painter.setPen(pen)
         painter.drawPath(path)
         painter.restore()
@@ -390,7 +374,7 @@ class FaceWidget(QWidget):
                   size: float, blink_factor: float, is_left: bool):
         """Diamond eye beams retain the mask identity through expressions and blinks."""
         openness = self._activation_level * (1.0 - blink_factor)
-        height = size * (0.86 + self._listening * 0.10)
+        height = size
         if self._expression == Expression.HAPPY:
             height *= 0.7
         elif self._expression == Expression.SURPRISED:
@@ -412,20 +396,15 @@ class FaceWidget(QWidget):
         path.lineTo(ex, ey + height * 0.5)
         path.closeSubpath()
         opacity = 0.52 + self._activation_level * 0.48
-        self._stroke(painter, path, 1.8, opacity)
+        self._stroke(painter, path, 1.4, opacity)
         if openness < 0.15:
             return
-        pupil_size = size * 0.33 * openness
+        pupil_size = size * 0.3 * openness
         pupil_x = ex + (self._gaze_x + self._thinking * size * 0.12) * openness
         pupil_y = ey + (self._gaze_y - self._thinking * size * 0.14) * openness
         painter.save()
         painter.setOpacity(opacity)
-        pupil = QRadialGradient(pupil_x - pupil_size * 0.3,
-                                pupil_y - pupil_size * 0.4, pupil_size * 1.4)
-        pupil.setColorAt(0.0, self.PRIMARY_COLOUR.lighter(165))
-        pupil.setColorAt(0.5, self.PRIMARY_COLOUR)
-        pupil.setColorAt(1.0, self.SECONDARY_COLOUR)
-        painter.setBrush(pupil)
+        painter.setBrush(self.PRIMARY_COLOUR)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawEllipse(QPointF(pupil_x, pupil_y), pupil_size, pupil_size)
         painter.restore()
@@ -451,8 +430,8 @@ class FaceWidget(QWidget):
     def _draw_mouth(self, painter: QPainter, cx: float, cy: float,
                     face_width: float, face_height: float):
         """A straight mask seam opens into a quiet, tapered speaking waveform."""
-        half_width = face_width * (0.16 + self._speaking * 0.075)
-        mouth_y = cy + face_height * 0.20
+        half_width = face_width * 0.35
+        mouth_y = cy + face_height * 0.25
         amplitude = face_height * 0.035 * self._speaking
         path = QPainterPath(QPointF(cx - half_width, mouth_y))
         for step in range(1, 49):
