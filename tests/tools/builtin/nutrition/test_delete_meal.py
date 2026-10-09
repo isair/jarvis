@@ -17,13 +17,14 @@ class TestDeleteMealTool:
         self.context = Mock(spec=ToolContext)
         self.context.user_print = Mock()
         self.context.db = Mock()
+        self.context.db.delete_meal_by_description.return_value = False
     
     def test_tool_properties(self):
         """Test tool metadata properties."""
         assert self.tool.name == "deleteMeal"
         assert "delete" in self.tool.description.lower()
         assert self.tool.inputSchema["type"] == "object"
-        assert "id" in self.tool.inputSchema["required"]
+        assert any("id" in option["required"] for option in self.tool.inputSchema["oneOf"])
     
     def test_run_success(self):
         """Test successful meal deletion."""

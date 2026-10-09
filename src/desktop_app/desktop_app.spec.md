@@ -116,28 +116,38 @@ The central controller that manages:
 - Missing optional location support is reported once at startup with a pointer to Setup, without printing the full installation guide.
 - Missing optional location support is a warning, rendered in yellow because it degrades available functionality.
 
-Window visibility is user-controlled: starting or stopping the assistant never shows or hides the log viewer or the face window. The windows open automatically once at app launch; after that the tray menu's `📝 View Logs` and `👤 Show Face` actions are the only controls over their visibility (the diary dialog shown while stopping is raised on top but leaves those windows' visibility untouched).
+Window visibility is user-controlled: starting or stopping the assistant never shows or hides the log viewer or the face window. The windows open automatically once at app launch; after that the tray menu's `📝 View Logs` and `👤 Show Face` actions open them, while window close controls and the face's `Hide face` menu can hide them (the diary dialog shown while stopping is raised on top but leaves those windows' visibility untouched).
+
+### Desktop face presence
+
+The face is a compact frameless, translucent tool window, always on top without
+accepting focus or activating when shown. macOS keeps the tool window visible
+when another application is active. It paints only the amber face and its
+animation, with an ink-only shadow for contrast on light backgrounds. There is
+no background panel, grid, title bar, subtitle area or persistent toolbar.
+Eyes paint only their outlines and pupils (or thinking arcs), with transparent
+interiors and surroundings. The contrast shadow follows those strokes; there
+is no filled eye halo to obscure desktop content.
+
+The default footprint is 220 × 280 logical pixels, with zero layout margins.
+Vector strokes, glows and motion scale together with the face geometry.
+Presence opacity and state-entry animations follow the same frame-level state
+observation for bundled signals and file-backed subprocess updates.
+Asleep and idle states have lower window opacity than active listening,
+thinking, speaking or dictation. The state animations remain distinct. Empty
+corners are excluded from the native input region through an elliptical mask.
+Dragging the face uses native window movement where supported, with a pointer
+position fallback. A right-click menu hides the face; the tray shows it again
+without activating it. Visibility remains user-controlled after launch.
 
 **Face state follows the daemon lifecycle**: the face animates from states written by the daemon (`JarvisStateManager`, file-backed for cross-process use). Whenever the daemon goes down — the tray's Stop/Start Listening toggle, an unexpected exit, or the setup wizard pausing it — the tray resets the face to `ASLEEP` so it never looks awake while no daemon is running. Starting the daemon lets the daemon's own state writes take over again.
 
-### Rejected speech feedback
+### Rejected speech
 
-- A rejected low-confidence segment produces a brief "Didn't catch that,
-  please repeat" subtitle in the face window. The subtitle clears after
-  approximately two seconds; another rejection refreshes its lifetime.
-- Subtitle space is reserved, so showing feedback does not compress the
-  face or resize the window. Feedback never opens a hidden window or changes
-  listening, thinking, speaking or dictation state.
-- The daemon coalesces rejection notifications without keeping transcript
-  text. The listener enqueues notifications; a stoppable notification worker
-  delivers them independently of diary processing.
-  Bundled mode uses a callback and a queued Qt signal. Subprocess mode uses
-  `__VOICE__:{"type":"low_confidence","data":null}` and the same Qt signal.
-  Protocol events do not appear in the ordinary log viewer.
-- Stop clears the subtitle immediately and stops notification delivery
-  with a bounded wait, discarding pending feedback. Queued notifications are
-  ignored while the daemon is stopped or stopping. Accepted segments do not
-  produce this feedback. No TTS is triggered.
+Low-confidence transcription is a listener diagnostic, not evidence of an
+addressed user request. It does not produce face text, reserve subtitle space,
+change face state, raise the window or trigger TTS. The face contains only its
+animation; rejected segments remain filtered and logged by the listener.
 
 ### macOS tray event safety
 
@@ -222,6 +232,21 @@ completion signals use other names (`check_done`, `completed`, `done`).
 `Qt.QueuedConnection`: the signal is emitted from the worker's OS thread,
 and the slot mutates Qt UI state (menu actions, tray icon, face state), so
 it must run on the main thread.
+
+### Daemon ownership and shutdown
+
+Starting is blocked while an owned thread or subprocess is alive, or while
+Stop is processing Qt events. The core daemon also holds a per-user OS lock
+across initialisation and cleanup (see `src/jarvis/daemon_lock.spec.md`).
+
+A bundled shutdown that exhausts its wait retains the worker handle and
+blocks replacement until that worker finishes. Its completion callback is
+queued on the GUI thread and identifies the originating worker. A delayed
+callback cannot reset a replacement daemon's UI or drop its handle. Stop
+uses its captured worker reference while processing events; completion can
+safely retire the tray's reference. Re-entrant Stop requests return without
+starting another shutdown. The status timer also retires finished workers,
+including those whose shutdown timed out.
 
 ### Daemon Callbacks
 

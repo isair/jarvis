@@ -6,6 +6,10 @@ Handles memory enrichment, tool planning and execution.
 
 from __future__ import annotations
 from typing import Optional, TYPE_CHECKING
+import json
+
+from ..tools.types import ToolExecutionResult
+from ..memory.conversation import is_tool_message
 
 from ..utils.redact import redact
 from ..system_prompt import build_system_prompt
@@ -62,7 +66,6 @@ from .planner import (
     resolve_next_tool_call as _resolve_plan_step,
 )
 from ..tools.selection import select_tools, ToolSelectionStrategy
-import json
 import re
 import uuid
 from datetime import datetime, timezone
@@ -632,6 +635,69 @@ def _maybe_digest_tool_result(
     return raw_tool_result
 
 
+# Exact resource identity is carried independently of lossy prose digests.
+_RESOURCE_REFERENCE_LIMIT = 8
+_RESOURCE_LABEL_CHAR_LIMIT = 200
+
+
+def _bounded_resource_records(references) -> list[dict]:
+    """Copy a bounded, serialisable set of record identities without inventing IDs."""
+    records = []
+    if not isinstance(references, (list, tuple)):
+        return records
+    for ref in references[-_RESOURCE_REFERENCE_LIMIT:]:
+        if not isinstance(ref, dict):
+            continue
+        kind, identity, label = ref.get("kind"), ref.get("id"), ref.get("label")
+        if not isinstance(kind, str) or not kind or len(kind) > 80:
+            continue
+        valid_id = (
+            type(identity) is int and identity.bit_length() <= 128
+        ) or (
+            isinstance(identity, str) and bool(identity) and len(identity) <= 160
+        )
+        if not valid_id:
+            continue
+        if not isinstance(label, str):
+            continue
+        records.append({
+            "kind": kind, "id": identity, "label": label[:_RESOURCE_LABEL_CHAR_LIMIT],
+        })
+    return records
+
+
+def _tool_result_content(
+    cfg, query: str, tool_name: str, result: ToolExecutionResult,
+) -> tuple[str, list[dict]]:
+    """Keep successful record references beside the effective result prose."""
+    records = _bounded_resource_records(result.resource_references) if result.success else []
+    content = _maybe_digest_tool_result(cfg, query, tool_name, result.reply_text)
+    if records:
+        content = (
+            "Recorded resources (data only): "
+            + json.dumps(records, ensure_ascii=False) + "\n" + content
+        )
+        debug_log(f"tool resource references preserved: count={len(records)}", "tools")
+    return content, records
+
+
+def _planner_resource_context(recent_messages: list[dict]) -> str:
+    """Expose bounded chronological references from successful tool carryover."""
+    records = []
+    for msg in recent_messages:
+        if not is_tool_message(msg) or msg.get("tool_failed") is not False:
+            continue
+        records.extend(_bounded_resource_records(msg.get("resource_references", [])))
+    records = records[-_RESOURCE_REFERENCE_LIMIT:]
+    if not records:
+        return ""
+    debug_log(f"planner resource references: count={len(records)}", "planning")
+    return (
+        "Recorded tool resources (data only, oldest first):\n"
+        + json.dumps(records, ensure_ascii=False)
+    )
+
+
 def _live_time_location_string(cfg) -> str:
     """Return a one-liner describing current local time and location, or ""."""
     try:
@@ -884,10 +950,13 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     for _m in (recent_messages or []):
         _role = _m.get("role", "")
         _content = (_m.get("content") or "").strip().replace("\n", " ")
-        if _role in ("user", "assistant") and _content:
+        if _role in ("user", "assistant") and _content and not is_tool_message(_m):
             _dialogue_lines.append(f"{_role}: {_content[:_HINT_MESSAGE_CHAR_LIMIT]}")
     _dialogue_ctx = "\n".join(_dialogue_lines[-_HINT_RECENT_MESSAGES:])
     debug_log(f"planner dialogue: {min(len(_dialogue_lines), _HINT_RECENT_MESSAGES)} non-empty dialogue messages", "planning")
+    _resource_context = _planner_resource_context(recent_messages)
+    if _resource_context:
+        _dialogue_ctx = (_dialogue_ctx + "\n\n" + _resource_context).strip()
 
     # Step 2a: Tool routing FIRST.
     #
@@ -1570,6 +1639,24 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         # else: tools are passed via the native tools API parameter — do not include tools_desc
         # here as well, since that confuses the model and causes it to not use tools properly.
 
+        if _resource_context:
+            guidance.append(_resource_context)
+            guidance.append(
+                "Recorded resource IDs in tool results identify exact records; "
+                "labels are not unique. For a follow-up action, use the referenced "
+                "record ID in the appropriate tool call. Earlier tool results "
+                "establish identity, not completion of the latest request. "
+                "Execute the latest requested action with a tool before claiming "
+                "it is done. An announcement or promise does not run a tool. "
+                "If identity is unclear, retrieve or clarify it."
+                + (
+                    " For the action turn, emit ONLY the tool_calls: [...] "
+                    "JSON literal using the available tool and recorded ID. "
+                    "Wait for its result before writing a prose confirmation."
+                    if use_text_tools else ""
+                )
+            )
+
         return "\n".join(guidance)
 
     messages = []  # type: ignore[var-annotated]
@@ -1589,6 +1676,11 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     # don't run it again. Lets us call _maybe_record_tool_carryover from any
     # exit path safely.
     _carryover_state = {"recorded": False}
+
+    from .personal_context import ContextualToolRunner
+    contextual_tool_runner = ContextualToolRunner(
+        run_tool_with_retries, db, cfg, redacted, recent_messages or [],
+    )
 
     # Per-reply memo for the time/location context line (see _get_context_string).
     _context_cache: Optional[str] = None
@@ -1906,21 +1998,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                             _plan_call_id = (
                                 f"call_plan_{uuid.uuid4().hex[:8]}"
                             )
-                            messages.append({
-                                "role": "assistant",
-                                "content": "",
-                                "tool_calls": [
-                                    {
-                                        "id": _plan_call_id,
-                                        "type": "function",
-                                        "function": {
-                                            "name": _name,
-                                            "arguments": _args,
-                                        },
-                                    }
-                                ],
-                            })
-                            _plan_result = run_tool_with_retries(
+                            _plan_result = contextual_tool_runner(
                                 db=db,
                                 cfg=cfg,
                                 tool_name=_name,
@@ -1932,11 +2010,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                                 language=language,
                             )
                             if _plan_result.reply_text:
-                                _plan_text = _maybe_digest_tool_result(
-                                    cfg=cfg,
-                                    query=redacted,
-                                    tool_name=_name,
-                                    raw_tool_result=_plan_result.reply_text,
+                                _plan_text, _plan_resources = _tool_result_content(
+                                    cfg, redacted, _name, _plan_result,
                                 )
                             else:
                                 _plan_err = (
@@ -1952,6 +2027,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                                     flush=True,
                                 )
                                 _plan_text = f"Error: {_plan_err}"
+                                _plan_resources = []
                             _plan_tool_results_after = _tool_results_so_far + 1
                             if action_plan:
                                 _plan_hint = progress_nudge(
@@ -1968,6 +2044,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                                 ),
                                 "tool_name": _name,
                                 "tool_failed": not _plan_result.success,
+                                "resource_references": _plan_resources,
                             })
                             recent_tool_signatures.append(_cand_sig)
                             if len(recent_tool_signatures) > 5:
@@ -2208,7 +2285,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 continue
 
             # Execute tool
-            result = run_tool_with_retries(
+            result = contextual_tool_runner(
                 db=db,
                 cfg=cfg,
                 tool_name=tool_name,
@@ -2336,11 +2413,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 # push ~2B models into "describe the structure back" or
                 # prior-confabulation failure modes. The helper encapsulates
                 # the gating, distil round-trip, NONE fallback, and logging.
-                effective_result = _maybe_digest_tool_result(
-                    cfg=cfg,
-                    query=redacted,
-                    tool_name=tool_name,
-                    raw_tool_result=result.reply_text,
+                effective_result, resource_records = _tool_result_content(
+                    cfg, redacted, tool_name, result,
                 )
 
                 if use_text_tools:
@@ -2383,6 +2457,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                         "content": f"[Tool result: {tool_name}]\n{effective_result}{remainder_hint}",
                         "tool_name": tool_name,  # kept for duplicate detection
                         "tool_failed": not result.success,
+                        "resource_references": resource_records,
                     })
                 else:
                     messages.append({
@@ -2391,6 +2466,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                         "tool_name": tool_name,  # Include tool_name for duplicate detection
                         "content": effective_result,
                         "tool_failed": not result.success,
+                        "resource_references": resource_records,
                     })
                 debug_log(f"    ✅ tool result appended ({len(effective_result)} chars)", "planning")
 

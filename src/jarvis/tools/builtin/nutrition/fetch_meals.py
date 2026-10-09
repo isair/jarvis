@@ -71,7 +71,9 @@ def summarize_meals(meals: List[Any]) -> str:
         total_protein += prot
         total_carbs += carbs
         total_fat += fat
-        lines.append(f"- {desc} (~{int(round(kcal))} kcal, {int(round(prot))}g P, {int(round(carbs))}g C, {int(round(fat))}g F)")
+        meal_id = m.get("id") if isinstance(m, dict) else m["id"]
+        label = f"#{meal_id}: " if meal_id is not None else ""
+        lines.append(f"- {label}{desc} (~{int(round(kcal))} kcal, {int(round(prot))}g P, {int(round(carbs))}g C, {int(round(fat))}g F)")
     header = f"Meals: {len(meals)} | Total ~{int(round(total_kcal))} kcal, {int(round(total_protein))}g P, {int(round(total_carbs))}g C, {int(round(total_fat))}g F"
     return header + ("\n" + "\n".join(lines) if lines else "")
 

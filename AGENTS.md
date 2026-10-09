@@ -88,6 +88,12 @@ README priorities (in order of importance):
 
 Keep sections concise. Use collapsible `<details>` for lengthy content. Avoid documenting internal implementation details - the README is for end users, not developers.
 
+README style:
+- Lead with what Jarvis lets people do. Keep wording direct, clear and brief.
+- Cover the useful capabilities and show what makes them impressive through concrete examples, without hype or repeated claims.
+- Explain user-visible outcomes. Keep prompt rules, extraction stages, source attribution mechanics and other internal details in specs or technical docs.
+- A fix does not need another README sentence when the existing description already covers the capability. Prefer tightening or replacing text over adding more.
+
 ---
 
 When the user says "remember" something, add it to AGENTS.md in the appropriate section (project-specific above the ---, or portable below).

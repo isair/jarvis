@@ -186,9 +186,8 @@ class TestGetRequiredModels:
         with patch("desktop_app.setup_wizard.load_settings", side_effect=Exception("Config error")):
             models = get_required_models()
 
-            assert len(models) == 2
-            assert "gemma4:e2b" in models
-            assert "nomic-embed-text" in models
+            from jarvis.config import DEFAULT_CHAT_MODEL, DEFAULT_FAST_MODEL
+            assert set(models) == {DEFAULT_CHAT_MODEL, DEFAULT_FAST_MODEL, "nomic-embed-text"}
 
     def _cfg(self, **over):
         from types import SimpleNamespace
@@ -1733,6 +1732,36 @@ class TestWhisperSetupPageSliderRebuild:
     stay parented to their containers throughout rebuilds — the
     safe pattern for clearing items out of a layout.
     """
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize("refresh", ["language", "initialise"])
+    def test_rebuild_displays_only_current_labels_before_deferred_deletion(self, qapp, refresh):
+        """Repeated refreshes must display one label set in each slider row."""
+        from PyQt6.QtWidgets import QLabel
+        from desktop_app.setup_wizard import WhisperSetupPage
+
+        page = WhisperSetupPage()
+        page.resize(640, 600)
+        page.show()
+        qapp.processEvents()
+
+        for english_only in (False, True, False):
+            if refresh == "language":
+                page._on_language_changed(english_only)
+            else:
+                page.initializePage()
+            # Layout and paint events can run before deleteLater is delivered,
+            # as they do inside the wizard's nested event loop.
+            qapp.processEvents()
+            options = page._get_current_model_options()
+            for container, expected in (
+                (page._labels_container, [option[1] for option in options]),
+                (page._size_container, [f"{option[2]} / {option[3]}" for option in options]),
+            ):
+                visible = [label for label in container.findChildren(QLabel) if label.isVisible()]
+                assert [label.text() for label in visible] == expected
+                for left, right in zip(visible, visible[1:]):
+                    assert not left.geometry().intersects(right.geometry())
 
     def test_slider_labels_keep_container_parent_after_rebuild(self, qapp):
         """Newly-built slider labels must remain children of their containers.

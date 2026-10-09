@@ -50,7 +50,7 @@ class TestLogMealTool:
     def test_run_with_meal_arg_passes_meal_text_to_extractor(self, mock_extract):
         """When the planner passes meal='Big Mac', the tool must pass that
         text to the extractor rather than the full redacted utterance."""
-        mock_extract.return_value = "Logged meal #456: Big Mac - 550 kcal"
+        mock_extract.return_value = ToolExecutionResult(True, "Logged meal #456: Big Mac - 550 kcal")
 
         result = self.tool.run({"meal": "Big Mac"}, self.context)
 
@@ -68,7 +68,7 @@ class TestLogMealTool:
     @patch('src.jarvis.tools.builtin.nutrition.log_meal.extract_and_log_meal')
     def test_run_without_meal_arg_falls_back_to_redacted_text(self, mock_extract):
         """When no meal arg is provided, the extractor must use context.redacted_text."""
-        mock_extract.return_value = "Logged meal #456: sandwich - 300 kcal"
+        mock_extract.return_value = ToolExecutionResult(True, "Logged meal #456: sandwich - 300 kcal")
 
         result = self.tool.run(None, self.context)
 

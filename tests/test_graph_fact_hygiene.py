@@ -95,3 +95,18 @@ def test_review_shares_the_remaining_extraction_budget(mock_config):
 def test_nonpositive_budget_does_not_start_extraction(mock_config):
     with patch('jarvis.memory.graph_ops.call_llm_direct', side_effect=AssertionError('Unexpected inference')):
         assert extract_graph_memories('Summary', mock_config, 'local-model', timeout_sec=0) == []
+
+
+def test_source_relationship_review_preserves_only_supported_candidates(mock_config):
+    summary = 'The user asked to translate "I live in Bristol". They are vegetarian.'
+    candidates = [{'branch': 'USER', 'fact': 'The user lives in Bristol'},
+                  {'branch': 'USER', 'fact': 'The user is vegetarian'}]
+    def infer(**kwargs):
+        if kwargs['user_content'].startswith('Extract'):
+            return json.dumps(candidates)
+        source = json.loads(kwargs['user_content'])['summary']
+        return '0: UNSUPPORTED\n1: DURABLE' if source == summary else ''
+    with patch('jarvis.memory.graph_ops.call_llm_direct', side_effect=infer):
+        assert extract_graph_memories(summary, mock_config, 'local-model') == [
+            ('user', 'The user is vegetarian'),
+        ]

@@ -1,8 +1,8 @@
 """
 VRAM detection and model recommendation.
 
-Cross-platform GPU memory detection with a preferred DXGI path on Windows
-and ``nvidia-smi`` fallback on other platforms.  Provides model
+Model memory estimates use DXGI on Windows, NVIDIA detection on Linux,
+and Apple Silicon unified memory with headroom reserved for the system.  Provides model
 recommendations based on available VRAM so the setup wizard and startup
 flow can warn users whose GPU doesn't meet the default model's requirements.
 """
@@ -10,6 +10,7 @@ flow can warn users whose GPU doesn't meet the default model's requirements.
 from __future__ import annotations
 
 import os
+import platform
 import re
 import subprocess
 import sys
@@ -76,14 +77,29 @@ for _entry in _MODEL_VRAM_TABLE:
 
 
 def detect_total_vram_mb() -> Optional[int]:
-    """Return total dedicated video memory in MB for the primary GPU, or
+    """Return a model memory budget in MB for the primary GPU, or
     ``None`` when detection is unavailable / fails.
 
     Resolution order:
+    Apple Silicon reserves the larger of 4 GB or 25% of physical memory.
+
     1. Windows → DXGI (``dxgi.dll`` COM factory → adapter description).
     2. Any platform with ``nvidia-smi`` on ``PATH``.
     3. Linux → ``/proc/driver/nvidia/gpus/*/information``.
     """
+    if sys.platform == "darwin" and platform.machine() == "arm64":
+        try:
+            result = subprocess.run(["sysctl", "-n", "hw.memsize"],
+                                    capture_output=True, text=True, timeout=10)
+            if result.returncode != 0:
+                return None
+            total_mb = int(result.stdout.strip()) // (1024 * 1024)
+            budget_mb = max(0, total_mb - max(4096, total_mb // 4))
+            debug_log(f"Unified memory: {total_mb} MB, model budget: {budget_mb} MB", "vram")
+            return budget_mb
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            return None
+
     if sys.platform == "win32":
         mb = _detect_via_dxgi()
         if mb is not None:
@@ -276,12 +292,12 @@ def _detect_via_proc_nvidia() -> Optional[int]:
 def get_recommended_model_id(total_vram_mb: Optional[int]) -> str:
     """Return the model ID best suited for the given VRAM.
 
-    When VRAM is unknown (``None``), or is at least 8 GB, the default
-    ``gemma4:e2b`` is returned.  When VRAM is below 8 GB the low-VRAM
-    option (``qwen3.5:0.8b``) is returned instead.
+    Unknown hardware uses the configured quality default. Known budgets select
+    the most capable supported model that fits, or the smallest CPU fallback.
     """
     if total_vram_mb is None:
-        return "gemma4:e2b"  # safe default — user can still override
+        from jarvis.config import DEFAULT_CHAT_MODEL
+        return DEFAULT_CHAT_MODEL
 
     # Scan from highest-VRAM to lowest-VRAM so we prefer the most
     # capable model that fits.  The table is sorted ascending, so
@@ -327,6 +343,23 @@ def format_vram_warning(total_vram_mb: Optional[int],
         f"⚠️ Your GPU has {total_vram_mb} MB VRAM, but "
         f"{model_id} recommends {required} MB."
     )
+
+
+def get_recommended_model_pair(model_budget_mb: Optional[int]) -> tuple[str, str]:
+    """Recommend chat and fast together after reserving companion overhead."""
+    from jarvis.config import DEFAULT_CHAT_MODEL, DEFAULT_FAST_MODEL, SUPPORTED_FAST_MODEL_IDS
+
+    if model_budget_mb is None:
+        return DEFAULT_CHAT_MODEL, DEFAULT_FAST_MODEL
+    fast_mb = required_vram_mb(DEFAULT_FAST_MODEL) or 0
+    for chat, _name, chat_mb, _low in reversed(_MODEL_VRAM_TABLE):
+        total = chat_mb + (0 if chat == DEFAULT_FAST_MODEL else fast_mb)
+        if total <= model_budget_mb:
+            return chat, DEFAULT_FAST_MODEL
+        if chat in SUPPORTED_FAST_MODEL_IDS and chat_mb <= model_budget_mb:
+            return chat, chat
+    smallest = _MODEL_VRAM_TABLE[0][0]
+    return smallest, smallest
 
 
 def required_vram_mb(model_id: str) -> Optional[int]:

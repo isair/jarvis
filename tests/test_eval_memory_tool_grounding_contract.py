@@ -3,6 +3,7 @@ import importlib
 from pathlib import Path
 import runpy
 import sys
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -25,7 +26,20 @@ def load_case(monkeypatch, case):
     with monkeypatch.context() as scope:
         scope.setitem(sys.modules, 'conftest', importlib.import_module('evals.conftest'))
         namespace = runpy.run_path(str(path))
-    return getattr(namespace[cls](), method), namespace[forecast]
+    original = getattr(namespace[cls](), method)
+
+    def run(db, dialogue):
+        if module != 'graph':
+            return original(db, dialogue)
+        from jarvis.memory.graph import GraphMemoryStore
+        with TemporaryDirectory() as directory:
+            store = GraphMemoryStore(str(Path(directory) / 'graph.db'))
+            try:
+                return original(dialogue, store)
+            finally:
+                store.close()
+
+    return run, namespace[forecast]
 
 
 def tool_turn(engine, cfg, text, city, result):

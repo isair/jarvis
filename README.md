@@ -17,14 +17,14 @@ Talk naturally, as if Jarvis were a third person in the room.
 
 ## An assistant that lives with you, not in the cloud
 
-Jarvis is built to be part of the conversation, not another screen to type into. Talk through an idea, discuss plans with a friend, then ask “Jarvis, what do you think?” While listening, it keeps a short, temporary rolling transcript of nearby speech so it can join an ongoing conversation using what was just discussed, without you having to repeat the background.
+Jarvis is built to be part of the conversation. Talk through an idea, discuss plans with a friend, then ask “Jarvis, what do you think?” While listening, it keeps a short, temporary rolling transcript of nearby speech so it can join an ongoing conversation using what was just discussed.
 
-Address Jarvis by name anywhere in a sentence and follow up naturally. Wake aliases match whole words so unrelated words do not trigger their approximate variants. Mentions while speaking to someone else are not invitations to reply. Speech recognition, language models and speech synthesis run on hardware you control. The animated face gives your voice assistant a presence on the desktop; chat is there when you would rather type.
+Address Jarvis by name anywhere in a sentence and follow up naturally. Speech recognition, language models and speech synthesis run on hardware you control.
 
-Your conversation memory stays on your computer. Separate local databases keep their semantic search indices separate. Sensitive information is redacted before it reaches model context or the saved diary. Web search, weather and connected tools use the network when you ask for those capabilities; local conversation does not require a cloud AI account.
+Your conversation and all data stays solely on your computer. Separate local databases keep their semantic search indices separate. Sensitive information is redacted before it reaches model context or the saved diary, even though both are local, to ensure the security of your private information. Web search, weather and connected tools use the network but send only what is necessary when you ask for those capabilities.
 
 <p align="center">
-  <img src="docs/img/face.png" alt="Jarvis's animated amber wireframe face, the desktop presence of your local voice assistant" width="460">
+  <img src="docs/img/face.png" alt="Jarvis's floating amber face, with no frame or background" width="420">
 </p>
 
 <p align="center"><sub>A voice, a face, and a place in the conversation.</sub></p>
@@ -56,11 +56,11 @@ Memory needs depend on model size, quantisation, context length and speech recog
 | Starting point | Chat model |
 | :--- | :--- |
 | Smaller hardware | `qwen3.5:0.8b` |
-| Default | `gemma4:e2b` |
-| More capable | `gemma4:e4b` |
+| Constrained memory | `gemma4:e2b` |
+| Default | `gemma4:e4b` |
 | Larger local setup | `qwen3.8:27b` |
 
-Budget memory for Whisper and, when different from chat, the fast model used for voice intent and tool routing. Apple Silicon uses unified memory; other GPUs use dedicated VRAM. The wizard recommends smaller models when detected memory is exhausted and warns when CPU fallback is needed.
+Budget memory for Whisper and, when different from chat, the fast model used for voice intent and tool routing. Apple Silicon uses unified memory; other GPUs use dedicated VRAM. Setup budgets chat and fast together alongside the selected Whisper model, using E2B for fast tasks when it fits or sharing E4B across both roles to save memory. Apple Silicon estimates reserve memory for macOS. Saved model choices are preserved, and insufficient memory shows CPU fallback guidance.
 
 </details>
 
@@ -68,9 +68,8 @@ Budget memory for Whisper and, when different from chat, the fast model used for
 
 - **A third person in the room.** Bring Jarvis into an ongoing conversation with friends, talk through a problem aloud, or ask it to weigh in on a decision. “Jarvis, what do you think?” draws on the recent discussion, not just that one sentence.
 - **Remember beyond one session.** Search your local diary and knowledge graph. Diary keyword search supports Unicode text, and semantic search uses local embeddings with the bundled index. Planning requests memory for personal context and distinguishes it from general facts; recall scopes diary searches by requested dates, and accuracy depends on the selected model. Jarvis checks graph candidates for lasting value before storing them. Browse what Jarvis has stored in the Memory Viewer.
-- **Get things done.** Built-in tools cover web search, weather, time, screenshot OCR, file access, nutrition tracking and optional location awareness.
+- **Get things done.** Built-in tools cover web search, weather, time, screenshot OCR, file access, nutrition tracking and optional location awareness. Delete a meal by its ID or exact, unique description; meal listings include IDs to distinguish repeated entries.
 - **Connect your own tools.** MCP servers add browser automation, smart-home controls and other integrations. Tool routing selects a relevant subset for each request.
-- **See when speech was unclear.** The face briefly shows a repeat request when speech recognition rejects a low-confidence segment. It does not speak or interrupt the current assistant state.
 - **Dictate into other apps.** Hold a hotkey, speak, then release to paste locally transcribed text. See the [platform limitations](#known-limitations) first.
 - **Type when you need to.** The companion chat shares your voice conversation and memory. Text replies are silent, and you can rewind a sent message to regenerate from that point.
 
@@ -132,12 +131,14 @@ Jarvis is actively developed, primarily on macOS. Windows and Linux behaviour ma
 - **No mobile app** is available ([#17](https://github.com/isair/jarvis/issues/17)).
 - **Capture continues while Jarvis thinks.** Speech detection and assembly run independently of intent judging and reply generation. Recognition backlogs are bounded; Logs warns when speech arrives faster than it can be processed.
 - **Continuous speech is split at your utterance limit.** The shorter limit during speech playback helps interruption requests reach recognition promptly. Both limits are adjustable in Settings.
+- **Smaller chat models can miss tool arguments.** E4B is the preferred chat default when memory allows; constrained hardware can use a smaller model, with lower tool-use reliability.
 - **Reasoning models can take longer.** Planning, recall, summaries and partial replies reserve room for reasoning and the final answer, with the configured timeout limiting the wait.
 - **GPT-OSS always reasons.** Its Ollama thinking toggle selects low or high reasoning effort; turning it off selects low effort rather than disabling reasoning.
 - **Long conversations feed the complete pending snapshot into the diary.** Bounded batches share the configured generation timeout; interrupted saves resume completed batches privately in memory on the next attempt.
 - **Diary saves remain successful if the optional search index fails.** Saved text stays available through keyword search; semantic search can retain an older embedding.
 - **Meal logging confirms saved meals even if coaching is unavailable.** Optional follow-up advice can fail without logging the meal twice.
 - **Weather place fallback supports abbreviated names.** Names such as Washington D.C. retain internal punctuation when location detection is unavailable.
+- **Weather can use remembered home location.** If automatic detection is unavailable, Jarvis checks local conversation and memory before asking for a city. A remembered home is a labelled default; conflicting or outdated evidence requires clarification.
 - **Slow speech recognition produces guidance.** After several utterances decode slower than real time, Logs recommends a smaller Whisper model or checking available acceleration. Smaller models can reduce accuracy.
 - **First-run downloads can take time.** Whisper and language models can be large. Check Logs for progress before assuming startup is stuck.
 - **Apple Silicon desktop bundles include MLX speech recognition.** Windows, Linux and Intel Mac builds use faster-whisper.

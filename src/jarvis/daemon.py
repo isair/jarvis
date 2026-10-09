@@ -113,82 +113,6 @@ CHAT_NEW_SESSION_IPC_PREFIX = "__CHAT_NEW_SESSION__"
 CHAT_REWIND_IPC_PREFIX = "__CHAT_REWIND__:"
 CHAT_RESTORE_IPC_PREFIX = "__CHAT_RESTORE__:"
 
-# Rejection feedback carries no transcript or confidence payload.
-VOICE_IPC_PREFIX = "__VOICE__:"
-_voice_feedback_pending = threading.Event()
-_voice_feedback_callback = None
-_voice_feedback_stop = threading.Event()
-_voice_feedback_thread = None
-
-
-def set_voice_feedback_callback(callback=None) -> None:
-    """Register a non-blocking rejection notification consumer."""
-    global _voice_feedback_callback
-    _voice_feedback_callback = callback
-    _voice_feedback_pending.clear()
-
-
-def _queue_low_confidence(_event) -> None:
-    """Coalesce listener notifications without retaining rejected speech."""
-    if not _global_stop_requested:
-        _voice_feedback_pending.set()
-
-
-def _dispatch_voice_feedback() -> None:
-    """Deliver pending feedback without diary or database work."""
-    if not _voice_feedback_pending.is_set():
-        return
-    _voice_feedback_pending.clear()
-    if _global_stop_requested:
-        return
-    callback = _voice_feedback_callback
-    if callback is not None:
-        try:
-            callback()
-        except Exception as exc:
-            debug_log(f"voice feedback callback failed ({type(exc).__name__})", "voice")
-    elif os.environ.get("JARVIS_STDIN_IPC") == "1":
-        _emit_ipc_event(VOICE_IPC_PREFIX, "low_confidence", None, "voice")
-
-
-def _start_voice_feedback_worker() -> None:
-    """Keep rejection delivery independent of synchronous diary processing."""
-    global _voice_feedback_thread, _voice_feedback_stop
-    if _voice_feedback_thread is not None and _voice_feedback_thread.is_alive():
-        return
-    _voice_feedback_stop = threading.Event()
-    stop = _voice_feedback_stop
-
-    def run():
-        while not stop.is_set():
-            _voice_feedback_pending.wait()
-            if not stop.is_set():
-                _dispatch_voice_feedback()
-
-    _voice_feedback_thread = threading.Thread(
-        target=run, name="jarvis-voice-feedback", daemon=True,
-    )
-    try:
-        _voice_feedback_thread.start()
-        debug_log("voice feedback worker started", "voice")
-    except (RuntimeError, OSError) as exc:
-        _voice_feedback_thread = None
-        stop.set()
-        debug_log(f"voice feedback unavailable ({type(exc).__name__})", "voice")
-
-
-def _stop_voice_feedback_worker() -> None:
-    """Wake and stop notification delivery with a bounded shutdown wait."""
-    _voice_feedback_stop.set()
-    _voice_feedback_pending.set()
-    thread = _voice_feedback_thread
-    if thread is not None and thread is not threading.current_thread():
-        thread.join(timeout=1.0)
-        if thread.is_alive():
-            debug_log("voice feedback consumer still finishing after stop", "voice")
-    _voice_feedback_pending.clear()
-
-
 def request_stop() -> None:
     """Request the daemon to stop gracefully."""
     global _global_stop_requested
@@ -829,17 +753,41 @@ def _check_and_update_diary(
 def main(smoke_test: bool = False) -> None:
     """Main daemon entry point.
 
+    The per-user OS lock covers initialisation, the event loop and cleanup.
+    Contenders return before any runtime globals or stop flags are changed.
+
     Args:
         smoke_test: If True, initialise all components, print a success
             marker, and return without entering the main event loop.
             Used by CI smoke tests to verify the build is not broken.
     """
+    from .daemon_lock import acquire_daemon_lock, lock_holder_pid, release_daemon_lock
+
+    lock = acquire_daemon_lock()
+    if lock is None:
+        pid = lock_holder_pid()
+        print(
+            f"⚠️ Another Jarvis daemon is already running{f' (pid {pid})' if pid else ''}. "
+            "Stop it before starting Jarvis again.",
+            flush=True,
+        )
+        debug_log("daemon start refused: another daemon holds the lock", "jarvis")
+        if smoke_test:
+            raise RuntimeError("Another Jarvis daemon is already running; smoke initialisation was not performed")
+        return
+    try:
+        _run_daemon(smoke_test)
+    finally:
+        release_daemon_lock(lock)
+
+
+def _run_daemon(smoke_test: bool = False) -> None:
+    """Initialise and run the daemon while holding its single-instance lock."""
     global _global_dialogue_memory, _global_stop_requested, _global_tts_engine, _global_dictation_engine
     global _warm_profile_graph_listener
 
-    # Reset stop flag at start (in case of restart)
+    # The lock prevents contenders from resetting a stopping runtime.
     _global_stop_requested = False
-    _voice_feedback_pending.clear()
 
     _install_signal_handlers()
 
@@ -1015,7 +963,6 @@ def main(smoke_test: bool = False) -> None:
     voice_thread: Optional[threading.Thread] = None
     voice_thread = VoiceListener(
         db, cfg, tts, _global_dialogue_memory,
-        on_low_confidence=_queue_low_confidence,
     )
     voice_thread.start()
 
@@ -1128,8 +1075,6 @@ def main(smoke_test: bool = False) -> None:
 
         return
 
-    _start_voice_feedback_worker()
-
     # Periodic diary update checking
     last_diary_check = time.time()
     diary_check_interval = 60.0
@@ -1209,7 +1154,6 @@ def main(smoke_test: bool = False) -> None:
     except KeyboardInterrupt:
         debug_log("daemon received KeyboardInterrupt", "jarvis")
     finally:
-        _stop_voice_feedback_worker()
         print("🔄 Daemon shutting down - saving memory...", flush=True)
         debug_log("daemon finally block starting - performing cleanup", "jarvis")
 

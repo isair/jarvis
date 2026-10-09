@@ -384,3 +384,37 @@ Behaviour:
 - Avoid excessive logging; logs must remain readable and privacy-preserving.
 
 
+
+## Tool-requested personal context
+
+Both planned direct execution and model-generated tool calls pass through
+`ContextualToolRunner`. A tool's typed missing-context request can trigger bounded
+local personal-context recall even when the planner omitted `searchMemory`.
+The wrapper retries once with a grounded argument and preserves its source note
+in the tool result. Ordinary tool errors retain their existing behaviour.
+See `personal_context.spec.md` for policies and bounds.
+
+### Recorded resource identity
+
+Successful tool results can include structured resource references (see
+`src/jarvis/tools/types.spec.md`). The engine retains bounded references outside
+prose digestion, renders them beside the effective tool result for both direct
+and model-issued calls, and preserves internal reference metadata through tool
+carryover. Reference strings are scrubbed before carryover storage. A truncated
+result does not erase the independent metadata.
+
+The planner's six-message dialogue budget contains user/assistant conversation,
+excluding tool-result messages presented as user rows by the text-tool path.
+The latest eight successful resource references form a separate chronological
+data block. Destructive follow-ups use the recorded ID of the resolved referent;
+unknown identity requires retrieval or clarification. Database ambiguity guards
+remain authoritative. Reference metadata is internal and stripped by backends;
+rendered record data remains visible to the reply model and tool resolver.
+
+Planner direct execution supplies the tagged text-tool result without
+native tool-call fields.
+
+Recorded resource metadata also supplies a bounded reply data block independent
+of result prose truncation. When resources are carried over, reply guidance requires the current
+follow-up action to run using the referenced ID before claiming completion.
+Earlier results provide identity rather than proof of the latest action.

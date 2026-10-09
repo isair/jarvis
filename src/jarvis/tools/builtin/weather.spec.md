@@ -15,3 +15,13 @@ A non-empty name is passed as a geocoding query through the existing fixed
 geocoding endpoint. Detection/extraction failure requests a city from the user;
 the helper does not invent coordinates or produce weather data. Explicit
 location arguments and successfully detected coordinates retain precedence.
+
+## Missing personal context
+
+When explicit arguments, detected coordinates and current-utterance extraction
+cannot supply a place, the tool returns `missing_context="location"` with its
+clarification. The reply layer's shared personal-context resolver can supply
+an evidence-backed city and retry. Weather itself does not read diary or graph
+memory. See `../../reply/personal_context.spec.md` for the source, freshness,
+conflict and attribution contract. Successful detected coordinates and explicit
+arguments bypass that resolution.
