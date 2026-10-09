@@ -312,10 +312,11 @@ except Exception as _mlx_err:
 try:
     from faster_whisper import WhisperModel
     FASTER_WHISPER_AVAILABLE = True
-except Exception:
+except Exception as _faster_whisper_error:
     # Catch broad: the faster-whisper import chain can raise ValueError
     # (e.g. "psutil.__spec__ is not set") in some environments.
     WhisperModel = None
+    debug_log(f"faster-whisper unavailable: {type(_faster_whisper_error).__name__}", "voice")
 
 
 def _is_faster_whisper_turbo_supported() -> bool:

@@ -18,6 +18,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
 
 SCENARIO = r"""
@@ -97,4 +99,38 @@ def test_listener_imports_without_portaudio():
         error='OSError("PortAudio library not found")',
         attr="sd",
     )
+    _assert_ok(result)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize('error', [
+    'ImportError("fixture native binary blocked")',
+    'OSError("fixture shared library unavailable")',
+    'ValueError("fixture optional module metadata unavailable")',
+])
+def test_text_submission_survives_unavailable_speech_backend(error):
+    """An optional recognition backend cannot prevent a typed reply."""
+    extra = r'''
+import threading
+from unittest.mock import patch
+from jarvis.memory.conversation import DialogueMemory
+
+m._global_cfg = object()
+m._global_db = object()
+m._global_dialogue_memory = DialogueMemory(inactivity_timeout=300, max_interactions=20)
+completed = threading.Event()
+replies = []
+def complete(reply):
+    replies.append(reply)
+    completed.set()
+def text_engine(*, text, tts, **kwargs):
+    assert tts is None
+    return "Typed reply: " + text
+with patch('jarvis.reply.engine.run_reply_engine', text_engine):
+    m.submit_text_query('hello Jarvis', on_complete=complete)
+    assert completed.wait(5), 'Typed query never completed'
+assert replies == ['Typed reply: hello Jarvis'], replies
+'''
+    result = _run('jarvis.daemon', dep='faster_whisper', error=error,
+                  attr='_global_db', extra=extra)
     _assert_ok(result)
