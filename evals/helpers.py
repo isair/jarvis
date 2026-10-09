@@ -7,7 +7,8 @@ from typing import Optional, Dict, Any, List, Callable, Tuple
 import os
 
 
-# Eval inference and open-ended judging share the selected local model.
+# Eval inference uses the selected model; open-ended verification can
+# independently select EVAL_VERIFIER_MODEL on the same local transport.
 # The unset model follows the product chat default; EVAL_JUDGE_MODEL selects
 # another supported tier when comparing quality on constrained hardware.
 from jarvis.config import DEFAULT_CHAT_MODEL
@@ -490,6 +491,10 @@ def is_judge_llm_available() -> bool:
 def call_judge_llm(system_prompt: str, user_prompt: str, timeout_sec: float = 120.0) -> Optional[str]:
     """Call the judge LLM with a prompt.
 
+    ``EVAL_VERIFIER_MODEL`` selects an independent verifier; when unset or
+    blank, verification uses the model selected by ``EVAL_JUDGE_MODEL``.
+    The actor model and transport remain unchanged.
+
     Supports both Ollama (``/api/chat``) and OpenAI-compatible (``/v1/chat/completions``)
     endpoints. An explicit provider override takes precedence over detection.
     """
@@ -504,8 +509,9 @@ def call_judge_llm(system_prompt: str, user_prompt: str, timeout_sec: float = 12
         except Exception:
             return False
 
+    verifier_model = os.environ.get("EVAL_VERIFIER_MODEL", "").strip() or JUDGE_MODEL
     openai_payload = {
-        "model": JUDGE_MODEL,
+        "model": verifier_model,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
