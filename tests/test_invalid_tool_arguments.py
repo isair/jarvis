@@ -123,3 +123,13 @@ def test_ambiguous_multi_call_envelope_cannot_mix_names_and_arguments():
     name, arguments, _ = engine._extract_text_tool_call(content, {'getWeather', 'localFiles'})
     assert name == 'getWeather'
     assert arguments is None, 'Later function arguments must never be attached to an earlier tool'
+
+
+def test_text_protocol_examples_use_consistent_argument_objects():
+    import json
+    from jarvis.tools.registry import generate_tools_description
+    prompts = [generate_tools_description(['webSearch']), engine._text_tool_call_guidance(['webSearch'])]
+    for prompt in prompts:
+        call_line = next(line for line in prompt.splitlines() if line.startswith('tool_calls: '))
+        call = json.loads(call_line.removeprefix('tool_calls: '))[0]
+        assert isinstance(call['function']['arguments'], dict)

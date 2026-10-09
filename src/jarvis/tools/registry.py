@@ -234,7 +234,7 @@ def generate_tools_description(allowed_tools: Optional[List[str]] = None, mcp_to
     names = list(allowed_tools or list(BUILTIN_TOOLS.keys()))
     lines: List[str] = []
     lines.append("Tool-use protocol: Use the tool_calls field in your response:")
-    lines.append('tool_calls: [{"id": "call_<id>", "type": "function", "function": {"name": "<toolName>", "arguments": "<json_string>"}}]')
+    lines.append('tool_calls: [{"id": "call_<id>", "type": "function", "function": {"name": "<toolName>", "arguments": {"<argument_name>": "<value>"}}}]')
     lines.append("\nAvailable tools and when to use them:")
 
     # Add built-in tools
