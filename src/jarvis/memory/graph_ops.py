@@ -264,8 +264,11 @@ def extract_graph_memories(
         "user says they love Possessor: emit 'The user enjoys the film "
         "Possessor' (USER) AND 'Possessor (2020) is directed by Brandon "
         "Cronenberg' (WORLD) if that was established.\n\n"
-        "Respond with ONLY a JSON array of objects of the exact shape "
-        '`{\"branch\": \"USER|DIRECTIVES|WORLD\", \"fact\": \"...\"}`. '
+        "Respond with ONLY a valid JSON array. Every entry is an object with "
+        "both named keys: \"branch\" and \"fact\". Repeat both keys in every "
+        "object, even when consecutive entries have the same branch. "
+        "The branch value is exactly USER, DIRECTIVES or WORLD; the fact value "
+        "is a string. Do not omit a key or use a bare branch value. "
         "If nothing novel was learned, respond with `[]`.\n"
         "Example:\n"
         '[{"branch": "USER", "fact": "The user follows an 1800 kcal daily meal plan"},\n'
