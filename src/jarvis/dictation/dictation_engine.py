@@ -186,19 +186,13 @@ def _clipboard_paste(text: str) -> None:
     # On macOS, use CGEvent API directly — avoids pynput modifier state
     # conflicts and doesn't need separate osascript permissions.
     if system == "darwin":
-        global _accessibility_warned
-        if not _accessibility_warned and not _check_macos_accessibility():
-            _accessibility_warned = True
-            debug_log(
-                "Accessibility permission required for paste — "
-                "opened System Settings. Grant permission and restart Jarvis.",
-                "dictation",
-            )
-            return
-        if _paste_cgevent():
+        if _check_macos_accessibility() and _paste_cgevent():
             debug_log("paste sent via CGEvent", "dictation")
             return
-        debug_log("CGEvent paste failed, falling back to pynput", "dictation")
+        debug_log("native paste unavailable; dictated text retained on clipboard", "dictation")
+        print("  ⚠️  Dictation could not be pasted automatically. The text is on your "
+              "clipboard; paste it manually with Cmd+V.", flush=True)
+        return
 
     if pynput_keyboard is None:
         debug_log("pynput unavailable — cannot simulate paste", "dictation")
@@ -295,6 +289,7 @@ def _check_macos_accessibility() -> bool:
     Returns True if granted, False if not. On first denial, opens
     System Settings to the Accessibility pane so the user can grant it.
     """
+    global _accessibility_warned
     try:
         import ctypes
         ats = ctypes.cdll.LoadLibrary(
@@ -303,8 +298,9 @@ def _check_macos_accessibility() -> bool:
         # AXIsProcessTrusted() -> Boolean
         ats.AXIsProcessTrusted.restype = ctypes.c_bool
         trusted = ats.AXIsProcessTrusted()
-        if not trusted:
-            debug_log("Accessibility permission not granted — opening System Settings", "dictation")
+        if not trusted and not _accessibility_warned:
+            _accessibility_warned = True
+            debug_log("Accessibility permission not granted, opening System Settings", "dictation")
             import subprocess
             subprocess.Popen([
                 "open",
@@ -313,7 +309,7 @@ def _check_macos_accessibility() -> bool:
         return trusted
     except Exception as exc:
         debug_log(f"Accessibility check failed: {exc}", "dictation")
-        return True  # Assume granted if check fails
+        return False
 
 
 # Track whether we've already warned about Accessibility
@@ -340,36 +336,39 @@ def _paste_cgevent() -> bool:
         ]
         # CGEventSetFlags(event, flags)
         cg.CGEventSetFlags.argtypes = [ctypes.c_void_p, ctypes.c_uint64]
+        cg.CGEventSetFlags.restype = None
         # CGEventPost(tap, event)
         cg.CGEventPost.argtypes = [ctypes.c_uint32, ctypes.c_void_p]
+        cg.CGEventPost.restype = None
         # CFRelease(cf) — lives in CoreFoundation
         cf.CFRelease.argtypes = [ctypes.c_void_p]
+        cf.CFRelease.restype = None
 
         kCGHIDEventTap = 0
         kVK_V = 9  # macOS virtual keycode for 'v'
         kCGEventFlagMaskCommand = 0x100000
 
-        # Key down with Cmd
+        # Prepare the complete key pair before sending any input.
         event_down = cg.CGEventCreateKeyboardEvent(None, kVK_V, True)
         if not event_down:
             debug_log("CGEvent: failed to create key-down event", "dictation")
             return False
-        cg.CGEventSetFlags(event_down, kCGEventFlagMaskCommand)
-        cg.CGEventPost(kCGHIDEventTap, event_down)
-        cf.CFRelease(event_down)
-
-        time.sleep(0.01)
-
-        # Key up with Cmd
-        event_up = cg.CGEventCreateKeyboardEvent(None, kVK_V, False)
-        if not event_up:
-            debug_log("CGEvent: failed to create key-up event", "dictation")
-            return False
-        cg.CGEventSetFlags(event_up, kCGEventFlagMaskCommand)
-        cg.CGEventPost(kCGHIDEventTap, event_up)
-        cf.CFRelease(event_up)
-
-        return True
+        event_up = None
+        try:
+            event_up = cg.CGEventCreateKeyboardEvent(None, kVK_V, False)
+            if not event_up:
+                debug_log("CGEvent: failed to create key-up event", "dictation")
+                return False
+            cg.CGEventSetFlags(event_down, kCGEventFlagMaskCommand)
+            cg.CGEventSetFlags(event_up, kCGEventFlagMaskCommand)
+            cg.CGEventPost(kCGHIDEventTap, event_down)
+            time.sleep(0.01)
+            cg.CGEventPost(kCGHIDEventTap, event_up)
+            return True
+        finally:
+            if event_up:
+                cf.CFRelease(event_up)
+            cf.CFRelease(event_down)
     except Exception as exc:
         debug_log(f"CGEvent paste failed: {exc}", "dictation")
         return False
