@@ -144,6 +144,14 @@ def prepare_faster_whisper_model(model_name: str) -> str:
         path = _run_download_worker(model_name)
     except ModelDownloadError as error:
         debug_log(f'Whisper download failed: {error.category}', 'voice')
+        if error.category in ('timeout', 'worker_exit'):
+            print('  💡 Any cached files have been kept. Check your connection and restart Jarvis '
+                  'to resume the speech model download.', flush=True)
+            if error.category == 'timeout':
+                print('     🎤 For a smaller download, choose a smaller Whisper model in Settings.', flush=True)
+            else:
+                print('     📋 If the download process stops again, use Report Issue in Logs '
+                      'to share what happened.', flush=True)
         raise
     debug_log('Whisper model files prepared by isolated download', 'voice')
     return path

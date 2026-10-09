@@ -531,7 +531,10 @@ up to four retries with exponential backoff (2, 4, 8 and 16 seconds), including
 when an upstream cache fallback hides the remote error. An incomplete explicit
 local directory fails immediately. Every model constructor receives the
 local path and `local_files_only=True`. Cached files remain available after a
-failed attempt, retaining the Hub's download resume behaviour.
+failed attempt, retaining the Hub's download resume behaviour. Timeout and
+child-exit failures explain cache retention and restarting to resume. Timeout
+guidance also points to a smaller Whisper model in Settings; repeated child
+exits point to Report Issue in Logs.
 
 ### Corrupted Cache Recovery
 
