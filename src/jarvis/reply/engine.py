@@ -202,10 +202,10 @@ def _text_tool_call_guidance(allowed_names: list[str]) -> str:
         "\nExact tool-call syntax (copy this shape — emit nothing else on a "
         "tool-calling turn):\n"
         'tool_calls: [{"id": "call_1", "type": "function", "function": '
-        '{"name": "webSearch", "arguments": "{\\"search_query\\": '
-        '\\"example query\\"}"}}]\n'
+        '{"name": "webSearch", "arguments": {"query": "example query"}}}]\n'
         "Notes:\n"
-        "- `arguments` is a JSON STRING (quotes escaped), not a bare object.\n"
+        "- `arguments` is a JSON object containing the tool's input fields. "
+        "Copy the object shape above without double-encoding it as a string.\n"
         "- Never emit just a tool name by itself (e.g. `webSearch` or `web`) — "
         "a bare name is not a valid call and the tool will not run.\n"
         "- Never invoke tools that are not in the list above. The ONLY tools "
@@ -306,12 +306,46 @@ def _is_malformed_model_output(content: str) -> bool:
     return False
 
 
+def _decode_tool_arguments(raw):
+    """Decode an argument object without substituting defaults on failure."""
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        try:
+            decoded = json.loads(raw)
+        except (ValueError, TypeError):
+            return None
+        return decoded if isinstance(decoded, dict) else None
+    return None
+
+
+def _recover_unterminated_argument_string(raw):
+    """Recover a complete object inside a missing outer string terminator."""
+    if not raw.startswith('"'):
+        return None
+    escaped = raw[1:]
+    suffix_start = len(escaped.rstrip(' \t\r\n}]'))
+    for end in range(suffix_start + 1, len(escaped) + 1):
+        if escaped[end - 1] != '}':
+            continue
+        try:
+            unwrapped = json.loads('"' + escaped[:end] + '"')
+        except (ValueError, TypeError):
+            continue
+        decoded = _decode_tool_arguments(unwrapped)
+        if decoded is not None:
+            return decoded
+    return None
+
+
 def _extract_text_tool_call(content_field: str, known_names: set):
     """Parse a tool call out of a content-mode LLM response.
 
     Small models emit several shapes when instructed to use text-based tool
     calling; this helper attempts each in order and returns (name, args, id)
     on the first match, or (None, None, None) if nothing parses.
+    An identified call with invalid arguments returns (name, None, id) so
+    the engine can request correction without executing empty defaults.
 
     Supported shapes:
       1. `tool_calls: [{"id": ..., "function": {"name": ..., "arguments": ...}}]`
@@ -338,39 +372,36 @@ def _extract_text_tool_call(content_field: str, known_names: set):
         try:
             data = json.loads(fence_match.group(1).strip())
             name = str(data.get("name", "")).strip()
-            args = data.get("arguments", data.get("args", {}))
+            args = _decode_tool_arguments(data.get("arguments", data.get("args", {})))
             if name:
-                return name, (args if isinstance(args, dict) else {}), f"call_{uuid.uuid4().hex[:8]}"
+                return name, args, f"call_{uuid.uuid4().hex[:8]}"
         except Exception:
             pass
 
     # Form: `tool_calls: [...]` JSON array literal
     tc_literal = re.search(
-        r"tool_calls\s*:\s*(\[.+?\])",
+        r"tool_calls\s*:\s*(\[)",
         content_field,
         re.DOTALL,
     )
     if tc_literal:
-        raw_literal = tc_literal.group(1)
+        raw_literal = content_field[tc_literal.start(1):]
         try:
-            arr = json.loads(raw_literal)
+            arr, _ = json.JSONDecoder().raw_decode(raw_literal)
             if isinstance(arr, list) and arr:
                 first = arr[0]
                 if isinstance(first, dict) and isinstance(first.get("function"), dict):
                     func = first["function"]
                     name = str(func.get("name", "")).strip()
-                    raw_args = func.get("arguments")
-                    if isinstance(raw_args, str):
+                    raw_args = func.get("arguments", {})
+                    parsed_args = _decode_tool_arguments(raw_args)
+                    # The text protocol also accepts a literal search string.
+                    if (parsed_args is None and isinstance(raw_args, str)
+                            and raw_args.strip() and raw_args.lstrip()[0] not in '{["'):
                         try:
-                            parsed_args = json.loads(raw_args)
-                            if not isinstance(parsed_args, dict):
-                                parsed_args = {"query": raw_args}
-                        except Exception:
+                            json.loads(raw_args)
+                        except ValueError:
                             parsed_args = {"query": raw_args}
-                    elif isinstance(raw_args, dict):
-                        parsed_args = raw_args
-                    else:
-                        parsed_args = {}
                     tool_call_id = first.get("id") or f"call_{uuid.uuid4().hex[:8]}"
                     if name:
                         return name, parsed_args, tool_call_id
@@ -392,25 +423,19 @@ def _extract_text_tool_call(content_field: str, known_names: set):
                         raw_literal,
                         re.DOTALL,
                     )
-                    parsed_args: dict = {}
+                    parsed_args = None
                     if args_match:
                         raw = args_match.group(1)
                         def _lenient_json_object(candidate: str) -> dict | None:
-                            """Parse a JSON object, trimming trailing garbage."""
+                            """Accept a complete object with surplus closing braces."""
                             candidate = candidate.strip()
-                            # Greedy-trim trailing chars until a balanced
-                            # object parses cleanly. Handles the common
-                            # small-model "extra closing braces" bug.
-                            for end in range(len(candidate), 0, -1):
-                                chunk = candidate[:end]
-                                if not chunk.endswith("}"):
-                                    continue
-                                try:
-                                    parsed = json.loads(chunk)
-                                    if isinstance(parsed, dict):
-                                        return parsed
-                                except Exception:
-                                    continue
+                            try:
+                                parsed, end = json.JSONDecoder().raw_decode(candidate)
+                                remainder = candidate[end:].strip()
+                                if isinstance(parsed, dict) and not remainder.strip('}'):
+                                    return parsed
+                            except (ValueError, TypeError):
+                                pass
                             return None
 
                         if raw.startswith('"'):
@@ -425,13 +450,19 @@ def _extract_text_tool_call(content_field: str, known_names: set):
                                 if inner is not None:
                                     parsed_args = inner
                                 else:
-                                    parsed_args = {"query": unwrapped}
+                                    parsed_args = None
                             elif isinstance(unwrapped, dict):
                                 parsed_args = unwrapped
                         else:
                             lenient = _lenient_json_object(raw)
                             if lenient is not None:
                                 parsed_args = lenient
+                    else:
+                        start = re.search(r'"arguments"\s*:\s*', raw_literal)
+                        if start:
+                            parsed_args = _recover_unterminated_argument_string(
+                                raw_literal[start.end():]
+                            )
                     id_match = re.search(r'"id"\s*:\s*"([^"]+)"', raw_literal)
                     tool_call_id = id_match.group(1) if id_match else f"call_{uuid.uuid4().hex[:8]}"
                     return name, parsed_args, tool_call_id
@@ -469,10 +500,13 @@ def _extract_text_tool_call(content_field: str, known_names: set):
                 candidate = json.loads(inside)
                 if isinstance(candidate, dict):
                     parsed_args = candidate
+                elif isinstance(candidate, str):
+                    parsed_args = {"query": candidate}
                 else:
-                    parsed_args = {"query": str(candidate)}
+                    parsed_args = None
             except Exception:
-                parsed_args = {"query": inside.strip().strip('"').strip("'")}
+                parsed_args = (None if inside.lstrip().startswith(('{', '['))
+                               else {"query": inside.strip().strip('"').strip("'")})
         return name, parsed_args, f"call_{uuid.uuid4().hex[:8]}"
 
     return None, None, None
@@ -1728,7 +1762,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     if isinstance(first, dict) and isinstance(first.get("function"), dict):
                         func = first["function"]
                         name = str(func.get("name", "")).strip()
-                        args = func.get("arguments")
+                        args = _decode_tool_arguments(func.get("arguments", {}))
                         tool_call_id = first.get("id")  # Extract tool_call_id
                         if not tool_call_id:
                             # Generate a shorthand ID if LLM didn't provide one
@@ -1739,13 +1773,13 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                             # Extract from nested structure: {'tool': {'args': {...}, 'name': ...}}
                             tool_info = args.get("tool", {})
                             if isinstance(tool_info, dict):
-                                actual_args = tool_info.get("args", {})
+                                actual_args = _decode_tool_arguments(tool_info.get("args", {}))
                                 actual_name = tool_info.get("name", name)
                                 if actual_name:
-                                    return actual_name, (actual_args if isinstance(actual_args, dict) else {}), tool_call_id
+                                    return actual_name, actual_args, tool_call_id
 
                         if name:
-                            return name, (args if isinstance(args, dict) else {}), tool_call_id
+                            return name, args, tool_call_id
 
                 # Content-mode tool-call parsing: the model returned prose that may
                 # encode a tool call in one of several shapes (markdown fence,
@@ -2224,7 +2258,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             tool_name, tool_args, tool_call_id = t_name, t_args, t_call_id
             debug_log(f"🛠️ tool requested: {tool_name}", "planning")
             try:
-                _args_preview = json.dumps(tool_args or {}, ensure_ascii=False)
+                _args_preview = json.dumps(tool_args, ensure_ascii=False)
             except Exception:
                 _args_preview = str(tool_args)
             if len(_args_preview) > 160:
@@ -2241,6 +2275,22 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     "tool_call_id": tool_call_id,
                     "content": f"Error: Tool '{tool_name}' is not available. Available tools: {', '.join(allowed_tools[:5])}{'...' if len(allowed_tools) > 5 else ''}"
                 })
+                continue
+
+            if not isinstance(tool_args, dict):
+                _enter_plan_recovery()
+                debug_log(f"invalid argument object for {tool_name}; tool not executed", "planning")
+                print(f"    ⚠️ Invalid arguments for {tool_name}; tool not executed.", flush=True)
+                error = (
+                    "Arguments must be a complete JSON object. This tool was not executed. "
+                    "Emit a corrected call preserving the user's requested values; "
+                    "do not replace malformed arguments with empty defaults."
+                )
+                if use_text_tools:
+                    messages.append({"role": "user", "content": f"[Tool error: {tool_name}] {error}"})
+                else:
+                    messages.append({"role": "tool", "tool_call_id": tool_call_id,
+                                     "content": error})
                 continue
 
             # Cap toolSearchTool usage per reply so a confused model can't

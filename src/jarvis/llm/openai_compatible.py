@@ -86,8 +86,8 @@ def _normalise_response(data: Dict[str, Any]) -> Dict[str, Any]:
                             try:
                                 decoded_func["arguments"] = json.loads(args)
                             except (json.JSONDecodeError, ValueError):
-                                # Leave as-is; the engine's content-mode
-                                # parser may still recover something.
+                                # Retain malformed data for the reply
+                                # engine to reject without execution.
                                 pass
                         decoded_tc["function"] = decoded_func
                     decoded_calls.append(decoded_tc)
@@ -248,10 +248,11 @@ class OpenAICompatibleBackend(LLMBackend):
     ) -> List[Dict[str, Any]]:
         """JSON-encode ``tool_calls[*].function.arguments`` in assistant messages.
 
-        The OpenAI API spec requires ``arguments`` to be a JSON string, but
-        ``normalise_openai_response`` decodes it to a dict for internal use.
-        When that assistant message is sent back to the server on the next
-        turn, we must re-encode it.
+        The provider requires ``arguments`` to be a JSON string. Response
+        normalisation decodes JSON values for the reply engine, so outbound
+        history re-encodes every non-string value. Invalid object shapes
+        retain their values in failed-call history rather than breaking the
+        provider's wire format.
         """
         for msg in messages:
             if msg.get("role") != "assistant":
@@ -263,8 +264,8 @@ class OpenAICompatibleBackend(LLMBackend):
                 func = tc.get("function")
                 if not isinstance(func, dict):
                     continue
-                args = func.get("arguments")
-                if isinstance(args, dict):
+                args = func.get("arguments", {})
+                if not isinstance(args, str):
                     func["arguments"] = json.dumps(args)
         return messages
 
