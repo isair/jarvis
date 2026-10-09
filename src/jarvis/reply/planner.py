@@ -386,9 +386,6 @@ def tool_steps_of(plan: Sequence[str]) -> List[str]:
     return list(steps[:-1])
 
 
-_TOOL_NAME_HEAD_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_-]*)")
-
-
 def tool_names_in_plan(
     plan: Sequence[str], known_names: Sequence[str],
 ) -> List[str]:
@@ -400,15 +397,21 @@ def tool_names_in_plan(
     returned — this is the allow-list guard that prevents the chat
     model from seeing hallucinated tool names.
     """
-    known = set(known_names)
+    if not known_names:
+        return []
+    name_head = re.compile(
+        r"^\s*(" + "|".join(
+            re.escape(name) for name in sorted(set(known_names), key=len, reverse=True)
+        ) + r")(?=\s|[:(]|$)"
+    )
     seen: set[str] = set()
     out: List[str] = []
     for step in tool_steps_of(plan):
-        m = _TOOL_NAME_HEAD_RE.match(step)
+        m = name_head.match(step)
         if not m:
             continue
         candidate = m.group(1)
-        if candidate in known and candidate not in seen:
+        if candidate not in seen:
             seen.add(candidate)
             out.append(candidate)
     return out
