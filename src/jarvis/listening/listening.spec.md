@@ -36,6 +36,14 @@ Warnings are transition-based; dictation pauses suspend health checks. With
 peak level and capture rate, without saving microphone audio. Linux warnings
 point users to PipeWire/PulseAudio recording-source routing.
 
+Audio capture (`sounddevice`), array processing (`numpy`) and optional WebRTC VAD
+have independent import boundaries. An unavailable VAD uses the configured
+energy threshold without disabling working capture or array processing. Native
+library and module-initialisation exceptions are reported against the dependency
+that failed. PortAudio guidance belongs to capture failures, not VAD or array
+processing failures. Capture cannot start without sounddevice and NumPy; these
+failures do not prevent the daemon's text-chat path from loading.
+
 Utterance assembly enforces `max_utterance_ms` during continuous speech as
 well as at silent endpoints. While TTS is speaking, `tts_max_utterance_ms`
 applies so interruption audio reaches Whisper promptly. Limits count complete
