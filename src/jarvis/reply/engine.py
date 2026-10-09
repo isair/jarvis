@@ -2265,6 +2265,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 isinstance(empty_message, dict)
                 and isinstance(empty_message.get("content"), str)
                 and empty_message.get("role", "assistant") == "assistant"
+                and not empty_message.get("tool_calls")
             )
             if recoverable_empty and not empty_response_retry_used and turn < max_turns:
                 empty_response_retry_used = True

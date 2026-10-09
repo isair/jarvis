@@ -75,7 +75,9 @@ def test_recovery_cannot_exceed_the_configured_turn_budget(reply_config, db, dia
 
 @pytest.mark.parametrize('unavailable', [None, {'error': 'unavailable'},
                                        {'message': {'role': 'tool', 'content': ''}},
-                                       {'message': {'content': None}}])
+                                       {'message': {'content': None}},
+                                       {'message': {'content': '', 'tool_calls': [{'function': {'arguments': {}}}]}},
+                                       {'message': {'content': '', 'tool_calls': 'invalid'}}])
 def test_unavailable_or_invalid_responses_are_not_empty_successful_turns(reply_config, db, dialogue_memory, unavailable):
     recovered = 'Unavailable response must not lead to this answer.'
     reply, operations = _reply(reply_config, db, dialogue_memory, [unavailable, {'message': {'content': recovered}}])
