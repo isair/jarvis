@@ -1403,66 +1403,37 @@ class LogViewerWindow(QMainWindow):
         self.append_log("🗑️ Logs cleared\n")
 
     def _report_issue(self) -> None:
-        """Open GitHub issue with redacted log contents."""
+        """Review a described, redacted report before opening GitHub."""
+        import platform
         from jarvis import get_version
-        from jarvis.utils.redact import _REDACTION_RULES
+        from jarvis.config import load_settings
+        from jarvis.utils.redact import scrub_secrets
+        from desktop_app.issue_report import IssueReportDialog
 
         try:
             version = get_version()
         except Exception:
-            version = "unknown"
-
-        # Get all log content and redact sensitive information (preserving line breaks)
+            version = ('unknown', 'unknown')
+        metadata = {'Platform': f'{sys.platform} ({platform.release()}, {platform.machine()})'}
+        try:
+            cfg = load_settings()
+            metadata.update({
+                'Configured provider': cfg.llm_provider,
+                'Configured chat model': cfg.llm_chat_model,
+                'Configured Whisper model': cfg.whisper_model,
+                'Configured Whisper backend': cfg.whisper_backend,
+                'Configured Whisper device': cfg.whisper_device,
+            })
+        except Exception as exc:
+            debug_log(f'Issue report settings unavailable: {type(exc).__name__}', 'desktop')
         log_content = self.log_display.toPlainText()
         if not self.download_card.isHidden():
             percentage = f"{self.download_bar.value()}% · " if self.download_bar.maximum() else ''
             log_content += f"\n{self.download_title.text()}: {percentage}{self.download_detail.text()}\n"
-        redacted_logs = log_content
-        for pattern, repl in _REDACTION_RULES:
-            redacted_logs = pattern.sub(repl, redacted_logs)
-
-        # Truncate if too long for URL (GitHub has ~8000 char limit for URLs)
-        # Keep init lines + recent tail (recent logs are most useful for debugging)
-        redacted_logs = _truncate_logs_for_report(redacted_logs, 5000)
-        # Escape backtick fences so log content can't break out of the code block
-        redacted_logs = redacted_logs.replace('```', '`` `')
-
-        title = "Bug Report"
-        body = f"""## Bug Report
-
-**Version:** {version}
-**Platform:** {sys.platform}
-
-### Description
-(Please describe what went wrong or what you expected to happen)
-
-
-
-### Steps to Reproduce
-1.
-2.
-3.
-
-<details>
-<summary>📋 Logs (click to expand)</summary>
-
-```
-{redacted_logs}
-```
-
-</details>
-
-### Additional Context
-(Any other relevant information)
-"""
-        params = urllib.parse.urlencode({
-            'title': title,
-            'body': body,
-            'labels': 'bug'
-        })
-        url = f"https://github.com/isair/jarvis/issues/new?{params}"
-
-        webbrowser.open(url)
+        logs = _truncate_logs_for_report(scrub_secrets(log_content), 5000)
+        debug_log('Issue report composer opened for local review', 'desktop')
+        dialog = IssueReportDialog(logs, version=version, metadata=metadata, parent=self)
+        dialog.exec()
 
 
 class MemoryViewerWindow(QMainWindow):

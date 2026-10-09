@@ -173,12 +173,12 @@ The Inno Setup script also runs a `VerifyCudaInstall` hook after the CUDA downlo
 
 - Real-time log streaming from daemon
 - Monospace font for readability (JetBrains Mono on macOS, Consolas elsewhere)
-- **Report Issue button**: Opens GitHub issue with:
-  - Pre-filled bug report template
-  - Auto-redacted log contents (emails, tokens, JWTs, passwords, etc.)
-  - Logs in collapsible `<details>` section
-  - Version and platform info
-  - Log truncation preserves the init section (everything up to the last `─`×50 separator) + recent tail (most useful for debugging); middle lines are truncated
+- **Report Issue button**: Opens a local composer requiring a title and a description of what went wrong. Expected results and reproduction steps are optional. Whitespace-only required fields keep the GitHub and copy actions disabled.
+- A separate review step gives the read-only report preview most of the window and shows the exact redacted body. Copy and browser actions are available only after advancing to review; Back preserves the entered details. Known secrets and email addresses are scrubbed across all fields, metadata and logs; conversation text can remain and the user can exclude logs. Nothing is submitted automatically.
+- Reports include a readable version/channel, OS/architecture and a whitelist of configured provider, chat model and Whisper choices. Credentials, endpoint URLs and the complete configuration are not included. Configured choices are not presented as observed runtime readiness.
+- Included logs retain current download progress, collapsible formatting and bounded truncation preserving startup, fatal diagnostics and recent activity.
+- Short reports open a pre-filled GitHub issue. Reports whose encoded browser link exceeds 8,000 characters explicitly offer to copy the full report and open GitHub for the user to paste it. The preview and clipboard retain the full prepared body. A browser failure keeps the composer and its contents open with manual-copy guidance.
+- The form scrolls at small window sizes while cancellation, copy and GitHub actions remain outside the scrolling area.
 
 ### Splash Screen
 
