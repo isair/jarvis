@@ -684,6 +684,21 @@ def mock_config():
 
 
 @pytest.fixture
+def configure_mcp_tools(mock_config, monkeypatch):
+    """Supply registered MCP tool metadata without starting external processes."""
+    from jarvis.tools import registry
+
+    def configure(*specs):
+        catalogue = {spec.name: spec for spec in specs}
+        mock_config.mcps = {name.split("__", 1)[0]: {} for name in catalogue}
+        monkeypatch.setattr(registry, "get_cached_mcp_tools", lambda: catalogue.copy())
+        monkeypatch.setattr(registry, "is_mcp_cache_initialized", lambda: False)
+        return catalogue
+
+    return configure
+
+
+@pytest.fixture
 def eval_db():
     """Provide an in-memory database for eval tests."""
     from jarvis.memory.db import Database
