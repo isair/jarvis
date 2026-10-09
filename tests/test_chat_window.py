@@ -675,47 +675,33 @@ class TestChatWindowInputKeys:
 class TestChatWindowTranscriptScroll:
     """New messages keep the latest content visible (auto-scroll to bottom)."""
 
-    def test_append_scrolls_to_bottom_after_many_lines(self, qapp, monkeypatch):
+    @pytest.mark.parametrize("rebuild", [False, True])
+    @pytest.mark.parametrize("kind", ["user", "assistant", "system"])
+    def test_long_transcript_keeps_newest_message_visible(self, qapp, monkeypatch, rebuild, kind):
         from desktop_app.chat_window import ChatWindow
         from PyQt6.QtTest import QTest
 
-        monkeypatch.setattr(
-            "desktop_app.chat_window.get_hot_window_messages", lambda: []
-        )
+        monkeypatch.setattr("desktop_app.chat_window.get_hot_window_messages", lambda: [])
         win = ChatWindow()
         win.show()
         qapp.processEvents()
-        # Force a tall transcript so the viewport is scrolled past the first
-        # lines. Each append must bring the cursor (the view) back to the end.
-        for _ in range(80):
-            win._append_assistant("line of transcript content " * 4)
+        history = ["line of transcript content " * 4 for _ in range(80)]
+        for text in history:
+            win._append_assistant(text)
+        if rebuild:
+            win._render_transcript(win._messages)
         QTest.qWait(100)
 
         scroll_bar = win.transcript_widget.verticalScrollBar()
         assert scroll_bar.maximum() > 0
         assert scroll_bar.value() == scroll_bar.maximum()
-
-    @pytest.mark.parametrize("kind", ["user", "assistant", "system"])
-    def test_new_message_scrolls_to_bottom_from_scrolled_up_position(self, qapp, monkeypatch, kind):
-        from desktop_app.chat_window import ChatWindow
-        from PyQt6.QtTest import QTest
-
-        monkeypatch.setattr("desktop_app.chat_window.get_hot_window_messages", lambda: [])
-
-        win = ChatWindow()
-        win.show()
-        for index in range(80):
-            win._append_assistant(f"older message {index} " * 4)
-        QTest.qWait(100)
-
-        scroll_bar = win.transcript_widget.verticalScrollBar()
         scroll_bar.setValue(scroll_bar.minimum())
         assert scroll_bar.value() < scroll_bar.maximum()
 
         getattr(win, f"_append_{kind}")("newest message")
         QTest.qWait(100)
-
         assert scroll_bar.value() == scroll_bar.maximum()
+        assert win.transcript_text() == "\n".join([*history, "newest message"])
 
 
 @pytest.mark.unit

@@ -27,6 +27,7 @@ from PyQt6.QtGui import (
 )
 from PyQt6.QtWidgets import (
     QHBoxLayout,
+    QLayout,
     QLabel,
     QMainWindow,
     QPlainTextEdit,
@@ -484,12 +485,7 @@ class ChatWindow(QMainWindow):
         self.transcript_widget.verticalScrollBar().rangeChanged.connect(
             self._finish_scroll_to_bottom
         )
-        self._transcript_container = QWidget()
-        self._transcript_layout = QVBoxLayout(self._transcript_container)
-        self._transcript_layout.setContentsMargins(4, 4, 4, 4)
-        self._transcript_layout.setSpacing(16)
-        self._transcript_layout.addStretch(1)
-        self.transcript_widget.setWidget(self._transcript_container)
+        self._render_transcript([])
         root.addWidget(self.transcript_widget, stretch=1)
         self.transcript_widget.hide()
 
@@ -781,6 +777,7 @@ class ChatWindow(QMainWindow):
         """
         container = QWidget()
         layout = QVBoxLayout(container)
+        layout.setSizeConstraint(QLayout.SizeConstraint.SetMinAndMaxSize)
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(16)
         self.empty_state.setVisible(not messages)
