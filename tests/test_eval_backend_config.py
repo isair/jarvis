@@ -1,4 +1,5 @@
 """Evaluation transport configuration uses the requested local backend."""
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -231,9 +232,10 @@ def test_tool_selection_evals_use_selected_backends(monkeypatch, provider, base,
         response.__enter__.return_value = response
         text = payload.get('prompt', payload.get('input', ''))
         vector = [1., 0.] if 'weather' in text.lower() else [0., 1.]
+        answer = json.dumps({'requested_operation': 'Look up weather', 'tools': ['getWeather']})
         response.json.return_value = {
-            'message': {'content': 'getWeather'},
-            'choices': [{'message': {'content': 'getWeather'}}],
+            'message': {'content': answer},
+            'choices': [{'message': {'content': answer}}],
             'embedding': vector, 'data': [{'embedding': vector}],
         }
         return response
@@ -283,7 +285,12 @@ def test_embedding_eval_skips_only_when_selected_model_is_missing(monkeypatch, n
         )
 
 
-@pytest.mark.parametrize('response', [None, 'unrecognisedTool'])
+@pytest.mark.parametrize('response', [
+    None,
+    json.dumps({'requested_operation': 'Look up weather', 'tools': ['unrecognisedTool']}),
+    'getWeather',
+    json.dumps({'requested_operation': 'Look up weather', 'tools': 'getWeather'}),
+])
 @pytest.mark.parametrize('entry', ['filtering', 'context', 'implicit'])
 def test_router_eval_rejects_fallback_even_when_expected_tool_matches(monkeypatch, response, entry):
     from evals import test_tool_selection as evaluation
@@ -291,7 +298,7 @@ def test_router_eval_rejects_fallback_even_when_expected_tool_matches(monkeypatc
     backend = MagicMock()
     backend.direct.return_value = response
     monkeypatch.setattr('evals.tool_routing.get_llm_backend', lambda cfg: backend)
-    with pytest.raises(AssertionError, match='router (returned no model response|response did not select)'):
+    with pytest.raises(AssertionError, match='router'):
         if entry == 'filtering':
             evaluation.TestToolSelectionFilteringLLM().test_llm_selects_relevant_tools(
                 helpers.MockConfig(), 'weather', ['getWeather'], 5,

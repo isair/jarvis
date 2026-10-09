@@ -10,6 +10,7 @@ Strategies (ToolSelectionStrategy enum):
 
 from __future__ import annotations
 
+import json
 import re
 from enum import Enum
 from typing import Dict, List, Optional, TYPE_CHECKING
@@ -252,33 +253,46 @@ def _select_llm(
     can already see at reply time (current local time, user's resolved
     location, recent dialogue). When provided, the router is told that any
     fact visible in that block needs no tool — a query fully answerable from
-    the hint should return 'none'. This avoids enumerating specific cases
+    the hint should return an empty tools array. This avoids enumerating specific cases
     ("time is known", "location is known") in the prompt: the router sees the
     actual data and judges for itself. Gracefully degrades when the hint is
     missing or partial (e.g. location failed to resolve) — the router simply
     has less context and falls back to tool-selection on content.
     """
     catalogue_lines: List[str] = []
-    for name, tool in builtin_tools.items():
+    for name, tool in {**builtin_tools, **mcp_tools}.items():
         if name in _ALWAYS_INCLUDED:
             continue
-        catalogue_lines.append(f"- {name}: {tool.description[:120]}")
-    for name, spec in mcp_tools.items():
-        catalogue_lines.append(f"- {name}: {spec.description[:120]}")
+        required = (tool.inputSchema or {}).get("required", [])
+        requirement = (
+            f" (required inputs: {json.dumps(required, ensure_ascii=False)})"
+            if required else ""
+        )
+        catalogue_lines.append(f"- {name}: {tool.description[:120]}{requirement}")
     catalogue = "\n".join(catalogue_lines)
 
     sys_prompt = (
-        "You are a tool router. Given a user query and a list of available tools, "
-        "pick AT MOST the 5 most relevant tools for the query and return ONLY a "
-        "comma-separated list of their exact names. Prefer fewer (1-3) when the "
+        "You are a tool router. Interpret the full request using KNOWN FACTS "
+        "and RECENT DIALOGUE when present. When the exact answer is visible "
+        "in KNOWN FACTS, the requested operation is to answer from those "
+        "facts and the tools array must be empty. Given a user query and "
+        "a list of available tools, "
+        "identify the operation the user wants performed, then pick AT MOST the "
+        "5 tools whose capabilities perform that operation. Return JSON with "
+        "two fields: requested_operation (the user request translated into a "
+        "short English action, preserving the verb and target) and tools "
+        "(an array of exact tool names). Prefer fewer (1-3) when the "
         "query is clearly about one thing; never return more than 5. "
-        "Return 'none' ONLY for pure greetings/small talk OR when the exact "
+        "Return an empty tools array ONLY for pure greetings/small talk OR when the exact "
         "fact needed is already visible in the KNOWN FACTS block below. If "
         "the query depends on data NOT in KNOWN FACTS — the user's logs, "
         "current conditions, web info, files, screen — pick a tool, even "
         "when the phrasing is indirect ('should I order pizza?' → needs the "
         "meal log; 'do I need a jacket?' → needs the weather). Do NOT pick a "
-        "tool merely because its domain is loosely adjacent. "
+        "tool merely because its domain is loosely adjacent. Prefer a tool "
+        "whose required inputs can be supplied from the request or context. "
+        "If an operation needs an unknown record identifier, include a "
+        "retrieval tool to obtain that identifier rather than guessing it. "
         "If the query asks for DETAILED information on a topic (articles, "
         "explanations, write-ups), include BOTH a search tool AND a page-fetch "
         "tool so the model can follow the chain. "
@@ -286,8 +300,12 @@ def _select_llm(
         "continuation of that dialogue: a short follow-up (e.g. naming a "
         "place, confirming an option, answering a clarifying question the "
         "assistant just asked) should route to the tool that answers the "
-        "COMBINED intent across turns, not to 'none'. "
-        "Output nothing else — no explanations, no prose, no code fences."
+        "COMBINED intent across turns, not to an empty tools array. "
+        'Example shape: {"requested_operation": "short description", '
+        '"tools": ["exact_tool_name"]}. Every tool entry is a string, '
+        'never an object. When known facts answer the query, return '
+        '{"requested_operation": "answer from known facts", "tools": []}. '
+        "Output only the JSON object, without code fences."
     )
     hint_section = ""
     if context_hint and context_hint.strip():
@@ -330,7 +348,7 @@ def _select_llm(
         f"Available tools:\n{catalogue}\n\n"
         f"{hint_section}"
         f"User query: {query}\n\n"
-        "Top tools (comma-separated, max 5, or 'none'):"
+        "Requested operation and tools (JSON):"
     )
 
     try:
@@ -338,6 +356,7 @@ def _select_llm(
             llm_model, sys_prompt, user_prompt,
             timeout_sec=llm_timeout_sec,
             max_tokens=_ROUTER_TOKEN_BUDGET,
+            temperature=0.0,
         )
     except Exception as e:
         debug_log(f"LLM tool selection failed: {e}, falling back to keyword strategy", "planning")
@@ -347,21 +366,33 @@ def _select_llm(
         debug_log("LLM tool selection returned empty, falling back to keyword strategy", "planning")
         return _select_keyword(query, builtin_tools, mcp_tools)
 
-    resp_lower = resp.strip().lower()
-    if resp_lower == "none":
-        debug_log("LLM tool selection returned 'none' — including only mandatory tools", "planning")
-        return [t for t in _ALWAYS_INCLUDED if t in builtin_tools or t in mcp_tools]
+    try:
+        payload = json.loads(resp)
+        if not isinstance(payload, dict):
+            raise ValueError("routing response is not an object")
+        operation = payload.get("requested_operation")
+        names = payload.get("tools")
+        if not isinstance(operation, str) or not operation.strip():
+            raise ValueError("requested operation is missing")
+        if not isinstance(names, list) or not all(isinstance(name, str) for name in names):
+            raise ValueError("tool selection is not an array of names")
+    except (ValueError, TypeError):
+        debug_log("LLM tool selection returned invalid JSON, falling back to keyword strategy", "planning")
+        return _select_keyword(query, builtin_tools, mcp_tools)
+
+    if not names:
+        debug_log("LLM tool selection returned no tools, including only mandatory tools", "planning")
+        return _ensure_always_included([], builtin_tools, mcp_tools)
 
     known = set(builtin_tools.keys()) | set(mcp_tools.keys())
     selected: List[str] = []
-    # Chatty routers wrap names in backticks, bullet them, or emit bracketed
-    # JSON-ish lists. Strip every punctuation char that can't appear in a tool
-    # name before matching, so the extraction is robust to formatting drift.
-    _STRIP_CHARS = "'\"`*-_[](){}<>,.:;!?\\ "
-    for token in re.split(r"[,\s]+", resp):
-        clean = token.strip(_STRIP_CHARS)
-        if clean in known and clean not in selected:
-            selected.append(clean)
+    for name in names:
+        if name in known and name not in selected:
+            selected.append(name)
+
+    if not selected:
+        debug_log("LLM tool selection matched nothing, falling back to keyword strategy", "planning")
+        return _select_keyword(query, builtin_tools, mcp_tools)
 
     # Hard cap — a chatty router that ignores the prompt cap must not bloat
     # the downstream tool list. Preserve order (model's ranking).
@@ -369,10 +400,6 @@ def _select_llm(
         selected = selected[:_LLM_MAX_SELECTED]
 
     selected = _ensure_always_included(selected, builtin_tools, mcp_tools)
-
-    if len(selected) <= len(_ALWAYS_INCLUDED):
-        debug_log("LLM tool selection matched nothing, falling back to keyword strategy", "planning")
-        return _select_keyword(query, builtin_tools, mcp_tools)
 
     debug_log(f"LLM tool selection: {len(selected)}/{len(known)} tools selected", "planning")
     return selected

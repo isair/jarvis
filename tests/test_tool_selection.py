@@ -1,8 +1,10 @@
 """Tests for tool selection strategies."""
 
+import json
 import pytest
 from unittest.mock import MagicMock
 
+from jarvis.tools.registry import ToolSpec
 from jarvis.tools.selection import (
     select_tools,
     ToolSelectionStrategy,
@@ -34,6 +36,10 @@ def _embedding_backend(text_to_vec=None, fail=False):
     return backend
 
 
+def _selection(*names):
+    return json.dumps({'requested_operation': 'Perform the requested action', 'tools': list(names)})
+
+
 def _llm_backend(direct_fn=None, return_value=None, raises=None):
     """Build a MagicMock chat backend whose ``direct`` returns or raises."""
     backend = MagicMock()
@@ -50,45 +56,23 @@ def _llm_backend(direct_fn=None, return_value=None, raises=None):
 # Helpers
 # ---------------------------------------------------------------------------
 
-class FakeTool:
-    """Minimal tool stand-in for testing."""
-    def __init__(self, name: str, description: str):
-        self._name = name
-        self._description = description
-
-    @property
-    def name(self):
-        return self._name
-
-    @property
-    def description(self):
-        return self._description
-
-
-class FakeToolSpec:
-    """Minimal ToolSpec stand-in for testing."""
-    def __init__(self, name: str, description: str):
-        self.name = name
-        self.description = description
-
-
 def _builtin():
     """Return a small set of fake builtin tools."""
     return {
-        "webSearch": FakeTool("webSearch", "Search the web using DuckDuckGo for current information, news, or general queries."),
-        "getWeather": FakeTool("getWeather", "Get current weather conditions."),
-        "logMeal": FakeTool("logMeal", "Log a single meal when the user mentions eating or drinking something."),
-        "fetchMeals": FakeTool("fetchMeals", "Retrieve meals from the database for a given time range."),
-        "screenshot": FakeTool("screenshot", "Capture a selected screen region and OCR the text."),
-        "localFiles": FakeTool("localFiles", "Safely read, write, list, append, or delete files within your home directory."),
-        "stop": FakeTool("stop", "End the current conversation."),
+        "webSearch": ToolSpec("webSearch", "Search the web using DuckDuckGo for current information, news, or general queries."),
+        "getWeather": ToolSpec("getWeather", "Get current weather conditions."),
+        "logMeal": ToolSpec("logMeal", "Log a single meal when the user mentions eating or drinking something."),
+        "fetchMeals": ToolSpec("fetchMeals", "Retrieve meals from the database for a given time range."),
+        "screenshot": ToolSpec("screenshot", "Capture a selected screen region and OCR the text."),
+        "localFiles": ToolSpec("localFiles", "Safely read, write, list, append, or delete files within your home directory."),
+        "stop": ToolSpec("stop", "End the current conversation."),
     }
 
 
 def _mcp():
     """Return a small set of fake MCP tools."""
     return {
-        "homeassistant__turn_on": FakeToolSpec("homeassistant__turn_on", "Turn on a smart home device."),
+        "homeassistant__turn_on": ToolSpec("homeassistant__turn_on", "Turn on a smart home device."),
     }
 
 
@@ -363,8 +347,8 @@ class TestEmbeddingStrategy:
 class TestLLMStrategy:
 
     @pytest.mark.unit
-    def test_parses_comma_separated_response(self):
-        backend = _llm_backend(return_value="webSearch, getWeather")
+    def test_parses_structured_selection(self):
+        backend = _llm_backend(return_value=_selection('webSearch', 'getWeather'))
         result = select_tools(
             "what's the weather",
             _builtin(), {},
@@ -377,8 +361,8 @@ class TestLLMStrategy:
         assert "stop" in result
 
     @pytest.mark.unit
-    def test_none_response_returns_only_mandatory(self):
-        backend = _llm_backend(return_value="none")
+    def test_empty_selection_returns_only_mandatory(self):
+        backend = _llm_backend(return_value=_selection())
         result = select_tools(
             "hello",
             _builtin(), {},
@@ -448,7 +432,7 @@ class TestLLMStrategy:
         result = select_tools(
             "navigate to youtube.com",
             _builtin(),
-            {"chrome-devtools__navigate_page": FakeToolSpec(
+            {"chrome-devtools__navigate_page": ToolSpec(
                 "chrome-devtools__navigate_page",
                 "Navigate the browser to a given URL.",
             )},
@@ -464,7 +448,7 @@ class TestLLMStrategy:
 
     @pytest.mark.unit
     def test_ignores_hallucinated_tool_names(self):
-        backend = _llm_backend(return_value="webSearch, nonExistentTool, getWeather")
+        backend = _llm_backend(return_value=_selection('webSearch', 'nonExistentTool', 'getWeather'))
         result = select_tools(
             "search and weather",
             _builtin(), {},
@@ -476,31 +460,13 @@ class TestLLMStrategy:
         assert "getWeather" in result
 
     @pytest.mark.unit
-    def test_parses_markdown_and_backtick_wrapped_names(self):
-        """Chatty routers wrap names in backticks, bullets, or JSON brackets.
-        The parser must strip that formatting before matching — a literal
-        `webSearch` should resolve to the tool called webSearch, not be
-        silently dropped as an unknown token."""
-        backend = _llm_backend(return_value="- `webSearch`, * `getWeather`, [logMeal]")
-        result = select_tools(
-            "chatty router",
-            _builtin(), {},
-            strategy=ToolSelectionStrategy.LLM,
-            llm_backend=backend,
-            llm_model="test",
-        )
-        assert "webSearch" in result
-        assert "getWeather" in result
-        assert "logMeal" in result
-
-    @pytest.mark.unit
     def test_caps_chatty_router_output_at_max(self):
         """A router that echoes the whole catalogue must still produce a
         compact selection — the hard cap guarantees downstream prompt size."""
         from jarvis.tools.selection import _LLM_MAX_SELECTED
 
         backend = _llm_backend(
-            return_value="webSearch, getWeather, logMeal, fetchMeals, screenshot, localFiles, homeassistant__turn_on"
+            return_value=_selection('webSearch', 'getWeather', 'logMeal', 'fetchMeals', 'screenshot', 'localFiles', 'homeassistant__turn_on')
         )
         result = select_tools(
             "arbitrary query",
@@ -528,7 +494,7 @@ class TestLLMStrategy:
         def _direct(model, sys, user, timeout_sec=8.0, **kwargs):
             captured["sys"] = sys
             captured["user"] = user
-            return "getWeather"
+            return _selection('getWeather')
 
         backend = _llm_backend(direct_fn=_direct)
 
@@ -562,7 +528,7 @@ class TestLLMStrategy:
 
         def _direct(model, sys, user, timeout_sec=8.0, **kwargs):
             captured["user"] = user
-            return "getWeather"
+            return _selection('getWeather')
 
         backend = _llm_backend(direct_fn=_direct)
 
@@ -589,7 +555,7 @@ class TestLLMStrategy:
 
         def _direct(model, sys, user, timeout_sec=8.0, **kwargs):
             captured["user"] = user
-            return "getWeather"
+            return _selection('getWeather')
 
         backend = _llm_backend(direct_fn=_direct)
 
@@ -625,7 +591,7 @@ def test_reasoning_router_has_room_for_answer_before_fallback(monkeypatch, provi
     from jarvis.llm import get_llm_backend
     tools = _builtin()
     reasoning_tokens = len(('Consider each catalogue entry carefully. ' * len(tools) * 4).split())
-    answer = 'getWeather'
+    answer = _selection('getWeather')
     def post(endpoint, **kwargs):
         payload = kwargs['json']
         budget = payload.get('max_tokens', payload.get('options', {}).get('num_predict', 0))
@@ -645,4 +611,4 @@ def test_reasoning_router_has_room_for_answer_before_fallback(monkeypatch, provi
         strategy=ToolSelectionStrategy.LLM, llm_backend=get_llm_backend(cfg),
         llm_model='synthetic-reasoning-router',
     )
-    assert selected == [answer, 'stop']
+    assert selected == ['getWeather', 'stop']
