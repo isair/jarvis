@@ -21,7 +21,7 @@ Jarvis is built to be part of the conversation. Talk through an idea, discuss pl
 
 Address Jarvis by name anywhere in a sentence and follow up naturally. Speech recognition, language models and speech synthesis run on hardware you control.
 
-Your conversation and all data stays solely on your computer. Separate local databases keep their semantic search indices separate. Sensitive information is redacted before it reaches model context or the saved diary, even though both are local, to ensure the security of your private information. Web search, weather and connected tools use the network but send only what is necessary when you ask for those capabilities.
+Your conversation and all data stays solely on your computer. Sensitive information is redacted before it reaches model context or the saved diary, even though both are local, to ensure the security of your private information. Web search, weather and connected tools use the network but send only what is necessary when you ask for those capabilities.
 
 <p align="center">
   <img src="docs/img/face.png" alt="Jarvis's floating amber face, with no frame or background" width="420">
@@ -67,9 +67,9 @@ Budget memory for Whisper and, when different from chat, the fast model used for
 ## What you can do
 
 - **A third person in the room.** Bring Jarvis into an ongoing conversation with friends, talk through a problem aloud, or ask it to weigh in on a decision. “Jarvis, what do you think?” draws on the recent discussion, not just that one sentence.
-- **Remember beyond one session.** Search your local diary and knowledge graph. Diary keyword search supports Unicode text, and semantic search uses local embeddings with the bundled index. Planning requests memory for personal context and distinguishes it from general facts; recall scopes diary searches by requested dates, and accuracy depends on the selected model. Jarvis checks graph candidates for lasting value before storing them. Browse what Jarvis has stored in the Memory Viewer.
-- **Get things done.** Built-in tools cover web search, weather, time, screenshot OCR, file access, nutrition tracking and optional location awareness. Delete a meal by its ID or exact, unique description; meal listings include IDs to distinguish repeated entries.
-- **Connect your own tools.** MCP servers add browser automation, smart-home controls and other integrations. Tool routing selects a relevant subset for each request.
+- **Remember beyond one session.** Ask about past conversations, preferences and plans. Browse your local diary and knowledge graph in the Memory Viewer.
+- **Get things done.** Built-in tools cover web search, weather, time, screenshot OCR, file access, nutrition tracking and optional location awareness.
+- **Connect your own tools.** MCP servers add browser automation, smart-home controls and other integrations.
 - **Dictate into other apps.** Hold a hotkey, speak, then release to paste locally transcribed text. See the [platform limitations](#known-limitations) first.
 - **Type when you need to.** The companion chat shares your voice conversation and memory. Text replies are silent, and you can rewind a sent message to regenerate from that point.
 
@@ -85,7 +85,7 @@ Jarvis can use the recent conversation to understand that you are asking about t
 
 ## Inside Jarvis
 
-The supporting desktop interfaces keep setup, activity and settings within reach. The screenshots below use current widgets with demo data, each on its own row so you can read the interface without opening an image viewer.
+Keep setup, activity and settings within reach.
 
 ### A guided start
 
@@ -121,30 +121,13 @@ When speaking is inconvenient, open Chat from the tray. It picks up the same con
 
 ## Known limitations
 
-Jarvis is actively developed, primarily on macOS. Windows and Linux behaviour may differ. Model choice and hardware affect response quality and speed; [automated evaluation results](EVALS.md) show what is being measured.
+Jarvis is developed primarily on macOS. Windows and Linux behaviour may differ. See the [evaluation results](EVALS.md) for tested capabilities.
 
-- **Large web pages:** page downloads are limited to 2 MiB of decoded content. Oversized pages return a download-limit error.
-
-- **macOS menu-bar activation handles non-mouse events safely.** The tray avoids a native `clickCount` assertion when AppKit reports an event without mouse click data.
-- **macOS 26+ dictation is unavailable** because of a pynput incompatibility ([#172](https://github.com/isair/jarvis/issues/172)). This limitation concerns the global dictation hotkey.
-- **Spoken “stop” can be mistaken for echo** while Jarvis is speaking ([#24](https://github.com/isair/jarvis/issues/24)). Use a standalone configured stop phrase; echoed longer instructions containing it are ignored.
+- **Accuracy and speed depend on your models and hardware.** Smaller models can miss parts of complex requests, and slow speech recognition can drop utterances.
+- **Dictation is unavailable on macOS 26+** ([#172](https://github.com/isair/jarvis/issues/172)). Linux dictation requires X11, with limited Wayland support.
+- **Spoken “stop” can be mistaken for echo** while Jarvis is speaking ([#24](https://github.com/isair/jarvis/issues/24)).
+- **Very large web pages cannot be read.** Page downloads have a 2 MiB limit.
 - **No mobile app** is available ([#17](https://github.com/isair/jarvis/issues/17)).
-- **Capture continues while Jarvis thinks.** Speech detection and assembly run independently of intent judging and reply generation. Recognition backlogs are bounded; Logs warns when speech arrives faster than it can be processed.
-- **Continuous speech is split at your utterance limit.** The shorter limit during speech playback helps interruption requests reach recognition promptly. Both limits are adjustable in Settings.
-- **Smaller chat models can miss tool arguments.** E4B is the preferred chat default when memory allows; constrained hardware can use a smaller model, with lower tool-use reliability.
-- **Reasoning models can take longer.** Planning, recall, summaries and partial replies reserve room for reasoning and the final answer, with the configured timeout limiting the wait.
-- **GPT-OSS always reasons.** Its Ollama thinking toggle selects low or high reasoning effort; turning it off selects low effort rather than disabling reasoning.
-- **Long conversations feed the complete pending snapshot into the diary.** Bounded batches share the configured generation timeout; interrupted saves resume completed batches privately in memory on the next attempt.
-- **Diary saves remain successful if the optional search index fails.** Saved text stays available through keyword search; semantic search can retain an older embedding.
-- **Meal logging confirms saved meals even if coaching is unavailable.** Optional follow-up advice can fail without logging the meal twice.
-- **Weather place fallback supports abbreviated names.** Names such as Washington D.C. retain internal punctuation when location detection is unavailable.
-- **Weather can use remembered home location.** If automatic detection is unavailable, Jarvis checks local conversation and memory before asking for a city. A remembered home is a labelled default; conflicting or outdated evidence requires clarification.
-- **Slow speech recognition produces guidance.** After several utterances decode slower than real time, Logs recommends a smaller Whisper model or checking available acceleration. Smaller models can reduce accuracy.
-- **First-run downloads can take time.** Whisper and language models can be large. Check Logs for progress before assuming startup is stuck.
-- **Apple Silicon desktop bundles include MLX speech recognition.** Windows, Linux and Intel Mac builds use faster-whisper.
-- **CUDA speech failures use a CPU fallback.** If the CUDA runtime fails during decoding, Jarvis makes one recovery attempt on CPU. Speech recognition can be slower in this mode.
-- **Whisper turbo needs a compatible backend.** The wizard hides it when the selected backend cannot load it; an existing unsupported selection uses `medium` instead.
-- **Optional capabilities need their dependencies.** Location awareness needs a GeoLite2 database. Semantic memory search needs working embeddings; otherwise search falls back to keywords.
 
 ## Configuration
 
