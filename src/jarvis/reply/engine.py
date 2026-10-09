@@ -2287,23 +2287,6 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": f"You already called {tool_name} with these exact arguments. The results are in the previous messages. Please use those results to answer the user."})
                 continue
 
-            # Check if we already have results for this type of tool (prevents tool call loops).
-            # In native-tools mode results carry role="tool"; in text-tools mode they carry
-            # role="user" with a "tool_name" key — check both to make the guard effective
-            # in small-model paths where direct-exec is most likely to loop.
-            duplicate_tool_count = sum(
-                1 for msg in messages[-10:]
-                if msg.get("tool_name") == tool_name
-                and msg.get("role") in ("tool", "user")
-            )
-            if duplicate_tool_count >= 2:
-                debug_log(f"  ⚠️ Too many {tool_name} calls ({duplicate_tool_count}) - returning guidance", "planning")
-                if use_text_tools:
-                    messages.append({"role": "user", "content": f"[Tool: {tool_name}] You have already called this tool {duplicate_tool_count} times. Use the results from those calls to answer the user's question."})
-                else:
-                    messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": f"You have already called {tool_name} {duplicate_tool_count} times. Please use the results from those calls to answer the user's question."})
-                continue
-
             # Execute tool
             result = contextual_tool_runner(
                 db=db,
@@ -2499,14 +2482,6 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 # Note: We don't add a guidance system message here because adding system messages
                 # after the conversation starts breaks native tool calling in models like Llama 3.2.
                 # The model should naturally decide to answer, chain tools, or ask for clarification.
-                # Record signature after a successful tool response
-                try:
-                    recent_tool_signatures.append(signature)
-                    # Keep short memory of last 5
-                    if len(recent_tool_signatures) > 5:
-                        recent_tool_signatures = recent_tool_signatures[-5:]
-                except Exception:
-                    pass
                 # Record invoked tool history.
                 try:
                     invoked_tools_history.append(
@@ -2538,6 +2513,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                         "tool_failed": True,
                     })
                 debug_log(f"    ❌ tool error: {err}", "planning")
+            # Reuse outcomes for identical calls, including error-only results.
+            recent_tool_signatures.append(signature)
+            recent_tool_signatures = recent_tool_signatures[-5:]
             # Loop continues to let the agent produce the next step/final reply
             continue
 
