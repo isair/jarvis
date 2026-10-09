@@ -133,3 +133,14 @@ def test_text_protocol_examples_use_consistent_argument_objects():
         call_line = next(line for line in prompt.splitlines() if line.startswith('tool_calls: '))
         call = json.loads(call_line.removeprefix('tool_calls: '))[0]
         assert isinstance(call['function']['arguments'], dict)
+
+
+def test_text_search_example_matches_the_actual_tool_schema():
+    import json
+    from jarvis.tools.registry import BUILTIN_TOOLS
+    guidance = engine._text_tool_call_guidance(['webSearch'])
+    call = json.loads(next(line for line in guidance.splitlines() if line.startswith('tool_calls: ')).removeprefix('tool_calls: '))[0]['function']
+    schema = BUILTIN_TOOLS[call['name']].inputSchema
+    arguments = call['arguments']
+    assert set(schema.get('required', [])) <= set(arguments)
+    assert set(arguments) <= set(schema['properties'])
