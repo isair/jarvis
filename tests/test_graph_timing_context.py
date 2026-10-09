@@ -13,7 +13,7 @@ pytestmark = pytest.mark.unit
 def test_graph_extraction_and_review_have_separate_timings(mock_config):
     responses = iter([
         json.dumps([{'branch': 'USER', 'fact': 'The user has a cat named Miso'}]),
-        '0: DURABLE',
+        '{"0": "DURABLE"}',
     ])
     with patch.object(graph_ops, 'call_llm_direct', side_effect=lambda **kwargs: next(responses)):
         with TimingRecorder() as recorder:
