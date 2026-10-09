@@ -304,3 +304,22 @@ def test_cache_recovery_stops_after_download_child_failure(tmp_path, monkeypatch
     listener.run()
     assert 'child aborted' in capsys.readouterr().out
     assert not snapshot.exists()
+
+
+@pytest.mark.parametrize('category', ['timeout', 'worker_exit'])
+def test_terminal_download_failure_explains_retained_cache_and_recovery(monkeypatch, capsys, category):
+    def no_cache(*args, **kwargs):
+        raise FileNotFoundError('fixture has no cached model')
+    monkeypatch.setattr('faster_whisper.utils.download_model', no_cache)
+    def fail_worker(*args):
+        raise model_download.ModelDownloadError(category, 'fixture failure')
+    monkeypatch.setattr(model_download, '_run_download_worker', fail_worker)
+    with pytest.raises(model_download.ModelDownloadError) as failure:
+        model_download.prepare_faster_whisper_model('small')
+    assert failure.value.category == category
+    output = capsys.readouterr().out.lower()
+    assert 'cached files' in output
+    assert 'restart jarvis' in output
+    assert 'resume' in output
+    if category == 'timeout':
+        assert 'smaller' in output and 'settings' in output
