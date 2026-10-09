@@ -91,6 +91,21 @@ MOCK_MADRID_LIVE = (
 )
 
 
+@pytest.fixture
+def browser_tools(configure_mcp_tools):
+    from jarvis.tools.registry import ToolSpec
+
+    return configure_mcp_tools(ToolSpec(
+        name='chrome-devtools__navigate_page',
+        description='Navigate the browser to the supplied URL.',
+        inputSchema={
+            'type': 'object',
+            'properties': {'url': {'type': 'string'}},
+            'required': ['url'],
+        },
+    ))
+
+
 # =============================================================================
 # Helpers
 # =============================================================================
@@ -140,17 +155,8 @@ class TestRequestedToolExecution:
 
     @pytest.mark.eval
     @requires_judge_llm
-    @pytest.mark.xfail(
-        reason=(
-            "Plumbing verified in unit tests (tests/test_engine_tool_search_loop.py, "
-            "planner tests). Live behaviour on gemma4:e2b is flaky: "
-            "the small model sometimes refuses in prose despite the execution guidance. "
-            "Tracked for iterative prompt tuning; architecture ships as-is."
-        ),
-        strict=False,
-    )
     def test_requested_navigation_executes_tool(
-        self, mock_config, eval_db, eval_dialogue_memory
+        self, mock_config, eval_db, eval_dialogue_memory, browser_tools
     ):
         from jarvis.reply.engine import run_reply_engine
 
@@ -473,16 +479,13 @@ class TestToolSearchToolEscapeHatch:
     @requires_judge_llm
     @pytest.mark.xfail(
         reason=(
-            "Plumbing verified in unit tests (tests/test_tool_search_tool.py, "
-            "tests/test_engine_tool_search_loop.py). Live behaviour on "
-            "gemma4:e2b is flaky: the small model often falls back to "
-            "webSearch rather than invoking toolSearchTool. Tracked for "
-            "iterative prompt tuning; architecture ships as-is."
+            "A narrow initial route can omit the requested browser action "
+            "instead of discovering its tool."
         ),
         strict=False,
     )
     def test_toolsearchtool_widens_then_navigate(
-        self, mock_config, eval_db, eval_dialogue_memory
+        self, mock_config, eval_db, eval_dialogue_memory, browser_tools
     ):
         from jarvis.reply.engine import run_reply_engine
 
@@ -810,15 +813,13 @@ class TestComplexMultiTurnMultiTool:
     @requires_judge_llm
     @pytest.mark.xfail(
         reason=(
-            "Plumbing verified in unit tests. Live behaviour on gemma4:e2b "
-            "is flaky on multi-turn escape-hatch flows: the small model "
-            "sometimes refuses turn 1 in prose despite the execution guidance. Tracked "
-            "for iterative prompt tuning; architecture ships as-is."
+            "Narrow-route discovery and subsequent action execution "
+            "are incomplete across turns."
         ),
         strict=False,
     )
     def test_escape_hatch_then_follow_up_action(
-        self, mock_config, eval_db, eval_dialogue_memory
+        self, mock_config, eval_db, eval_dialogue_memory, browser_tools
     ):
         """Turn 1: narrow router → toolSearchTool → navigate. Turn 2: a new
         action whose argument must be self-contained ('lo-fi')."""
@@ -871,7 +872,9 @@ class TestComplexMultiTurnMultiTool:
         print(f"   Turn 2 calls: {turn2}")
         print(f"   Turn 2 reply: {(reply2 or '')[:200]}...")
 
-        assert turn1, "Turn 1 should have at least one tool call"
+        assert any(call['name'] == 'chrome-devtools__navigate_page' for call in turn1), (
+            f"Turn 1 must actually navigate to YouTube. Calls: {turn1}"
+        )
         assert turn2, "Turn 2 should have at least one tool call"
 
         # Turn 2's tool call arg must contain the self-contained keyword.
