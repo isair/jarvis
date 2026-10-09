@@ -775,16 +775,6 @@ class LowPolyFaceWidget(QWidget):
         # Eye shape - hexagonal for geometric look
         eye_height = size * height_mult
 
-        # Apply activation level to glow
-        glow_alpha = int(100 * self._activation_level)
-        glow_gradient = QRadialGradient(ex, ey, size * 1.5)
-        glow_gradient.setColorAt(0, QColor(251, 191, 36, glow_alpha))
-        glow_gradient.setColorAt(1, QColor(251, 191, 36, 0))
-        painter.setBrush(glow_gradient)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setOpacity(self._activation_level)
-        painter.drawEllipse(QPointF(ex, ey), size * 1.5, size * 1.5)
-
         # Draw eye outline (diamond/hexagon shape)
         eye_path = QPainterPath()
 
