@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, List, Callable, Tuple
 import os
 import json
+import math
 
 
 # Eval inference uses the selected model; open-ended verification can
@@ -439,7 +440,8 @@ def create_tool_call(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
 class JudgeVerdict:
     """Result from LLM judge evaluation."""
     is_passed: bool
-    score: float  # 0.0 to 1.0
+    is_verified: bool
+    score: float  # 0.0 to 1.0, zero when verification is incomplete
     reasoning: str
     criteria_scores: Dict[str, float] = field(default_factory=dict)
 
@@ -624,18 +626,10 @@ Assistant Response: {response}"""
     if context:
         user_prompt += f"\n\nContext (data available to assistant):\n{context[:2000]}"
 
-    judge_response = call_judge_llm(system_prompt, user_prompt)
-
-    if not judge_response:
-        # Fallback to heuristic evaluation if judge fails
-        return JudgeVerdict(
-            is_passed=not is_generic_greeting(response) and len(response) > 50,
-            score=0.5,
-            reasoning="Judge LLM unavailable, using heuristic fallback"
-        )
-
-    # Parse the judge response
-    return _parse_judge_response(judge_response)
+    return _parse_judge_response(
+        call_judge_llm(system_prompt, user_prompt),
+        required_criteria=('relevance', 'completeness', 'accuracy', 'no_deflection'),
+    )
 
 
 def judge_search_query_quality(
@@ -680,57 +674,50 @@ Generated Search Query: "{search_query}"
     if time_context:
         user_prompt += f"Time Context: {time_context}\n"
 
-    judge_response = call_judge_llm(system_prompt, user_prompt)
-
-    if not judge_response:
-        # Heuristic fallback
-        has_location = location and any(
-            loc_part.lower() in search_query.lower()
-            for loc_part in location.split(",")[0].split()
-        )
-        return JudgeVerdict(
-            is_passed=has_location if location else True,
-            score=0.5,
-            reasoning="Judge LLM unavailable, using heuristic fallback"
-        )
-
-    return _parse_judge_response(judge_response)
+    return _parse_judge_response(
+        call_judge_llm(system_prompt, user_prompt),
+        required_criteria=('intent_match', 'location_awareness', 'time_awareness', 'specificity'),
+    )
 
 
-def _parse_judge_response(response: str) -> JudgeVerdict:
-    """Parse the structured judge response into a JudgeVerdict."""
-    lines = response.strip().split("\n")
-    criteria_scores = {}
-    is_passed = False
-    reasoning = ""
+def _parse_judge_response(response: Optional[str], *, required_criteria: tuple[str, ...]) -> JudgeVerdict:
+    """Accept one complete scored verdict; incomplete verification has no score."""
+    def incomplete(reason: str) -> JudgeVerdict:
+        return JudgeVerdict(is_passed=False, is_verified=False, score=0.0,
+                            reasoning=f'Verification incomplete: {reason}')
 
-    for line in lines:
-        line = line.strip()
-        if ":" in line:
-            key, value = line.split(":", 1)
-            key = key.strip().upper()
-            value = value.strip()
-
-            if key == "OVERALL":
-                is_passed = "PASS" in value.upper()
-            elif key == "REASONING":
-                reasoning = value
-            else:
-                # Try to parse as score
-                try:
-                    score = float(value.split()[0])
-                    criteria_scores[key.lower()] = score / 10.0  # Normalize to 0-1
-                except (ValueError, IndexError):
-                    pass
-
-    # Calculate average score
-    avg_score = sum(criteria_scores.values()) / len(criteria_scores) if criteria_scores else 0.5
-
+    if not isinstance(response, str) or not response.strip():
+        return incomplete('verifier response unavailable')
+    fields = {}
+    expected_fields = {*required_criteria, 'overall', 'reasoning'}
+    for line in response.splitlines():
+        if ':' not in line:
+            continue
+        key, value = line.split(':', 1)
+        key = key.strip().casefold()
+        if key not in expected_fields:
+            continue
+        if key in fields:
+            return incomplete(f'duplicate {key} field')
+        fields[key] = value.strip()
+    if set(fields) != expected_fields:
+        return incomplete('required verdict fields missing')
+    overall = fields['overall'].upper()
+    if overall not in ('PASS', 'FAIL') or not fields['reasoning']:
+        return incomplete('invalid verdict or missing reasoning')
+    try:
+        scores = {key: float(fields[key]) for key in required_criteria}
+    except ValueError:
+        return incomplete('invalid criterion score')
+    if any(not math.isfinite(score) or not 0 <= score <= 10 for score in scores.values()):
+        return incomplete('criterion score outside its range')
+    normalised = {key: score / 10 for key, score in scores.items()}
     return JudgeVerdict(
-        is_passed=is_passed,
-        score=avg_score,
-        reasoning=reasoning,
-        criteria_scores=criteria_scores
+        is_passed=overall == 'PASS',
+        is_verified=True,
+        score=sum(normalised.values()) / len(normalised),
+        reasoning=fields['reasoning'],
+        criteria_scores=normalised,
     )
 
 
@@ -778,15 +765,7 @@ Tools Called:
     if expected_tools:
         user_prompt += f"\nExpected Tools: {', '.join(expected_tools)}"
 
-    judge_response = call_judge_llm(system_prompt, user_prompt)
-
-    if not judge_response:
-        # Heuristic fallback
-        has_expected = not expected_tools or all(t in tools_called for t in expected_tools)
-        return JudgeVerdict(
-            is_passed=has_expected,
-            score=0.5,
-            reasoning="Judge LLM unavailable, using heuristic fallback"
-        )
-
-    return _parse_judge_response(judge_response)
+    return _parse_judge_response(
+        call_judge_llm(system_prompt, user_prompt),
+        required_criteria=('tool_selection', 'arg_quality', 'efficiency'),
+    )
