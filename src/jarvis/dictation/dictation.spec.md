@@ -66,7 +66,13 @@ After transcription, text passes through these stages in order:
 
 - **`pynput`** for global hotkey detection (cross-platform). On supported macOS releases, the listener enters the Quartz event loop directly and retains pynput character/modifier decoding. It does not open a Carbon keyboard-layout context on its worker thread: event characters come from `CGEventKeyboardGetUnicodeString`, and the unused context can trigger a fatal TSM main-queue assertion. The macOS 26+ safety guard remains in force.
 - **Clipboard-based paste** (`Ctrl+V` / `Cmd+V`) for text insertion — more
-  reliable than character-by-character typing, handles Unicode.
+  reliable than character-by-character typing, handles Unicode. macOS uses
+  native CGEvent paste exclusively, with both key events prepared before input
+  is posted and both references released after the attempt. Accessibility is
+  checked for every paste and an unavailable permission check denies automatic
+  input. A denied permission opens Settings at most once per process. Failed
+  native paste retains the copied text, reports manual Cmd+V as recovery and
+  never enters a pynput Controller or Carbon keyboard-layout context.
 - **Shared Whisper model** via lazy reference (`lambda: voice_thread.model`)
   and backend info — no double memory usage.
 - **Separate `sounddevice.InputStream`** for dictation audio — avoids
