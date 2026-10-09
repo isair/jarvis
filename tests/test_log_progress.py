@@ -197,7 +197,10 @@ def test_report_preview_redacts_progress_details(qapp, monkeypatch):
     window.append_log("weights.npz: 20%|xx| 2M/10M · token=private-value\n")
     reviewed = []
     def inspect_preview(dialog):
-        reviewed.append(dialog.preview.toPlainText())
+        dialog.problem_input.setPlainText('The download is stuck')
+        dialog.review_button.click()
+        dialog.details_button.click()
+        reviewed.append(dialog.technical_preview.toPlainText())
         dialog.reject()
     monkeypatch.setattr(IssueReportDialog, 'exec', inspect_preview)
     window._report_issue()

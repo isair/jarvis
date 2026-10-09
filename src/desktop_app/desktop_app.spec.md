@@ -173,12 +173,12 @@ The Inno Setup script also runs a `VerifyCudaInstall` hook after the CUDA downlo
 
 - Real-time log streaming from daemon
 - Monospace font for readability (JetBrains Mono on macOS, Consolas elsewhere)
-- **Report Issue button**: Opens a local composer requiring a title and a description of what went wrong. Expected results and reproduction steps are optional. Whitespace-only required fields keep the GitHub and copy actions disabled.
-- A separate review step gives the read-only report preview most of the window and shows the exact redacted body. Copy and browser actions are available only after advancing to review; Back preserves the entered details. Known secrets and email addresses are scrubbed across all fields, metadata and logs; conversation text can remain and the user can exclude logs. Nothing is submitted automatically.
-- Reports include a readable version/channel, OS/architecture and a whitelist of configured provider, chat model and Whisper choices. Credentials, endpoint URLs and the complete configuration are not included. Configured choices are not presented as observed runtime readiness.
-- Included logs retain current download progress, collapsible formatting and bounded truncation preserving startup, fatal diagnostics and recent activity.
-- Short reports open a pre-filled GitHub issue. Reports whose encoded browser link exceeds 8,000 characters explicitly offer to copy the full report and open GitHub for the user to paste it. The preview and clipboard retain the full prepared body. A browser failure keeps the composer and its contents open with manual-copy guidance.
-- The form scrolls at small window sizes while cancellation, copy and GitHub actions remain outside the scrolling area.
+- **Report Issue button**: Opens a local composer asking what happened and, optionally, what should have happened. A short summary and reproduction steps live behind an optional extra-details control. The first description line supplies the issue title unless the user supplies a summary. Whitespace-only descriptions keep review disabled.
+- A separate review step presents the description as readable text, without Markdown or configuration jargon. Troubleshooting details start collapsed and can be inspected or excluded together. Back preserves entered details. Copy and browser actions are available only after advancing to review. Nothing is submitted automatically.
+- Known secrets and email addresses are scrubbed across all fields, metadata and logs. User text is escaped before rich rendering, so it cannot introduce HTML, images or links. Troubleshooting details can still contain conversation text, which the review explains.
+- Reports include a readable version/channel. Optional troubleshooting details include OS/architecture, a whitelist of configured provider, chat model and Whisper choices, and current download progress. Credentials, endpoint fields and the complete configuration are not included. Configured choices are not presented as observed runtime readiness. Logs retain bounded truncation preserving startup, fatal diagnostics and recent activity.
+- Short reports open a pre-filled GitHub issue. Reports whose encoded browser link exceeds 8,000 characters explicitly offer to copy the prepared report and open GitHub for the user to paste it. Copying and browser transport use the same redacted report content represented by the review and optional troubleshooting panel. A browser failure keeps the composer and its contents open with copy guidance.
+- Both pages have scroll viewports retaining usable field and preview sizes when extra details are revealed; navigation remains outside the scrolling area.
 
 ### Splash Screen
 

@@ -1,13 +1,15 @@
 """Local report composition and review before opening GitHub."""
 from __future__ import annotations
 
+from collections.abc import Mapping
+from html import escape
 import urllib.parse
 import webbrowser
-from collections.abc import Mapping
 
 from PyQt6.QtWidgets import (
     QApplication, QCheckBox, QDialog, QHBoxLayout, QLabel, QLineEdit,
-    QPlainTextEdit, QPushButton, QScrollArea, QStackedWidget, QVBoxLayout, QWidget,
+    QPlainTextEdit, QPushButton, QScrollArea, QStackedWidget, QTextBrowser,
+    QVBoxLayout, QWidget,
 )
 
 from jarvis.debug import debug_log
@@ -19,61 +21,80 @@ _URL_LIMIT = 8000
 
 
 class IssueReportDialog(QDialog):
-    """Compose a useful report with an exact preview of shared content."""
+    """Describe a problem in plain language, then review its public report."""
 
     def __init__(self, logs: str, *, version: tuple[str, str],
                  metadata: Mapping[str, str], parent=None):
         super().__init__(parent)
-        self.setWindowTitle('Report an issue')
+        self.setWindowTitle('Report a problem')
         self.setStyleSheet(JARVIS_THEME_STYLESHEET)
-        self.resize(660, 640)
         screen = self.screen().availableGeometry()
-        self.resize(min(self.width(), screen.width()), min(self.height(), screen.height()))
+        self.resize(min(660, screen.width()), min(640, screen.height()))
         self._logs = scrub_secrets(logs).replace('```', '`` `')
         self._version = f'{version[0]} ({version[1]})'
         self._metadata = dict(metadata)
         layout = QVBoxLayout(self)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        content = QWidget()
-        form = QVBoxLayout(content)
-        intro = QLabel('Describe the problem, then review what you will share publicly on GitHub. '
-                       'Nothing is submitted automatically.')
+        self.pages = QStackedWidget()
+        layout.addWidget(self.pages, 1)
+
+        form_scroll, form = self._scroll_page()
+        heading = QLabel('Tell us what happened')
+        heading.setStyleSheet('font-size: 20px; font-weight: 600; color: #fbbf24;')
+        form.addWidget(heading)
+        intro = QLabel('A few words are enough to get started. You can check the report before opening GitHub.')
         intro.setWordWrap(True)
         form.addWidget(intro)
+        self.problem_input = self._add_field(form, 'What happened?',
+            'What were you doing, and what went wrong?', 'problem')
+        self.expected_input = self._add_field(form, 'What should have happened? (optional)',
+            'What did you want Jarvis to do?', 'expected')
+        extra = QCheckBox('Add more detail (optional)')
+        extra.setObjectName('add_details')
+        form.addWidget(extra)
+        self.extra_fields = QWidget()
+        extra_layout = QVBoxLayout(self.extra_fields)
+        extra_layout.setContentsMargins(0, 0, 0, 0)
         self.title_input = QLineEdit()
         self.title_input.setMaxLength(200)
-        self.title_input.setPlaceholderText('A short summary, for example: Voice replies stop after the first question')
-        form.addWidget(QLabel('Title (required)'))
-        form.addWidget(self.title_input)
-        self.problem_input = self._add_field(form, 'What went wrong? (required)',
-            'What were you trying to do, and what happened instead?', 'problem')
-        self.expected_input = self._add_field(form, 'What did you expect? (optional)',
-            'Describe the result you wanted', 'expected')
-        self.steps_input = self._add_field(form, 'How can we reproduce it? (optional)',
-            'Include what you said or typed and any steps that trigger the problem', 'steps')
-        scroll.setWidget(content)
-        self.pages = QStackedWidget()
-        self.pages.addWidget(scroll)
-        review = QWidget()
-        review_layout = QVBoxLayout(review)
-        review_layout.setContentsMargins(0, 0, 0, 0)
-        self.include_logs = QCheckBox('Include the current activity log')
+        self.title_input.setPlaceholderText('Leave blank to use the first line of your description')
+        extra_layout.addWidget(QLabel('Short summary (optional)'))
+        extra_layout.addWidget(self.title_input)
+        self.steps_input = self._add_field(extra_layout, 'How can we make it happen again? (optional)',
+            'Include what you said or clicked, if you remember', 'steps')
+        self.extra_fields.hide()
+        extra.toggled.connect(self.extra_fields.setVisible)
+        form.addWidget(self.extra_fields)
+        form.addStretch()
+        self.pages.addWidget(form_scroll)
+
+        review_scroll, review = self._scroll_page()
+        heading = QLabel('Check your report')
+        heading.setStyleSheet('font-size: 20px; font-weight: 600; color: #fbbf24;')
+        review.addWidget(heading)
+        self.preview = QTextBrowser()
+        self.preview.setOpenExternalLinks(False)
+        self.preview.setOpenLinks(False)
+        self.preview.setMinimumHeight(200)
+        self.preview.setAccessibleName('Your report')
+        review.addWidget(self.preview, 1)
+        self.include_logs = QCheckBox('Include troubleshooting details to help us fix it')
         self.include_logs.setChecked(True)
-        review_layout.addWidget(self.include_logs)
-        privacy = QLabel('Known secrets and email addresses are masked. Logs can still contain '
-                         'conversation text and other personal details, so check the preview or exclude logs.')
+        review.addWidget(self.include_logs)
+        privacy = QLabel('These details include your computer settings and activity log, which can contain '
+                         'things you have said to Jarvis. You can check them below or leave them out.')
         privacy.setWordWrap(True)
-        review_layout.addWidget(privacy)
-        review_layout.addWidget(QLabel('Review the report you will share'))
-        self.preview = QPlainTextEdit()
-        self.preview.setReadOnly(True)
-        self.preview.setMinimumHeight(160)
-        self.preview.setAccessibleName('Report preview')
-        review_layout.addWidget(self.preview, 1)
-        self.pages.addWidget(review)
-        layout.addWidget(self.pages, 1)
+        review.addWidget(privacy)
+        self.details_button = QPushButton('View troubleshooting details')
+        self.details_button.setCheckable(True)
+        self.details_button.toggled.connect(self._show_diagnostics)
+        review.addWidget(self.details_button)
+        self.technical_preview = QPlainTextEdit()
+        self.technical_preview.setReadOnly(True)
+        self.technical_preview.setMinimumHeight(160)
+        self.technical_preview.setAccessibleName('Troubleshooting details')
+        self.technical_preview.hide()
+        review.addWidget(self.technical_preview)
+        self.pages.addWidget(review_scroll)
         self.status = QLabel()
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
@@ -104,6 +125,16 @@ class IssueReportDialog(QDialog):
         self.include_logs.toggled.connect(self._update_preview)
         self._show_page(0)
 
+    @staticmethod
+    def _scroll_page():
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        content = QWidget()
+        form = QVBoxLayout(content)
+        scroll.setWidget(content)
+        return scroll, form
+
     def _show_page(self, index):
         if index == 1 and not self._valid():
             return
@@ -113,6 +144,11 @@ class IssueReportDialog(QDialog):
         self.open_button.setVisible(index == 1)
         self.review_button.setVisible(index == 0)
         self._update_preview()
+
+    def _show_diagnostics(self, visible):
+        self.technical_preview.setVisible(visible and self.include_logs.isChecked())
+        self.details_button.setText('Hide troubleshooting details' if visible
+                                    else 'View troubleshooting details')
 
     @staticmethod
     def _add_field(form, label, placeholder, name):
@@ -126,69 +162,88 @@ class IssueReportDialog(QDialog):
         form.addWidget(field)
         return field
 
+    def _title(self):
+        description = self.problem_input.toPlainText().strip()
+        first_line = description.splitlines()[0][:160] if description else ''
+        return scrub_secrets(self.title_input.text().strip() or first_line)
+
+    def _sections(self):
+        return [(heading, scrub_secrets(field.toPlainText().strip())) for heading, field in (
+            ('What happened', self.problem_input),
+            ('What should have happened', self.expected_input),
+            ('How to make it happen again', self.steps_input),
+        ) if field.toPlainText().strip()]
+
+    def _diagnostics_text(self):
+        parts = [f'Jarvis version: {self._version}']
+        parts.extend(f'{key}: {value}' for key, value in self._metadata.items())
+        parts.extend(['', 'Activity log', self._logs or 'No activity log was available.'])
+        return scrub_secrets('\n'.join(parts))
+
     def _report_body(self):
-        parts = [f'## {self.title_input.text().strip()}',
-                 f'**Version:** {self._version}']
-        parts.extend(f'**{key}:** {value}' for key, value in self._metadata.items())
-        parts.extend(['', '### What went wrong', self.problem_input.toPlainText().strip()])
-        for heading, field in (('Expected result', self.expected_input),
-                               ('Steps to reproduce', self.steps_input)):
-            if field.toPlainText().strip():
-                parts.extend(['', f'### {heading}', field.toPlainText().strip()])
+        parts = [f'## {self._title()}', f'**Version:** {self._version}']
+        for heading, value in self._sections():
+            parts.extend(['', f'### {heading}', value])
         if self.include_logs.isChecked():
-            parts.extend(['', '<details>', '<summary>📋 Activity log</summary>', '',
-                          '```', self._logs, '```', '', '</details>'])
+            parts.extend(['', '<details>', '<summary>📋 Troubleshooting details</summary>', '',
+                          '```', self._diagnostics_text(), '```', '', '</details>'])
         else:
-            parts.extend(['', 'Logs omitted by the reporter.'])
+            parts.extend(['', 'Troubleshooting details omitted by the reporter.'])
         return scrub_secrets('\n'.join(parts))
 
     def _report_url(self, body):
         return _ISSUE_URL + '?' + urllib.parse.urlencode({
-            'title': scrub_secrets(self.title_input.text().strip()),
-            'body': body, 'labels': 'bug',
+            'title': self._title(), 'body': body, 'labels': 'bug',
         })
 
     def _valid(self):
-        return bool(self.title_input.text().strip() and self.problem_input.toPlainText().strip())
+        return bool(self.problem_input.toPlainText().strip())
 
     def _update_preview(self):
-        body = self._report_body()
-        self.preview.setPlainText(body)
+        self._prepared_report = self._report_body()
+        # User text is escaped, so it cannot introduce images, links or HTML.
+        parts = [f'<h2>{escape(self._title())}</h2>']
+        for heading, value in self._sections():
+            text = escape(value).replace('\n', '<br>')
+            parts.extend([f'<h3>{escape(heading)}</h3>', f'<p>{text}</p>'])
+        self.preview.setHtml(''.join(parts))
+        self.technical_preview.setPlainText(self._diagnostics_text())
+        included = self.include_logs.isChecked()
+        self.details_button.setEnabled(included)
+        if not included:
+            self.details_button.setChecked(False)
+        self.technical_preview.setVisible(included and self.details_button.isChecked())
         valid = self._valid()
         reviewing = self.pages.currentIndex() == 1
         self.review_button.setEnabled(valid)
         self.open_button.setEnabled(valid and reviewing)
         self.copy_button.setEnabled(valid and reviewing)
-        long_report = len(self._report_url(body)) > _URL_LIMIT
+        long_report = len(self._report_url(self._prepared_report)) > _URL_LIMIT
         self.open_button.setText('Copy + open GitHub' if long_report else 'Open GitHub')
-        self.status.setText('This report is too long for a browser link. The button copies it '
-                            'so you can paste it into the GitHub description before submitting.'
-                            if long_report and reviewing else '')
+        self.status.setText('This report is too long to open directly. We will copy it so you can '
+                            'paste it into GitHub before submitting.' if long_report and reviewing else '')
 
     def _copy_report(self):
         if not self._valid() or self.pages.currentIndex() != 1:
             return False
         try:
-            QApplication.clipboard().setText(self.preview.toPlainText())
+            QApplication.clipboard().setText(self._prepared_report)
         except Exception as exc:
             debug_log(f'Issue report clipboard failed: {type(exc).__name__}', 'desktop')
-            self.status.setText('Could not copy the report. Select and copy the preview manually.')
+            self.status.setText('Could not copy the report. You can copy the text from the preview instead.')
             return False
-        self.status.setText('Report copied. Review it before sharing publicly.')
+        self.status.setText('Report copied. You can paste it into GitHub.')
         debug_log('Issue report copied after local review', 'desktop')
         return True
 
     def _open_github(self):
         if not self._valid() or self.pages.currentIndex() != 1:
             return
-        body = self.preview.toPlainText()
-        url = self._report_url(body)
+        url = self._report_url(self._prepared_report)
         if len(url) > _URL_LIMIT:
             if not self._copy_report():
                 return
-            url = _ISSUE_URL + '?' + urllib.parse.urlencode({
-                'title': scrub_secrets(self.title_input.text().strip()), 'labels': 'bug',
-            })
+            url = _ISSUE_URL + '?' + urllib.parse.urlencode({'title': self._title(), 'labels': 'bug'})
         try:
             opened = webbrowser.open(url)
         except Exception as exc:
@@ -196,7 +251,7 @@ class IssueReportDialog(QDialog):
             opened = False
         if not opened:
             self.status.setText('Could not open your browser. Copy the report and open '
-                                'github.com/isair/jarvis/issues/new manually.')
+                                'github.com/isair/jarvis/issues/new yourself.')
             return
         debug_log('Issue report opened for user submission on GitHub', 'desktop')
         self.accept()
