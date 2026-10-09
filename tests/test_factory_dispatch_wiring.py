@@ -43,7 +43,6 @@ def provider_config(request):
 
 @pytest.mark.parametrize("module_path", [
     "jarvis.reply.planner",
-    "jarvis.reply.evaluator",
     "jarvis.reply.enrichment",
     "jarvis.memory.graph_ops",
     "jarvis.tools.builtin.nutrition.log_meal",

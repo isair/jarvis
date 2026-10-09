@@ -66,7 +66,6 @@ def test_context_block_at_tail_of_system_message(mock_config, db, dialogue_memor
     from jarvis.reply import engine as engine_mod
 
     mock_config.llm_chat_model = "gpt-oss:20b"  # LARGE -> native tools
-    mock_config.evaluator_enabled = False
 
     captured: list[str] = []
 
@@ -98,7 +97,6 @@ def test_context_computed_once_per_reply_and_identical_across_loop_calls(
     from jarvis.reply import engine as engine_mod
 
     mock_config.llm_chat_model = "gpt-oss:20b"  # LARGE -> native tools
-    mock_config.evaluator_enabled = False
 
     captured: list[str] = []
     context_fetches: list[int] = []
@@ -152,7 +150,6 @@ def test_context_restored_after_native_to_text_fallback(
     from jarvis.reply import engine as engine_mod
 
     mock_config.llm_chat_model = "gpt-oss:20b"
-    mock_config.evaluator_enabled = False
 
     captured: list[str] = []
 
@@ -194,7 +191,6 @@ def test_text_query_sees_voice_turns_from_the_shared_memory(
     from jarvis.reply import engine as engine_mod
 
     mock_config.llm_chat_model = "gpt-oss:20b"  # LARGE -> native tools
-    mock_config.evaluator_enabled = False
 
     # Prior audio conversation recorded in the shared memory.
     dialogue_memory.add_message("user", "remind me to buy oat milk")
