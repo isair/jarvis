@@ -128,8 +128,11 @@ class WeatherTool(Tool):
             "Call this for ANY mention of weather, climate, temperature, or "
             "conditions — whether a question, a statement, or a casual remark. "
             "Covers now, later today, tomorrow, this week. "
-            "Call with {} — user location is auto-detected. Do NOT ask the user "
-            "where they are or request a city; just call this tool with empty args."
+            "When the user names a place, pass that place in location; it takes "
+            "precedence over the user's detected or remembered location. "
+            "When no place is named, call with {} so the tool can resolve the "
+            "user's location. Do not ask for a city before calling the tool, "
+            "and do not put a date or time phrase in location."
         )
 
     @property
@@ -139,7 +142,7 @@ class WeatherTool(Tool):
             "properties": {
                 "location": {
                     "type": "string",
-                    "description": "OPTIONAL. City name or location (e.g., 'London', 'New York', 'Tokyo'). Only set this if the user explicitly named a place different from their own location. If omitted, the tool auto-uses the user's current detected location — never ask the user for this argument."
+                    "description": "OPTIONAL. City name or location (e.g., 'London', 'New York', 'Tokyo'). Set this when the user explicitly names a place, preserving its name and geographic qualifiers. The named place takes precedence over the user's own location. Omit it when no place is named so the tool can resolve the user's location. Date and time phrases are not places."
                 }
             },
             "required": []
