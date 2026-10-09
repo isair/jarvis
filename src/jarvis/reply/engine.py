@@ -481,9 +481,13 @@ def _extract_text_tool_call(content_field: str, known_names: set):
         return None, None, None
 
     stripped = content_field.strip()
+    # Registered names are literal identifiers, including MCP namespaces.
+    name_prefix = r"^(" + "|".join(
+        re.escape(name) for name in sorted(known_names, key=len, reverse=True)
+    ) + r")\s*"
 
     # Form: `toolName: key: value` — only accept if the first segment is a known tool.
-    m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.*)$", stripped, re.DOTALL)
+    m = re.match(name_prefix + r":\s*(.*)$", stripped, re.DOTALL)
     if m and m.group(1) in known_names:
         name = m.group(1)
         rest = m.group(2).strip()
@@ -500,7 +504,7 @@ def _extract_text_tool_call(content_field: str, known_names: set):
         return name, args, f"call_{uuid.uuid4().hex[:8]}"
 
     # Form: `toolName(...)`
-    m2 = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*\((.*)\)\s*$", stripped, re.DOTALL)
+    m2 = re.match(name_prefix + r"\((.*)\)\s*$", stripped, re.DOTALL)
     if m2 and m2.group(1) in known_names:
         name = m2.group(1)
         inside = m2.group(2).strip()
