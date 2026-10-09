@@ -147,7 +147,7 @@ def test_eye_surroundings_stay_transparent(face, state, expression,
                for y in range(image.height()))
     if expression == Expression.NEUTRAL and blink_factor == 0.0 and state != JarvisState.ASLEEP:
         # Desktop content is visible between the pupil and the eye outline.
-        gap_x = round((centre + size * 0.6) * scale)
-        assert image.pixelColor(gap_x, centre * scale).alpha() == 0
+        gap_x = round((centre + size * 0.5) * scale)
+        assert image.pixelColor(gap_x, round((centre - size * 0.2) * scale)).alpha() == 0
     assert any(image.pixelColor(x, y).alpha() > 0
                for x in range(image.width()) for y in range(image.height()))
