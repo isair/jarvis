@@ -76,6 +76,16 @@ if TYPE_CHECKING:
     from ..memory.db import Database
 
 
+_PLAN_RECOVERY_HINT = (
+    "\n\n[Reassess the unfinished tasks in the original request using the tool "
+    "outcomes. A failed tool is not a completed task. Try a different allowed "
+    "approach or corrected arguments when the available information supports "
+    "one. If information or access is missing, ask the user or explain the "
+    "blocker. Do not perform a dependent action until its prerequisite succeeds, "
+    "and do not claim an unsuccessful action happened.]"
+)
+
+
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
 
@@ -1534,6 +1544,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
     _assistant_name = str(getattr(cfg, "wake_word", "jarvis") or "jarvis").strip().capitalize()
     _persona_prompt = build_system_prompt(_assistant_name)
+    _plan_in_recovery = False
 
     def _build_initial_system_message() -> str:
         guidance = [_persona_prompt.strip()]
@@ -1621,7 +1632,11 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             )
         )
         if len(action_plan) > 1 or _plan_has_tool_step:
-            guidance.append(format_plan_block(action_plan))
+            if _plan_in_recovery:
+                guidance.append("TASKS TO REASSESS AFTER A TOOL FAILURE:\n"
+                                + "\n".join(action_plan) + _PLAN_RECOVERY_HINT)
+            else:
+                guidance.append(format_plan_block(action_plan))
 
         if use_text_tools and tools_desc:
             # Text-based tool calling: inject tool descriptions as plain text. The tools_desc
@@ -1914,28 +1929,29 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     # to the steps of the current plan.
     _plan_steps_baseline = sum(1 for m in messages if m.get("tool_name"))
 
+    def _enter_plan_recovery() -> None:
+        nonlocal _plan_in_recovery
+        if not action_plan or _plan_in_recovery:
+            return
+        _plan_in_recovery = True
+        messages[0] = {"role": "system", "content": _build_initial_system_message()}
+        debug_log("tool failed, returning unfinished task decisions to the reply model", "planning")
+        print("    ⚠️ Planned task needs recovery before continuing.", flush=True)
+
     while turn < max_turns:
         turn += 1
         debug_log(f"🔁 messages loop turn {turn}", "planning")
         print(f"  🔁 Turn {turn}/{max_turns}", flush=True)
 
-        # Plan-driven direct-exec. When a pre-loop action plan exists and
-        # has more tool steps than tool results seen so far, resolve the
-        # next step into a concrete tool call and execute it IN THIS TURN
-        # without asking the chat model. Small models (gemma4:e2b) don't
-        # reliably substitute discovered entities into subsequent tool
-        # calls; driving plan steps via a short resolver LLM call against
-        # prior tool results lifts that responsibility off the chat model
-        # entirely. After each step we ``continue`` so the next iteration
-        # resolves the step after — the chat model is only invoked once
-        # all plan tool steps are exhausted, at which point it synthesises
-        # a final reply from the accumulated results.
-        # See planner.spec.md.
+        # Execute concrete plan steps while their outcomes succeed. A
+        # failed prerequisite returns unfinished task decisions to the
+        # reply model within the same bounded conversation loop.
         _plan_tool_steps = tool_steps_of(action_plan)
         if (
             use_text_tools
             and _plan_tool_steps
             and not _plan_under_specified
+            and not _plan_in_recovery
         ):
             _tool_results_so_far = (
                 sum(1 for m in messages if m.get("tool_name"))
@@ -2028,8 +2044,12 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                                 )
                                 _plan_text = f"Error: {_plan_err}"
                                 _plan_resources = []
+                            if not _plan_result.success:
+                                _enter_plan_recovery()
                             _plan_tool_results_after = _tool_results_so_far + 1
-                            if action_plan:
+                            if _plan_in_recovery:
+                                _plan_hint = _PLAN_RECOVERY_HINT
+                            elif action_plan:
                                 _plan_hint = progress_nudge(
                                     action_plan,
                                     _plan_tool_results_after,
@@ -2334,6 +2354,10 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 return None
 
             # Append tool result
+            if not result.success:
+                _enter_plan_recovery()
+            recovery_hint = _PLAN_RECOVERY_HINT if _plan_in_recovery else ""
+
             if result.reply_text:
                 # toolSearchTool is an escape hatch: merge the surfaced tool
                 # names into the per-turn allow-list so the chat model can
@@ -2431,7 +2455,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                         sum(1 for m in messages if m.get("tool_name"))
                         - _plan_steps_baseline
                     ) + 1
-                    if action_plan:
+                    if action_plan and _plan_in_recovery:
+                        remainder_hint = _PLAN_RECOVERY_HINT
+                    elif action_plan:
                         remainder_hint = progress_nudge(
                             action_plan, tool_results_so_far
                         )
@@ -2464,7 +2490,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                         "role": "tool",
                         "tool_call_id": tool_call_id,
                         "tool_name": tool_name,  # Include tool_name for duplicate detection
-                        "content": effective_result,
+                        "content": effective_result + recovery_hint,
                         "tool_failed": not result.success,
                         "resource_references": resource_records,
                     })
@@ -2499,7 +2525,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 if use_text_tools:
                     messages.append({
                         "role": "user",
-                        "content": f"[Tool error: {tool_name}] {err}",
+                        "content": f"[Tool error: {tool_name}] {err}" + recovery_hint,
                         "tool_name": tool_name,
                         "tool_failed": True,
                     })
@@ -2508,7 +2534,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                         "role": "tool",
                         "tool_call_id": tool_call_id,
                         "tool_name": tool_name,
-                        "content": f"Error: {err}",
+                        "content": f"Error: {err}" + recovery_hint,
                         "tool_failed": True,
                     })
                 debug_log(f"    ❌ tool error: {err}", "planning")
