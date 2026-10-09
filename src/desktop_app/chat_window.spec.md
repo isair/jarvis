@@ -19,6 +19,10 @@ The core `jarvis` package exposes a text-submission entry point with no
 knowledge of the desktop app. It mirrors the diary-callbacks pattern already
 used for end-of-session UI updates.
 
+Optional speech-recognition backend import failures do not prevent daemon
+initialisation or text submission. The listener owns speech-backend availability
+and reports unavailable voice recognition; typed replies do not require Whisper.
+
 ### `submit_text_query(text: str) -> None` (in `jarvis.daemon`)
 
 - Fire-and-forget: spawns a worker thread and returns immediately so the
