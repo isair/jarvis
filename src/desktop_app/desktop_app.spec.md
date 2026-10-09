@@ -122,23 +122,50 @@ Window visibility is user-controlled: starting or stopping the assistant never s
 
 The face is a compact frameless, translucent tool window, always on top without
 accepting focus or activating when shown. macOS keeps the tool window visible
-when another application is active. It paints only the amber face and its
-animation, with an ink-only shadow for contrast on light backgrounds. There is
+when another application is active. It paints a softly faceted amber contour,
+rounded expressive eyes and a small relaxed smile. Fine strokes use the shared
+theme's amber palette with directional highlights and a narrow ink outline for
+contrast on light backgrounds. There is
 no background panel, grid, title bar, subtitle area or persistent toolbar.
-Eyes paint only their outlines and pupils (or thinking arcs), with transparent
-interiors and surroundings. The contrast shadow follows those strokes; there
-is no filled eye halo to obscure desktop content.
+Eyes paint only their outlines and softly lit pupils, with transparent
+interiors and surroundings. Contrast and glow follow those strokes; there is
+no filled eye halo to obscure desktop content.
 
 The default footprint is 220 × 280 logical pixels, with zero layout margins.
 Vector strokes, glows and motion scale together with the face geometry.
 Presence opacity and state-entry animations follow the same frame-level state
 observation for bundled signals and file-backed subprocess updates.
 Asleep and idle states have lower window opacity than active listening,
-thinking, speaking or dictation. The state animations remain distinct. Empty
-corners are excluded from the native input region through an elliptical mask.
+thinking, speaking or dictation. The native input region follows the face's
+contour with enough padding for breathing and active cues. Empty corners and
+lateral margins pass clicks through to the desktop.
 Dragging the face uses native window movement where supported, with a pointer
 position fallback. A right-click menu hides the face; the tray shows it again
 without activating it. Visibility remains user-controlled after launch.
+
+The face's character comes from restrained expressions and uninterrupted
+negative space. Awake breathing changes its size by at most 0.6%, without
+moving or tilting the window. Natural brief blinks occur 4.5 to 7.5 seconds
+apart. Idle glances last 3.2 seconds, stay within 2.5 logical pixels horizontally
+and one vertically, and are separated by 9 to 15 seconds of rest. The face
+does not track the pointer or analyse the desktop.
+
+- **Asleep:** relaxed closed eyelids and a still, dim silhouette after settling.
+- **Idle:** soft breathing, a slight smile and occasional blinks and glances.
+- **Listening:** receptive eyes and a close-fitting amber echo on a two-second cycle.
+- **Thinking:** pupils look gently upwards while a short highlight travels along the rim.
+- **Speaking:** the smile opens into a small, smoothly tapered waveform. It indicates
+  the speaking state without measuring or recording audio.
+- **Dictation:** a close-fitting coral outline breathes during recording; processing
+  combines that outline with the thinking expression.
+
+Animation follows monotonic elapsed time, with smooth activation and state
+blends independent of frame rate. Each frame does a bounded amount of work,
+including after a long event-loop stall. Hidden faces stop their animation
+timer and observe the latest state immediately when shown. Visible resting
+faces use a lower refresh rate, with a 250 ms state check when fully asleep.
+`scripts/capture_face_preview.py` renders the actual widget on light and dark
+backgrounds using isolated in-memory state and a fixed clock.
 
 **Face state follows the daemon lifecycle**: the face animates from states written by the daemon (`JarvisStateManager`, file-backed for cross-process use). Whenever the daemon goes down — the tray's Stop/Start Listening toggle, an unexpected exit, or the setup wizard pausing it — the tray resets the face to `ASLEEP` so it never looks awake while no daemon is running. Starting the daemon lets the daemon's own state writes take over again.
 
