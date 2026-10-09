@@ -6,6 +6,17 @@ A self-organising node graph that stores the assistant's accumulated world knowl
 
 The graph dynamically structures knowledge by topic relevance using a hierarchical tree where nodes auto-split when they grow too large. Three fast-access entry points — **recent nodes**, **top nodes**, and **root node** — ensure the most relevant knowledge is always reachable without exhaustive search.
 
+### Knowledge and task history
+
+Completed assistant transactions and their confirmations belong in the diary,
+including creating, changing, deleting or cancelling records and opening
+resources. Completion alone does not make an interaction durable knowledge.
+Extraction and semantic review retain independently established personal facts
+and standing directives alongside those transactions. Record operations alone
+do not establish real-world events; deleting a record does not establish whether
+its underlying event happened. Explicit user corrections determine the supported
+claim, preserving its subject and temporal scope.
+
 ## Fixed Top-Level Branches
 
 On first bootstrap the graph seeds three non-deletable branches under root, defined in `FIXED_BRANCHES` in `graph.py`:
