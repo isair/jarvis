@@ -106,7 +106,9 @@ The planner prompt instructs the model to emit:
   without searching private conversation history. Explicit requests for
   what the user said about a named person still require memory.
 - Tool names from the provided catalog only (exact match), for any
-  concrete tool step.
+  concrete tool step. Names are literal registered identifiers, including
+  namespace punctuation and non-ASCII characters. A prefix of another tool
+  name is not a match.
 - Resource identity comes from recorded tool references. A follow-up operation
   uses the exact ID of the requested referent, rather than its potentially
   duplicate label or an inferred newest database row. IDs in recorded tool
