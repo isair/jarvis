@@ -38,6 +38,7 @@ from __future__ import annotations
 import json
 import math
 import re
+from datetime import datetime, timezone
 from typing import List, Optional, Sequence, Tuple
 
 from ..debug import debug_log
@@ -596,6 +597,24 @@ _STEP_RESOLVER_SYSTEM = (
 )
 
 
+_TEMPORAL_RESOLUTION_GUIDANCE = (
+    "\nCURRENT CLOCK provides UTC and system-local ISO timestamps. Resolve relative "
+    "dates and times from this clock. The system-local date is the default calendar "
+    "unless the step or prior results specify another timezone. Use the temporal "
+    "format required by the schema, not relative labels."
+)
+
+
+def _has_temporal_format(schema) -> bool:
+    """Recognise temporal contracts through standard JSON schema formats."""
+    if isinstance(schema, dict):
+        value = schema.get('format')
+        return (isinstance(value, str) and value in {'date', 'date-time', 'time'}) or any(
+            _has_temporal_format(child) for child in schema.values()
+        )
+    return isinstance(schema, list) and any(_has_temporal_format(child) for child in schema)
+
+
 def _format_prior_results(prior_results: Sequence[Tuple[str, str, str]]) -> str:
     """Render prior tool calls as ``N. <name>(<args>) → <result excerpt>``.
 
@@ -814,8 +833,19 @@ def resolve_next_tool_call(
         else getattr(cfg, "planner_timeout_sec", 3.0)
     )
 
+    referenced_names = set(tool_names_in_plan([next_step_text], allowed_names))
+    needs_clock = any(entry['name'] in referenced_names and _has_temporal_format(entry['parameters'])
+                      for entry in tool_catalogue)
+    clock_context = ''
+    system_prompt = _STEP_RESOLVER_SYSTEM
+    if needs_clock:
+        now_utc = datetime.now(timezone.utc)
+        clock = {'utc': now_utc.isoformat(), 'system_local': now_utc.astimezone().isoformat()}
+        clock_context = f"CURRENT CLOCK:\n{json.dumps(clock)}\n\n"
+        system_prompt += _TEMPORAL_RESOLUTION_GUIDANCE
+        debug_log("planner.resolve_next_tool_call: added declared temporal clock context", "planning")
     user_content = (
-        f"ALLOWED TOOLS:\n{json.dumps(tool_catalogue, ensure_ascii=False, separators=(',', ':'))}\n\n"
+        clock_context + f"ALLOWED TOOLS:\n{json.dumps(tool_catalogue, ensure_ascii=False, separators=(',', ':'))}\n\n"
         f"PRIOR TOOL CALLS IN THIS SESSION:\n"
         f"{_format_prior_results(prior_results)}\n\n"
         f"NEXT PLANNED STEP: {next_step_text.strip()}\n\n"
@@ -826,7 +856,7 @@ def resolve_next_tool_call(
         raw = call_llm_direct(
             cfg=cfg,
             chat_model=model,
-            system_prompt=_STEP_RESOLVER_SYSTEM,
+            system_prompt=system_prompt,
             user_content=user_content,
             timeout_sec=effective_timeout,
             thinking=False,

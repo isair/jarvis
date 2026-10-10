@@ -100,8 +100,8 @@ class FetchMealsTool(Tool):
         return {
             "type": "object",
             "properties": {
-                "since_utc": {"type": "string", "description": "Start time in ISO format (UTC)"},
-                "until_utc": {"type": "string", "description": "End time in ISO format (UTC)"}
+                "since_utc": {"type": "string", "format": "date-time", "description": "Start time in ISO format (UTC)"},
+                "until_utc": {"type": "string", "format": "date-time", "description": "End time in ISO format (UTC)"}
             },
             "required": []
         }
