@@ -1,8 +1,6 @@
 """Tests for the node graph memory system (v2)."""
 
-import os
-import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -10,8 +8,7 @@ from src.jarvis.memory.graph import (
     GraphMemoryStore,
     MemoryNode,
     _estimate_tokens,
-    SPLIT_THRESHOLD,
-    MERGE_THRESHOLD,
+    DECAY_HALF_LIFE_DAYS,
     FIXED_BRANCHES,
 )
 
@@ -530,62 +527,23 @@ class TestSafetyGuards:
 class TestAccessDecay:
     """Tests for time-decayed access scoring."""
 
-    def test_recently_accessed_node_ranks_higher(self, store):
-        """A node accessed today should rank above one accessed long ago,
-        even if the stale node has a higher raw access_count.
-
-        With a 14-day half-life:
-        - Stale: 20 accesses, 60 days ago → 20 / (1 + 60/14) ≈ 3.78
-        - Fresh: 5 accesses, today → 5 / (1 + 0/14) = 5.0
-        """
-        from datetime import timedelta
-
+    @pytest.mark.parametrize('ranking', ['top', 'children'])
+    def test_fresh_access_outranks_stale_raw_count(self, store, ranking):
+        """Both entry points rank by configured decay rather than raw count."""
         stale = store.create_node(name="Stale", description="Old node", parent_id="root")
         fresh = store.create_node(name="Fresh", description="New node", parent_id="root")
-
-        # Give the stale node moderate accesses but set last_accessed to 60 days ago
         store.conn.execute(
             "UPDATE memory_nodes SET access_count = 20, last_accessed = ? WHERE id = ?",
-            ((datetime.now(timezone.utc) - timedelta(days=60)).isoformat(), stale.id),
+            ((datetime.now(timezone.utc) - timedelta(days=4 * DECAY_HALF_LIFE_DAYS)).isoformat(), stale.id),
         )
         store.conn.commit()
-
-        # Fresh node: fewer accesses but just now
         for _ in range(5):
             store.touch_node(fresh.id)
-
-        top = store.get_top_nodes(limit=2)
-        assert len(top) >= 2
-        assert top[0].id == fresh.id, (
+        nodes = store.get_top_nodes(limit=2) if ranking == 'top' else store.get_children('root')
+        assert len(nodes) >= 2
+        assert nodes[0].id == fresh.id, (
             "Freshly accessed node should rank above stale node"
         )
-
-    def test_children_ordered_by_decayed_score(self, store):
-        """get_children should order by decayed score, not raw count.
-
-        With a 14-day half-life:
-        - Old child: 10 accesses, 90 days ago → 10 / (1 + 90/14) ≈ 1.35
-        - New child: 3 accesses, today → 3 / (1 + 0/14) = 3.0
-        """
-        from datetime import timedelta
-
-        old_child = store.create_node(name="Old Child", description="", parent_id="root")
-        new_child = store.create_node(name="New Child", description="", parent_id="root")
-
-        # Old child: moderate count, very stale
-        store.conn.execute(
-            "UPDATE memory_nodes SET access_count = 10, last_accessed = ? WHERE id = ?",
-            ((datetime.now(timezone.utc) - timedelta(days=90)).isoformat(), old_child.id),
-        )
-        store.conn.commit()
-
-        # New child: low count, fresh
-        for _ in range(3):
-            store.touch_node(new_child.id)
-
-        children = store.get_children("root")
-        child_ids = [c.id for c in children]
-        assert child_ids[0] == new_child.id
 
     def test_same_age_nodes_ordered_by_count(self, store):
         """When two nodes were accessed at the same time, higher count wins."""
