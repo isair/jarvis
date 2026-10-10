@@ -7,8 +7,8 @@ format. Naive bounds are interpreted as UTC, as named by the public fields.
 
 Absent or empty upper bounds resolve to the current UTC instant. Absent or
 empty lower bounds resolve to one day before the resolved upper bound.
-Invalid timestamps, non-string bounds, non-object arguments and reversed
-ranges fail explicitly; they do not produce a successful empty-intake result.
+Invalid or unrepresentable UTC timestamps, non-string bounds, non-object
+arguments and reversed ranges fail explicitly; they do not produce a successful empty-intake result.
 
 The database stores UTC ISO timestamps with automatic microsecond precision.
 The normalised lower bound uses that format, and the upper bound includes an

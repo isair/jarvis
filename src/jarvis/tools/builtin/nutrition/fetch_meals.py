@@ -22,15 +22,18 @@ def _normalise_time_range(args: Optional[Dict[str, Any]]) -> tuple[str, str]:
             raise ValueError(f"{name} must be an ISO timestamp")
         try:
             instant = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        except ValueError as error:
-            raise ValueError(f"{name} must be an ISO timestamp") from error
-        if instant.tzinfo is None:
-            instant = instant.replace(tzinfo=timezone.utc)
-        return instant.astimezone(timezone.utc)
+            if instant.tzinfo is None:
+                instant = instant.replace(tzinfo=timezone.utc)
+            return instant.astimezone(timezone.utc)
+        except (ValueError, OverflowError) as error:
+            raise ValueError(f"{name} must be a representable UTC ISO timestamp") from error
 
     since, until = parse_bound("since_utc"), parse_bound("until_utc")
     until = until or now
-    since = since or (until - timedelta(days=1))
+    try:
+        since = since or (until - timedelta(days=1))
+    except OverflowError as error:
+        raise ValueError("Meal time range exceeds the supported timestamp bounds") from error
     if since > until:
         raise ValueError("since_utc must not be after until_utc")
     # Zero fractions sort after whole-second timestamps in the stored text
