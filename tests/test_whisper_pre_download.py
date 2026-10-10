@@ -287,6 +287,7 @@ def test_retry_stops_when_preparation_becomes_non_retryable(monkeypatch, capsys,
 
 
 def test_cache_recovery_stops_after_download_child_failure(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr("huggingface_hub.constants.HF_HUB_CACHE", str(tmp_path))
     listener, module = listener_for_loading(monkeypatch)
     snapshot = complete_model(tmp_path / 'models--Test--whisper' / 'snapshots' / 'revision')
     outcomes = iter([str(snapshot), model_download.ModelDownloadError('worker_exit', 'child aborted')])

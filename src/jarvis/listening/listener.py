@@ -350,7 +350,8 @@ def _clear_corrupted_whisper_cache(error_message: str) -> bool:
     """Clear a corrupted Whisper model cache directory.
 
     Parses the CTranslate2 error message to find the snapshot directory,
-    then deletes the parent ``models--`` directory so the model can be
+    then verifies its parent ``models--`` directory belongs to the configured
+    Hub cache before deleting it so the model can be
     re-downloaded cleanly (including blobs that may also be corrupt).
 
     Returns ``True`` if a cache directory was found and deleted.
@@ -369,21 +370,23 @@ def _clear_corrupted_whisper_cache(error_message: str) -> bool:
         debug_log("could not parse cache path from error message", "voice")
         return False
 
-    snapshot_path = match.group(1)
-
-    # Walk up to the models-- directory
-    # snapshot_path is e.g. .../models--Org--Name/snapshots/<hash>
-    # We want to delete .../models--Org--Name entirely
     from pathlib import Path
-    path = Path(snapshot_path)
-    model_dir = None
-    for parent in [path] + list(path.parents):
-        if parent.name.startswith("models--"):
-            model_dir = parent
-            break
+    from huggingface_hub.constants import HF_HUB_CACHE
 
-    if model_dir is None or not model_dir.is_dir():
-        debug_log(f"could not locate models-- cache directory from: {snapshot_path}", "voice")
+    snapshot_path = Path(match.group(1))
+    model_dir = snapshot_path.parent.parent
+    try:
+        is_hub_snapshot = (
+            snapshot_path.parent.name == "snapshots"
+            and model_dir.name.startswith("models--")
+            and not model_dir.is_symlink()
+            and model_dir.parent.resolve() == Path(HF_HUB_CACHE).resolve()
+            and model_dir.is_dir()
+        )
+    except (OSError, RuntimeError):
+        is_hub_snapshot = False
+    if not is_hub_snapshot:
+        debug_log("Whisper recovery kept files outside a recognised Hub snapshot", "voice")
         return False
 
     try:
