@@ -9,8 +9,7 @@ since the warm profile does not include world facts.
 
 from __future__ import annotations
 
-import os
-import tempfile
+from contextlib import closing
 
 import pytest
 
@@ -26,15 +25,9 @@ from src.jarvis.memory.graph import (
 
 
 @pytest.fixture
-def graph_store():
-    fd, path = tempfile.mkstemp(suffix=".db")
-    os.close(fd)
-    store = GraphMemoryStore(path)
-    yield store
-    try:
-        os.unlink(path)
-    except OSError:
-        pass
+def graph_store(tmp_path):
+    with closing(GraphMemoryStore(str(tmp_path / 'graph.db'))) as store:
+        yield store
 
 
 @pytest.mark.unit
