@@ -933,11 +933,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             web_search can pick locale-appropriate resources (e.g. the
             right Wikipedia host). None when invoked outside the voice
             path — tools then fall back to their own default.
-        quiet: When True, the reply is not printed to stdout. The text-chat
-            path sets this so chat replies never land in the daemon's
-            stdout, which subprocess mode forwards to the desktop app's
-            general log viewer (a surface outside the chat redaction
-            invariant). Voice replies keep printing for terminal UX.
+        quiet: When True, the engine does not print the reply to stdout.
+            The text-chat worker owns logging of scrubbed delivered replies
+            after its cancellation check. Voice replies print here.
 
     Returns:
         Generated reply text or None
@@ -2690,9 +2688,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         safe_reply = "Sorry, I had trouble processing that. Could you try again?"
         reply = safe_reply
     if safe_reply:
-        # Print reply with appropriate header. Quiet mode (text chat) skips
-        # this entirely so the reply never reaches the daemon stdout that
-        # the desktop app forwards to the general log viewer.
+        # Quiet callers own delivery and activity logging of the reply.
         try:
             if not quiet and not getattr(cfg, "voice_debug", False):
                 print(f"\n🤖 Jarvis\n  {_indent_text(safe_reply)}\n", flush=True)

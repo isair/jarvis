@@ -113,11 +113,9 @@ class RuntimeStatusSignals(QObject):
 def _should_emit_as_log(line: str) -> bool:
     """Whether a daemon output line belongs in the general log viewer.
 
-    Chat and voice-control IPC are excluded. Chat's ``complete`` event carries
-    the whole assistant reply, which can echo back whatever the user typed, and the
-    log window is not covered by the redaction invariant the chat path
-    maintains. Diary IPC stays: it carries progress and token deltas the
-    log window exists to show.
+    Chat and voice-control IPC are excluded. The daemon supplies separate
+    redacted query and scrubbed reply activity lines for chat. Diary IPC
+    carries progress and token deltas for the log window.
     """
     from jarvis.daemon import CHAT_IPC_PREFIX, VOICE_STATUS_IPC_PREFIX
 

@@ -110,6 +110,7 @@ The central controller that manages:
 
 ### Activity log and downloads
 
+- Accepted typed chat requests and delivered replies appear in the activity log alongside voice exchanges. Queries are redacted and reply secrets are scrubbed; chat protocol events remain hidden.
 - The log viewer uses a timestamped timeline with distinct success, warning and error colours from the shared theme. Messages are inserted as plain text, including tracebacks.
 - Download updates appear in a live card above the timeline, showing the filename, percentage, transferred/total bytes, speed and remaining time when supplied by the downloader. Unknown totals use an indeterminate bar, never a fabricated percentage.
 - Repeated updates are coalesced; the timeline retains download start/completion events and all ordinary messages. Completion of a small metadata file must not hide another active model download.

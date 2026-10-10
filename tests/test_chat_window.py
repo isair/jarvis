@@ -1035,3 +1035,14 @@ class TestChatRewind:
         win._rewind_to_user(1, "question")
 
         assert rewinds == [], "rewind must be disabled while a query is in flight"
+
+
+@pytest.mark.unit
+def test_chat_activity_lines_reach_log_without_protocol_duplicates():
+    from desktop_app.app import _should_emit_as_log
+    from jarvis.daemon import CHAT_IPC_PREFIX
+
+    assert _should_emit_as_log('⌨️ Typed: "Where do I live?"\n')
+    assert _should_emit_as_log('🤖 Jarvis\n')
+    assert _should_emit_as_log('  London.\n')
+    assert not _should_emit_as_log(CHAT_IPC_PREFIX + '{"type":"complete","data":"London."}\n')
