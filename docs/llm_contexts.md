@@ -43,7 +43,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 - **Inputs**:
   - Rolling transcript buffer (last 120s, with timestamps)
   - Wake-word timestamp (if any), normalised aliases
-  - Last TTS text + finish time (echo rejection)
+  - Last TTS text + finish time (echo rejection). Prefix cleanup compares canonically normalised Unicode letters and numbers, preserving unrelated non-Latin user speech before intent judging.
   - State flags (wake_word_mode, hot_window_mode, during_tts)
 - **System prompt**: `SYSTEM_PROMPT_TEMPLATE` at [intent_judge.py:135](src/jarvis/listening/intent_judge.py:135). Teaches query extraction, echo detection, stop commands, pronoun/topic disambiguation, imperative re-addressing, declaratives to the wake word, and mentions addressed to another person. In wake-word mode, name mentions do not invite a reply; high-confidence non-echo rejections stop collection despite a detected wake word.
 - **Output**: strict JSON `IntentJudgment{directed, query, stop, confidence, reasoning}` ([intent_judge.py:94](src/jarvis/listening/intent_judge.py:94)). Consumed by the listening state machine which dispatches to the reply engine. In the hot window, a complete normalised query phrase found in the captured TTS text but absent from the current utterance is rejected at the shared minimum salvage word count, preventing earlier assistant speech from being dispatched as a fresh user query. When `content` is empty **or truncated mid-JSON** (reasoning models count thinking tokens against the generation cap), the judge also recovers the JSON answer from `reasoning_content` — reasoning models typically end their thinking with the full structured answer.
