@@ -29,6 +29,12 @@ On first bootstrap the graph seeds three non-deletable branches under root, defi
 
 These branches are created idempotently by inserting only missing stable IDs. The structure is intentionally shallow and purpose-driven — splits deepen each subtree over time, but the top layer stays fixed so the **warm profile** (see below) has a stable shape.
 
+Opening an initialised graph reads the existing revision and branch seeds without
+issuing seed writes. Under SQLite WAL, this permits opening and reading committed
+nodes while another owner holds a write transaction. Missing schema or seeds
+require writable bootstrap. Actual mutations and access-score updates retain
+their normal SQLite write-lock requirements.
+
 No Other branch: the extractor defaults unknown classifications to `user`. A fact that genuinely belongs nowhere should not be stored.
 
 Extracted facts must be non-empty strings. Missing, blank or non-string facts
