@@ -90,7 +90,6 @@ SPLIT_THRESHOLD = 1500       # tokens — when to split a node into children
 MERGE_THRESHOLD = 200        # tokens — when to collapse sparse children back
 RECENT_NODES_COUNT = 10      # number of recently-accessed nodes to track
 TOP_NODES_COUNT = 15         # most-accessed nodes to surface
-TOP_NODES_WINDOW_DAYS = 30   # time window for top-nodes ranking (legacy, kept for compat)
 MAX_TRAVERSAL_DEPTH = 8      # safety limit on graph traversal
 SUMMARY_MAX_LENGTH = 300     # max characters for a node description
 DECAY_HALF_LIFE_DAYS = 14    # days until a node's access score halves
@@ -594,17 +593,12 @@ class GraphMemoryStore:
             ).fetchall()
             return [self._row_to_node(r) for r in rows]
 
-    def get_top_nodes(
-        self,
-        limit: int = TOP_NODES_COUNT,
-        window_days: int = TOP_NODES_WINDOW_DAYS,
-    ) -> list[MemoryNode]:
+    def get_top_nodes(self, limit: int = TOP_NODES_COUNT) -> list[MemoryNode]:
         """Get nodes with the highest time-decayed access score.
 
         Uses hyperbolic decay so frequently accessed nodes that haven't
         been touched in a while naturally fall off without needing a hard
-        window cutoff. The ``window_days`` parameter is kept for backward
-        compatibility but is no longer used for filtering.
+        window cutoff.
         """
         score = _decay_score_sql()
         with self._lock:
