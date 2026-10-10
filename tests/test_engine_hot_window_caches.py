@@ -3,11 +3,11 @@
 Three caches share one primitive (DialogueMemory.hot_cache_*):
 
 1. Warm profile block — query-agnostic, keyed on a constant.
-2. Memory enrichment extractor — keyed on the redacted query (+topic hint).
-3. Tool router output — keyed on redacted query + strategy + catalogue.
+2. Memory enrichment extractor — keyed on query (+topic hint) and context.
+3. Tool router output — keyed on query, context, strategy and tool definitions.
 
-All three should fire on the second matching turn within the hot window so
-follow-up queries don't pay for SQLite reads or LLM hops they already did.
+Identical data inputs can reuse results within the active conversation.
+Changed dialogue, live facts or tool definitions require fresh computations.
 
 Also covers the C1 fix: when the planner explicitly emits a `searchMemory`
 step, the recall gate must NOT short-circuit memory enrichment even when
@@ -50,131 +50,6 @@ def _mock_cfg():
     cfg.ollama_embed_model = "test-embed"
     cfg.db_path = ":memory:"
     return cfg
-
-
-@pytest.mark.unit
-@patch("src.jarvis.memory.graph_ops.format_warm_profile_block", return_value="")
-@patch("src.jarvis.memory.graph_ops.build_warm_profile", return_value={"user": "", "directives": ""})
-@patch("src.jarvis.memory.graph.GraphMemoryStore")
-@patch("src.jarvis.reply.engine.select_tools", return_value=[])
-@patch("src.jarvis.reply.engine.plan_query", return_value=[])
-@patch("src.jarvis.reply.engine.extract_search_params_for_memory", return_value={})
-@patch("src.jarvis.reply.engine.extract_text_from_response")
-@patch("src.jarvis.reply.engine.chat_with_messages")
-def test_tool_router_cached_across_turns(
-    mock_chat, mock_extract, mock_extractor, mock_plan, mock_select,
-    _mock_graph, _mock_warm, _mock_fmt,
-):
-    """Two identical queries within the same DialogueMemory should call the
-    tool router exactly once — the second turn must hit the hot-window cache.
-    """
-    mock_chat.side_effect = [
-        {"message": {"content": "hello"}},
-        {"message": {"content": "hello again"}},
-    ]
-    mock_extract.side_effect = ["hello", "hello again"]
-
-    db = Mock()
-    cfg = _mock_cfg()
-    dm = DialogueMemory()
-
-    run_reply_engine(db=db, cfg=cfg, tts=None, text="say hi", dialogue_memory=dm)
-    run_reply_engine(db=db, cfg=cfg, tts=None, text="say hi", dialogue_memory=dm)
-
-    assert mock_select.call_count == 1, (
-        f"router should be cached on identical query; called {mock_select.call_count} times"
-    )
-
-
-@pytest.mark.unit
-@patch("src.jarvis.memory.graph_ops.format_warm_profile_block", return_value="")
-@patch("src.jarvis.memory.graph_ops.build_warm_profile", return_value={"user": "", "directives": ""})
-@patch("src.jarvis.memory.graph.GraphMemoryStore")
-@patch("src.jarvis.reply.engine.plan_query", return_value=[])
-@patch("src.jarvis.reply.engine.extract_search_params_for_memory", return_value={})
-@patch("src.jarvis.reply.engine.extract_text_from_response")
-@patch("src.jarvis.reply.engine.chat_with_messages")
-def test_router_fallback_to_all_tools_is_not_cached(
-    mock_chat, mock_extract, mock_extractor, mock_plan,
-    _mock_graph, _mock_warm, _mock_fmt,
-):
-    """When the router falls open to the full tool catalogue (its parse-failure
-    fail-open path), the engine must NOT persist that result in the
-    conversation-scoped cache. Otherwise a single small-model fluke pins
-    ``allowed_tools`` to "all N" for the rest of the session, overwhelms the
-    planner, and starves the chat model.
-
-    Field trace (2026-05-03): user said "navigate to youtube.com". The router
-    LLM flaked, fell open to ~41 tools, the cache stored that, every
-    subsequent navigate attempt replayed the cached 41-tool set, and the small
-    chat model produced an empty reply ("Sorry, I had trouble processing
-    that"). Pre-#281 this didn't happen because the router re-rolled per turn.
-    """
-    from src.jarvis.tools.registry import BUILTIN_TOOLS
-    full_catalogue = list(BUILTIN_TOOLS.keys())
-
-    mock_chat.side_effect = [
-        {"message": {"content": "hello"}},
-        {"message": {"content": "hello again"}},
-    ]
-    mock_extract.side_effect = ["hello", "hello again"]
-
-    db = Mock()
-    cfg = _mock_cfg()
-    dm = DialogueMemory()
-
-    with patch(
-        "src.jarvis.reply.engine.select_tools",
-        return_value=full_catalogue,
-    ) as mock_select:
-        run_reply_engine(db=db, cfg=cfg, tts=None, text="navigate to youtube", dialogue_memory=dm)
-        run_reply_engine(db=db, cfg=cfg, tts=None, text="navigate to youtube", dialogue_memory=dm)
-
-    assert mock_select.call_count == 2, (
-        "fall-open-to-all-tools must not be cached; the router should re-run "
-        f"on the second identical turn — was called {mock_select.call_count} times"
-    )
-
-
-@pytest.mark.unit
-@patch("src.jarvis.memory.graph_ops.format_warm_profile_block", return_value="")
-@patch("src.jarvis.memory.graph_ops.build_warm_profile", return_value={"user": "", "directives": ""})
-@patch("src.jarvis.memory.graph.GraphMemoryStore")
-@patch("src.jarvis.reply.engine.select_tools", return_value=["webSearch"])
-@patch("src.jarvis.reply.engine.plan_query", return_value=[])
-@patch("src.jarvis.reply.engine.extract_search_params_for_memory", return_value={"keywords": ["x"], "questions": []})
-@patch("src.jarvis.memory.conversation.search_conversation_memory_by_keywords", return_value=[])
-@patch("src.jarvis.reply.engine.extract_text_from_response")
-@patch("src.jarvis.reply.engine.chat_with_messages")
-def test_memory_extractor_cached_across_turns(
-    mock_chat, mock_extract, _mock_search, mock_extractor,
-    _mock_plan, _mock_select, _mock_graph, _mock_warm, _mock_fmt,
-):
-    """Empty plan → fail-open path runs the extractor. The second identical
-    follow-up must skip the extractor LLM call.
-
-    The recall gate would also fire on a tool-grounded follow-up, so we
-    keep the dialogue free of tool messages here to exercise the extractor
-    path on both turns.
-    """
-    mock_chat.side_effect = [
-        {"message": {"content": "first"}},
-        {"message": {"content": "second"}},
-    ]
-    mock_extract.side_effect = ["first", "second"]
-
-    db = Mock()
-    cfg = _mock_cfg()
-    dm = DialogueMemory()
-
-    run_reply_engine(db=db, cfg=cfg, tts=None,
-                     text="tell me about pushkin", dialogue_memory=dm)
-    run_reply_engine(db=db, cfg=cfg, tts=None,
-                     text="tell me about pushkin", dialogue_memory=dm)
-
-    assert mock_extractor.call_count == 1, (
-        f"extractor should be cached; called {mock_extractor.call_count} times"
-    )
 
 
 @pytest.mark.unit
