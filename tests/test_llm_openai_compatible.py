@@ -13,6 +13,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+pytestmark = pytest.mark.unit
+
 
 def _make_response(*, json_data=None, iter_lines=None, status_code=200, raise_http=None):
     resp = MagicMock()
