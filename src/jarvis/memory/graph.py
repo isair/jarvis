@@ -232,7 +232,37 @@ CREATE TABLE IF NOT EXISTS memory_nodes (
 CREATE INDEX IF NOT EXISTS idx_nodes_parent ON memory_nodes(parent_id);
 CREATE INDEX IF NOT EXISTS idx_nodes_last_accessed ON memory_nodes(last_accessed DESC);
 CREATE INDEX IF NOT EXISTS idx_nodes_access_count ON memory_nodes(access_count DESC);
+
+CREATE TABLE IF NOT EXISTS memory_graph_revisions (
+    name TEXT PRIMARY KEY,
+    revision INTEGER NOT NULL DEFAULT 0
+);
+INSERT OR IGNORE INTO memory_graph_revisions(name, revision) VALUES('warm_profile', 0);
 """
+
+
+_WARM_PROFILE_TRIGGERS_SQL = "\n".join(
+    f"""CREATE TRIGGER IF NOT EXISTS warm_profile_{name}
+    {event} ON memory_nodes
+    WHEN EXISTS (
+        WITH RECURSIVE ancestry(id, parent_id) AS (
+            SELECT id, parent_id FROM memory_nodes WHERE id = {row}.id
+            UNION
+            SELECT parent.id, parent.parent_id FROM memory_nodes AS parent
+            JOIN ancestry ON parent.id = ancestry.parent_id
+        )
+        SELECT 1 FROM ancestry WHERE id IN ('{BRANCH_USER}', '{BRANCH_DIRECTIVES}')
+    )
+    BEGIN
+        UPDATE memory_graph_revisions SET revision = revision + 1 WHERE name = 'warm_profile';
+    END;"""
+    for name, event, row in (
+        ('insert', 'AFTER INSERT', 'NEW'),
+        ('delete', 'BEFORE DELETE', 'OLD'),
+        ('update_old', 'BEFORE UPDATE OF id, name, description, data, parent_id', 'OLD'),
+        ('update_new', 'AFTER UPDATE OF id, name, description, data, parent_id', 'NEW'),
+    )
+)
 
 
 # ── Graph Memory Store ──────────────────────────────────────────────────────
@@ -261,7 +291,7 @@ class GraphMemoryStore:
     def _init_schema(self) -> None:
         with self._lock:
             self.conn.execute("PRAGMA foreign_keys = ON")
-            self.conn.executescript(_GRAPH_SCHEMA_SQL)
+            self.conn.executescript(_GRAPH_SCHEMA_SQL + _WARM_PROFILE_TRIGGERS_SQL)
             self.conn.commit()
 
     def _ensure_root(self) -> None:
@@ -362,6 +392,14 @@ class GraphMemoryStore:
         return True
 
     # ── CRUD ────────────────────────────────────────────────────────────
+
+    def get_warm_profile_revision(self) -> int:
+        """Read the persisted revision of User/Directives profile inputs."""
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT revision FROM memory_graph_revisions WHERE name = 'warm_profile'"
+            ).fetchone()
+        return row["revision"]
 
     def get_node(self, node_id: str) -> Optional[MemoryNode]:
         """Fetch a single node by ID."""

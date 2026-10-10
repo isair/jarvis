@@ -120,6 +120,23 @@ Any node except root can be deleted. Children are orphaned (parent_id set to NUL
 
 Increments `access_count` and updates `last_accessed`. Called automatically when a node is viewed in the UI or retrieved during query traversal.
 
+### Warm Profile Revision
+
+A persisted `warm_profile` revision in `memory_graph_revisions` tracks User and
+Directives profile inputs. SQLite triggers advance it for inserts, deletes and
+content/parent edits anywhere in those subtrees. Before/after update checks cover
+moves into or out of a relevant branch. Ancestor queries use indexed parent links
+and terminate on repeated nodes. Access-only touches and World-only writes leave
+the revision unchanged. Triggers operate within the writer's transaction,
+including writes from separate connections or processes. Schema initialisation
+preserves existing nodes and revision values.
+
+The reply cache includes the database path and revision with its profile block.
+Each turn checks that signature before reuse, so committed external edits reach
+the next turn without requiring an in-process callback. Changed profiles are
+rebuilt; an unavailable rebuild supplies no stale block. Temporary read stores
+are closed after use.
+
 ### Mutation Listeners
 
 The graph module exposes a small observer registry, `register_graph_mutation_listener(cb)` / `unregister_graph_mutation_listener(cb)`, invoked after every successful `create_node`, `update_node`, `delete_node`, and (transitively) `append_to_node`. Callbacks receive `action`, `node_id`, and `branch` (the FIXED_BRANCH ancestor id, or `None` for root-level mutations and unresolvable nodes). Listener exceptions are logged via `debug_log` and swallowed so they cannot break a write.
