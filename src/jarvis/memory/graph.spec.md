@@ -31,6 +31,11 @@ These branches are created idempotently via `INSERT OR IGNORE` on stable IDs. Th
 
 No Other branch: the extractor defaults unknown classifications to `user`. A fact that genuinely belongs nowhere should not be stored.
 
+Extracted facts must be non-empty strings. Missing, blank or non-string facts
+are discarded before semantic review, without discarding valid sibling entries.
+Numbers, booleans and structured JSON values cannot become memory text through
+implicit conversion.
+
 ### Legacy-Shape Migration (destructive)
 
 `GraphMemoryStore.migrate_legacy_shape()` checks the on-disk graph against the expected shape at daemon start-up. The graph is considered non-conforming if root has any direct child that isn't one of the fixed branches, or if root's own `data` column is non-empty (cold-start writes that landed on root before the taxonomy existed). In either case the entire `memory_nodes` table is wiped and root + the three fixed branches are re-seeded.

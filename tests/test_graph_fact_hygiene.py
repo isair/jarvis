@@ -17,6 +17,24 @@ CANDIDATES = [
 ]
 
 
+@pytest.mark.parametrize('invalid_fact', [True, 42, {'text': 'Invented fact'}, ['Invented fact'], None, '', '   '])
+def test_malformed_fact_cannot_become_personal_memory(mock_config, invalid_fact):
+    supported = 'The user prefers concise replies'
+    candidates = [{'branch': 'USER', 'fact': invalid_fact},
+                  {'branch': 'USER', 'fact': supported}]
+
+    def infer(**kwargs):
+        if kwargs['user_content'].startswith('Extract'):
+            return json.dumps(candidates)
+        review = json.loads(kwargs['user_content'])
+        return json.dumps({str(item['id']): 'DURABLE' for item in review['candidates']})
+
+    with patch('jarvis.memory.graph_ops.call_llm_direct', side_effect=infer):
+        assert extract_graph_memories('The user prefers concise replies', mock_config, 'local-model') == [
+            ('user', supported),
+        ]
+
+
 def test_transient_and_interaction_candidates_are_not_returned(mock_config):
     with patch('jarvis.memory.graph_ops.call_llm_direct', side_effect=[
         json.dumps(CANDIDATES), json.dumps({'0': 'TRANSIENT', '1': 'DURABLE', '2': 'INTERACTION', '3': 'DURABLE'}),
