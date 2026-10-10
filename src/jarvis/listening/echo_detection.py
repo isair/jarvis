@@ -3,10 +3,17 @@
 import time
 from typing import Optional, List
 import re
+import unicodedata
 
 from ..debug import debug_log
 
 from rapidfuzz import fuzz
+
+
+def _normalise_echo_token(token: str) -> str:
+    """Retain Unicode letters and numbers when comparing echo words."""
+    normalised = unicodedata.normalize("NFC", token).casefold()
+    return "".join(char for char in normalised if char.isalnum() or char == "'")
 
 
 class EchoDetector:
@@ -232,14 +239,8 @@ class EchoDetector:
         if not tts_words or not heard_words:
             return heard_text
 
-        # Normalize tokens to ignore punctuation and curly quotes while comparing
-        def _clean_token(token: str) -> str:
-            t = token.replace("'", "'")
-            # drop all non-alphanumeric except apostrophe
-            return re.sub(r"[^a-z0-9']+", "", t)
-
-        tts_clean = [_clean_token(w) for w in tts_words]
-        heard_clean = [_clean_token(w) for w in heard_words]
+        tts_clean = [_normalise_echo_token(w) for w in tts_words]
+        heard_clean = [_normalise_echo_token(w) for w in heard_words]
 
         # Phase 1: Try timing-based segment first (faster for typical cases)
         time_offset = utterance_start_time - self._tts_start_time
@@ -457,12 +458,8 @@ class EchoDetector:
         if not heard_words or not tts_words:
             return heard_text
 
-        # Strip punctuation from words for comparison (handles "kensington," vs "kensington")
-        def strip_punct(word: str) -> str:
-            return re.sub(r"[^\w']", "", word)
-
-        heard_clean = [strip_punct(w) for w in heard_words]
-        tts_clean = [strip_punct(w) for w in tts_words]
+        heard_clean = [_normalise_echo_token(w) for w in heard_words]
+        tts_clean = [_normalise_echo_token(w) for w in tts_words]
 
         def _words_match(a: list, b: list) -> bool:
             """Check if two word lists match, allowing fuzzy per-word comparison."""

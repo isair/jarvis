@@ -851,3 +851,24 @@ def test_prior_echo_query_obeys_shared_minimum(minimum):
     shorter = ' '.join(phrase.split()[:-1])
     assert detector.query_is_prior_echo(phrase, 'new speech', phrase)
     assert not detector.query_is_prior_echo(shorter, 'new speech', phrase)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize('during_tts', [True, False])
+@pytest.mark.parametrize('echo_prefix', [True, False])
+@pytest.mark.parametrize('spoken,suffix', [
+    ('الطقس مشمس اليوم', 'أخبرني كيف يمكنني إعداد وجبة صحية'),
+    ('сегодня погода солнечная', 'расскажи мне как приготовить вкусный завтрак'),
+    ('ο καιρός καλός', 'πες μου πώς γίνεται αυτό σήμερα'),
+])
+def test_unicode_echo_cleanup_retains_actual_user_speech(spoken, suffix, echo_prefix, during_tts):
+    detector = EchoDetector()
+    detector.track_tts_start(spoken)
+    heard = spoken + ' ' + suffix if echo_prefix else suffix
+    if during_tts:
+        result = detector.cleanup_leading_echo_during_tts(
+            heard, tts_rate=200, utterance_start_time=detector._tts_start_time + 0.1,
+        )
+    else:
+        result = detector.cleanup_leading_echo(heard)
+    assert result == suffix

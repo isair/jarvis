@@ -280,6 +280,7 @@ While TTS is playing, echo rejection and stop commands are handled with fast tex
 - During active TTS, a standalone configured stop phrase (including a fuzzy transcription) retains immediate interruption priority. Longer literal echoes of the current TTS text are rejected even when they contain a configured stop phrase. Unicode punctuation and casing are normalised without language-specific patterns; an appended user command remains eligible for interruption.
 
 **Echo handling:**
+- Exact prefix comparisons during and after TTS retain Unicode letters and numbers, normalise canonical composition and casing, and ignore surrounding punctuation. Unrelated non-Latin speech must not become an empty-token echo match.
 - Transcripts during TTS are flagged with `is_during_tts=true`
 - Intent judge uses this context to identify echo
 
