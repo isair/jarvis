@@ -2673,7 +2673,6 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 content = non_completion_reply
             elif not _unexecuted_reply_retried and turn < max_turns:
                 _unexecuted_reply_retried = True
-                messages.append({"role": "assistant", "content": content})
                 messages.append({"role": "user", "content": _UNEXECUTED_ACTION_HINT
                                  + ("\n" + _resource_context if _resource_context else "")})
                 debug_log("unexecuted planned action: requesting one grounded recovery turn", "planning")
