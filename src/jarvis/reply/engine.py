@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import Optional, TYPE_CHECKING
 import json
 from hashlib import sha256
+from contextlib import closing
 
 from ..tools.types import ToolExecutionResult
 from ..memory.conversation import DialogueMemory, is_tool_message
@@ -1276,44 +1277,40 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     # revision and rebuild from one read-only snapshot, so external writes
     # invalidate the conversation cache without bootstrapping every turn.
     warm_profile_block = ""
-    _graph_store_warm = None
     try:
         from ..memory.graph import GraphMemoryStore
         from ..memory.graph_ops import build_warm_profile, format_warm_profile_block
-        _graph_store_warm = GraphMemoryStore(cfg.db_path, read_only=True)
-        _graph_store_warm.conn.execute('BEGIN')
-        signature = (cfg.db_path, _graph_store_warm.get_warm_profile_revision())
-        cached_profile = (
-            dialogue_memory.hot_cache_get(DialogueMemory.WARM_PROFILE_CACHE_KEY)
-            if dialogue_memory else None
-        )
-        if cached_profile is not None and cached_profile[0] == signature:
-            warm_profile_block = cached_profile[1]
-            debug_log("warm profile served from current graph revision cache", "memory")
-        else:
-            profile = build_warm_profile(_graph_store_warm)
-            warm_profile_block = format_warm_profile_block(profile)
-            if warm_profile_block:
-                user_len = len(profile.get("user", ""))
-                directives_len = len(profile.get("directives", ""))
-                print(
-                    f"  🪴 Warm profile: {user_len} user chars, "
-                    f"{directives_len} directive chars",
-                    flush=True,
-                )
-                debug_log(
-                    f"warm profile loaded: user={user_len} directives={directives_len}",
-                    "memory",
-                )
-            if dialogue_memory:
-                dialogue_memory.hot_cache_put(
-                    DialogueMemory.WARM_PROFILE_CACHE_KEY, (signature, warm_profile_block),
-                )
+        with closing(GraphMemoryStore(cfg.db_path, read_only=True)) as _graph_store_warm:
+            _graph_store_warm.conn.execute('BEGIN')
+            signature = (cfg.db_path, _graph_store_warm.get_warm_profile_revision())
+            cached_profile = (
+                dialogue_memory.hot_cache_get(DialogueMemory.WARM_PROFILE_CACHE_KEY)
+                if dialogue_memory else None
+            )
+            if cached_profile is not None and cached_profile[0] == signature:
+                warm_profile_block = cached_profile[1]
+                debug_log("warm profile served from current graph revision cache", "memory")
+            else:
+                profile = build_warm_profile(_graph_store_warm)
+                warm_profile_block = format_warm_profile_block(profile)
+                if warm_profile_block:
+                    user_len = len(profile.get("user", ""))
+                    directives_len = len(profile.get("directives", ""))
+                    print(
+                        f"  🪴 Warm profile: {user_len} user chars, "
+                        f"{directives_len} directive chars",
+                        flush=True,
+                    )
+                    debug_log(
+                        f"warm profile loaded: user={user_len} directives={directives_len}",
+                        "memory",
+                    )
+                if dialogue_memory:
+                    dialogue_memory.hot_cache_put(
+                        DialogueMemory.WARM_PROFILE_CACHE_KEY, (signature, warm_profile_block),
+                    )
     except Exception as error:
         debug_log(f"warm profile load failed (non-fatal): {error}", "memory")
-    finally:
-        if _graph_store_warm is not None:
-            _graph_store_warm.close()
 
     # Step 4: Memory enrichment — controlled by cfg.memory_enrichment_source
     # "all" = diary + graph, "diary" = diary only, "graph" = graph only
@@ -1425,53 +1422,53 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         else:
             try:
                 from ..memory.graph import GraphMemoryStore
-                graph_store = GraphMemoryStore(cfg.db_path)
+                with closing(GraphMemoryStore(cfg.db_path)) as graph_store:
 
-                graph_parts: list[str] = []
-                # Track node name + matched question for user-facing logs
-                node_annotations: list[tuple[str, str]] = []  # (node_name, matched_question)
+                    graph_parts: list[str] = []
+                    # Track node name + matched question for user-facing logs
+                    node_annotations: list[tuple[str, str]] = []  # (node_name, matched_question)
 
-                # Build search text from the questions, stripped of stop words so
-                # LIKE matching keys off the content words.
-                question_words: list[str] = []
-                seen: set[str] = set()
-                for q in questions:
-                    for w in q.lower().split():
-                        w = w.strip("?.,!'\"")
-                        if _is_content_word(w) and w not in seen:
-                            seen.add(w)
-                            question_words.append(w)
+                    # Build search text from the questions, stripped of stop words so
+                    # LIKE matching keys off the content words.
+                    question_words: list[str] = []
+                    seen: set[str] = set()
+                    for q in questions:
+                        for w in q.lower().split():
+                            w = w.strip("?.,!'\"")
+                            if _is_content_word(w) and w not in seen:
+                                seen.add(w)
+                                question_words.append(w)
 
-                # Fewer than 2 meaningful words produces noisy LIKE matches against
-                # a single generic term — skip rather than surface irrelevant hits.
-                if len(question_words) < 2:
-                    debug_log(f"skipping graph search: <2 content words after stopwords ({question_words})", "memory")
-                else:
-                    graph_nodes = graph_store.search_nodes(" ".join(question_words), limit=5)
-                    for node in graph_nodes:
-                        ancestors = graph_store.get_ancestors(node.id)
-                        path = " > ".join(a.name for a in ancestors)
-                        data_preview = node.data[:300] if node.data else ""
-                        if data_preview:
-                            graph_parts.append(f"[{path}] {data_preview}")
-                            matched_q = _match_question(data_preview, questions)
-                            node_annotations.append((node.name or path.split(" > ")[-1], matched_q))
-                            debug_log(f"graph hit: [{path}] ({node.data_token_count} tokens)", "memory")
+                    # Fewer than 2 meaningful words produces noisy LIKE matches against
+                    # a single generic term — skip rather than surface irrelevant hits.
+                    if len(question_words) < 2:
+                        debug_log(f"skipping graph search: <2 content words after stopwords ({question_words})", "memory")
+                    else:
+                        graph_nodes = graph_store.search_nodes(" ".join(question_words), limit=5)
+                        for node in graph_nodes:
+                            ancestors = graph_store.get_ancestors(node.id)
+                            path = " > ".join(a.name for a in ancestors)
+                            data_preview = node.data[:300] if node.data else ""
+                            if data_preview:
+                                graph_parts.append(f"[{path}] {data_preview}")
+                                matched_q = _match_question(data_preview, questions)
+                                node_annotations.append((node.name or path.split(" > ")[-1], matched_q))
+                                debug_log(f"graph hit: [{path}] ({node.data_token_count} tokens)", "memory")
 
-                if graph_parts:
-                    raw_graph_parts = list(graph_parts)
-                    graph_context = (
-                        "Information the user has shared with you in prior conversations "
-                        "(you have access to this — it is part of what the user has told "
-                        "you, just not in the current session):\n" + "\n".join(graph_parts)
-                    )
-                    names_str = ", ".join(name for name, _ in node_annotations[:4] if name)
-                    print(f"  🧠 Knowledge: {len(graph_parts)} nodes — {names_str}", flush=True)
-                    for name, reason in node_annotations[:4]:
-                        if reason:
-                            print(f"     · {name} → {reason}", flush=True)
-                        else:
-                            print(f"     · {name}", flush=True)
+                    if graph_parts:
+                        raw_graph_parts = list(graph_parts)
+                        graph_context = (
+                            "Information the user has shared with you in prior conversations "
+                            "(you have access to this — it is part of what the user has told "
+                            "you, just not in the current session):\n" + "\n".join(graph_parts)
+                        )
+                        names_str = ", ".join(name for name, _ in node_annotations[:4] if name)
+                        print(f"  🧠 Knowledge: {len(graph_parts)} nodes — {names_str}", flush=True)
+                        for name, reason in node_annotations[:4]:
+                            if reason:
+                                print(f"     · {name} → {reason}", flush=True)
+                            else:
+                                print(f"     · {name}", flush=True)
             except Exception as e:
                 debug_log(f"graph enrichment failed: {e}", "memory")
 

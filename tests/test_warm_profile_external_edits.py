@@ -1,4 +1,6 @@
 """Committed graph edits from other connections reach the next reply context."""
+import sqlite3
+
 import pytest
 
 from jarvis.memory.graph import GraphMemoryStore
@@ -26,7 +28,7 @@ def reply_context(monkeypatch, tmp_path, mock_config, db, dialogue_memory):
     monkeypatch.setattr(engine, 'chat_with_messages', chat)
     store = GraphMemoryStore(mock_config.db_path)
     try:
-        yield store, lambda: engine.run_reply_engine(db, mock_config, None, 'Check the stored fact.', dialogue_memory), mock_config
+        yield store, lambda text='Check the stored fact.': engine.run_reply_engine(db, mock_config, None, text, dialogue_memory), mock_config
     finally:
         store.close()
 
@@ -123,3 +125,47 @@ def test_profile_remains_available_during_an_unrelated_writer(reply_context, cac
         assert reply() == 'Supplied memory: Alpha'
     finally:
         store.conn.rollback()
+
+
+@pytest.fixture
+def graph_recall_context(reply_context, monkeypatch):
+    store, reply, cfg = reply_context
+    cfg.memory_enrichment_source = 'graph'
+    store.create_node('Marker', 'Synthetic fact', data='Cache-visible fact: Alpha', parent_id='world')
+    monkeypatch.setattr(engine, 'plan_query', lambda **kwargs: ["searchMemory topic='stored fact'", 'Reply to the user.'])
+    monkeypatch.setattr(engine, 'extract_search_params_for_memory', lambda *args, **kwargs: {
+        'keywords': ['cache-visible', 'fact'], 'questions': ['Which cache-visible fact was recorded?'],
+    })
+    return store, lambda: reply('Please check which cache-visible fact was recorded in saved graph memory.')
+
+
+
+@pytest.mark.parametrize('path', ['normal', 'failure', 'short_question'])
+def test_graph_reply_readers_close_after_every_retrieval_path(graph_recall_context, monkeypatch, path):
+    store, reply = graph_recall_context
+    opened = []
+    store_type = type(store)
+
+    def open_store(*args, **kwargs):
+        reader = store_type(*args, **kwargs)
+        opened.append(reader.conn)
+        return reader
+
+    monkeypatch.setattr('jarvis.memory.graph.GraphMemoryStore', open_store)
+    if path == 'failure':
+        def unavailable(*args):
+            raise RuntimeError('Synthetic ancestry unavailable')
+        monkeypatch.setattr(store_type, 'get_ancestors', unavailable)
+    elif path == 'short_question':
+        monkeypatch.setattr(engine, 'extract_search_params_for_memory', lambda *args, **kwargs: {
+            'keywords': [], 'questions': ['what is the?'],
+        })
+    marker = store.find_node_by_name('Marker', parent_id='world')
+    previous_access_count = marker.access_count
+    assert reply() == f"Supplied memory: {'Alpha' if path == 'normal' else 'Absent'}"
+    if path == 'normal':
+        assert store.get_node(marker.id).access_count > previous_access_count
+    assert opened
+    for connection in opened:
+        with pytest.raises(sqlite3.ProgrammingError, match='closed'):
+            connection.execute('SELECT 1')
