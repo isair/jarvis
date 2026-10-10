@@ -215,7 +215,6 @@ Note: the always-on warm profile (User + Directives injected on every turn) is s
 | `MERGE_THRESHOLD` | 200 | Tokens below which children collapse |
 | `RECENT_NODES_COUNT` | 10 | Recent nodes to surface |
 | `TOP_NODES_COUNT` | 15 | Top nodes to surface |
-| `TOP_NODES_WINDOW_DAYS` | 30 | Legacy — kept for API compat, no longer used for filtering |
 | `DECAY_HALF_LIFE_DAYS` | 14 | Days until a node's access score halves |
 | `MAX_TRAVERSAL_DEPTH` | 8 | Safety limit on graph traversal |
 | `SUMMARY_MAX_LENGTH` | 300 | Max chars for node description |
