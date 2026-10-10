@@ -50,7 +50,7 @@ def test_saved_meal_is_confirmed_once_without_coaching(monkeypatch, meal_context
     assert 'Follow-ups:' not in result.reply_text
 
 
-@pytest.mark.parametrize('macro', ['not a number', 'NaN', 'Infinity'])
+@pytest.mark.parametrize('macro', ['not a number', 'NaN', 'Infinity', True, False])
 def test_invalid_optional_macro_does_not_duplicate_a_saved_meal(monkeypatch, meal_context, macro):
     meal = {'description': 'eggs', 'calories_kcal': macro, 'protein_g': 12}
     monkeypatch.setattr(log_meal, 'call_llm_direct',
