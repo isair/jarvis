@@ -109,12 +109,12 @@ def call_nutrition_extraction(
     # boundary. Coaching has its own live case, independent of meal accuracy.
     with patch.object(log_meal, 'call_llm_direct', side_effect=capture_answer), \
          patch.object(log_meal, 'generate_followups_for_meal', return_value=''):
-        log_meal.extract_and_log_meal(
+        result = log_meal.extract_and_log_meal(
             SimpleNamespace(insert_meal=insert_meal), cfg, meal_text, 'stdin',
         )
     assert answers and isinstance(answers[0], str) and answers[0].strip(), 'Empty inference is not a non-food answer'
     if not rows:
-        assert answers[0].strip().upper() == 'NONE', 'Invalid extraction is not a non-food answer'
+        assert result is not None and not result.success, 'Invalid extraction is not a non-food answer'
         return None
     data = dict(rows[0])
     for field in ('ts_utc', 'source_app'):
@@ -298,7 +298,8 @@ class TestNutritionExtraction:
 
     @pytest.mark.eval
     @requires_judge_llm
-    def test_extraction_rejects_non_food(self):
+    @pytest.mark.parametrize('text', ['I went for a walk in the park', 'Bugün parkta yürüyüş yaptım.'])
+    def test_extraction_rejects_non_food(self, text):
         """
         Test that extraction returns NONE for non-food inputs.
         """
@@ -308,7 +309,7 @@ class TestNutritionExtraction:
         print(f"   🤖 Model: {JUDGE_MODEL}")
 
         # Non-food input
-        data = call_nutrition_extraction(mock_config, "I went for a walk in the park")
+        data = call_nutrition_extraction(mock_config, text)
 
         print(f"   🥗 Response: {data}")
 

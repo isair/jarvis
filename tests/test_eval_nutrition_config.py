@@ -15,7 +15,7 @@ def clear_eval_environment(monkeypatch):
 
 
 @pytest.mark.parametrize('provider', ['ollama', 'openai_compatible'])
-@pytest.mark.parametrize('answer', ['meal', 'NONE'])
+@pytest.mark.parametrize('answer', ['meal', 'NONE', '```text\nNONE\n```'])
 def test_nutrition_eval_uses_selected_transport_and_production_fence(monkeypatch, provider, answer):
     from evals.test_nutrition_extraction import call_nutrition_extraction
     import requests
@@ -64,4 +64,17 @@ def test_empty_inference_is_not_successful_non_food_rejection(monkeypatch):
     monkeypatch.setattr(requests, 'post', lambda *args, **kwargs: response)
     cfg = MockConfig(llm_provider='ollama', llm_chat_model='local-model')
     with pytest.raises(AssertionError, match='Empty'):
+        call_nutrition_extraction(cfg, 'I went for a walk')
+
+
+@pytest.mark.parametrize('answer', ['{invalid', 'null'])
+def test_invalid_inference_is_not_successful_non_food_rejection(monkeypatch, answer):
+    from evals.test_nutrition_extraction import call_nutrition_extraction
+    import requests
+    response = MagicMock()
+    response.__enter__.return_value = response
+    response.json.return_value = {'message': {'content': answer}}
+    monkeypatch.setattr(requests, 'post', lambda *args, **kwargs: response)
+    cfg = MockConfig(llm_provider='ollama', llm_chat_model='local-model')
+    with pytest.raises(AssertionError, match='Invalid'):
         call_nutrition_extraction(cfg, 'I went for a walk')

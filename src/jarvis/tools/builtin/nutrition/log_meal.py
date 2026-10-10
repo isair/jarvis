@@ -69,7 +69,7 @@ def _safe_float(x: Any) -> Optional[float]:
 def extract_and_log_meal(db: Database, cfg: Any, original_text: str, source_app: str) -> Optional[ToolExecutionResult]:
     """
     Uses the chat model to extract a structured meal from the redacted user text, logs it to DB,
-    and returns confirmation with the saved record reference and optional coaching.
+    and returns a recording outcome, with the saved reference and optional coaching on success.
     """
     # Fence the user text as untrusted data so prompt-injection attempts
     # ("ignore previous instructions and …") embedded in a meal description
@@ -93,13 +93,13 @@ def extract_and_log_meal(db: Database, cfg: Any, original_text: str, source_app:
         thinking=getattr(cfg, 'llm_thinking_enabled', False),
         max_tokens=_NUTRITION_TOKEN_BUDGET,
     ) or ""
-    text = (raw or "").strip()
+    text = _strip_code_fence(raw or "").strip()
     if text.upper() == "NONE":
         debug_log(f"logMeal extractor returned NONE for text={original_text[:120]!r}", "nutrition")
-        return None
+        return ToolExecutionResult(success=False, reply_text="No meal was described; no record was created.")
     data: Dict[str, Any]
     try:
-        data = json.loads(_strip_code_fence(text))
+        data = json.loads(text)
     except Exception as e:
         debug_log(f"logMeal extractor JSON parse failed: {e!r}; raw={text[:200]!r}", "nutrition")
         return None
@@ -249,8 +249,9 @@ class LogMealTool(Tool):
             try:
                 debug_log(f"logMeal: extracting from text (attempt {attempt+1}/{context.max_retries+1})", "nutrition")
                 meal_result = extract_and_log_meal(context.db, context.cfg, original_text=extract_text, source_app=("stdin" if context.cfg.use_stdin else "unknown"))
-                if meal_result:
-                    debug_log("logMeal: extraction+log succeeded", "nutrition")
+                if meal_result is not None:
+                    outcome = "extraction+log succeeded" if meal_result.success else "no meal to record"
+                    debug_log(f"logMeal: {outcome}", "nutrition")
                     return meal_result
             except Exception as e:
                 debug_log(f"logMeal extract_and_log_meal attempt {attempt+1} raised: {e!r}", "nutrition")
