@@ -211,10 +211,24 @@ The engine consumes the plan in two phases.
   the tool directly, bypassing the chat model for that turn. This
   keeps small models on-rails without relying on their native
   tool-call reliability.
+- An unresolved, rejected or failed step-resolution attempt hands unfinished
+  task decisions to the reply model for the remainder of that reply. A missing
+  concrete call is not an execution result. Recovery includes a snapshot of
+  successful tool-result names recorded for the current request at the hand-off.
+  Earlier results can supply context and identifiers, but do not establish a
+  new action. Recorded resource references also accompany recovery feedback.
+- In text-tool mode, an unresolved plan with no current-request action-tool
+  outcome requires an actual call or a non-completion envelope: one non-empty
+  `question` or `blocker` string field. Unsupported prose receives one
+  corrective turn within the existing budget. Repeated unsupported content
+  produces an honest execution blocker. Exhaustion without an action outcome
+  uses the same blocker instead of a model-generated loop digest. Tool discovery is not an action
+  outcome. Successful direct chains and native advisory plans retain their
+  ordinary reply protocol.
 - A current-reply tool result with `success=False` suspends direct plan
   execution for the remainder of that reply. The failed result is retained,
-  without a next-step or completion claim. The system message replaces the
-  execution plan with tasks to reassess. Task-reassessment guidance asks the
+  without a next-step or completion claim. The system message removes the
+  execution plan so the reply model reassesses the original request and outcomes. Task-reassessment guidance asks the
   reply model to choose a grounded alternative, correct arguments, ask for
   missing information or explain a blocker before any dependent action.
   Subsequent results retain reassessment guidance rather than counting calls
@@ -231,7 +245,8 @@ The engine consumes the plan in two phases.
   returns this concrete call without model inference. String and untyped
   values stay literal; declared booleans, integers, finite numbers and null
   values use their JSON types, including values in the planner's quote syntax.
-  Invalid primitive values, complex types and type unions use the LLM resolver.
+  Primitive type unions use the same conversion rules. Invalid primitive
+  values and complex types use the LLM resolver.
   Each property appears once and all argument text must be consumed, apart
   from whitespace, commas between pairs and an optional final full stop.
   Unmatched quotes or unparsed text use the LLM resolver rather than dispatching

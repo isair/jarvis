@@ -17,6 +17,8 @@ from unittest.mock import patch
 
 import pytest
 
+pytestmark = pytest.mark.unit
+
 
 def _make_tool_name_msg(name: str) -> dict:
     """Return a message dict that looks like a tool-result message from a prior query."""
@@ -217,11 +219,11 @@ def test_empty_plan_falls_through_to_existing_behaviour(
     )
 
 
+@pytest.mark.parametrize("resolution", ["missing", "error", "disallowed"])
 def test_resolver_failure_on_tool_step_falls_back_to_chat(
-    mock_config, db, dialogue_memory
+    mock_config, db, dialogue_memory, resolution
 ):
-    """When resolve_next_tool_call returns None for a tool step (not synthesis),
-    the engine must fall through to the normal chat-model turn for that step."""
+    """Unavailable resolution hands unfinished decisions to the reply model."""
     from jarvis.reply import engine as engine_mod
     from jarvis.tools.types import ToolExecutionResult
 
@@ -233,7 +235,11 @@ def test_resolver_failure_on_tool_step_falls_back_to_chat(
 
     def fake_chat(*args, **kwargs):
         chat_call_count[0] += 1
-        # First fallback turn: model emits a tool call itself
+        system = kwargs['messages'][0]['content']
+        assert "EXECUTION RECORD AT HAND-OFF" in system
+        assert "Successful tool results for this request: []" in system
+        assert "ACTION PLAN for this query" not in system
+        # The reply model receives pending work, then chooses its own tool.
         if chat_call_count[0] == 1:
             return {
                 "message": {
@@ -256,6 +262,11 @@ def test_resolver_failure_on_tool_step_falls_back_to_chat(
         "Reply to the user with the combined findings.",
     ]
 
+    def resolve(**kwargs):
+        if resolution == "error":
+            raise RuntimeError("Resolver unavailable")
+        return ("not_registered", {}) if resolution == "disallowed" else None
+
     with patch.object(engine_mod, "run_tool_with_retries", side_effect=fake_tool_runner), \
          patch.object(engine_mod, "chat_with_messages", side_effect=fake_chat), \
          patch.object(engine_mod, "select_tools", return_value=["webSearch", "stop"]), \
@@ -265,7 +276,7 @@ def test_resolver_failure_on_tool_step_falls_back_to_chat(
              return_value={"keywords": []},
          ), \
          patch.object(engine_mod, "plan_query", return_value=plan), \
-         patch.object(engine_mod, "_resolve_plan_step", return_value=None):
+         patch.object(engine_mod, "_resolve_plan_step", side_effect=resolve):
         engine_mod.run_reply_engine(
             db=db,
             cfg=mock_config,
@@ -721,3 +732,137 @@ def test_planner_not_skipped_on_router_fallback_to_all_tools(
         f"the 'all tools' fallback carries no signal and must not skip "
         f"the planner. Was called {len(plan_query_calls)}×"
     )
+
+
+def test_recovery_record_keeps_current_successes_and_excludes_prior_requests(mock_config, db, dialogue_memory):
+    from jarvis.reply import engine
+    from jarvis.tools.types import ToolExecutionResult
+
+    mock_config.llm_chat_model = mock_config.ollama_chat_model = "gemma4:e2b"
+    dialogue_memory.add_message("user", "Check my meals.")
+    dialogue_memory.record_tool_turn([{
+        "role": "user", "content": "Meal history", "tool_name": "fetchMeals", "tool_failed": False,
+    }])
+    dialogue_memory.add_message("assistant", "Here is your meal history.")
+    plan = ["localFiles operation='read' path='report.txt'",
+            "localFiles operation='delete' path='report.txt'", "Reply to the user."]
+
+    def chat(*args, **kwargs):
+        system = kwargs['messages'][0]['content']
+        assert 'Successful tool results for this request: ["localFiles"]' in system
+        assert 'Successful tool results for this request: ["fetchMeals"' not in system
+        return _assistant_content("I read the report but cannot delete it yet.")
+
+    with patch.object(engine, 'plan_query', return_value=plan), \
+         patch.object(engine, 'select_tools', return_value=['localFiles', 'stop']), \
+         patch.object(engine, '_resolve_plan_step', side_effect=[
+             ('localFiles', {'operation': 'read', 'path': 'report.txt'}), None,
+         ]), \
+         patch.object(engine, 'run_tool_with_retries', return_value=ToolExecutionResult(
+             success=True, reply_text='The report contents are available.')), \
+         patch.object(engine, 'chat_with_messages', side_effect=chat):
+        reply = engine.run_reply_engine(db, mock_config, None, 'Read the report, then delete it.', dialogue_memory)
+    assert reply == "I read the report but cannot delete it yet."
+
+
+@pytest.mark.parametrize('claim', ['I deleted the meal.', 'Öğün silindi.', '{"reply":"Deleted."}'])
+def test_unexecuted_action_retries_before_delivering_a_completion(monkeypatch, mock_config, db, dialogue_memory, claim):
+    import json
+    from datetime import datetime, timezone
+    from jarvis.reply import engine
+
+    mock_config.llm_chat_model = mock_config.ollama_chat_model = 'gemma4:e2b'
+    mock_config.tool_result_digest_enabled = False
+    record = db.insert_meal(datetime.now(timezone.utc).isoformat(), 'test', 'Meal fixture')
+    dialogue_memory.add_message('user', 'I ate the meal fixture.')
+    dialogue_memory.record_tool_turn([{
+        'role':'user', 'tool_name':'logMeal', 'tool_failed':False, 'content':'Meal logged.',
+        'resource_references':[{'kind':'meal','id':record,'label':'Meal fixture'}],
+    }])
+    dialogue_memory.add_message('assistant', 'The meal was recorded.')
+    replies = iter([
+        _assistant_content(claim),
+        _assistant_content('tool_calls: ' + json.dumps([{'type':'function','function':{'name':'deleteMeal','arguments':{'id':record}}}])),
+        _assistant_content('The recorded meal was deleted.'),
+    ])
+    monkeypatch.setattr(engine, 'select_tools', lambda **kwargs: ['deleteMeal', 'stop'])
+    monkeypatch.setattr(engine, 'plan_query', lambda **kwargs: [f"deleteMeal id='{record}'", 'Reply to the user.'])
+    monkeypatch.setattr(engine, '_resolve_plan_step', lambda **kwargs: None)
+    def chat(**kwargs):
+        if kwargs['messages'][-1].get('content', '').startswith('[Execution status]'):
+            assert f'"id": {record}' in kwargs['messages'][-1]['content']
+        return next(replies)
+    monkeypatch.setattr(engine, 'chat_with_messages', chat)
+    reply = engine.run_reply_engine(db, mock_config, None, 'Delete the recorded meal.', dialogue_memory)
+    assert reply == 'The recorded meal was deleted.'
+    assert db.get_meals_between('2000', '2100') == []
+
+
+@pytest.mark.parametrize('envelope', [{"question":"Which record should I remove?"}, {"blocker":"The record cannot be identified."}])
+def test_unexecuted_action_can_return_a_clarification_or_blocker(monkeypatch, mock_config, db, dialogue_memory, envelope):
+    import json
+    from jarvis.reply import engine
+    mock_config.llm_chat_model = mock_config.ollama_chat_model = 'gemma4:e2b'
+    monkeypatch.setattr(engine, 'select_tools', lambda **kwargs: ['deleteMeal', 'stop'])
+    monkeypatch.setattr(engine, 'plan_query', lambda **kwargs: ['deleteMeal the specified meal', 'Reply to the user.'])
+    monkeypatch.setattr(engine, '_resolve_plan_step', lambda **kwargs: None)
+    monkeypatch.setattr(engine, 'chat_with_messages', lambda **kwargs: _assistant_content(json.dumps(envelope)))
+    reply = engine.run_reply_engine(db, mock_config, None, 'Delete the recorded meal.', dialogue_memory)
+    assert reply == next(iter(envelope.values()))
+
+
+@pytest.mark.parametrize('response', [
+    'I deleted the meal.', '{"question":[]}', '{"question":""}',
+    '{"question":"Which record?","blocker":"Unavailable"}',
+    '{"question":"Which record?","question":"Deleted"}',
+    '[["question","Which record?"]]',
+])
+def test_unexecuted_action_does_not_deliver_repeated_completion_claims(monkeypatch, mock_config, db, dialogue_memory, response):
+    from jarvis.reply import engine
+    mock_config.llm_chat_model = mock_config.ollama_chat_model = 'gemma4:e2b'
+    mock_config.agentic_max_turns = 3
+    monkeypatch.setattr(engine, 'select_tools', lambda **kwargs: ['deleteMeal', 'stop'])
+    monkeypatch.setattr(engine, 'plan_query', lambda **kwargs: ['deleteMeal the specified meal', 'Reply to the user.'])
+    monkeypatch.setattr(engine, '_resolve_plan_step', lambda **kwargs: None)
+    monkeypatch.setattr(engine, 'chat_with_messages', lambda **kwargs: _assistant_content(response))
+    reply = engine.run_reply_engine(db, mock_config, None, 'Delete the recorded meal.', dialogue_memory)
+    assert reply == "I couldn't execute the requested action. Please try again or provide the missing details."
+
+
+def test_discovery_without_execution_cannot_confirm_a_planned_action(monkeypatch, mock_config, db, dialogue_memory):
+    from jarvis.reply import engine
+    from jarvis.tools.types import ToolExecutionResult
+
+    mock_config.llm_chat_model = mock_config.ollama_chat_model = 'gemma4:e2b'
+    mock_config.agentic_max_turns = 4
+    monkeypatch.setattr(engine, 'select_tools', lambda **kwargs: ['deleteMeal', 'stop'])
+    monkeypatch.setattr(engine, 'plan_query', lambda **kwargs: ['deleteMeal the specified meal', 'Reply to the user.'])
+    monkeypatch.setattr(engine, '_resolve_plan_step', lambda **kwargs: None)
+    replies = iter([
+        _assistant_content('tool_calls: [{"function":{"name":"toolSearchTool","arguments":{"query":"delete meal"}}}]'),
+        _assistant_content('I deleted the meal.'),
+        _assistant_content('I deleted the meal.'),
+    ])
+    monkeypatch.setattr(engine, 'chat_with_messages', lambda **kwargs: next(replies))
+    monkeypatch.setattr(engine, 'run_tool_with_retries', lambda *args, **kwargs: ToolExecutionResult(
+        success=True, reply_text='The deletion tool is available.'))
+    reply = engine.run_reply_engine(db, mock_config, None, 'Delete the recorded meal.', dialogue_memory)
+    assert reply == "I couldn't execute the requested action. Please try again or provide the missing details."
+
+
+def test_exhausted_recovery_without_execution_cannot_deliver_digest_completion(monkeypatch, mock_config, db, dialogue_memory):
+    from jarvis.reply import engine
+    from jarvis.tools.types import ToolExecutionResult
+
+    mock_config.llm_chat_model = mock_config.ollama_chat_model = 'gemma4:e2b'
+    mock_config.agentic_max_turns = 1
+    monkeypatch.setattr(engine, 'select_tools', lambda **kwargs: ['deleteMeal', 'stop'])
+    monkeypatch.setattr(engine, 'plan_query', lambda **kwargs: ['deleteMeal the specified meal', 'Reply to the user.'])
+    monkeypatch.setattr(engine, '_resolve_plan_step', lambda **kwargs: None)
+    monkeypatch.setattr(engine, 'chat_with_messages', lambda **kwargs: _assistant_content(
+        'tool_calls: [{"function":{"name":"toolSearchTool","arguments":{"query":"delete meal"}}}]'))
+    monkeypatch.setattr(engine, 'run_tool_with_retries', lambda *args, **kwargs: ToolExecutionResult(
+        success=True, reply_text='The deletion tool is available.'))
+    monkeypatch.setattr(engine, 'digest_loop_for_max_turns', lambda **kwargs: 'I deleted the meal.')
+    reply = engine.run_reply_engine(db, mock_config, None, 'Delete the recorded meal.', dialogue_memory)
+    assert reply == "I couldn't execute the requested action. Please try again or provide the missing details."

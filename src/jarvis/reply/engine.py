@@ -79,7 +79,8 @@ if TYPE_CHECKING:
 
 _PLAN_RECOVERY_HINT = (
     "\n\n[Reassess the unfinished tasks in the original request using the tool "
-    "outcomes. A failed tool is not a completed task. Try a different allowed "
+    "outcomes. An unexecuted or failed tool is not a completed task. "
+    "Try a different allowed "
     "approach or corrected arguments when the available information supports "
     "one. If information or access is missing, ask the user or explain the "
     "blocker. Do not perform a dependent action until its prerequisite succeeds, "
@@ -93,6 +94,42 @@ _EMPTY_REPLY_RECOVERY_HINT = (
     "preserving the user's requested values and actual prior tool results. "
     "Do not invent readings or claim an unexecuted action happened."
 )
+
+
+_NON_COMPLETION_HINT = (
+    ' If no action tool has run for this request and information is missing, '
+    'return exactly {"question": "your clarification question"}. If execution '
+    'is blocked, return exactly {"blocker": "the reason it cannot be performed"}. '
+    'These objects describe non-completion; do not put a completion claim in them.'
+)
+
+
+_UNEXECUTED_ACTION_HINT = (
+    "[Execution status] No action tool has run for the current request. "
+    "Your previous reply was not delivered. Execute the requested action "
+    "through the available tool_calls protocol before confirming it. Do not "
+    "guess missing arguments."
+) + _NON_COMPLETION_HINT
+
+_UNEXECUTED_ACTION_REPLY = (
+    "I couldn't execute the requested action. Please try again or provide the missing details."
+)
+
+
+def _handoff_non_completion_reply(content: str) -> Optional[str]:
+    """Read an explicit clarification or blocker without accepting free prose."""
+    if not content.lstrip().startswith("{"):
+        return None
+    try:
+        pairs = json.loads(content, object_pairs_hook=lambda pairs: pairs)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(pairs, list) or len(pairs) != 1:
+        return None
+    key, value = pairs[0]
+    if key in {"question", "blocker"} and isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -1606,6 +1643,10 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     _assistant_name = str(getattr(cfg, "wake_word", "jarvis") or "jarvis").strip().capitalize()
     _persona_prompt = build_system_prompt(_assistant_name)
     _plan_in_recovery = False
+    _plan_recovery_record = ""
+    _recovery_guidance = (_PLAN_RECOVERY_HINT
+                          + (_NON_COMPLETION_HINT if use_text_tools else "")
+                          + ("\n" + _resource_context if _resource_context else ""))
 
     def _build_initial_system_message() -> str:
         guidance = [_persona_prompt.strip()]
@@ -1694,8 +1735,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         )
         if len(action_plan) > 1 or _plan_has_tool_step:
             if _plan_in_recovery:
-                guidance.append("TASKS TO REASSESS AFTER A TOOL FAILURE:\n"
-                                + "\n".join(action_plan) + _PLAN_RECOVERY_HINT)
+                guidance.append("EXECUTION RECORD AT HAND-OFF:\n"
+                                + _plan_recovery_record + _recovery_guidance)
             else:
                 guidance.append(format_plan_block(action_plan))
 
@@ -1990,14 +2031,33 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     # counter must ignore these — they belong to earlier plan executions, not
     # to the steps of the current plan.
     _plan_steps_baseline = sum(1 for m in messages if m.get("tool_name"))
+    _unexecuted_reply_retried = False
+
+    def _recovery_without_action_outcome() -> bool:
+        return use_text_tools and _plan_in_recovery and not any(
+            message.get("tool_name") in _full_catalog_names
+            and message.get("tool_name") not in {"stop", "toolSearchTool"}
+            for message in messages[user_msg_index + 1:]
+        )
 
     def _enter_plan_recovery() -> None:
-        nonlocal _plan_in_recovery
+        nonlocal _plan_in_recovery, _plan_recovery_record
         if not action_plan or _plan_in_recovery:
             return
+        successful_tools = [
+            message["tool_name"]
+            for message in messages[user_msg_index + 1:]
+            if message.get("tool_name") and message.get("tool_failed") is False
+        ]
+        _plan_recovery_record = (
+            "Successful tool results for this request: "
+            + json.dumps(successful_tools)
+            + ". Earlier results may supply information or recorded identifiers, "
+            "but are not proof of a new action."
+        )
         _plan_in_recovery = True
         messages[0] = {"role": "system", "content": _build_initial_system_message()}
-        debug_log("tool failed, returning unfinished task decisions to the reply model", "planning")
+        debug_log("planned execution incomplete, returning unfinished task decisions to the reply model", "planning")
         print("    ⚠️ Planned task needs recovery before continuing.", flush=True)
 
     while turn < max_turns:
@@ -2106,7 +2166,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                                 _enter_plan_recovery()
                             _plan_tool_results_after = _tool_results_so_far + 1
                             if _plan_in_recovery:
-                                _plan_hint = _PLAN_RECOVERY_HINT
+                                _plan_hint = _recovery_guidance
                             elif action_plan:
                                 _plan_hint = progress_nudge(
                                     action_plan,
@@ -2147,6 +2207,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     )
                 if _plan_exec_handled:
                     continue
+                _enter_plan_recovery()
 
         # Update the system message with fresh context (time/location) before each LLM call.
         # The block sits at the END of the system message's dynamic region (computed once per
@@ -2428,7 +2489,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 )
             if not result.success:
                 _enter_plan_recovery()
-            recovery_hint = _PLAN_RECOVERY_HINT if _plan_in_recovery else ""
+            recovery_hint = _recovery_guidance if _plan_in_recovery else ""
 
             if result.reply_text:
                 # toolSearchTool is an escape hatch: merge the surfaced tool
@@ -2528,7 +2589,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                         - _plan_steps_baseline
                     ) + 1
                     if action_plan and _plan_in_recovery:
-                        remainder_hint = _PLAN_RECOVERY_HINT
+                        remainder_hint = _recovery_guidance
                     elif action_plan:
                         remainder_hint = progress_nudge(
                             action_plan, tool_results_so_far
@@ -2605,6 +2666,21 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             # Loop continues to let the agent produce the next step/final reply
             continue
 
+        # Missing resolution cannot establish completion of a planned action.
+        if _recovery_without_action_outcome():
+            non_completion_reply = _handoff_non_completion_reply(content)
+            if non_completion_reply is not None:
+                content = non_completion_reply
+            elif not _unexecuted_reply_retried and turn < max_turns:
+                _unexecuted_reply_retried = True
+                messages.append({"role": "user", "content": _UNEXECUTED_ACTION_HINT
+                                 + ("\n" + _resource_context if _resource_context else "")})
+                debug_log("unexecuted planned action: requesting one grounded recovery turn", "planning")
+                continue
+            else:
+                content = _UNEXECUTED_ACTION_REPLY
+                debug_log("unexecuted planned action: delivering an honest execution blocker", "planning")
+
         # Natural-language content from the model. Normalise and deliver.
         extracted = _extract_text_from_json_response(content)
         if extracted:
@@ -2628,6 +2704,10 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         reply = candidate_reply
         last_candidate_reply = candidate_reply
         break
+
+    if not reply and _recovery_without_action_outcome():
+        reply = _UNEXECUTED_ACTION_REPLY
+        debug_log("unexecuted planned action: turn budget exhausted without execution", "planning")
 
     # Step 9: Handle error case - return error message if no reply
     if not reply or not reply.strip():
