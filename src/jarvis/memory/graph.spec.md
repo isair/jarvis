@@ -232,7 +232,7 @@ Piggybacks on the existing diary update flow in `conversation.py`:
    appends new facts to the current node. A deleted target is neither recreated
    nor reported as stored. Self-consolidation rejects stale output without an
    append fallback.
-6. **Split**: If the merge or fallback append pushes the node past `SPLIT_THRESHOLD`, auto-split is triggered
+6. **Split**: If the merge or fallback append pushes the node past `SPLIT_THRESHOLD`, auto-split is triggered. Inference holds no database write lock. The node name, description and raw data must still match the source snapshot inside an immediate write transaction. Changed or deleted sources reject the proposal without creating children. Child insertion and parent clearing commit together; a failed write rolls back the entire split. Existing children and access metadata are preserved. Mutation listeners run only after the complete split commits.
 
 Cold start: each fact lands directly on its tagged branch root (User / Directives / World) until enough data accumulates there for the first auto-split. The tree structure emerges organically under each branch.
 
