@@ -2,6 +2,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, Tuple, List
 import threading
+import sys
+
+if sys.version_info < (3, 11):
+    from exceptiongroup import BaseExceptionGroup
 
 from .builtin.screenshot import ScreenshotTool
 from .builtin.web_search import WebSearchTool
@@ -113,6 +117,24 @@ class ToolSpec:
     inputSchema: Optional[Dict[str, Any]] = None  # JSON Schema for arguments (matches MCP format)
 
 
+def _mcp_error_detail(error: Exception) -> str:
+    """Keep bounded leaf causes from nested transport/task-group failures."""
+    pending = [iter((error,))]
+    details = []
+    while pending and len(details) < 3:
+        try:
+            cause = next(pending[-1])
+        except StopIteration:
+            pending.pop()
+            continue
+        if isinstance(cause, BaseExceptionGroup):
+            pending.append(iter(cause.exceptions))
+        else:
+            detail = str(cause).strip() or type(cause).__name__
+            details.append(detail[:400] + ('…' if len(detail) > 400 else ''))
+    return '; '.join(details) or type(error).__name__
+
+
 def discover_mcp_tools(mcps_config: Dict[str, Any]) -> Tuple[Dict[str, ToolSpec], Dict[str, str]]:
     """Discover all tools from configured MCP servers and create ToolSpec entries for them.
 
@@ -147,21 +169,18 @@ def discover_mcp_tools(mcps_config: Dict[str, Any]) -> Tuple[Dict[str, ToolSpec]
                         inputSchema=input_schema
                     )
 
-            except BaseException as e:
-                # ExceptionGroups (from anyio TaskGroup) wrap the real cause;
-                # extract the first sub-exception for a useful error message.
-                cause = e
-                if hasattr(e, "exceptions") and e.exceptions:
-                    cause = e.exceptions[0]
-                debug_log(f"Failed to discover tools from MCP server '{server_name}': {cause}", "mcp")
-                errors[server_name] = str(cause)
+            except Exception as e:
+                detail = _mcp_error_detail(e)
+                debug_log(f"Failed to discover tools from MCP server '{server_name}': {detail}", "mcp")
+                errors[server_name] = detail
                 continue
 
         return discovered_tools, errors
 
     except Exception as e:
-        debug_log(f"Failed to discover MCP tools: {e}", "mcp")
-        return {}, {"_global": str(e)}
+        detail = _mcp_error_detail(e)
+        debug_log(f"Failed to discover MCP tools: {detail}", "mcp")
+        return {}, {"_global": detail}
 
 
 def generate_tools_json_schema(allowed_tools: Optional[List[str]] = None, mcp_tools: Optional[Dict[str, ToolSpec]] = None) -> List[Dict[str, Any]]:
@@ -301,7 +320,7 @@ def run_tool_with_retries(
                 text = result.get("text") or None
                 return ToolExecutionResult(success=(not is_error), reply_text=text, error_message=(text if is_error else None))
             except Exception as e:
-                detail = str(e) or type(e).__name__
+                detail = _mcp_error_detail(e)
                 return ToolExecutionResult(success=False, reply_text=None, error_message=f"MCP tool '{raw_name}' error: {detail}")
 
     # Friendly user print helper (non-debug only)
