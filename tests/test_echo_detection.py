@@ -7,6 +7,8 @@ when heard audio is an echo of TTS output vs genuine user speech.
 
 import time
 import pytest
+
+pytestmark = pytest.mark.unit
 from jarvis.listening.echo_detection import EchoDetector
 
 
