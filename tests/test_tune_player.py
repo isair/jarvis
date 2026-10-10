@@ -295,3 +295,33 @@ def test_failed_playback_releases_worker_ownership_for_a_fresh_start(monkeypatch
         assert restarted.wait(timeout=1.0), 'A finished worker blocked playback retry'
     finally:
         player.stop_tune()
+
+
+def test_worker_creation_failure_allows_stop_and_retry(monkeypatch):
+    original_start = threading.Thread.start
+    refused = threading.Event()
+    started = threading.Event()
+
+    def refuse_once(thread):
+        if not refused.is_set():
+            refused.set()
+            raise RuntimeError('Cannot start output worker')
+        return original_start(thread)
+
+    class _ReadyStream(_FakeStream):
+        def start(self):
+            super().start()
+            started.set()
+
+    _install_fake_sounddevice(monkeypatch, stream_factory=_ReadyStream)
+    monkeypatch.setattr(threading.Thread, 'start', refuse_once)
+    player = TunePlayer(enabled=True)
+    try:
+        with pytest.raises(RuntimeError, match='Cannot start output worker'):
+            player.start_tune()
+        player.stop_tune()
+        player.start_tune()
+        assert started.wait(timeout=1.0), 'Worker creation failure prevented playback retry'
+    finally:
+        if started.is_set():
+            player.stop_tune()
