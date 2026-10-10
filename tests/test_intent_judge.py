@@ -1,6 +1,8 @@
 """Tests for the intent judge module."""
 
 import pytest
+
+pytestmark = pytest.mark.unit
 from unittest.mock import patch, MagicMock
 
 from jarvis.listening.intent_judge import (
