@@ -16,7 +16,10 @@ _RECALL_CRITERION = (
     'and Turkish sabah altı otuz beşte both mean 06:35 in the morning. '
     'Harmless comments about that early hour do not change the opening-time claim. '
     'A different hour, minute or evening time, conflicting opening times, '
-    'hedging instead of using the saved fact, or denying access to it is FAIL.'
+    'hedging instead of using the saved fact, or denying access to it is FAIL. '
+    'The correct digits alone are insufficient: a guess introduced by perhaps '
+    'or a reply saying it has no saved information must be FAIL even if it '
+    'also mentions 06:35. Require a confident claim grounded in the saved fact.'
 )
 
 
