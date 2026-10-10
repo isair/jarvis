@@ -87,7 +87,7 @@ trivial "ignore previous instructions" injections in meal descriptions.
 
 ### LLM passes
 
-One eligibility pass uses `resolve_model(cfg, Tier.FAST)`, a 256-token generation
+One eligibility pass uses `resolve_model(cfg, Tier.FAST)`, the shared generation
 budget, temperature 0, disabled thinking and `cfg.llm_chat_timeout_sec`. Approved
 requests then use two passes against the chat model (`cfg.llm_chat_model`):
 
@@ -103,8 +103,10 @@ requests then use two passes against the chat model (`cfg.llm_chat_model`):
    asking for 2-3 healthy, realistic follow-ups (hydration, protein,
    veggies, sodium/potassium balance, light activity).
 
-Both passes share a bounded 1,024-token generation budget, including reasoning
-and the answer, `cfg.llm_chat_timeout_sec` and the `llm_thinking_enabled` flag.
+All three passes share a bounded 1,024-token generation budget, including
+reasoning and the answer, and `cfg.llm_chat_timeout_sec`. The eligibility pass
+requests disabled thinking; the chat passes use `llm_thinking_enabled`. The
+shared room allows servers that retain reasoning to emit a structured answer.
 
 ### Database
 

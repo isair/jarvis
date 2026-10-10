@@ -1,4 +1,4 @@
-"""Meal extraction and coaching can emit answers after local reasoning."""
+"""Meal decisions, extraction and coaching can emit answers after local reasoning."""
 import json
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -13,12 +13,12 @@ pytestmark = pytest.mark.unit
 
 
 @pytest.mark.parametrize('provider', ['ollama', 'openai_compatible'])
-@pytest.mark.parametrize('phase', ['extraction', 'coaching'])
+@pytest.mark.parametrize('phase', ['eligibility', 'extraction', 'coaching'])
 def test_nutrition_answer_survives_reasoning_budget(monkeypatch, provider, phase):
     cfg = SimpleNamespace(
         llm_provider=provider, llm_base_url='http://127.0.0.1:1/v1',
         ollama_base_url='http://127.0.0.1:1', llm_chat_model='local-reasoning-model',
-        llm_chat_timeout_sec=7.3, llm_thinking_enabled=False,
+        fast_model='local-reasoning-model', llm_chat_timeout_sec=7.3, llm_thinking_enabled=False,
     )
     meal = {'description': 'eggs with toast', 'calories_kcal': 220,
             'protein_g': 14, 'carbs_g': 18, 'fat_g': 11, 'confidence': 0.8}
@@ -28,8 +28,9 @@ def test_nutrition_answer_survives_reasoning_budget(monkeypatch, provider, phase
     def post(url, **kwargs):
         observed_timeouts.append(kwargs['timeout'])
         payload = kwargs['json']
-        is_extraction = payload['messages'][0]['content'] == log_meal.NUTRITION_SYS
-        answer = json.dumps(meal) if is_extraction else coaching
+        answers = {log_meal.MEAL_ELIGIBILITY_SYS: json.dumps({'record': True}),
+                   log_meal.NUTRITION_SYS: json.dumps(meal)}
+        answer = answers.get(payload['messages'][0]['content'], coaching)
         cap = payload.get('max_tokens', payload.get('options', {}).get('num_predict', 0))
         required = len(reasoning.split()) + len(answer.split())
         response = MagicMock()
@@ -39,7 +40,9 @@ def test_nutrition_answer_survives_reasoning_budget(monkeypatch, provider, phase
                                      else {'choices': [{'message': message}]})
         return response
     monkeypatch.setattr('requests.post', post)
-    if phase == 'extraction':
+    if phase == 'eligibility':
+        assert log_meal.meal_recording_requested(cfg, 'I ate eggs with toast', 'eggs with toast') is True
+    elif phase == 'extraction':
         db = Database(':memory:', sqlite_vss_path=None)
         try:
             reply = log_meal.extract_and_log_meal(db, cfg, 'I ate eggs with toast', 'stdin', request_text='I ate eggs with toast')

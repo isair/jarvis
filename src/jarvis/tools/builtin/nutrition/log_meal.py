@@ -31,7 +31,6 @@ def call_llm_direct(*, cfg, chat_model, system_prompt, user_content,
     )
 
 
-_MEAL_ELIGIBILITY_TOKEN_BUDGET = 256
 _MEAL_INPUT_CHARACTER_LIMIT = 1200
 MEAL_ELIGIBILITY_SYS = (
     'Decide whether the user wants a meal recorded. Use the actual user request as authority. '
@@ -56,7 +55,7 @@ def meal_recording_requested(cfg: Any, user_request: str, meal_description: str)
     raw = call_llm_direct(
         cfg=cfg, chat_model=resolve_model(cfg, Tier.FAST), system_prompt=MEAL_ELIGIBILITY_SYS,
         user_content=prompt, timeout_sec=cfg.llm_chat_timeout_sec,
-        thinking=False, temperature=0.0, max_tokens=_MEAL_ELIGIBILITY_TOKEN_BUDGET,
+        thinking=False, temperature=0.0, max_tokens=_NUTRITION_TOKEN_BUDGET,
     )
     try:
         decision = json.loads(_strip_code_fence(raw or ''))
