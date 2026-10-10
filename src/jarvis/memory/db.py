@@ -155,10 +155,12 @@ class Database:
             cur.executescript(_SCHEMA_SQL)
             if self.is_vss_enabled:
                 cur.executescript(_VSS_SCHEMA_SQL)
+            migration = 'summary_fts_content_consistency'
+            if cur.execute('SELECT 1 FROM diary_index_migrations WHERE name=?', (migration,)).fetchone():
+                return
             try:
-                # Serialise the durable consistency check across database owners.
+                # Recheck under the writer lock when a rebuild is required.
                 cur.execute('BEGIN IMMEDIATE')
-                migration = 'summary_fts_content_consistency'
                 if not cur.execute('SELECT 1 FROM diary_index_migrations WHERE name=?', (migration,)).fetchone():
                     cur.execute("INSERT INTO summaries_fts(summaries_fts) VALUES('rebuild')")
                     cur.execute('INSERT INTO diary_index_migrations(name) VALUES (?)', (migration,))
