@@ -950,7 +950,8 @@ class TestCrossPlatformAudioHealthWarning:
                             def fake_get(timeout=0.2):
                                 get_calls[0] += 1
                                 if get_calls[0] >= 3:
-                                    listener._should_stop = True
+                                    assert decoded.wait(timeout=2), 'Captured speech did not reach Whisper'
+                                listener._should_stop = True
                                 raise q.Empty()
 
                             listener._audio_q = MagicMock()
@@ -1057,7 +1058,16 @@ class TestSampleRateFallback:
     def test_fallback_to_native_rate_on_invalid_sample_rate(self, capsys, platform_name, input_channels):
         """Negotiated headset capture reaches Whisper at the correct duration."""
         mock_whisper_model = MagicMock()
-        mock_whisper_model.transcribe.return_value = ([], None)
+        import threading
+        decoded = threading.Event()
+        utterance_audio = []
+        def transcribe(audio, **kwargs):
+            # Warmup decodes one second; this captured utterance is shorter.
+            if len(audio) < mock_cfg.sample_rate:
+                utterance_audio.append(audio)
+                decoded.set()
+            return [], None
+        mock_whisper_model.transcribe.side_effect = transcribe
 
         with patch("jarvis.listening.listener.sys") as mock_sys:
             mock_sys.platform = platform_name
@@ -1144,8 +1154,10 @@ class TestSampleRateFallback:
                             assert listener._stream_samplerate == 44100
                             assert listener._frame_samples == 44100 * mock_cfg.vad_frame_ms // 1000
                             assert capture_kwargs['blocksize'] == listener._frame_samples
-                            assert len(mock_whisper_model.transcribe.call_args[0][0]) == 6400
-                            np.testing.assert_allclose(mock_whisper_model.transcribe.call_args[0][0], .1, atol=.001)
+                            expected_samples = round(17640 / device_info['default_samplerate'] * mock_cfg.sample_rate)
+                            assert len(utterance_audio) == 1
+                            assert len(utterance_audio[0]) == expected_samples
+                            np.testing.assert_allclose(utterance_audio[0], .1, atol=.001)
 
                             captured = capsys.readouterr()
                             assert "44100" in captured.out
