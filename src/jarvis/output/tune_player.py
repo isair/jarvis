@@ -1,6 +1,4 @@
 from __future__ import annotations
-import io
-import struct
 import threading
 import time
 from typing import Optional
@@ -83,48 +81,7 @@ def _generate_thinking_pad_samples() -> tuple[np.ndarray, int]:
     return samples, sample_rate
 
 
-def _generate_thinking_pad_wav() -> bytes:
-    """WAV-wrapped version of the thinking pad (kept for test coverage)."""
-    samples, sample_rate = _generate_thinking_pad_samples()
-    num_samples = samples.size
-
-    wav_buffer = io.BytesIO()
-    num_channels = 1
-    bits_per_sample = 16
-    byte_rate = sample_rate * num_channels * bits_per_sample // 8
-    block_align = num_channels * bits_per_sample // 8
-    data_size = num_samples * block_align
-
-    wav_buffer.write(b'RIFF')
-    wav_buffer.write(struct.pack('<I', 36 + data_size))
-    wav_buffer.write(b'WAVE')
-
-    wav_buffer.write(b'fmt ')
-    wav_buffer.write(struct.pack('<I', 16))
-    wav_buffer.write(struct.pack('<H', 1))
-    wav_buffer.write(struct.pack('<H', num_channels))
-    wav_buffer.write(struct.pack('<I', sample_rate))
-    wav_buffer.write(struct.pack('<I', byte_rate))
-    wav_buffer.write(struct.pack('<H', block_align))
-    wav_buffer.write(struct.pack('<H', bits_per_sample))
-
-    wav_buffer.write(b'data')
-    wav_buffer.write(struct.pack('<I', data_size))
-    wav_buffer.write(samples.tobytes())
-
-    return wav_buffer.getvalue()
-
-
-_THINKING_PAD_WAV: Optional[bytes] = None
 _THINKING_PAD_SAMPLES: Optional[tuple[np.ndarray, int]] = None
-
-
-def _get_thinking_pad_wav() -> bytes:
-    """Get cached thinking-pad WAV data, generating on first call."""
-    global _THINKING_PAD_WAV
-    if _THINKING_PAD_WAV is None:
-        _THINKING_PAD_WAV = _generate_thinking_pad_wav()
-    return _THINKING_PAD_WAV
 
 
 def _get_thinking_pad_samples() -> tuple[np.ndarray, int]:
