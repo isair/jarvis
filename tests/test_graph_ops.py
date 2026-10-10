@@ -237,94 +237,6 @@ class TestLLMPickBestChild:
         assert mock_llm.call_args.kwargs["chat_model"] == "big-chat"
 
 
-# ── find_best_node ─────────────────────────────────────────────────────
-
-
-@pytest.mark.unit
-class TestFindBestNode:
-    """Tests for the three-entry-point traversal."""
-
-    @patch("src.jarvis.memory.graph_ops._llm_pick_best_child")
-    def test_matches_recent_node_first(self, mock_pick, populated_store, mock_config):
-
-        children = populated_store.get_children("root")
-        music_node = [c for c in children if c.name == "Music"][0]
-        # Touch Music so it appears in recent nodes
-        populated_store.touch_node(music_node.id)
-
-        # First call (recent nodes): return the music node
-        mock_pick.return_value = music_node.id
-
-        result = find_best_node(populated_store, "Likes jazz", mock_config, "model")
-        assert result == music_node.id
-        # Should only call once (matched on recent nodes)
-        assert mock_pick.call_count == 1
-
-    @patch("src.jarvis.memory.graph_ops._llm_pick_best_child")
-    def test_falls_through_to_top_nodes(self, mock_pick, populated_store, mock_config):
-
-        children = populated_store.get_children("root")
-        work_node = [c for c in children if c.name == "Work"][0]
-        # Touch Work many times so it appears in top nodes
-        for _ in range(5):
-            populated_store.touch_node(work_node.id)
-
-        # First call (recent): None. Second call (top): match work.
-        mock_pick.side_effect = [None, work_node.id]
-
-        result = find_best_node(populated_store, "Uses TypeScript", mock_config, "model")
-        assert result == work_node.id
-
-    @patch("src.jarvis.memory.graph_ops._llm_pick_best_child")
-    def test_falls_through_to_root_traversal(self, mock_pick, populated_store, mock_config):
-
-        children = populated_store.get_children("root")
-        health_node = [c for c in children if c.name == "Health"][0]
-
-        # Recent: None, Top: skipped (all recent_ids overlap), Root children: pick Health
-        mock_pick.side_effect = [None, health_node.id]
-
-        result = find_best_node(populated_store, "Allergic to peanuts", mock_config, "model")
-        assert result == health_node.id
-
-    @patch("src.jarvis.memory.graph_ops._llm_pick_best_child")
-    def test_writes_to_root_when_nothing_matches(self, mock_pick, populated_store, mock_config):
-
-        # Everything returns None — no match anywhere
-        mock_pick.return_value = None
-
-        result = find_best_node(populated_store, "Completely unrelated fact", mock_config, "model")
-        assert result == "root"
-
-    @patch("src.jarvis.memory.graph_ops._llm_pick_best_child")
-    def test_empty_graph_writes_to_root(self, mock_pick, store, mock_config):
-        """With seeded branches under root but nothing else, an
-        unclassified fact with no branch pin will try to pick among
-        the seeded branches. If the picker declines all of them
-        (returns None), traversal halts at root."""
-        # Picker declines at every level so traversal breaks at root.
-        mock_pick.return_value = None
-        result = find_best_node(store, "First ever fact", mock_config, "model")
-        assert result == "root"
-
-    @patch("src.jarvis.memory.graph_ops._llm_pick_best_child")
-    def test_branch_pin_skips_shortcut_entry_points(self, mock_pick, store, mock_config):
-        """When a branch is pinned, the recent / top shortcut entry
-        points are skipped entirely — the fact descends only through
-        the pinned branch's subtree. With an empty branch, that means
-        the branch root itself is the write target, and the picker is
-        never consulted."""
-        mock_pick.return_value = None
-        result = find_best_node(
-            store, "Likes jazz music", mock_config, "model",
-            branch_root_id="user",
-        )
-        assert result == "user"
-        # The picker was never called because the User branch has no
-        # children yet; descent terminated immediately at the branch root.
-        mock_pick.assert_not_called()
-
-
 # ── auto_split_node ────────────────────────────────────────────────────
 
 
@@ -1385,3 +1297,26 @@ class TestFormatWarmProfileBlock:
 
     def test_whitespace_only_treated_as_empty(self):
         assert format_warm_profile_block({"user": "   \n", "directives": "\t"}) == ""
+
+
+@pytest.mark.unit
+class TestBranchPlacement:
+    """Placement stays inside the classified branch, including on no match."""
+
+    @pytest.mark.parametrize('branch', [BRANCH_USER, BRANCH_DIRECTIVES, BRANCH_WORLD])
+    @pytest.mark.parametrize('match', [True, False])
+    @patch('src.jarvis.memory.graph_ops.call_llm_direct')
+    def test_popular_other_branches_cannot_capture_a_fact(self, mock_llm, store, mock_config, branch, match):
+        category = store.create_node('Category', 'Relevant category', parent_id=branch)
+        leaf = store.create_node('Leaf', 'Relevant leaf', parent_id=category.id)
+        for other in (BRANCH_USER, BRANCH_DIRECTIVES, BRANCH_WORLD):
+            if other != branch:
+                outsider = store.create_node('Category', 'Relevant category', parent_id=other)
+                store.touch_node(outsider.id)
+        mock_llm.return_value = '1' if match else 'NONE'
+        result = find_best_node(store, 'A supported fact', mock_config, 'model', branch_root_id=branch)
+        assert result == (leaf.id if match else branch)
+
+    @pytest.mark.parametrize('branch', [BRANCH_USER, BRANCH_DIRECTIVES, BRANCH_WORLD])
+    def test_empty_branch_is_the_destination(self, store, mock_config, branch):
+        assert find_best_node(store, 'First fact', mock_config, 'model', branch_root_id=branch) == branch
