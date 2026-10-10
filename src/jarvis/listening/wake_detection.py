@@ -81,27 +81,22 @@ def is_stop_command(text_lower: str, stop_commands: List[str], fuzzy_ratio: floa
     if not text_lower or not text_lower.strip():
         return False
     
-    # Check for exact matches
-    detected_commands = []
-    for cmd in stop_commands:
-        if cmd in text_lower:
-            detected_commands.append(cmd)
-    
-    # Check fuzzy matches for short inputs (2 words or less)
-    if len(text_lower.split()) <= 2:
-        try:
-            for word in text_lower.split():
-                for cmd in stop_commands:
-                    ratio = difflib.SequenceMatcher(a=cmd, b=word).ratio()
-                    if ratio >= fuzzy_ratio:
-                        detected_commands.append(f"{cmd}~{word}")
-        except Exception:
-            pass
-    
-    if detected_commands:
-        debug_log(f"stop command detected: {detected_commands[0]} in '{text_lower}'", "voice")
-        return True
-    
+    heard = unicodedata.normalize("NFC", text_lower).casefold()
+    commands = [unicodedata.normalize("NFC", command.strip()).casefold()
+                for command in stop_commands if command.strip()]
+    for command in commands:
+        if command in heard:
+            debug_log(f"stop command detected: {command} in '{heard}'", "voice")
+            return True
+
+    # Short inputs permit a close transcription of a configured phrase.
+    words = heard.split()
+    if len(words) <= 2:
+        for word in words:
+            for command in commands:
+                if difflib.SequenceMatcher(a=command, b=word).ratio() >= fuzzy_ratio:
+                    debug_log(f"stop command detected: {command}~{word} in '{heard}'", "voice")
+                    return True
     return False
 
 

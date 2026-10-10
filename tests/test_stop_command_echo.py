@@ -1,5 +1,6 @@
 """Spoken control commands do not turn the assistant's own echo into an interruption."""
 from types import SimpleNamespace
+import unicodedata
 from unittest.mock import MagicMock
 import pytest
 from jarvis.listening.listener import VoiceListener
@@ -72,3 +73,20 @@ def test_normalised_and_partial_echo_does_not_interrupt(spoken,heard,command):
 ])
 def test_appended_control_is_not_lost_when_echo_contains_the_same_command(spoken,command):
     assert not process(spoken+' '+command,spoken,[command])
+
+
+@pytest.mark.parametrize('commands', [[''], ['  '], ['', 'stop']])
+def test_blank_stop_entries_cannot_interrupt_unrelated_speech(commands):
+    assert process('we are discussing dinner plans', 'The forecast is sunny today.', commands)
+
+
+@pytest.mark.parametrize('heard,command', [
+    ('please stop talking', ' STOP '),
+    ('shut up', ' SHUT UP '),
+    ('σιωπή', ' ΣΙΩΠΗ '),
+    (unicodedata.normalize('NFD', 'σιωπή'), 'σιωπή'),
+    ('توقف', ' توقف '),
+    ('停止', ' 停止 '),
+])
+def test_normalised_configured_controls_interrupt(heard, command):
+    assert not process(heard, 'The forecast is sunny today.', [command])

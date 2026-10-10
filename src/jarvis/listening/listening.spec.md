@@ -275,7 +275,7 @@ hot-window admission; manual expiry also cancels pending activation.
 While TTS is playing, echo rejection and stop commands are handled with fast text-based checks (no LLM). This prevents self-loops where the mic picks up TTS output. After TTS finishes, the intent judge takes over.
 
 **Stop detection:**
-- Text-based: Check for "stop", "quiet", "shut up", etc.
+- Text-based: Check configured phrases such as "stop", "quiet" and "shut up". Ignore empty or whitespace-only entries; normalise Unicode composition, casing and surrounding configuration whitespace before exact or fuzzy comparison.
 - Intent judge can also detect stop commands
 - During active TTS, a standalone configured stop phrase (including a fuzzy transcription) retains immediate interruption priority. Longer literal echoes of the current TTS text are rejected even when they contain a configured stop phrase. Unicode punctuation and casing are normalised without language-specific patterns; an appended user command remains eligible for interruption.
 
