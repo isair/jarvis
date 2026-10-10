@@ -150,6 +150,12 @@ Design principles enforced by the engine:
    - Fallback is detected once per session (first HTTP 400 response) and persists for the rest of the conversation
    - Internal reasoning uses the `thinking` field (not shown to user)
    - Allowed tools: all builtin tools plus MCP (if configured)
+   - Tool diagnostics: failed outcomes produce one activity-log error line for
+     planner, text-tool and native-tool dispatch, including failures that also
+     return reply text. The diagnostic prefers the error message, then reply
+     text, then an empty-result marker. Whitespace is collapsed and the preview
+     is capped at 240 characters; debug output uses the same bounded preview.
+     Model-facing tool content and failure recovery retain the original data.
    - Duplicate suppression: the engine returns a tool error response for repeated calls with identical args, guiding the model to use prior results
    - Tool results: native path appends `{role: "tool", tool_call_id: "<id>", content: "<text>"}` messages; text-based fallback appends `{role: "user", content: "[Tool result: name]\n<text>"}` messages
    - No system message injection: The engine does NOT add system messages during the loop as this breaks native tool calling; instead, guidance is provided via tool error responses when needed
