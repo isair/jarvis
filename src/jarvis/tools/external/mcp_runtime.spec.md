@@ -63,6 +63,16 @@ resident for the daemon's lifetime.
 - `get_runtime()` / `shutdown_runtime()` — module-level helpers used
   by the daemon's startup and shutdown paths.
 
+## Error reporting
+
+Registry discovery and tool execution report leaf causes from nested exception
+groups rather than task-group wrapper messages. Empty messages use exception
+type names. Diagnostics include up to three causes, each bounded to 400
+characters, so a large server failure cannot flood the activity log. A failed
+server does not remove tools discovered from healthy servers. Global client
+construction failures use the same diagnostic policy. Shutdown signals such as
+KeyboardInterrupt, SystemExit and cancellation propagate through discovery.
+
 ## Configuration
 
 Each server entry in `config.mcps` is a dict consumed by
