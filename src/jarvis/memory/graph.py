@@ -478,7 +478,8 @@ class GraphMemoryStore:
         parent_id: Optional[str] = ...,  # type: ignore[assignment]
     ) -> Optional[MemoryNode]:
         """Return the updated node, or None for an absent node or invalid parent."""
-        with self._lock:
+        with self._lock, self.conn:
+            self.conn.execute("BEGIN IMMEDIATE")
             node = self.get_node(node_id)
             if node is None:
                 return None
@@ -504,7 +505,7 @@ class GraphMemoryStore:
         return node
 
     def _valid_parent(self, node_id: str, parent_id: Optional[str]) -> bool:
-        """Check parent ancestry while the caller holds the store lock."""
+        """Check parent ancestry inside the caller's locked write transaction."""
         if node_id == "root" or node_id in FIXED_BRANCH_IDS:
             return False
         visited = {node_id}
@@ -520,7 +521,7 @@ class GraphMemoryStore:
         return True
 
     def _persist_node(self, node: MemoryNode) -> None:
-        """Commit a node snapshot while the caller holds the store lock."""
+        """Write a node snapshot inside the caller's locked write transaction."""
         self.conn.execute(
             """UPDATE memory_nodes
                SET name = ?, description = ?, data = ?, parent_id = ?,
@@ -529,7 +530,6 @@ class GraphMemoryStore:
             (node.name, node.description, node.data, node.parent_id,
              node.updated_at, node.data_token_count, node.id),
         )
-        self.conn.commit()
 
     def delete_node(self, node_id: str) -> bool:
         """Delete a node. Children are orphaned (parent_id set to NULL by FK).
@@ -577,7 +577,8 @@ class GraphMemoryStore:
 
         Returns True if the node's data_token_count now exceeds SPLIT_THRESHOLD.
         """
-        with self._lock:
+        with self._lock, self.conn:
+            self.conn.execute("BEGIN IMMEDIATE")
             node = self.get_node(node_id)
             if node is None:
                 return False
