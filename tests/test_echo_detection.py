@@ -904,3 +904,14 @@ def test_fuzzy_during_tts_cleanup_preserves_complete_follow_up(user_speech):
     assert detector.cleanup_leading_echo_during_tts(
         heard, tts_rate=200, utterance_start_time=detector._tts_start_time + 0.1,
     ) == user_speech
+
+
+@pytest.mark.unit
+def test_fuzzy_echo_cleanup_handles_expanded_spoken_units():
+    detector = EchoDetector()
+    detector.track_tts_start('It is 9°C outside')
+    user_speech = 'who made it?'
+    heard = 'it is 9 degrees celsius outside ' + user_speech
+    assert detector.cleanup_leading_echo_during_tts(
+        heard, tts_rate=200, utterance_start_time=detector._tts_start_time + 0.1,
+    ) == user_speech

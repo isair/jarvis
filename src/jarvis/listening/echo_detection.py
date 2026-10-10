@@ -285,7 +285,7 @@ class EchoDetector:
             tts_normalised_words = self._normalize_for_comparison(self._last_tts_text).split()
             best_prefix = None
             best_score = 0.0
-            max_prefix_words = min(len(tts_words), len(heard_words) - self.min_salvage_words)
+            max_prefix_words = min(len(tts_normalised_words), len(heard_words) - self.min_salvage_words)
             for prefix_len in range(self.min_salvage_words, max_prefix_words + 1):
                 heard_prefix = self._normalize_for_comparison(" ".join(heard_words[:prefix_len]))
                 normalised_length = len(heard_prefix.split())
