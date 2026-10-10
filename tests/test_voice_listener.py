@@ -8,6 +8,21 @@ from unittest.mock import patch, MagicMock, call
 import time
 import pytest
 
+pytestmark = pytest.mark.unit
+
+
+@pytest.fixture(autouse=True)
+def require_mocked_model_transport(monkeypatch):
+    """Listener unit tests cannot probe a running model server."""
+    import requests
+    attempts = []
+    def reject_request(*args, **kwargs):
+        attempts.append(True)
+        raise AssertionError('Model transport must be mocked in listener unit tests')
+    monkeypatch.setattr(requests.Session, 'request', reject_request)
+    yield
+    assert not attempts, 'Listener unit tests attempted an unmocked model request'
+
 
 def _mock_input_devices(audio, devices):
     """Expose the sounddevice list, default-input and indexed-query contracts."""
@@ -24,6 +39,10 @@ def _mock_input_devices(audio, devices):
 def _create_mock_config(**kwargs):
     """Create a mock config object with default values for voice listener tests."""
     mock_cfg = MagicMock()
+    mock_cfg.llm_chat_model = kwargs.get("llm_chat_model", "")
+    mock_cfg.ollama_chat_model = mock_cfg.llm_chat_model
+    mock_cfg.fast_model = kwargs.get("fast_model", "")
+    mock_cfg.embedding_model = kwargs.get("embedding_model", None)
     mock_cfg.whisper_model = kwargs.get("whisper_model", "small")
     mock_cfg.whisper_device = kwargs.get("whisper_device", "auto")
     mock_cfg.whisper_compute_type = kwargs.get("whisper_compute_type", "int8")
