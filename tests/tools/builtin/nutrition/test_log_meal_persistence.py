@@ -50,7 +50,7 @@ def test_saved_meal_is_confirmed_once_without_coaching(monkeypatch, meal_context
     assert 'Follow-ups:' not in result.reply_text
 
 
-@pytest.mark.parametrize('macro', ['not a number', 'NaN', 'Infinity', True, False])
+@pytest.mark.parametrize('macro', ['not a number', 'NaN', 'Infinity', True, False, -1, '-2'])
 def test_invalid_optional_macro_does_not_duplicate_a_saved_meal(monkeypatch, meal_context, macro):
     meal = {'description': 'eggs', 'calories_kcal': macro, 'protein_g': 12}
     monkeypatch.setattr(log_meal, 'call_llm_direct',
@@ -168,3 +168,20 @@ def test_non_single_meal_envelopes_cannot_create_a_record(monkeypatch, meal_cont
     assert not result.success
     assert not result.resource_references
     assert saved_meals(meal_context.db) == []
+
+
+@pytest.mark.parametrize('confidence,expected', [
+    (-0.5, None), (2, None), ('90', None), (0, 0), (1, 1), (0.25, 0.25), ('0.5', 0.5),
+])
+def test_record_confidence_respects_probability_bounds(monkeypatch, meal_context, confidence, expected):
+    meal = {'description': 'eggs', 'calories_kcal': 150, 'confidence': confidence}
+    monkeypatch.setattr(log_meal, 'call_llm_direct', lambda **kwargs:
+                        json.dumps(meal) if kwargs['system_prompt'] == log_meal.NUTRITION_SYS else '')
+    result = log_meal.LogMealTool().run({}, meal_context)
+    rows = saved_meals(meal_context.db)
+    assert result.success and len(rows) == 1
+    assert rows[0]['confidence'] == expected
+    if expected is None:
+        assert '(confidence' not in result.reply_text
+    else:
+        assert f'(confidence {expected:.0%})' in result.reply_text
