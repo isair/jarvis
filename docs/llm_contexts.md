@@ -141,7 +141,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 ## 10. Knowledge Graph Fact Extraction + Branch Classification
 
 - **File**: [src/jarvis/memory/graph_ops.py](src/jarvis/memory/graph_ops.py) — `extract_graph_memories()`.
-- **Trigger**: after each daily summary (#9). Background.
+- **Trigger**: after each daily summary (#9). Background. The diary flush owns its temporary graph store until the graph pass completes, skips or fails, then closes it. The committed diary remains available on graph failure.
 - **Model**: `cfg.llm_chat_model` via `get_llm_backend(cfg)`.
 - **Inputs**: summary text + optional date.
 - **System prompt**: inline — asks for JSON array of `{"branch": "USER|DIRECTIVES|WORLD", "fact": "..."}` objects, repeating both named keys in every object even for consecutive facts in the same branch, with a heuristic ("user telling the assistant how to behave → DIRECTIVES; user telling the assistant about themselves → USER; external facts → WORLD"). Unknown branches default to USER. The DO-NOT-EXTRACT block hardens two recurring traps: assistant-generated recommendations (would-a-different-assistant-give-the-same-answer? heuristic separates these from external lookups, which DO count as facts) and transient snapshots like the current weather / time of day (described as "moments not facts" so the model stops conflating ephemera with persistent climate / location knowledge).
