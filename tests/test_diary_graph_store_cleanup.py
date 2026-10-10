@@ -29,14 +29,11 @@ def test_diary_save_releases_graph_store_for_every_graph_outcome(tmp_path, mock_
     with closing(Database(str(tmp_path / 'synthetic.db'), sqlite_vss_path=None)) as db:
         read_summary = db.get_conversation_summary
         if outcome == 'no-summary':
-            monkeypatch.setattr(db, 'get_conversation_summary', lambda *args: None)
+            monkeypatch.setattr(db, 'get_conversation_summary_by_id', lambda *args: None)
         elif outcome == 'summary-read-error':
-            def unavailable_after_save(*args):
-                row = read_summary(*args)
-                if row is not None:
-                    raise RuntimeError('Synthetic graph read failure')
-                return row
-            monkeypatch.setattr(db, 'get_conversation_summary', unavailable_after_save)
+            def unavailable_saved_row(*args):
+                raise RuntimeError('Synthetic graph read failure')
+            monkeypatch.setattr(db, 'get_conversation_summary_by_id', unavailable_saved_row)
 
         def update_graph(*, store, **kwargs):
             if outcome == 'update-error':

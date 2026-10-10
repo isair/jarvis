@@ -1892,12 +1892,15 @@ def update_diary_from_dialogue_memory(
                 from .graph_ops import update_graph_from_dialogue
 
                 with closing(GraphMemoryStore(db.db_path)) as graph_store:
-                    # Retrieve the summary we just stored to use for extraction
-                    today = datetime.now(timezone.utc).date().isoformat()
-                    existing = db.get_conversation_summary(today, source_app)
-                    summary_text = existing['summary'] if existing else None
+                    saved = db.get_conversation_summary_by_id(summary_id)
+                    summary_text = saved['summary'] if saved else None
+                    if saved is None:
+                        debug_log("graph memory skipped: saved diary row unavailable", "memory")
 
                     if summary_text:
+                        debug_log(
+                            f"graph memory source: diary {summary_id}, date {saved['date_utc']}", "memory",
+                        )
                         # Use a shorter timeout for graph operations — extraction (30s),
                         # placement (15s/fact), and split (45s) each have their own budgets
                         # inside update_graph_from_dialogue.
@@ -1909,7 +1912,7 @@ def update_diary_from_dialogue_memory(
                             chat_model=cfg.llm_chat_model,
                             timeout_sec=graph_timeout,
                             thinking=thinking,
-                            date_utc=today,
+                            date_utc=saved['date_utc'],
                             picker_model=graph_picker_model,
                         )
                         stored = result.stored
