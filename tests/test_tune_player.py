@@ -214,3 +214,84 @@ def test_stream_callback_wraps_seamlessly(monkeypatch):
             np.testing.assert_array_equal(out[:, 0], expected)
     finally:
         player.stop_tune()
+
+
+def test_restart_waits_for_the_previous_audio_stream_to_close(monkeypatch):
+    closing = threading.Event()
+    allow_close = threading.Event()
+    closed = threading.Event()
+    started = threading.Event()
+    next_started = threading.Event()
+    streams = []
+
+    class _DelayedCloseStream(_FakeStream):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.index = len(streams)
+            streams.append(self)
+
+        def start(self):
+            super().start()
+            (started if self.index == 0 else next_started).set()
+
+        def close(self):
+            if self.index == 0:
+                closing.set()
+                assert allow_close.wait(timeout=5.0), 'Audio teardown was not released'
+            super().close()
+            if self.index == 0:
+                closed.set()
+
+    _install_fake_sounddevice(monkeypatch, stream_factory=_DelayedCloseStream)
+    player = TunePlayer(enabled=True)
+    player.start_tune()
+    try:
+        assert started.wait(timeout=1.0)
+        player.stop_tune()
+        assert closing.is_set()
+        player.start_tune()
+        allow_close.set()
+        assert closed.wait(timeout=1.0)
+        assert not next_started.wait(timeout=0.2), 'Restart during teardown opened another audio stream'
+        player.start_tune()
+        assert next_started.wait(timeout=1.0), 'Restart after teardown did not play'
+    finally:
+        allow_close.set()
+        player.stop_tune()
+
+
+def test_failed_playback_releases_worker_ownership_for_a_fresh_start(monkeypatch):
+    first_closed = threading.Event()
+    restarted = threading.Event()
+    streams = []
+
+    class _FailFirstStartStream(_FakeStream):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.index = len(streams)
+            streams.append(self)
+
+        def start(self):
+            if self.index == 0:
+                raise RuntimeError('Audio output unavailable')
+            super().start()
+            restarted.set()
+
+        def close(self):
+            super().close()
+            if self.index == 0:
+                first_closed.set()
+
+    _install_fake_sounddevice(monkeypatch, stream_factory=_FailFirstStartStream)
+    player = TunePlayer(enabled=True)
+    player.start_tune()
+    try:
+        assert first_closed.wait(timeout=1.0)
+        deadline = time.monotonic() + 1.0
+        while player.is_playing() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert not player.is_playing()
+        player.start_tune()
+        assert restarted.wait(timeout=1.0), 'A finished worker blocked playback retry'
+    finally:
+        player.stop_tune()

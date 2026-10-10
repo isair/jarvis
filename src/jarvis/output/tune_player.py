@@ -111,27 +111,29 @@ class TunePlayer:
     uses. This matters: if the tune held the audio output device via a
     separate path (e.g. afplay subprocess killed mid-stream), macOS
     CoreAudio could take seconds to release the device, stalling TTS.
-    Using one API means clean release — stop returns in milliseconds and
-    TTS can open the device immediately after.
+    The owning worker releases the device; stop uses a bounded wait and
+    another tune starts only after teardown finishes.
     """
 
     def __init__(self, enabled: bool = True) -> None:
         self.enabled = enabled
         self._thread: Optional[threading.Thread] = None
+        self._lifecycle_lock = threading.Lock()
         self._stop_event = threading.Event()
         self._is_playing = threading.Event()
 
     def start_tune(self) -> None:
-        if not self.enabled or self._thread is not None:
-            return
+        with self._lifecycle_lock:
+            if not self.enabled or self._thread is not None:
+                return
 
-        debug_log("thinking tune: start", category="tune")
-        self._stop_event.clear()
-        self._thread = threading.Thread(target=self._play_tune, daemon=True)
-        self._thread.start()
+            debug_log("thinking tune: start", category="tune")
+            self._stop_event.clear()
+            self._thread = threading.Thread(target=self._play_tune, daemon=True)
+            self._thread.start()
 
     def stop_tune(self) -> None:
-        """Stop the tune immediately, releasing the audio device.
+        """Request stop and wait briefly for audio teardown.
 
         We deliberately do NOT call ``stream.abort()`` from this thread —
         only the tune thread (`_play_tune`'s finally block) touches the
@@ -142,14 +144,17 @@ class TunePlayer:
         stop event is enough — `stream.close()` discards pending buffers
         as if abort() had been called.
         """
-        if self._thread is None:
-            return
+        with self._lifecycle_lock:
+            thread = self._thread
+            if thread is None:
+                return
+            debug_log("thinking tune: stop", category="tune")
+            self._stop_event.set()
 
-        debug_log("thinking tune: stop", category="tune")
-        self._stop_event.set()
-        self._thread.join(timeout=1.0)
-        self._thread = None
-        self._is_playing.clear()
+        thread.join(timeout=1.0)
+        with self._lifecycle_lock:
+            if self._thread is thread:
+                debug_log("thinking tune: audio teardown pending; restart deferred", category="tune")
 
     def is_playing(self) -> bool:
         return self._is_playing.is_set()
@@ -222,7 +227,10 @@ class TunePlayer:
                 except Exception as exc:
                     debug_log(f"thinking tune: stream close failed: {exc!r}", category="tune")
         finally:
-            self._is_playing.clear()
+            with self._lifecycle_lock:
+                self._thread = None
+                self._is_playing.clear()
+            debug_log("thinking tune: worker finished", category="tune")
 
     def _play_fallback_tune(self) -> None:
         """Fallback for environments without a usable audio output."""
