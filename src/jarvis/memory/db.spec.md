@@ -32,7 +32,11 @@ preserving the committed summary and its references.
 
 Opening a diary rebuilds its full-text index from live summaries once, tracked
 in `diary_index_migrations`. The rebuild and its marker commit together under a
-SQLite writer transaction shared across database owners. A failed rebuild rolls
+SQLite writer transaction shared across database owners. Completed migrations
+are checked before requesting a writer lock, so an initialised diary can open
+and read committed summaries while another owner saves. A required rebuild
+rechecks its marker under the writer lock. Missing schema and migrations still
+require write access. A failed rebuild rolls
 back without a marker, allowing a later open to retry. Diary text and vector
 rows are unchanged by the rebuild; orphaned vectors are not reassociated.
 
