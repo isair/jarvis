@@ -1106,14 +1106,7 @@ class DialogueMemory:
                 return self._last_profile
             return None
 
-    # Compatibility and diary functionality
-    def add_interaction(self, user_text: str, assistant_text: str) -> None:
-        """Compatibility method - use add_message() instead."""
-        if user_text.strip():
-            self.add_message("user", user_text.strip())
-        if assistant_text.strip():
-            self.add_message("assistant", assistant_text.strip())
-
+    # Diary functionality
     def get_pending_chunks(self) -> List[str]:
         """Get unsaved messages as formatted chunks for diary update.
 
