@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 import json
-import math
 from typing import Dict, Any, Optional
 from datetime import datetime, timezone
 
@@ -11,6 +10,7 @@ from ....memory.db import Database
 from ....llm import get_llm_backend, Tier, resolve_model
 from ...base import Tool, ToolContext
 from ...types import ToolExecutionResult
+from .amounts import normalise_amount
 
 
 # Shared generation room includes reasoning and the structured or coaching answer.
@@ -94,19 +94,6 @@ def _strip_code_fence(text: str) -> str:
     return s.strip()
 
 
-def _safe_float(x: Any) -> Optional[float]:
-    """Convert a finite, non-negative nutritional amount or return None."""
-    try:
-        if x is None or isinstance(x, bool):
-            return None
-        value = float(x)
-        return value if math.isfinite(value) and value >= 0 else None
-    except Exception:
-        return None
-
-
-
-
 def extract_and_log_meal(db: Database, cfg: Any, original_text: str, source_app: str, *, request_text: str) -> Optional[ToolExecutionResult]:
     """
     Uses the chat model to extract a structured meal from the redacted user text, logs it to DB,
@@ -156,7 +143,7 @@ def extract_and_log_meal(db: Database, cfg: Any, original_text: str, source_app:
     invalid_fields = []
     for field in numeric_fields:
         raw_value = data.get(field)
-        value = _safe_float(raw_value)
+        value = normalise_amount(raw_value)
         if field == "confidence" and value is not None and value > 1:
             value = None
         if raw_value is not None and value is None:

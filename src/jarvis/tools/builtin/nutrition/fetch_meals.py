@@ -6,6 +6,7 @@ from datetime import datetime, timezone, timedelta
 from ....debug import debug_log
 from ...base import Tool, ToolContext
 from ...types import ToolExecutionResult
+from .amounts import normalise_amount
 
 
 def _normalise_time_range(args: Optional[Dict[str, Any]]) -> tuple[str, str]:
@@ -42,42 +43,45 @@ def _normalise_time_range(args: Optional[Dict[str, Any]]) -> tuple[str, str]:
 
 
 def summarize_meals(meals: List[Any]) -> str:
-    """Summarize a list of meals with totals."""
-    lines: List[str] = []
-    total_kcal = 0.0
-    total_protein = 0.0
-    total_carbs = 0.0
-    total_fat = 0.0
-    for m in meals:
-        try:
-            desc = m["description"] if isinstance(m, dict) else m["description"]
-        except Exception:
-            desc = "meal"
-        try:
-            kcal = float(m["calories_kcal"]) if m["calories_kcal"] is not None else 0.0
-        except Exception:
-            kcal = 0.0
-        try:
-            prot = float(m["protein_g"]) if m["protein_g"] is not None else 0.0
-        except Exception:
-            prot = 0.0
-        try:
-            carbs = float(m["carbs_g"]) if m["carbs_g"] is not None else 0.0
-        except Exception:
-            carbs = 0.0
-        try:
-            fat = float(m["fat_g"]) if m["fat_g"] is not None else 0.0
-        except Exception:
-            fat = 0.0
-        total_kcal += kcal
-        total_protein += prot
-        total_carbs += carbs
-        total_fat += fat
-        meal_id = m.get("id") if isinstance(m, dict) else m["id"]
-        label = f"#{meal_id}: " if meal_id is not None else ""
-        lines.append(f"- {label}{desc} (~{int(round(kcal))} kcal, {int(round(prot))}g P, {int(round(carbs))}g C, {int(round(fat))}g F)")
-    header = f"Meals: {len(meals)} | Total ~{int(round(total_kcal))} kcal, {int(round(total_protein))}g P, {int(round(total_carbs))}g C, {int(round(total_fat))}g F"
-    return header + ("\n" + "\n".join(lines) if lines else "")
+    """Summarise available estimates with per-nutrient coverage."""
+    nutrients = (
+        ('calories_kcal', '~', ' kcal', 'kcal'),
+        ('protein_g', '', 'g P', 'protein'),
+        ('carbs_g', '', 'g C', 'carbs'),
+        ('fat_g', '', 'g F', 'fat'),
+    )
+    totals, counts = [0.0] * len(nutrients), [0] * len(nutrients)
+
+    def formatted(amount, nutrient):
+        _, prefix, suffix, name = nutrient
+        return f'{name} unavailable' if amount is None else f'{prefix}{int(round(amount))}{suffix}'
+
+    lines = []
+    for row in meals:
+        meal = dict(row)
+        estimates = []
+        for index, nutrient in enumerate(nutrients):
+            amount = normalise_amount(meal.get(nutrient[0]))
+            if amount is not None:
+                totals[index] += amount
+                counts[index] += 1
+            estimates.append(formatted(amount, nutrient))
+        meal_id = meal.get('id')
+        label = f'#{meal_id}: ' if meal_id is not None else ''
+        lines.append(f"- {label}{meal.get('description', 'meal')} ({', '.join(estimates)})")
+
+    total_estimates = []
+    for total, count, nutrient in zip(totals, counts, nutrients):
+        amount = normalise_amount(total) if count or not meals else None
+        text = formatted(amount, nutrient)
+        if 0 < count < len(meals):
+            text += f' ({count}/{len(meals)} meals estimated; full {nutrient[3]} total unavailable)'
+        total_estimates.append(text)
+    header = f"Meals: {len(meals)} | Total {', '.join(total_estimates)}"
+    debug_log('fetchMeals: estimate coverage ' + ', '.join(
+        f'{nutrient[3]}={count}/{len(meals)}' for nutrient, count in zip(nutrients, counts)
+    ), 'nutrition')
+    return header + ('\n' + '\n'.join(lines) if lines else '')
 
 
 class FetchMealsTool(Tool):
@@ -114,7 +118,7 @@ class FetchMealsTool(Tool):
         debug_log(f"fetchMeals: range since={since} until={until}", "nutrition")
         meals = context.db.get_meals_between(since, until)
         debug_log(f"fetchMeals: count={len(meals)}", "nutrition")
-        summary = summarize_meals([dict(r) for r in meals])
+        summary = summarize_meals(meals)
         # Return raw meal summary for profile processing
         context.user_print("✅ Meals retrieved.")
         return ToolExecutionResult(success=True, reply_text=summary)
