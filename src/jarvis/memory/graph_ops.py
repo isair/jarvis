@@ -347,7 +347,11 @@ def extract_graph_memories(
         if not isinstance(item, dict):
             continue
         branch_label = str(item.get("branch") or "").strip().upper()
-        fact_text = str(item.get("fact") or "").strip()
+        fact_text = item.get("fact")
+        if not isinstance(fact_text, str):
+            debug_log("graph memory extraction: ignored non-text fact", "memory")
+            continue
+        fact_text = fact_text.strip()
         if not fact_text:
             continue
         branch_id = _LABEL_TO_BRANCH.get(branch_label)
