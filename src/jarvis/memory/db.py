@@ -378,6 +378,13 @@ class Database:
             ).fetchone()
             return row
 
+    def get_conversation_summary_by_id(self, summary_id: int) -> Optional[sqlite3.Row]:
+        """Read a saved diary entry and its date by persistent row identity."""
+        with self._lock:
+            return self.conn.execute(
+                "SELECT * FROM conversation_summaries WHERE id = ?", (summary_id,),
+            ).fetchone()
+
     def get_recent_conversation_summaries(self, days: int = 7) -> list[sqlite3.Row]:
         """Get conversation summaries from the last N days."""
         from datetime import datetime, timedelta, timezone
