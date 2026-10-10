@@ -14,8 +14,8 @@ injected into sys.modules — works headlessly in CI.
 from __future__ import annotations
 
 import sys
-import time
 import threading
+import time
 import types
 
 import pytest

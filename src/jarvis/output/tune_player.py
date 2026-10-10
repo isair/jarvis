@@ -59,7 +59,7 @@ def _generate_thinking_pad_samples() -> tuple[np.ndarray, int]:
     # Exponential decay from 1.0 down to effectively 0 over the tone body.
     decay = np.exp(-4.0 * np.arange(decay_len) / decay_len)
     one_cycle[attack_len:tone_len] = decay
-    # Tile three cycles across the 9s buffer (matches duration_s exactly).
+    # Tile complete pulse cycles across the sample buffer.
     num_cycles = n // cycle_len
     envelope = np.zeros(n, dtype=np.float64)
     for i in range(num_cycles):
