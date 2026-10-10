@@ -44,6 +44,8 @@ Why destructive: pre-taxonomy nodes sitting under root would remain invisible to
 
 Called **only** from the daemon start-up path in `daemon.main()`. The memory viewer and reply engine instantiate `GraphMemoryStore` without triggering the migration, so a mid-session open never wipes anything.
 
+The daemon owns its temporary migration store and closes it on success or failure. Migration failure remains non-fatal to startup, releases any open SQLite transaction and preserves the diary.
+
 ### Branch-Pinned Traversal
 
 `find_best_node(..., branch_root_id=...)` requires the classified branch root and descends through that subtree only. This prevents cross-branch contamination when routing extracted facts: a User fact cannot land in the World subtree just because a World node was recently touched.

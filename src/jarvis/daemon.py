@@ -946,11 +946,10 @@ def _run_daemon(smoke_test: bool = False) -> None:
     # users can re-import via the memory viewer.
     try:
         from .memory.graph import GraphMemoryStore
-        _graph_store_boot = GraphMemoryStore(cfg.db_path)
-        if _graph_store_boot.migrate_legacy_shape():
-            print("🧹 Wiped legacy knowledge graph; re-seeded User / Directives / World branches", flush=True)
-            print("   📥 Open the memory viewer and use 'Import from Diary' to repopulate.", flush=True)
-        _graph_store_boot.close()
+        with contextlib.closing(GraphMemoryStore(cfg.db_path)) as graph_store:
+            if graph_store.migrate_legacy_shape():
+                print("🧹 Wiped legacy knowledge graph; re-seeded User / Directives / World branches", flush=True)
+                print("   📥 Open the memory viewer and use 'Import from Diary' to repopulate.", flush=True)
     except Exception as e:
         debug_log(f"graph legacy-shape migration failed (non-fatal): {e}", "memory")
 
