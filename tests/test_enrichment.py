@@ -245,6 +245,9 @@ class TestGraphEnrichmentGating:
             def __init__(self, *a, **kw):
                 pass
 
+            def close(self):
+                pass
+
             def search_nodes(self, query, limit=5):
                 store_calls.append(query)
                 return []
@@ -316,6 +319,9 @@ class TestGraphContextReachesSystemMessage:
 
         class _FakeStore:
             def __init__(self, *a, **kw):
+                pass
+
+            def close(self):
                 pass
 
             def search_nodes(self, query, limit=5):

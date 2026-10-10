@@ -980,8 +980,9 @@ class DialogueMemory:
     # typically the redacted query for query-dependent values, or a
     # constant for query-agnostic values.
 
-    # Cache key for the warm-profile block. Centralised so the engine
-    # and the graph-mutation invalidator agree on it.
+    # The warm-profile cache stores its graph signature with the block.
+    # The engine checks the database path/revision before reuse; mutation
+    # listeners can also invalidate this reserved key promptly.
     WARM_PROFILE_CACHE_KEY = "warm_profile_block"
 
     # LRU cap for the conversation-scoped scratch cache. The engine writes

@@ -232,7 +232,38 @@ CREATE TABLE IF NOT EXISTS memory_nodes (
 CREATE INDEX IF NOT EXISTS idx_nodes_parent ON memory_nodes(parent_id);
 CREATE INDEX IF NOT EXISTS idx_nodes_last_accessed ON memory_nodes(last_accessed DESC);
 CREATE INDEX IF NOT EXISTS idx_nodes_access_count ON memory_nodes(access_count DESC);
+
+CREATE TABLE IF NOT EXISTS memory_graph_revisions (
+    name TEXT PRIMARY KEY,
+    revision INTEGER NOT NULL DEFAULT 0
+);
+INSERT OR IGNORE INTO memory_graph_revisions(name, revision) VALUES('warm_profile', 0);
 """
+
+
+_WARM_PROFILE_TRIGGERS_SQL = "\n".join(
+    f"""CREATE TRIGGER IF NOT EXISTS warm_profile_{name}
+    {event} ON memory_nodes
+    WHEN EXISTS (
+        WITH RECURSIVE ancestry(id, parent_id) AS (
+            SELECT id, parent_id FROM memory_nodes WHERE id = {row}.id
+            UNION
+            SELECT parent.id, parent.parent_id FROM memory_nodes AS parent
+            JOIN ancestry ON parent.id = ancestry.parent_id
+        )
+        SELECT 1 FROM ancestry WHERE id IN ('{BRANCH_USER}', '{BRANCH_DIRECTIVES}')
+    )
+    BEGIN
+        UPDATE memory_graph_revisions SET revision = revision + 1 WHERE name = 'warm_profile';
+    END;"""
+    for name, event, row in (
+        ('insert_old', 'BEFORE INSERT', 'NEW'),
+        ('insert', 'AFTER INSERT', 'NEW'),
+        ('delete', 'BEFORE DELETE', 'OLD'),
+        ('update_old', 'BEFORE UPDATE OF id, name, description, data, parent_id', 'OLD'),
+        ('update_new', 'AFTER UPDATE OF id, name, description, data, parent_id', 'NEW'),
+    )
+)
 
 
 # ── Graph Memory Store ──────────────────────────────────────────────────────
@@ -245,23 +276,27 @@ class GraphMemoryStore:
     for fast retrieval: recent nodes, top nodes, and the root node.
     """
 
-    def __init__(self, db_path: str) -> None:
+    def __init__(self, db_path: str, *, read_only: bool = False) -> None:
         from pathlib import Path
-        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+        path = Path(db_path)
+        if not read_only:
+            path.parent.mkdir(parents=True, exist_ok=True)
 
         self.db_path = db_path
-        self.conn = sqlite3.connect(db_path, check_same_thread=False)
+        target = path.resolve().as_uri() + '?mode=ro' if read_only else db_path
+        self.conn = sqlite3.connect(target, uri=read_only, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self._lock = threading.RLock()
-        self._init_schema()
-        self._ensure_root()
+        if not read_only:
+            self._init_schema()
+            self._ensure_root()
 
     # ── Schema & bootstrap ──────────────────────────────────────────────
 
     def _init_schema(self) -> None:
         with self._lock:
             self.conn.execute("PRAGMA foreign_keys = ON")
-            self.conn.executescript(_GRAPH_SCHEMA_SQL)
+            self.conn.executescript(_GRAPH_SCHEMA_SQL + _WARM_PROFILE_TRIGGERS_SQL)
             self.conn.commit()
 
     def _ensure_root(self) -> None:
@@ -290,17 +325,17 @@ class GraphMemoryStore:
                 self.conn.commit()
                 debug_log("Created root memory node", "memory")
 
-            # Seed fixed top-level branches under root. Each row is
-            # inserted with INSERT OR IGNORE keyed on the stable id so
-            # repeated boots are no-ops.
+            # Insert missing branches only, keeping repeated bootstrap
+            # from firing insertion triggers for existing rows.
             for branch_id, name, description in FIXED_BRANCHES:
                 self.conn.execute(
                     """INSERT OR IGNORE INTO memory_nodes
                        (id, name, description, data, parent_id,
                         access_count, last_accessed, created_at, updated_at,
                         data_token_count)
-                       VALUES (?, ?, ?, '', 'root', 0, ?, ?, ?, 0)""",
-                    (branch_id, name, description, now, now, now),
+                       SELECT ?, ?, ?, '', 'root', 0, ?, ?, ?, 0
+                       WHERE NOT EXISTS (SELECT 1 FROM memory_nodes WHERE id = ?)""",
+                    (branch_id, name, description, now, now, now, branch_id),
                 )
             self.conn.commit()
 
@@ -362,6 +397,14 @@ class GraphMemoryStore:
         return True
 
     # ── CRUD ────────────────────────────────────────────────────────────
+
+    def get_warm_profile_revision(self) -> int:
+        """Read the persisted revision of User/Directives profile inputs."""
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT revision FROM memory_graph_revisions WHERE name = 'warm_profile'"
+            ).fetchone()
+        return row["revision"]
 
     def get_node(self, node_id: str) -> Optional[MemoryNode]:
         """Fetch a single node by ID."""

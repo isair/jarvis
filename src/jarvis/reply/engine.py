@@ -10,7 +10,7 @@ import json
 from hashlib import sha256
 
 from ..tools.types import ToolExecutionResult
-from ..memory.conversation import is_tool_message
+from ..memory.conversation import DialogueMemory, is_tool_message
 
 from ..utils.redact import redact
 from ..system_prompt import build_system_prompt
@@ -1272,62 +1272,48 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             if _memory_topic_hint:
                 break
 
-    # Step 3.5: Warm profile — pull the User + Directives branches of
-    # the knowledge graph into a compact, query-agnostic block that gets
-    # injected into the system prompt on every turn. These two branches
-    # are bounded by design (identity + standing rules), don't depend on
-    # the query, and changing rarely — so loading them unconditionally
-    # is the right tradeoff. No LLM call, just a SQLite traversal.
-    #
-    # This is the architectural pivot that lets the planner stop routing
-    # personalisation queries through searchMemory: "news that might
-    # interest me" can be answered directly when the model already sees
-    # the user's interests in its system prompt.
+    # Step 3.5: Query-agnostic User/Directives profile. Compare the persisted
+    # revision and rebuild from one read-only snapshot, so external writes
+    # invalidate the conversation cache without bootstrapping every turn.
     warm_profile_block = ""
-    # Conversation-scoped cache: warm profile is query-agnostic and the
-    # User / Directives branches change rarely, so reusing the block for
-    # the lifetime of the conversation saves the SQLite BFS on every
-    # follow-up turn. The cache is invalidated on:
-    #   - new conversation entry (cleared above with the full hot cache),
-    #   - the stop signal (also clears the full hot cache),
-    #   - any User/Directives graph mutation (via the listener registered
-    #     in daemon.py, which calls ``invalidate_warm_profile`` on the
-    #     active DialogueMemory).
-    _wp_cache_key = getattr(
-        type(dialogue_memory),
-        "WARM_PROFILE_CACHE_KEY",
-        "warm_profile_block",
-    ) if dialogue_memory else "warm_profile_block"
-    _wp_cached = (
-        dialogue_memory.hot_cache_get(_wp_cache_key)
-        if dialogue_memory and hasattr(dialogue_memory, "hot_cache_get") else None
-    )
-    if isinstance(_wp_cached, str):
-        warm_profile_block = _wp_cached
-        debug_log("warm profile served from conversation cache", "memory")
-    else:
-        try:
-            from ..memory.graph import GraphMemoryStore
-            from ..memory.graph_ops import build_warm_profile, format_warm_profile_block
-            _graph_store_warm = GraphMemoryStore(cfg.db_path)
-            _warm_profile = build_warm_profile(_graph_store_warm)
-            warm_profile_block = format_warm_profile_block(_warm_profile)
+    _graph_store_warm = None
+    try:
+        from ..memory.graph import GraphMemoryStore
+        from ..memory.graph_ops import build_warm_profile, format_warm_profile_block
+        _graph_store_warm = GraphMemoryStore(cfg.db_path, read_only=True)
+        _graph_store_warm.conn.execute('BEGIN')
+        signature = (cfg.db_path, _graph_store_warm.get_warm_profile_revision())
+        cached_profile = (
+            dialogue_memory.hot_cache_get(DialogueMemory.WARM_PROFILE_CACHE_KEY)
+            if dialogue_memory else None
+        )
+        if cached_profile is not None and cached_profile[0] == signature:
+            warm_profile_block = cached_profile[1]
+            debug_log("warm profile served from current graph revision cache", "memory")
+        else:
+            profile = build_warm_profile(_graph_store_warm)
+            warm_profile_block = format_warm_profile_block(profile)
             if warm_profile_block:
-                _user_len = len(_warm_profile.get("user", ""))
-                _dir_len = len(_warm_profile.get("directives", ""))
+                user_len = len(profile.get("user", ""))
+                directives_len = len(profile.get("directives", ""))
                 print(
-                    f"  🪴 Warm profile: {_user_len} user chars, "
-                    f"{_dir_len} directive chars",
+                    f"  🪴 Warm profile: {user_len} user chars, "
+                    f"{directives_len} directive chars",
                     flush=True,
                 )
                 debug_log(
-                    f"warm profile loaded: user={_user_len} directives={_dir_len}",
+                    f"warm profile loaded: user={user_len} directives={directives_len}",
                     "memory",
                 )
-            if dialogue_memory and hasattr(dialogue_memory, "hot_cache_put"):
-                dialogue_memory.hot_cache_put(_wp_cache_key, warm_profile_block)
-        except Exception as e:
-            debug_log(f"warm profile load failed (non-fatal): {e}", "memory")
+            if dialogue_memory:
+                dialogue_memory.hot_cache_put(
+                    DialogueMemory.WARM_PROFILE_CACHE_KEY, (signature, warm_profile_block),
+                )
+    except Exception as error:
+        debug_log(f"warm profile load failed (non-fatal): {error}", "memory")
+    finally:
+        if _graph_store_warm is not None:
+            _graph_store_warm.close()
 
     # Step 4: Memory enrichment — controlled by cfg.memory_enrichment_source
     # "all" = diary + graph, "diary" = diary only, "graph" = graph only
