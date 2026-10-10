@@ -872,3 +872,35 @@ def test_unicode_echo_cleanup_retains_actual_user_speech(spoken, suffix, echo_pr
     else:
         result = detector.cleanup_leading_echo(heard)
     assert result == suffix
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize('minimum', [2, 4])
+@pytest.mark.parametrize('qualifies', [True, False])
+def test_during_tts_echo_cleanup_obeys_shared_minimum(minimum, qualifies):
+    detector = EchoDetector()
+    detector.min_salvage_words = minimum
+    spoken = 'the weather outside is clear now today'
+    detector.track_tts_start(spoken)
+    overlap = minimum if qualifies else minimum - 1
+    prefix = ' '.join(spoken.split()[-overlap:])
+    user_speech = 'please explain quantum gravity for beginners'
+    heard = prefix + ' ' + user_speech
+    result = detector.cleanup_leading_echo_during_tts(
+        heard, tts_rate=200, utterance_start_time=detector._tts_start_time + 0.1,
+    )
+    assert result == (user_speech if qualifies else heard)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize('user_speech', [
+    'who made it?', 'please explain the main design decisions',
+    'can you tell me who built this project?',
+])
+def test_fuzzy_during_tts_cleanup_preserves_complete_follow_up(user_speech):
+    detector = EchoDetector()
+    detector.track_tts_start('Jarvis explores projects through practical experiments and clear examples.')
+    heard = 'laws projects through practical experiments and clear examples. ' + user_speech
+    assert detector.cleanup_leading_echo_during_tts(
+        heard, tts_rate=200, utterance_start_time=detector._tts_start_time + 0.1,
+    ) == user_speech
