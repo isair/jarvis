@@ -19,3 +19,11 @@ The raw result lists each meal ID, description and estimated nutrition, plus
 meal count and totals. No model inference occurs in this tool. An empty valid
 range returns a successful zero-meal summary. Important range, count and
 validation outcomes use nutrition debug logs.
+
+Missing, invalid, non-finite and negative nutrition amounts are unavailable,
+not zero. Each nutrient total sums its available estimates and labels partial
+coverage with the number of estimated meals. A nutrient with no usable estimates
+is unavailable when meals exist; an empty range retains zero totals. Explicit
+zero amounts remain valid estimates. Logging and retrieval share the same amount
+normalisation. Unrepresentable aggregate totals are unavailable. Debug logs
+include per-nutrient estimate coverage without meal descriptions.
