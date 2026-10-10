@@ -365,10 +365,10 @@ class TestAppendToNode:
 
     def test_append_to_empty_node(self, store):
         node = store.create_node(name="Test", description="Test", data="", parent_id="root")
-        exceeded = store.append_to_node(node.id, "First fact")
-        updated = store.get_node(node.id)
-        assert updated.data == "First fact"
-        assert exceeded is False
+        updated = store.append_to_node(node.id, "First fact")
+        assert updated.id == node.id
+        assert updated.data == store.get_node(node.id).data == "First fact"
+        assert updated.data_token_count < SPLIT_THRESHOLD
 
     def test_append_to_existing_data(self, store):
         node = store.create_node(name="Test", description="Test", data="Existing", parent_id="root")
@@ -378,16 +378,17 @@ class TestAppendToNode:
         assert "New fact" in updated.data
         assert "\n" in updated.data  # Separated by newline
 
-    def test_returns_true_when_threshold_exceeded(self, store):
+    def test_returns_committed_node_above_split_threshold(self, store):
         # Create node with data just below threshold
         big_data = "x" * (SPLIT_THRESHOLD * 4 - 10)  # ~SPLIT_THRESHOLD tokens
         node = store.create_node(name="Big", description="Big", data=big_data, parent_id="root")
-        exceeded = store.append_to_node(node.id, "More data that pushes it over")
-        assert exceeded is True
+        updated = store.append_to_node(node.id, "More data that pushes it over")
+        assert updated.id == node.id
+        assert updated.data == store.get_node(node.id).data
+        assert updated.data_token_count > SPLIT_THRESHOLD
 
-    def test_returns_false_for_nonexistent_node(self, store):
-        exceeded = store.append_to_node("nonexistent", "data")
-        assert exceeded is False
+    def test_returns_none_for_nonexistent_node(self, store):
+        assert store.append_to_node("nonexistent", "data") is None
 
 
 @pytest.mark.unit
