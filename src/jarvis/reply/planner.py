@@ -763,12 +763,11 @@ def resolve_next_tool_call(
     if not tools_schema:
         return None
 
-    # Build a compact allowed-tool schema: just names + short description +
-    # parameter keys so the resolver can't waste tokens echoing descriptions.
+    # Preserve the complete argument contract for the model resolver.
     # Also record each tool's declared property keys so we can strip
     # unknown keys out of the resolved arguments before dispatch.
     allowed_names: list[str] = []
-    schema_lines: list[str] = []
+    tool_catalogue: list[dict] = []
     allowed_props: dict[str, set[str]] = {}
     required_props: dict[str, set[str]] = {}
     property_schemas: dict[str, dict] = {}
@@ -780,12 +779,7 @@ def resolve_next_tool_call(
         allowed_names.append(str(name))
         params = (fn.get("parameters") or {}) if isinstance(fn, dict) else {}
         props = params.get("properties") if isinstance(params, dict) else None
-        if isinstance(props, dict):
-            prop_keys = set(props.keys())
-            keys = ", ".join(sorted(prop_keys))
-        else:
-            prop_keys = set()
-            keys = ""
+        prop_keys = set(props) if isinstance(props, dict) else set()
         allowed_props[str(name)] = prop_keys
         property_schemas[str(name)] = props if isinstance(props, dict) else {}
         required = params.get("required") if isinstance(params, dict) else None
@@ -794,7 +788,9 @@ def resolve_next_tool_call(
         } if isinstance(required, list) else set()
         desc = (fn.get("description") or "").strip().splitlines()
         first = desc[0] if desc else ""
-        schema_lines.append(f"- {name} (args: {keys}) — {first[:120]}")
+        tool_catalogue.append({
+            'name': str(name), 'description': first[:120], 'parameters': params,
+        })
 
     # Fast path: fully-concrete plan step parses deterministically.
     fast = _parse_plan_step_concrete(
@@ -819,7 +815,7 @@ def resolve_next_tool_call(
     )
 
     user_content = (
-        f"ALLOWED TOOLS:\n{chr(10).join(schema_lines)}\n\n"
+        f"ALLOWED TOOLS:\n{json.dumps(tool_catalogue, ensure_ascii=False, separators=(',', ':'))}\n\n"
         f"PRIOR TOOL CALLS IN THIS SESSION:\n"
         f"{_format_prior_results(prior_results)}\n\n"
         f"NEXT PLANNED STEP: {next_step_text.strip()}\n\n"
