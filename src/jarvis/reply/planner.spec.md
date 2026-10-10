@@ -255,6 +255,10 @@ The engine consumes the plan in two phases.
   argument keys, or doesn't fit the `key=value` shape, the step is
   passed to the LLM resolver which can substitute entities from prior
   results and remap names.
+- The resolver receives a JSON catalogue with tool names, short tool
+  descriptions and complete parameter schemas. Property descriptions, types,
+  enums, formats, required fields and nested constraints remain available;
+  argument names alone do not define the contract.
 - Returns `None` for synthesis steps (the LLM emits the literal
   `null`), unknown tools, or invalid JSON. All `None` paths fall back
   to the normal chat-model turn.
