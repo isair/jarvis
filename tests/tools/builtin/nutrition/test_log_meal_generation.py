@@ -42,7 +42,7 @@ def test_nutrition_answer_survives_reasoning_budget(monkeypatch, provider, phase
     if phase == 'extraction':
         db = Database(':memory:', sqlite_vss_path=None)
         try:
-            reply = log_meal.extract_and_log_meal(db, cfg, 'I ate eggs with toast', 'stdin')
+            reply = log_meal.extract_and_log_meal(db, cfg, 'I ate eggs with toast', 'stdin', request_text='I ate eggs with toast')
             now = datetime.now(timezone.utc)
             rows = db.get_meals_between((now - timedelta(minutes=1)).isoformat(),
                                         (now + timedelta(minutes=1)).isoformat())

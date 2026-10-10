@@ -110,7 +110,7 @@ def call_nutrition_extraction(
     with patch.object(log_meal, 'call_llm_direct', side_effect=capture_answer), \
          patch.object(log_meal, 'generate_followups_for_meal', return_value=''):
         result = log_meal.extract_and_log_meal(
-            SimpleNamespace(insert_meal=insert_meal), cfg, meal_text, 'stdin',
+            SimpleNamespace(insert_meal=insert_meal), cfg, meal_text, 'stdin', request_text=meal_text,
         )
     assert answers and isinstance(answers[0], str) and answers[0].strip(), 'Empty inference is not a non-food answer'
     if not rows:
@@ -478,3 +478,66 @@ def test_logged_meal_has_non_empty_follow_ups():
         voice_config(), 'grilled chicken with broccoli', '~300 kcal, 35g protein',
     )
     assert followups.strip(), 'Empty inference is not successful coaching'
+
+
+@pytest.mark.eval
+@requires_judge_llm
+@pytest.mark.parametrize('user_text,meal,record', [
+    ('Should I eat a Big Mac for dinner?', 'Big Mac', False),
+    ('I might have a Big Mac tomorrow.', 'Big Mac', False),
+    ("I did not eat the Big Mac. Don't log it.", 'Big Mac', False),
+    ('My partner ate a Big Mac, I did not.', 'Big Mac', False),
+    ('Akşam bir Big Mac yemeli miyim?', 'Big Mac', False),
+    ('Yarın bir Big Mac yiyebilirim.', 'Big Mac', False),
+    ('Big Mac yemedim, kaydetme.', 'Big Mac', False),
+    ('Eşim Big Mac yedi, ben yemedim.', 'Big Mac', False),
+    ('I ate a Big Mac.', 'Big Mac', True),
+    ('Log a Big Mac for lunch.', 'Big Mac', True),
+    ('Big Mac yedim.', 'Big Mac', True),
+    ('Öğle yemeğime bir Big Mac kaydet.', 'Big Mac', True),
+    ('I had eggs; my partner had a Big Mac.', 'eggs', True),
+    ('Ben yumurta yedim, eşim Big Mac yedi.', 'eggs', True),
+    ('I had eggs; my partner had a Big Mac.', '', True),
+    ('Ben yumurta yedim, eşim Big Mac yedi.', '', True),
+    ('I ate eggs. Log those eggs.', 'Big Mac', True),
+    ('eggs with toast', 'eggs with toast', True),
+    ('Log that meal.', 'eggs with toast', True),
+    ('', 'eggs with toast', True),
+    ('Would ordering pasta tomorrow be a good idea?', 'pasta', False),
+    ('Mañana podría comer pizza.', 'pizza', False),
+    ('¿Sería buena idea comer una manzana?', 'apple', False),
+    ('Ich habe die Suppe nicht gegessen.', 'soup', False),
+    ('My partner had yoghurt.', 'yoghurt', False),
+    ('Comí una manzana.', 'apple', True),
+    ('Ich habe Suppe gegessen.', 'soup', True),
+    ('Bitte trage die Suppe als Mittagessen ein.', 'soup', True),
+])
+def test_meal_recording_respects_actual_user_request(user_text, meal, record):
+    """A derived food name cannot turn advice or another person's meal into intake."""
+    from datetime import datetime, timedelta, timezone
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    from jarvis.memory.db import Database
+    from jarvis.tools.builtin.nutrition import log_meal
+
+    db = Database(':memory:', sqlite_vss_path=None)
+    context = SimpleNamespace(db=db, cfg=voice_config(), redacted_text=user_text,
+                              max_retries=0, user_print=lambda *args: None)
+    try:
+        with patch.object(log_meal, 'generate_followups_for_meal', return_value=''):
+            result = log_meal.LogMealTool().run({'meal': meal}, context)
+        now = datetime.now(timezone.utc)
+        rows = db.get_meals_between((now - timedelta(minutes=1)).isoformat(),
+                                    (now + timedelta(minutes=1)).isoformat())
+        assert result.success is record, result.reply_text
+        assert len(rows) == int(record), 'Only reported intake or an explicit logging request may create a record'
+        if record:
+            assert rows[0]['description']
+            if 'eggs' in user_text or 'yumurta' in user_text:
+                assert 'big mac' not in rows[0]['description'].lower(), "Another person's food is not user intake"
+            assert result.resource_references[0]['id'] == rows[0]['id']
+        else:
+            assert not result.error_message, 'Malformed inference is not a valid refusal to record'
+            assert not result.resource_references
+    finally:
+        db.close()

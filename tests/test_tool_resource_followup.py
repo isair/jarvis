@@ -11,6 +11,7 @@ pytestmark = pytest.mark.unit
 
 
 def test_logged_record_reference_is_grounded_in_saved_row(db, mock_config, monkeypatch):
+    monkeypatch.setattr(log_meal, 'meal_recording_requested', lambda *args: True)
     monkeypatch.setattr(log_meal, 'call_llm_direct', lambda **kwargs: json.dumps({'description':'Oats'}) if kwargs['system_prompt'] == log_meal.NUTRITION_SYS else '')
     ctx = ToolContext(db, mock_config, '', '', 'I ate oats', 0, lambda text: None)
     result = log_meal.LogMealTool().run({}, ctx)
@@ -27,6 +28,7 @@ def test_digest_does_not_erase_followup_identity(db, mock_config, dialogue_memor
     mock_config.tool_result_digest_enabled = True
     now = '2026-10-05T00:00:00+00:00'
     keep = db.insert_meal(now, 'fixture', 'Oats')
+    monkeypatch.setattr(log_meal, 'meal_recording_requested', lambda *args: True)
     monkeypatch.setattr(log_meal, 'call_llm_direct', lambda **kwargs: json.dumps({'description':'Oats'}) if kwargs['system_prompt'] == log_meal.NUTRITION_SYS else '')
     def plan(**kwargs):
         if kwargs['query'] == 'Log oats':
@@ -109,6 +111,7 @@ def test_native_tool_execution_preserves_identity_for_followup(db, mock_config, 
     mock_config.location_enabled = False
     mock_config.tool_result_digest_enabled = True
     older = db.insert_meal('2026-10-05T00:00:00+00:00', 'fixture', 'Oats')
+    monkeypatch.setattr(log_meal, 'meal_recording_requested', lambda *args: True)
     monkeypatch.setattr(log_meal, 'call_llm_direct', lambda **kwargs: json.dumps({'description':'Oats'}) if kwargs['system_prompt'] == log_meal.NUTRITION_SYS else '')
     def chat(cfg, messages, **kwargs):
         if messages[-1]['role'] == 'tool':

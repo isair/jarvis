@@ -48,8 +48,8 @@ def test_nutrition_eval_uses_selected_transport_and_production_fence(monkeypatch
     assert url == expected_url
     assert kwargs['timeout'] == cfg.llm_chat_timeout_sec
     prompt = payload['messages'][-1]['content']
-    assert '<<<BEGIN UNTRUSTED USER TEXT>>>\nI had eggs' in prompt
-    assert '<<<END UNTRUSTED USER TEXT>>>' in prompt
+    fenced = prompt.split('<<<BEGIN UNTRUSTED USER TEXT>>>\n', 1)[1].split('\n<<<END UNTRUSTED USER TEXT>>>', 1)[0]
+    assert json.loads(fenced) == {'user_request': 'I had eggs', 'meal_description': 'I had eggs'}
     sampling = payload.get('options', payload)
     assert ('num_predict' if provider == 'ollama' else 'max_tokens') in sampling
     assert (result and {key: result[key] for key in expected}) == (expected if answer == 'meal' else None)

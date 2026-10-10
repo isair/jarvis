@@ -82,7 +82,7 @@ Every LLM context runs on one of two models, resolved through `resolve_model(cfg
 
 | Tier | Field | Contexts | Default |
 |------|-------|----------|---------|
-| `Tier.FAST` | `cfg.fast_model` | intent judge, tool router, tool searcher, enrichment extractor, graph placement, max-turn digest | `gemma4:e2b` on the Ollama chat path; the active chat model on an OpenAI-compatible provider (the Ollama pull-name does not exist there) |
+| `Tier.FAST` | `cfg.fast_model` | intent judge, tool router, tool searcher, enrichment extractor, graph placement, meal recording eligibility, max-turn digest | `gemma4:e2b` on the Ollama chat path; the active chat model on an OpenAI-compatible provider (the Ollama pull-name does not exist there) |
 | `Tier.CHAT` | `cfg.llm_chat_model` | main reply loop, planner + plan-step resolver, summariser, graph extraction, tool-specific calls, memory/tool-result digests (size-gated passes on the chat model) | `gemma4:e4b`, adapted to detected memory at setup |
 
 Ollama setup counts shared models once. It retains E2B fast when it fits and can select E4B for both tiers when a separate E2B exceeds the budget. Explicit saved model choices take precedence over automatic chat recommendations.
@@ -139,7 +139,7 @@ Each migrated module exposes a single intercept point so tests can patch one sym
 - `jarvis.reply.enrichment.call_llm_direct(*, cfg, chat_model, ...)` — memory enrichment extractor + digest passes.
 - `jarvis.memory.graph_ops.call_llm_direct(*, cfg, chat_model, ...)` — knowledge graph extraction, best-child picker, node merge.
 - `jarvis.memory.conversation._direct_llm(cfg, system_prompt, user_content, ...)` — diary summary, deflection rewrite, topic optimisation.
-- `jarvis.tools.builtin.nutrition.log_meal.call_llm_direct(*, cfg, chat_model, ...)` — nutrition extractor + follow-up generator.
+- `jarvis.tools.builtin.nutrition.log_meal.call_llm_direct(*, cfg, chat_model, ...)` — meal recording eligibility + nutrition extractor + follow-up generator.
 - `jarvis.tools.builtin.weather.get_llm_backend` — hoisted to module scope so the place extractor's backend lookup is patchable.
 
 A factory-dispatch wiring guard at `tests/test_factory_dispatch_wiring.py` parametrises across each migrated module and asserts the wrapper actually constructs `OpenAICompatibleBackend` for `llm_provider: openai_compatible` and `OllamaBackend` for `ollama`. A regression that drops `get_llm_backend(cfg)` from a wrapper would bypass every unit test but trip this guard.
