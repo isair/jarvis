@@ -15,8 +15,8 @@ continuous capture use this negotiation and input selection. The system default
 is resolved to a concrete input index before the permission probe and model
 loading, so changing the default during startup cannot redirect capture. An
 unavailable default produces Settings guidance without choosing another input.
-Name matching skips
-output-only devices; a missing named microphone produces an actionable error
+Unicode case-insensitive exact input-name matches take precedence over the
+first partial input-name match. Both skip output-only devices; a missing named microphone produces an actionable error
 rather than silently selecting another input. Multichannel samples are averaged
 to mono before framing and speech detection.
 

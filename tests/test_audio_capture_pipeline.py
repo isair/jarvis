@@ -276,6 +276,24 @@ def test_named_input_skips_devices_with_missing_names(monkeypatch):
     assert audio_capture.resolve_input_device(capture.sd, 'Headset') == {'device': 1}
 
 
+
+@pytest.mark.parametrize('name', ['USB Microphone', 'Büro Mikrofon'])
+@pytest.mark.parametrize('output_alias', [False, True])
+def test_exact_input_name_wins_over_earlier_partial_matches(name, output_alias):
+    chosen = {'name': name, 'max_input_channels': 2}
+    devices = [{'name': name + ' Pro', 'max_input_channels': 1}]
+    if output_alias:
+        devices.append({'name': name, 'max_input_channels': 0})
+    devices.append(chosen)
+    audio = SimpleNamespace(query_devices=lambda: devices)
+    assert audio_capture.resolve_input_device(audio, name) == {'device': devices.index(chosen)}
+
+
+def test_named_input_matching_supports_unicode_casefold():
+    chosen = {'name': 'Straße Mikrofon', 'max_input_channels': 1}
+    audio = SimpleNamespace(query_devices=lambda: [chosen])
+    assert audio_capture.resolve_input_device(audio, chosen['name'].upper()) == {'device': 0}
+
 def test_numeric_input_index_zero_is_selected():
     assert audio_capture.resolve_input_device(capture.sd, 0) == {'device': 0}
 
