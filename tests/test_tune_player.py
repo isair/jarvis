@@ -1,7 +1,7 @@
 """Behavioural tests for the thinking-tune player.
 
 Covers:
-- Sample / WAV generation: right format/size, seam is effectively seamless.
+- Sample generation: right format/size, seam is effectively seamless.
 - TunePlayer lifecycle: idempotent start/stop, is_playing state, prompt
   stop even when a "stream" is running.
 - Sounddevice dispatch: stop_tune closes the stream cleanly from the
@@ -13,27 +13,24 @@ injected into sys.modules — works headlessly in CI.
 """
 from __future__ import annotations
 
-import io
-import struct
 import sys
+import threading
 import time
 import types
-import wave
-from unittest.mock import MagicMock
 
 import pytest
 
-from jarvis.output import tune_player
 from jarvis.output.tune_player import (
     TunePlayer,
     _generate_thinking_pad_samples,
-    _generate_thinking_pad_wav,
     _get_thinking_pad_samples,
-    _get_thinking_pad_wav,
 )
 
 
-# --- Sample / WAV generation -----------------------------------------------
+pytestmark = pytest.mark.unit
+
+
+# --- Sample generation -----------------------------------------------
 
 def test_thinking_pad_samples_have_expected_shape():
     samples, rate = _generate_thinking_pad_samples()
@@ -44,22 +41,10 @@ def test_thinking_pad_samples_have_expected_shape():
     assert samples.size / rate >= 5.0
 
 
-def test_thinking_pad_wav_is_well_formed():
-    data = _generate_thinking_pad_wav()
-    with wave.open(io.BytesIO(data)) as w:
-        assert w.getnchannels() == 1
-        assert w.getsampwidth() == 2
-        assert w.getframerate() == 44100
-
-
 def test_thinking_pad_samples_cached():
     a = _get_thinking_pad_samples()
     b = _get_thinking_pad_samples()
     assert a is b
-
-
-def test_thinking_pad_wav_cached():
-    assert _get_thinking_pad_wav() is _get_thinking_pad_wav()
 
 
 def test_thinking_pad_seam_is_effectively_seamless():
@@ -203,48 +188,29 @@ def test_fallback_when_sounddevice_unavailable(monkeypatch):
 
 
 def test_stream_callback_wraps_seamlessly(monkeypatch):
-    """The internal callback must wrap from end-of-buffer back to start
-    without dropping a frame — that's the whole 'seamless loop' promise."""
+    """Every frame matches the looping PCM buffer, including the seam."""
+    import numpy as np
+
     captured = {}
+    callback_ready = threading.Event()
 
     class _SpyStream(_FakeStream):
-        def __init__(self, *a, **kw):
-            super().__init__(*a, **kw)
-            captured["callback"] = kw.get("callback")
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            captured["callback"] = kwargs["callback"]
+            callback_ready.set()
 
     _install_fake_sounddevice(monkeypatch, stream_factory=_SpyStream)
-    tp = TunePlayer(enabled=True)
-    tp.start_tune()
+    player = TunePlayer(enabled=True)
+    player.start_tune()
     try:
-        for _ in range(100):
-            if captured.get("callback") is not None:
-                break
-            time.sleep(0.01)
-        cb = captured["callback"]
-        assert cb is not None
-
+        assert callback_ready.wait(timeout=1.0), "Playback callback did not become available"
         samples, _ = _get_thinking_pad_samples()
-        total = samples.size
-
-        # Position the read head just before the end of the buffer so
-        # the next callback crosses the seam.
-        import numpy as np
         frames = 1024
-        # Simulate two back-to-back callbacks that span the wrap.
-        # First drain most of the buffer with a big fake call — we can
-        # do it via multiple calls to the real callback.
-        out = np.zeros((frames, 1), dtype=np.int16)
-
-        # Call the callback repeatedly until position wraps.
-        # The callback uses a closure; after enough calls we should cross.
-        seen_wrap = False
-        for _ in range(total // frames + 2):
-            cb(out, frames, None, None)
-            # When the internal position wraps, outdata will be a mix
-            # of end-of-buffer and start-of-buffer samples. Verify no
-            # exception raised and output is int16.
-            assert out.dtype.name == "int16"
-            seen_wrap = True
-        assert seen_wrap
+        out = np.empty((frames, 1), dtype=np.int16)
+        for offset in range(0, samples.size + frames, frames):
+            captured["callback"](out, frames, None, None)
+            expected = samples[np.arange(offset, offset + frames) % samples.size]
+            np.testing.assert_array_equal(out[:, 0], expected)
     finally:
-        tp.stop_tune()
+        player.stop_tune()
