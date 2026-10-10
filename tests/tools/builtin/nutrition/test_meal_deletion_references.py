@@ -37,7 +37,7 @@ def test_unique_description_deletes_only_that_meal(context, description):
     assert [row['id'] for row in rows(context)] == [keep]
 
 
-@pytest.mark.parametrize('reference', ['Big', 'that meal', '', None, True, 1.9, pytest.param('1' * 5000, id='oversized-decimal')])
+@pytest.mark.parametrize('reference', ['Big', 'that meal', 'not_a_number', '', None, True, 1.9, pytest.param('1' * 5000, id='oversized-decimal')])
 def test_unresolved_or_invalid_reference_preserves_meals(context, reference):
     keep = insert(context, 'Big Mac')
     result = DeleteMealTool().run({'id': reference}, context)
@@ -108,4 +108,18 @@ def test_literal_description_step_deletes_without_model_resolution(context, monk
                                          "deleteMeal meal_description='Big Mac'", [], schema)
     assert call is not None
     assert tool.run(call[1], context).success
+    assert [row['id'] for row in rows(context)] == [keep]
+
+
+@pytest.mark.parametrize('as_text', [False, True])
+def test_recorded_id_deletion_and_retry_preserve_other_meals(context, as_text):
+    keep = insert(context, 'Keep this meal')
+    remove = insert(context, 'Remove this meal')
+    reference = str(remove) if as_text else remove
+    result = DeleteMealTool().run({'id': reference}, context)
+    assert result.success and 'Meal deleted' in result.reply_text
+    assert [row['id'] for row in rows(context)] == [keep]
+    retry = DeleteMealTool().run({'id': reference}, context)
+    assert not retry.success
+    assert "couldn't delete" in retry.reply_text and 'fetchMeals' in retry.reply_text
     assert [row['id'] for row in rows(context)] == [keep]

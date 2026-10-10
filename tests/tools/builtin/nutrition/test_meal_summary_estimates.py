@@ -55,3 +55,20 @@ def test_unrepresentable_legacy_total_does_not_crash_retrieval(db):
     assert result.success
     assert 'Total kcal unavailable' in result.reply_text
     assert 'First legacy meal' in result.reply_text and 'Second legacy meal' in result.reply_text
+
+
+def test_complete_estimates_report_every_meal_and_sum_each_nutrient(db):
+    now = datetime.now(timezone.utc).isoformat()
+    fields = ('calories_kcal', 'protein_g', 'carbs_g', 'fat_g')
+    first = (300, 15, 30, 10)
+    second = (500, 25, 45, 20)
+    for description, amounts in [('Breakfast', first), ('Lunch', second)]:
+        db.insert_meal(now, 'fixture', description, **dict(zip(fields, amounts)))
+    result = fetch(db)
+    assert result.success
+    header, *meals = result.reply_text.splitlines()
+    totals = [a + b for a, b in zip(first, second)]
+    assert header == f'Meals: 2 | Total ~{totals[0]} kcal, {totals[1]}g P, {totals[2]}g C, {totals[3]}g F'
+    assert len(meals) == 2
+    assert 'Breakfast' in meals[0] and 'Lunch' in meals[1]
+    assert 'unavailable' not in result.reply_text
