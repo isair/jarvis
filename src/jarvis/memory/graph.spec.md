@@ -95,7 +95,7 @@ Nodes can be fetched individually, as children of a parent, as a subtree (nested
 
 ### Update
 
-Any combination of name, description, and data can be updated. Token count is recomputed when data changes. `updated_at` is always refreshed. Reading the current node, applying the supplied fields and committing the result share one store lock, preserving independent concurrent edits. Appending text uses the same atomic read-and-write boundary, retaining every concurrent append. Mutation listeners run after the lock is released.
+Any combination of name, description, and data can be updated. Token count is recomputed when data changes. `updated_at` is always refreshed. Reading the current node, applying the supplied fields and committing the result share one store lock, preserving independent concurrent edits. Appending text uses the same atomic read-and-write boundary, retaining every concurrent append. Mutation listeners run after the lock is released. Parent edits are validated under the same lock before any supplied field changes: the parent must exist and its ancestry must not create a cycle. Root and the fixed top-level branches retain their parents. Invalid parents return no updated node and leave every field untouched. Other nodes may be detached with a null parent, retaining their subtree.
 
 ### Delete
 
