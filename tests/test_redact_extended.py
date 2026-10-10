@@ -1,8 +1,7 @@
-"""Tests for the extended structural-redaction rules added so tool-output
-carryover and recall-gate debug logs cannot leak credentials.
-"""
+"""Structural redaction protects carried tool results and diagnostic content."""
 
 import pytest
+from urllib.parse import urlsplit
 
 from src.jarvis.utils.redact import redact, scrub_secrets
 
@@ -84,3 +83,31 @@ class TestKeywordAnchoredCredentials:
         out = redact("oauth_token=qwertyuiop")
         assert "qwertyuiop" not in out
         assert "oauth_token=[REDACTED]" in out
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize('scrubber', [redact, scrub_secrets])
+@pytest.mark.parametrize('url,endpoint', [
+    ('http://alice:p%40ss@localhost:8080/v1', 'localhost:8080/v1'),
+    ('HTTPS://alice:p@ss@192.0.2.1/api', '192.0.2.1/api'),
+    ('ws://alice:short@[::1]:9000/events', '[::1]:9000/events'),
+    ('custom+local://alice:short@intranet/rpc', 'intranet/rpc'),
+    ('https://alice:short@example.test/path', 'example.test/path'),
+])
+def test_url_credentials_are_removed_without_losing_endpoint(scrubber, url, endpoint):
+    result = scrubber('Connection failed: ' + url)
+    assert 'alice' not in result
+    assert 'p%40ss' not in result and 'p@ss' not in result and 'short' not in result
+    assert urlsplit(result.removeprefix('Connection failed: ')).username is None
+    assert endpoint in result
+    assert scrubber(result) == result
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize('scrubber', [redact, scrub_secrets])
+@pytest.mark.parametrize('url', [
+    'http://localhost:8080/v1', 'https://example.test/path@segment',
+    'http://localhost/search?q=alice@intranet',
+])
+def test_non_credential_urls_remain_usable(scrubber, url):
+    assert scrubber(url) == url

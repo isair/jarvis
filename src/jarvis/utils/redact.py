@@ -5,6 +5,8 @@ import re
 # vendor-shaped tokens are matched before generic catches so the more
 # informative label wins (e.g. "[REDACTED_AWS_KEY]" beats "[REDACTED_HEX]").
 _REDACTION_RULES: list[tuple[re.Pattern[str], str]] = [
+    # Mask URI user information before email matching so the host stays useful.
+    (re.compile(r"(?<![a-z0-9+.-])([a-z][a-z0-9+.-]*://)[^\s/?#]*@", re.IGNORECASE), r"\1"),
     (re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}", re.IGNORECASE), "[REDACTED_EMAIL]"),
     (re.compile(r"\b(?:\d[ -]*?){13,19}\b"), "[REDACTED_CARD]"),
     # Vendor-specific access keys (bare, no surrounding keyword required).
