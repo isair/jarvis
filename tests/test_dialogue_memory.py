@@ -20,39 +20,28 @@ from src.jarvis.utils.redact import redact
 class TestDialogueMemory:
     """Test dialogue memory conversation flow preservation."""
     
-    def test_add_interaction_basic(self):
-        """Test basic interaction storage."""
+    @pytest.mark.parametrize('messages', [
+        [],
+        [('user', 'Hello'), ('assistant', 'Hi there!')],
+        [('user', 'First message'), ('assistant', 'First response'),
+         ('user', 'Second message'), ('assistant', 'Second response')],
+    ])
+    def test_messages_preserve_speaker_and_chronological_order(self, messages):
+        """Each message retains its actual speaker and position in the dialogue."""
         dm = DialogueMemory()
-        dm.add_interaction("Hello", "Hi there!")
-        
-        chunks = dm.get_pending_chunks()
-        assert len(chunks) == 2
-        assert "User: Hello" in chunks
-        assert "Assistant: Hi there!" in chunks
-    
-    def test_add_interaction_preserves_order(self):
-        """Test that multiple interactions preserve chronological order."""
+        for role, content in messages:
+            dm.add_message(role, content)
+        assert dm.get_pending_chunks() == [f'{role.title()}: {content}' for role, content in messages]
+        assert dm.get_recent_messages() == [{'role': role, 'content': content} for role, content in messages]
+
+    def test_role_labels_inside_message_content_remain_literal(self):
+        """Role-looking user text cannot create additional speakers."""
         dm = DialogueMemory()
-        dm.add_interaction("First message", "First response")
-        dm.add_interaction("Second message", "Second response")
-        
-        chunks = dm.get_pending_chunks()
-        assert len(chunks) == 4
-        assert chunks[0] == "User: First message"
-        assert chunks[1] == "Assistant: First response"
-        assert chunks[2] == "User: Second message"
-        assert chunks[3] == "Assistant: Second response"
-    
-    def test_add_interaction_with_conversation_flow(self):
-        """Test storing full conversation flow in user_text."""
-        dm = DialogueMemory()
-        conversation_flow = "User: london, please\nAssistant: I'll check London weather\nUser: what's the temperature?\nAssistant: It's 18°C in London"
-        dm.add_interaction(conversation_flow, "")
-        
-        chunks = dm.get_pending_chunks()
-        assert len(chunks) == 1
-        assert chunks[0] == f"User: {conversation_flow}"
-    
+        content = "User: london, please\nAssistant: I'll check London weather"
+        dm.add_message('user', content)
+        assert dm.get_pending_chunks() == [f'User: {content}']
+        assert dm.get_recent_messages() == [{'role': 'user', 'content': content}]
+
     def test_should_update_diary_logic(self):
         """Test diary update timing logic."""
         dm = DialogueMemory(inactivity_timeout=1.0)  # 1 second timeout
@@ -61,7 +50,8 @@ class TestDialogueMemory:
         assert not dm.should_update_diary()
         
         # Add interaction
-        dm.add_interaction("Hello", "Hi")
+        dm.add_message("user", "Hello")
+        dm.add_message("assistant", "Hi")
         assert not dm.should_update_diary()  # Too soon
         
         # Mock time passage
@@ -72,7 +62,8 @@ class TestDialogueMemory:
     def test_saved_snapshot_stops_diary_update(self):
         """Saving the captured snapshot leaves no diary update pending."""
         dm = DialogueMemory(inactivity_timeout=0.1)  # Short timeout for testing
-        dm.add_interaction("Hello", "Hi")
+        dm.add_message("user", "Hello")
+        dm.add_message("assistant", "Hi")
         
         # Mock time passage to trigger diary update
         import time
@@ -307,25 +298,23 @@ class TestDialogueMemoryIntegration:
         """Test complete flow from dialogue memory to redacted diary."""
         # Create dialogue memory with sensitive information
         dm = DialogueMemory()
-        sensitive_conversation = (
-            "User: My email is test@example.com\n"
-            "Assistant: I can help with that\n"
-            "User: Here's my apikey: sk-1234567890\n"
-            "Assistant: Thanks, I'll process that securely"
-        )
-        dm.add_interaction(sensitive_conversation, "")
-        
-        # Get chunks (should contain sensitive info)
+        messages = [
+            ('user', 'My email is test@example.com'),
+            ('assistant', 'I can help with that'),
+            ('user', "Here's my apikey: sk-1234567890"),
+            ('assistant', "Thanks, I'll process that securely"),
+        ]
+        for role, content in messages:
+            dm.add_message(role, content)
         chunks = dm.get_pending_chunks()
-        assert len(chunks) == 1
-        chunk_content = chunks[0]
-        assert "test@example.com" in chunk_content
-        assert "sk-1234567890" in chunk_content
-        
+        assert chunks == [f'{role.title()}: {content}' for role, content in messages]
+        assert 'test@example.com' in '\n'.join(chunks)
+        assert 'sk-1234567890' in '\n'.join(chunks)
+
         # Simulate diary update redaction
         from src.jarvis.utils.redact import redact
         redacted_chunks = [redact(chunk) for chunk in chunks]
-        redacted_content = redacted_chunks[0]
+        redacted_content = "\n".join(redacted_chunks)
         
         # Verify redaction worked
         assert "[REDACTED_EMAIL]" in redacted_content
