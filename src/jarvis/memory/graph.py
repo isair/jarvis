@@ -478,37 +478,38 @@ class GraphMemoryStore:
         parent_id: Optional[str] = ...,  # type: ignore[assignment]
     ) -> Optional[MemoryNode]:
         """Update fields on an existing node. Returns the updated node."""
-        node = self.get_node(node_id)
-        if node is None:
-            return None
-
-        now = datetime.now(timezone.utc).isoformat()
-        if name is not None:
-            node.name = name
-        if description is not None:
-            if len(description) > SUMMARY_MAX_LENGTH:
-                description = description[:SUMMARY_MAX_LENGTH]
-            node.description = description
-        if data is not None:
-            node.data = data
-            node.data_token_count = _estimate_tokens(data)
-        if parent_id is not ...:
-            node.parent_id = parent_id
-        node.updated_at = now
-
         with self._lock:
-            self.conn.execute(
-                """UPDATE memory_nodes
-                   SET name = ?, description = ?, data = ?, parent_id = ?,
-                       updated_at = ?, data_token_count = ?
-                   WHERE id = ?""",
-                (node.name, node.description, node.data, node.parent_id,
-                 node.updated_at, node.data_token_count, node_id),
-            )
-            self.conn.commit()
+            node = self.get_node(node_id)
+            if node is None:
+                return None
 
-        _notify_graph_mutation("update", node_id, self._resolve_branch(node_id))
+            if name is not None:
+                node.name = name
+            if description is not None:
+                node.description = description[:SUMMARY_MAX_LENGTH]
+            if data is not None:
+                node.data = data
+                node.data_token_count = _estimate_tokens(data)
+            if parent_id is not ...:
+                node.parent_id = parent_id
+            node.updated_at = datetime.now(timezone.utc).isoformat()
+            self._persist_node(node)
+            branch = self._resolve_branch(node_id)
+
+        _notify_graph_mutation("update", node_id, branch)
         return node
+
+    def _persist_node(self, node: MemoryNode) -> None:
+        """Commit a node snapshot while the caller holds the store lock."""
+        self.conn.execute(
+            """UPDATE memory_nodes
+               SET name = ?, description = ?, data = ?, parent_id = ?,
+                   updated_at = ?, data_token_count = ?
+               WHERE id = ?""",
+            (node.name, node.description, node.data, node.parent_id,
+             node.updated_at, node.data_token_count, node.id),
+        )
+        self.conn.commit()
 
     def delete_node(self, node_id: str) -> bool:
         """Delete a node. Children are orphaned (parent_id set to NULL by FK).
@@ -556,16 +557,21 @@ class GraphMemoryStore:
 
         Returns True if the node's data_token_count now exceeds SPLIT_THRESHOLD.
         """
-        node = self.get_node(node_id)
-        if node is None:
-            return False
+        with self._lock:
+            node = self.get_node(node_id)
+            if node is None:
+                return False
 
-        separator = "\n" if node.data else ""
-        new_data = node.data + separator + text
-        self.update_node(node_id, data=new_data)
+            separator = "\n" if node.data else ""
+            node.data += separator + text
+            node.data_token_count = _estimate_tokens(node.data)
+            node.updated_at = datetime.now(timezone.utc).isoformat()
+            self._persist_node(node)
+            branch = self._resolve_branch(node_id)
+            exceeded = node.data_token_count > SPLIT_THRESHOLD
 
-        updated = self.get_node(node_id)
-        return updated is not None and updated.data_token_count > SPLIT_THRESHOLD
+        _notify_graph_mutation("update", node_id, branch)
+        return exceeded
 
     def touch_node(self, node_id: str) -> None:
         """Increment access_count and update last_accessed."""
