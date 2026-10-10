@@ -44,7 +44,7 @@ def synthetic_turn(engine, cfg, text, answer):
     lower = text.lower()
     name = 'getWeather' if 'weather' in lower or 'umbrella' in lower else 'webSearch'
     query = 'Harry Styles songs' if 'famous songs' in lower else text
-    engine.run_tool_with_retries(db=None, cfg=cfg, tool_name=name, tool_args={'query': query})
+    engine.run_tool_with_retries(db=None, cfg=cfg, tool_name=name, tool_args={'search_query': query})
     return answer
 
 
@@ -127,3 +127,24 @@ def test_default_model_is_bound_to_the_canonical_field(monkeypatch, cases):
     monkeypatch.setattr(engine, 'run_reply_engine', reply)
     invoke(cases, ENTRIES[0], helpers.MockConfig())
     assert observed and set(observed) == {expected_model}
+
+
+@pytest.mark.parametrize('bad_arguments', [
+    {'search_query': 'his famous songs'},
+    {'search_query': 'Harry songs'},
+    {'search_query': 'Styles songs'},
+    {'search_query': 'his songs', 'note': 'Harry Styles'},
+    {'search_query': []},
+    {'query': 'Harry Styles songs'},
+])
+def test_pronoun_eval_requires_the_entity_in_the_search_query(monkeypatch, cases, bad_arguments):
+    from jarvis.reply import engine
+
+    def reply(*, cfg, text, **kwargs):
+        args = bad_arguments if 'famous songs' in text.lower() else {'search_query': text}
+        engine.run_tool_with_retries(db=None, cfg=cfg, tool_name='webSearch', tool_args=args)
+        return cases['MOCK_HARRY_STYLES_SONGS_SEARCH']
+
+    monkeypatch.setattr(engine, 'run_reply_engine', reply)
+    with pytest.raises(AssertionError):
+        invoke(cases, ENTRIES[3], helpers.MockConfig())
