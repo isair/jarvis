@@ -4,6 +4,7 @@ import re
 import time
 import threading
 from collections import OrderedDict
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Iterator, Optional, List, Tuple, Union, Callable
@@ -1900,76 +1901,69 @@ def update_diary_from_dialogue_memory(
                 dialogue_memory.mark_saved_up_to(snapshot_timestamp)
             debug_log(f"marked messages saved up to timestamp {snapshot_timestamp}", "memory")
 
-            # Graph memory (v2): extract facts and store in the node graph.
-            # Non-blocking — if this fails, the diary update still succeeded.
-            # Uses a dedicated timeout (30s) rather than the diary chat timeout,
-            # so graph updates don't inflate the diary flush wall time.
+            # Graph failure preserves the completed diary save.
             try:
                 from .graph import GraphMemoryStore
                 from .graph_ops import update_graph_from_dialogue
 
-                graph_store = GraphMemoryStore(db.db_path)
-                # Retrieve the summary we just stored to use for extraction
-                today = datetime.now(timezone.utc).date().isoformat()
-                existing = db.get_conversation_summary(today, source_app)
-                summary_text = existing['summary'] if existing else None
+                with closing(GraphMemoryStore(db.db_path)) as graph_store:
+                    # Retrieve the summary we just stored to use for extraction
+                    today = datetime.now(timezone.utc).date().isoformat()
+                    existing = db.get_conversation_summary(today, source_app)
+                    summary_text = existing['summary'] if existing else None
 
-                if summary_text:
-                    # Use a shorter timeout for graph operations — extraction (30s),
-                    # placement (15s/fact), and split (45s) each have their own budgets
-                    # inside update_graph_from_dialogue.
-                    graph_timeout = min(timeout_sec, 30.0)
-                    result = update_graph_from_dialogue(
-                        store=graph_store,
-                        summary=summary_text,
-                        cfg=cfg,
-                        chat_model=cfg.llm_chat_model,
-                        timeout_sec=graph_timeout,
-                        thinking=thinking,
-                        date_utc=today,
-                        picker_model=graph_picker_model,
-                    )
-                    stored = result.stored
-                    skipped = result.skipped
-                    # Print whenever extraction produced anything — including
-                    # all-duplicate flushes. Without the skipped count this
-                    # line went silent after #282's dedupe (cumulative diary
-                    # re-extracts the same facts on every flush), making it
-                    # look like the memory pipeline had stopped working.
-                    if stored or skipped:
-                        dup_suffix = (
-                            f"{skipped} duplicate{'' if skipped == 1 else 's'} skipped"
+                    if summary_text:
+                        # Use a shorter timeout for graph operations — extraction (30s),
+                        # placement (15s/fact), and split (45s) each have their own budgets
+                        # inside update_graph_from_dialogue.
+                        graph_timeout = min(timeout_sec, 30.0)
+                        result = update_graph_from_dialogue(
+                            store=graph_store,
+                            summary=summary_text,
+                            cfg=cfg,
+                            chat_model=cfg.llm_chat_model,
+                            timeout_sec=graph_timeout,
+                            thinking=thinking,
+                            date_utc=today,
+                            picker_model=graph_picker_model,
                         )
-                        if stored:
-                            fact_count = (
-                                f"{len(stored)} new fact"
-                                f"{'' if len(stored) == 1 else 's'}"
+                        stored = result.stored
+                        skipped = result.skipped
+                        # Report both new facts and duplicate-only graph passes.
+                        if stored or skipped:
+                            dup_suffix = (
+                                f"{skipped} duplicate{'' if skipped == 1 else 's'} skipped"
                             )
-                            tail = f" ({dup_suffix})" if skipped else ""
-                            print(
-                                f"  🧠 Knowledge graph: learned {fact_count}{tail}",
-                                flush=True,
-                            )
-                            # Show each new fact with the node it landed in so
-                            # the user can eyeball extraction/placement. Cap
-                            # preview length per fact.
-                            for fact, node_name in stored[:6]:
-                                preview = fact.replace("\n", " ").strip()
-                                if len(preview) > 90:
-                                    preview = preview[:90].rstrip() + "…"
-                                print(f"     · {preview} → {node_name}", flush=True)
-                            if len(stored) > 6:
-                                print(f"     · …and {len(stored) - 6} more", flush=True)
-                        else:
-                            print(
-                                f"  🧠 Knowledge graph: nothing new ({dup_suffix})",
-                                flush=True,
-                            )
-                    debug_log(
-                        f"graph memory: stored {len(stored)} facts, "
-                        f"{skipped} duplicates skipped",
-                        "memory",
-                    )
+                            if stored:
+                                fact_count = (
+                                    f"{len(stored)} new fact"
+                                    f"{'' if len(stored) == 1 else 's'}"
+                                )
+                                tail = f" ({dup_suffix})" if skipped else ""
+                                print(
+                                    f"  🧠 Knowledge graph: learned {fact_count}{tail}",
+                                    flush=True,
+                                )
+                                # Show each new fact with the node it landed in so
+                                # the user can eyeball extraction/placement. Cap
+                                # preview length per fact.
+                                for fact, node_name in stored[:6]:
+                                    preview = fact.replace("\n", " ").strip()
+                                    if len(preview) > 90:
+                                        preview = preview[:90].rstrip() + "…"
+                                    print(f"     · {preview} → {node_name}", flush=True)
+                                if len(stored) > 6:
+                                    print(f"     · …and {len(stored) - 6} more", flush=True)
+                            else:
+                                print(
+                                    f"  🧠 Knowledge graph: nothing new ({dup_suffix})",
+                                    flush=True,
+                                )
+                        debug_log(
+                            f"graph memory: stored {len(stored)} facts, "
+                            f"{skipped} duplicates skipped",
+                            "memory",
+                        )
             except Exception as e:
                 debug_log(f"graph memory update failed (non-fatal): {e}", "memory")
 
