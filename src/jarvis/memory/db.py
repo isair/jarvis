@@ -112,36 +112,36 @@ class Database:
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self.db_path = db_path
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
-        self.conn.row_factory = sqlite3.Row
-        self._lock = threading.RLock()
-        self.is_vss_enabled = False
-        self._python_vector_store = None
-        
-        if sqlite_vss_path:
-            try:
-                self.conn.enable_load_extension(True)
-                self.conn.load_extension(sqlite_vss_path)
-                self.is_vss_enabled = True
-            except Exception:
-                self.is_vss_enabled = False
-        
-        # If sqlite-vss is not available, use best available vector store (FAISS or Python fallback)
-        if not self.is_vss_enabled:
-            from ..utils.vector_store import get_best_vector_store
-            self._python_vector_store = get_best_vector_store(db_path, dimension=768)
-            
-            # Log which vector store implementation is being used
-            import sys
-            store_type = type(self._python_vector_store).__name__
-            if store_type == "FAISSVectorStore":
-                debug_log("Using FAISS vector store for fast search", "jarvis")
-            else:
-                debug_log("Using Python fallback vector store", "jarvis")
-        
         try:
+            self.conn.row_factory = sqlite3.Row
+            self._lock = threading.RLock()
+            self.is_vss_enabled = False
+            self._python_vector_store = None
+        
+            if sqlite_vss_path:
+                try:
+                    self.conn.enable_load_extension(True)
+                    self.conn.load_extension(sqlite_vss_path)
+                    self.is_vss_enabled = True
+                except Exception:
+                    self.is_vss_enabled = False
+        
+            # If sqlite-vss is not available, use best available vector store (FAISS or Python fallback)
+            if not self.is_vss_enabled:
+                from ..utils.vector_store import get_best_vector_store
+                self._python_vector_store = get_best_vector_store(db_path, dimension=768)
+            
+                # Log which vector store implementation is being used
+                store_type = type(self._python_vector_store).__name__
+                if store_type == "FAISSVectorStore":
+                    debug_log("Using FAISS vector store for fast search", "jarvis")
+                else:
+                    debug_log("Using Python fallback vector store", "jarvis")
+        
             self._init_schema()
-        except Exception:
+        except BaseException:
             self.conn.close()
+            debug_log('Diary initialisation failed: connection released', 'memory')
             raise
 
     @property
