@@ -160,7 +160,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 ## 11. Knowledge Graph Best-Child Picker
 
 - **File**: [src/jarvis/memory/graph_ops.py](src/jarvis/memory/graph_ops.py) — `_llm_pick_best_child()` (~line 167).
-- **Trigger**: during graph insertion, per novel fact, to place it under the best existing category. Before traversal, a branch-wide SQLite snapshot plus pending branch keys skips exact Unicode-folded duplicates, including facts stored in sibling destinations. Background.
+- **Trigger**: during graph insertion, per novel fact, to place it under the best existing category within its classified branch's subtree. Placement requires that branch root and descends through its children only. Before traversal, a branch-wide SQLite snapshot plus pending branch keys skips exact Unicode-folded duplicates, including facts stored in sibling destinations. Background.
 - **Model**: `picker_model` when passed through from `update_graph_from_dialogue` (daemon resolves it via `resolve_model(cfg, Tier.FAST)` → small model when available); falls back to `cfg.llm_chat_model`. Factory-dispatched.
 - **Inputs**: fact text + numbered list of candidate child nodes (name + description).
 - **System prompt**: inline (~lines 156-161) — answer with number or `NONE`.

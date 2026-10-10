@@ -445,71 +445,24 @@ def find_best_node(
     fragment: str,
     cfg,
     chat_model: str,
+    *,
+    branch_root_id: str,
     timeout_sec: float = 15.0,
     thinking: bool = False,
     picker_model: Optional[str] = None,
-    branch_root_id: Optional[str] = None,
 ) -> str:
-    """Find the best node to store a memory fragment.
+    """Find the best destination within the classified branch's subtree.
 
-    When ``branch_root_id`` is provided (one of the fixed taxonomy
-    branches — User / Directives / World), the shortcut entry points
-    (recent / top) are skipped entirely and traversal descends only
-    through that branch's subtree. This guarantees the purpose-shaped
-    top-level taxonomy is respected — a User fact can never end up in
-    the World subtree just because a World node happened to be
-    recently accessed.
-
-    When ``branch_root_id`` is None (legacy callers), the old three-
-    entry-point heuristic is used:
-
-    1. Recent nodes — check if fragment fits a recently accessed node
-    2. Top nodes — check frequently accessed domains
-    3. Root traversal — greedy top-down descent from root
-
-    Returns the id of the best node.
+    Greedy descent selects a matching child at each level. A leaf or a
+    declined match leaves the fact at the current node in the same branch.
     """
     debug_log(
         f"graph traversal: placing '{fragment[:60]}...' "
-        f"(branch={branch_root_id or 'any'})",
+        f"(branch={branch_root_id})",
         "memory",
     )
-
-    if branch_root_id is None:
-        # Entry point 1: Check recent nodes
-        recent = store.get_recent_nodes(limit=5)
-        if recent:
-            debug_log(f"graph traversal: trying {len(recent)} recent nodes: {[n.name for n in recent]}", "memory")
-            best = _llm_pick_best_child(
-                fragment, recent, cfg, chat_model,
-                timeout_sec=timeout_sec, thinking=thinking, picker_model=picker_model,
-            )
-            if best is not None:
-                matched = store.get_node(best)
-                name = matched.name if matched else best[:8]
-                debug_log(f"graph traversal: matched recent node '{name}'", "memory")
-                return best
-
-        # Entry point 2: Check top nodes (excluding any already checked as recent)
-        recent_ids = {n.id for n in recent} if recent else set()
-        top = [n for n in store.get_top_nodes(limit=10) if n.id not in recent_ids]
-        if top:
-            debug_log(f"graph traversal: trying {len(top)} top nodes: {[n.name for n in top]}", "memory")
-            best = _llm_pick_best_child(
-                fragment, top, cfg, chat_model,
-                timeout_sec=timeout_sec, thinking=thinking, picker_model=picker_model,
-            )
-            if best is not None:
-                matched = store.get_node(best)
-                name = matched.name if matched else best[:8]
-                debug_log(f"graph traversal: matched top node '{name}'", "memory")
-                return best
-
-    # Entry point 3 (or sole entry point when branch is pinned):
-    # greedy descent from the branch root (or root when no branch).
-    start_id = branch_root_id or "root"
-    debug_log(f"graph traversal: descending from '{start_id}'", "memory")
-    current_id = start_id
+    debug_log(f"graph traversal: descending from '{branch_root_id}'", "memory")
+    current_id = branch_root_id
     depth = 0
     for depth in range(MAX_TRAVERSAL_DEPTH):
         children = store.get_children(current_id)
