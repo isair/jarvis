@@ -221,7 +221,8 @@ The engine consumes the plan in two phases.
   outcome requires an actual call or a non-completion envelope: one non-empty
   `question` or `blocker` string field. Unsupported prose receives one
   corrective turn within the existing budget. Repeated unsupported content
-  produces an honest execution blocker. Tool discovery is not an action
+  produces an honest execution blocker. Exhaustion without an action outcome
+  uses the same blocker instead of a model-generated loop digest. Tool discovery is not an action
   outcome. Successful direct chains and native advisory plans retain their
   ordinary reply protocol.
 - A current-reply tool result with `success=False` suspends direct plan

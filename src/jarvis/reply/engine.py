@@ -2033,6 +2033,13 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     _plan_steps_baseline = sum(1 for m in messages if m.get("tool_name"))
     _unexecuted_reply_retried = False
 
+    def _recovery_without_action_outcome() -> bool:
+        return use_text_tools and _plan_in_recovery and not any(
+            message.get("tool_name") in _full_catalog_names
+            and message.get("tool_name") not in {"stop", "toolSearchTool"}
+            for message in messages[user_msg_index + 1:]
+        )
+
     def _enter_plan_recovery() -> None:
         nonlocal _plan_in_recovery, _plan_recovery_record
         if not action_plan or _plan_in_recovery:
@@ -2660,11 +2667,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             continue
 
         # Missing resolution cannot establish completion of a planned action.
-        if use_text_tools and _plan_in_recovery and not any(
-            message.get("tool_name") in _full_catalog_names
-            and message.get("tool_name") not in {"stop", "toolSearchTool"}
-            for message in messages[user_msg_index + 1:]
-        ):
+        if _recovery_without_action_outcome():
             non_completion_reply = _handoff_non_completion_reply(content)
             if non_completion_reply is not None:
                 content = non_completion_reply
@@ -2702,6 +2705,10 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         reply = candidate_reply
         last_candidate_reply = candidate_reply
         break
+
+    if not reply and _recovery_without_action_outcome():
+        reply = _UNEXECUTED_ACTION_REPLY
+        debug_log("unexecuted planned action: turn budget exhausted without execution", "planning")
 
     # Step 9: Handle error case - return error message if no reply
     if not reply or not reply.strip():

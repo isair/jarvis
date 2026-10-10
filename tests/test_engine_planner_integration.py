@@ -848,3 +848,21 @@ def test_discovery_without_execution_cannot_confirm_a_planned_action(monkeypatch
         success=True, reply_text='The deletion tool is available.'))
     reply = engine.run_reply_engine(db, mock_config, None, 'Delete the recorded meal.', dialogue_memory)
     assert reply == "I couldn't execute the requested action. Please try again or provide the missing details."
+
+
+def test_exhausted_recovery_without_execution_cannot_deliver_digest_completion(monkeypatch, mock_config, db, dialogue_memory):
+    from jarvis.reply import engine
+    from jarvis.tools.types import ToolExecutionResult
+
+    mock_config.llm_chat_model = mock_config.ollama_chat_model = 'gemma4:e2b'
+    mock_config.agentic_max_turns = 1
+    monkeypatch.setattr(engine, 'select_tools', lambda **kwargs: ['deleteMeal', 'stop'])
+    monkeypatch.setattr(engine, 'plan_query', lambda **kwargs: ['deleteMeal the specified meal', 'Reply to the user.'])
+    monkeypatch.setattr(engine, '_resolve_plan_step', lambda **kwargs: None)
+    monkeypatch.setattr(engine, 'chat_with_messages', lambda **kwargs: _assistant_content(
+        'tool_calls: [{"function":{"name":"toolSearchTool","arguments":{"query":"delete meal"}}}]'))
+    monkeypatch.setattr(engine, 'run_tool_with_retries', lambda *args, **kwargs: ToolExecutionResult(
+        success=True, reply_text='The deletion tool is available.'))
+    monkeypatch.setattr(engine, 'digest_loop_for_max_turns', lambda **kwargs: 'I deleted the meal.')
+    reply = engine.run_reply_engine(db, mock_config, None, 'Delete the recorded meal.', dialogue_memory)
+    assert reply == "I couldn't execute the requested action. Please try again or provide the missing details."
