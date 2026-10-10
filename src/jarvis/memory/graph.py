@@ -482,39 +482,61 @@ class GraphMemoryStore:
             if parent is None:
                 raise ValueError(f"Parent node '{parent_id}' does not exist")
 
-        # Enforce description length limit from spec
-        if len(description) > SUMMARY_MAX_LENGTH:
-            description = description[:SUMMARY_MAX_LENGTH]
+        with self._lock, self.conn:
+            node = self._insert_node(name, description, data, parent_id)
+            branch = self._resolve_branch(parent_id)
 
+        debug_log(f"Created memory node '{name}' ({node.id[:8]})", "memory")
+        _notify_graph_mutation("create", node.id, branch)
+        return node
+
+    def _insert_node(
+        self, name: str, description: str, data: str, parent_id: Optional[str],
+    ) -> MemoryNode:
+        """Insert a new node inside the caller's locked write transaction."""
+        description = description[:SUMMARY_MAX_LENGTH]
         node_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
         token_count = _estimate_tokens(data)
-
-        with self._lock:
-            self.conn.execute(
-                """INSERT INTO memory_nodes
-                   (id, name, description, data, parent_id,
-                    access_count, last_accessed, created_at, updated_at,
-                    data_token_count)
-                   VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?)""",
-                (node_id, name, description, data, parent_id, now, now, now, token_count),
-            )
-            self.conn.commit()
-
-        debug_log(f"Created memory node '{name}' ({node_id[:8]})", "memory")
-        _notify_graph_mutation("create", node_id, self._resolve_branch(parent_id))
-        return MemoryNode(
-            id=node_id,
-            name=name,
-            description=description,
-            data=data,
-            parent_id=parent_id,
-            access_count=0,
-            last_accessed=now,
-            created_at=now,
-            updated_at=now,
-            data_token_count=token_count,
+        self.conn.execute(
+            """INSERT INTO memory_nodes
+               (id, name, description, data, parent_id,
+                access_count, last_accessed, created_at, updated_at,
+                data_token_count)
+               VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?)""",
+            (node_id, name, description, data, parent_id, now, now, now, token_count),
         )
+        return MemoryNode(
+            id=node_id, name=name, description=description, data=data,
+            parent_id=parent_id, access_count=0, last_accessed=now,
+            created_at=now, updated_at=now, data_token_count=token_count,
+        )
+
+    def split_node(
+        self, source: MemoryNode, *, children: list[tuple[str, str, str]], summary: str,
+    ) -> bool:
+        """Commit children and the parent summary only from current source input."""
+        with self._lock, self.conn:
+            self.conn.execute("BEGIN IMMEDIATE")
+            current = self.get_node(source.id)
+            if current is None or (current.name, current.description, current.data) != (
+                source.name, source.description, source.data,
+            ):
+                debug_log(f"graph split: rejected stale input for {source.id}", "memory")
+                return False
+            created = [self._insert_node(name, description, data, source.id)
+                       for name, description, data in children]
+            current.data = ""
+            current.data_token_count = 0
+            current.description = summary[:SUMMARY_MAX_LENGTH]
+            current.updated_at = datetime.now(timezone.utc).isoformat()
+            self._persist_node(current)
+            branch = self._resolve_branch(source.id)
+
+        for child in created:
+            _notify_graph_mutation("create", child.id, branch)
+        _notify_graph_mutation("update", source.id, branch)
+        return True
 
     def update_node(
         self,

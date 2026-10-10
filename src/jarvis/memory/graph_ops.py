@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import re
+import sqlite3
 import time
 from dataclasses import dataclass, field
 from typing import Iterator, NamedTuple, Optional
@@ -875,19 +876,17 @@ def auto_split_node(
             debug_log("auto-split: invalid category name or facts, aborting", "memory")
             return False
 
-    # Create child nodes
-    for cat in categories:
-        child_data = "\n".join(cat["facts"])
-        store.create_node(
-            name=cat["name"],
-            description=str(cat.get("description", f"Memories about: {cat['name']}")),
-            data=child_data,
-            parent_id=node_id,
-        )
-        debug_log(f"  auto-split: created child '{cat['name']}' with {len(cat['facts'])} facts", "memory")
-
-    # Clear parent data and update description to summary
-    store.update_node(node_id, data="", description=str(summary))
+    children = [
+        (cat["name"], str(cat.get("description", f"Memories about: {cat['name']}")),
+         "\n".join(cat["facts"]))
+        for cat in categories
+    ]
+    try:
+        if not store.split_node(node, children=children, summary=str(summary)):
+            return False
+    except sqlite3.Error as exc:
+        debug_log(f"auto-split: storage failed ({type(exc).__name__})", "memory")
+        return False
 
     debug_log(f"auto-split: node '{node.name}' split into {len(categories)} children", "memory")
     return True
