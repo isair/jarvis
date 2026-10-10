@@ -89,29 +89,25 @@ def test_unordered_verdicts_preserve_durable_facts_in_original_order(mock_config
         ]
 
 
-def test_exhausted_extraction_budget_leaves_graph_empty(mock_config):
-    import time
-    def slow_extraction(**kwargs):
-        time.sleep(0.02)
-        return json.dumps(CANDIDATES)
-    with patch('jarvis.memory.graph_ops.call_llm_direct', side_effect=slow_extraction):
-        assert extract_graph_memories('Summary', mock_config, 'local-model', timeout_sec=0.01) == []
+@pytest.mark.parametrize('elapsed_fraction', [0.0, 0.2, 0.99, 1.0, 1.2])
+def test_review_uses_only_the_remaining_extraction_budget(mock_config, elapsed_fraction):
+    budget = mock_config.llm_chat_timeout_sec
+    clock = [0.0]
 
-
-def test_review_shares_the_remaining_extraction_budget(mock_config):
-    import time
-    budget = 0.1
-    started = time.monotonic()
     def backend(**kwargs):
         if kwargs['user_content'].startswith('Extract'):
-            time.sleep(budget / 5)
+            clock[0] += budget * elapsed_fraction
             return json.dumps(CANDIDATES)
-        assert kwargs['timeout_sec'] <= budget - (time.monotonic() - started) + 0.005
+        assert kwargs['timeout_sec'] == pytest.approx(budget - clock[0])
         return json.dumps({'0': 'TRANSIENT', '1': 'DURABLE', '2': 'INTERACTION', '3': 'DURABLE'})
-    with patch('jarvis.memory.graph_ops.call_llm_direct', side_effect=backend):
-        assert extract_graph_memories('Summary', mock_config, 'local-model', timeout_sec=budget) == [
-            ('user', CANDIDATES[1]['fact']), ('directives', CANDIDATES[3]['fact']),
-        ]
+
+    with (patch('jarvis.memory.graph_ops.time.monotonic', side_effect=lambda: clock[0]),
+          patch('jarvis.memory.graph_ops.call_llm_direct', side_effect=backend)):
+        result = extract_graph_memories('Summary', mock_config, 'local-model', timeout_sec=budget)
+
+    assert result == ([
+        ('user', CANDIDATES[1]['fact']), ('directives', CANDIDATES[3]['fact']),
+    ] if elapsed_fraction < 1.0 else [])
 
 
 def test_nonpositive_budget_does_not_start_extraction(mock_config):
