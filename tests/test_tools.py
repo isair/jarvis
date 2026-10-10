@@ -1,4 +1,3 @@
-import types
 import pytest
 
 from jarvis.tools.registry import run_tool_with_retries, ToolExecutionResult
@@ -27,7 +26,7 @@ class DummyDB:
 
 
 @pytest.mark.unit
-def test_delete_meal_success(monkeypatch):
+def test_delete_meal_success():
     db = DummyDB()
     cfg = DummyCfg()
     res = run_tool_with_retries(
@@ -46,7 +45,7 @@ def test_delete_meal_success(monkeypatch):
 
 
 @pytest.mark.unit
-def test_delete_meal_failure(monkeypatch):
+def test_delete_meal_failure():
     db = DummyDB()
     cfg = DummyCfg()
     res = run_tool_with_retries(
@@ -62,7 +61,20 @@ def test_delete_meal_failure(monkeypatch):
     assert res.success is False
 
 
+@pytest.fixture
+def local_files_home(tmp_path, monkeypatch):
+    """Confine tool filesystem operations to an isolated home directory."""
+    from jarvis.tools.builtin import local_files
+
+    expanduser = local_files.os.path.expanduser
+    monkeypatch.setattr(
+        local_files.os.path, "expanduser",
+        lambda path: str(tmp_path) if path == "~" else expanduser(path),
+    )
+
+
 @pytest.mark.unit
+@pytest.mark.usefixtures("local_files_home")
 def test_local_files_list_and_read(tmp_path):
     # Arrange
     root = tmp_path / "notes"
@@ -75,115 +87,98 @@ def test_local_files_list_and_read(tmp_path):
     db = DummyDB()
     cfg = DummyCfg()
 
-    # Monkeypatch expanduser to point to tmp home
-    import jarvis.tools.registry as tools_mod
-    import builtins
-    from pathlib import Path as _P
+    # list
+    res_list = run_tool_with_retries(
+        db=db,
+        cfg=cfg,
+        tool_name="localFiles",
+        tool_args={"operation": "list", "path": "~/notes", "glob": "*.txt", "recursive": False},
+        system_prompt="",
+        original_prompt="",
+        redacted_text="",
+        max_retries=0,
+    )
+    assert res_list.success is True
+    assert "a.txt" in (res_list.reply_text or "")
 
-    orig_expanduser = tools_mod.os.path.expanduser
-    tools_mod.os.path.expanduser = lambda p: str(tmp_path) if p == "~" or p.startswith("~") else orig_expanduser(p)
-
-    try:
-        # list
-        res_list = run_tool_with_retries(
-            db=db,
-            cfg=cfg,
-            tool_name="localFiles",
-            tool_args={"operation": "list", "path": "~/notes", "glob": "*.txt", "recursive": False},
-            system_prompt="",
-            original_prompt="",
-            redacted_text="",
-            max_retries=0,
-        )
-        assert res_list.success is True
-        assert "a.txt" in (res_list.reply_text or "")
-
-        # read
-        res_read = run_tool_with_retries(
-            db=db,
-            cfg=cfg,
-            tool_name="localFiles",
-            tool_args={"operation": "read", "path": "~/notes/a.txt"},
-            system_prompt="",
-            original_prompt="",
-            redacted_text="",
-            max_retries=0,
-        )
-        assert res_read.success is True
-        assert (res_read.reply_text or "").strip() == "hello"
-    finally:
-        tools_mod.os.path.expanduser = orig_expanduser
+    # read
+    res_read = run_tool_with_retries(
+        db=db,
+        cfg=cfg,
+        tool_name="localFiles",
+        tool_args={"operation": "read", "path": "~/notes/a.txt"},
+        system_prompt="",
+        original_prompt="",
+        redacted_text="",
+        max_retries=0,
+    )
+    assert res_read.success is True
+    assert (res_read.reply_text or "").strip() == "hello"
 
 
 @pytest.mark.unit
-def test_local_files_write_append_delete(tmp_path):
+@pytest.mark.usefixtures("local_files_home")
+def test_local_files_write_append_delete():
     db = DummyDB()
     cfg = DummyCfg()
-    import jarvis.tools.registry as tools_mod
+    # write
+    res_write = run_tool_with_retries(
+        db=db,
+        cfg=cfg,
+        tool_name="localFiles",
+        tool_args={"operation": "write", "path": "~/x/y.txt", "content": "abc"},
+        system_prompt="",
+        original_prompt="",
+        redacted_text="",
+        max_retries=0,
+    )
+    assert res_write.success is True
 
-    orig_expanduser = tools_mod.os.path.expanduser
-    tools_mod.os.path.expanduser = lambda p: str(tmp_path) if p == "~" or p.startswith("~") else orig_expanduser(p)
-    try:
-        # write
-        res_write = run_tool_with_retries(
-            db=db,
-            cfg=cfg,
-            tool_name="localFiles",
-            tool_args={"operation": "write", "path": "~/x/y.txt", "content": "abc"},
-            system_prompt="",
-            original_prompt="",
-            redacted_text="",
-            max_retries=0,
-        )
-        assert res_write.success is True
+    # append
+    res_append = run_tool_with_retries(
+        db=db,
+        cfg=cfg,
+        tool_name="localFiles",
+        tool_args={"operation": "append", "path": "~/x/y.txt", "content": "def"},
+        system_prompt="",
+        original_prompt="",
+        redacted_text="",
+        max_retries=0,
+    )
+    assert res_append.success is True
 
-        # append
-        res_append = run_tool_with_retries(
-            db=db,
-            cfg=cfg,
-            tool_name="localFiles",
-            tool_args={"operation": "append", "path": "~/x/y.txt", "content": "def"},
-            system_prompt="",
-            original_prompt="",
-            redacted_text="",
-            max_retries=0,
-        )
-        assert res_append.success is True
+    # read back
+    res_read = run_tool_with_retries(
+        db=db,
+        cfg=cfg,
+        tool_name="localFiles",
+        tool_args={"operation": "read", "path": "~/x/y.txt"},
+        system_prompt="",
+        original_prompt="",
+        redacted_text="",
+        max_retries=0,
+    )
+    assert res_read.success is True
+    assert (res_read.reply_text or "").strip() == "abcdef"
 
-        # read back
-        res_read = run_tool_with_retries(
-            db=db,
-            cfg=cfg,
-            tool_name="localFiles",
-            tool_args={"operation": "read", "path": "~/x/y.txt"},
-            system_prompt="",
-            original_prompt="",
-            redacted_text="",
-            max_retries=0,
-        )
-        assert res_read.success is True
-        assert (res_read.reply_text or "").strip() == "abcdef"
-
-        # delete
-        res_del = run_tool_with_retries(
-            db=db,
-            cfg=cfg,
-            tool_name="localFiles",
-            tool_args={"operation": "delete", "path": "~/x/y.txt"},
-            system_prompt="",
-            original_prompt="",
-            redacted_text="",
-            max_retries=0,
-        )
-        assert res_del.success is True
-    finally:
-        tools_mod.os.path.expanduser = orig_expanduser
+    # delete
+    res_del = run_tool_with_retries(
+        db=db,
+        cfg=cfg,
+        tool_name="localFiles",
+        tool_args={"operation": "delete", "path": "~/x/y.txt"},
+        system_prompt="",
+        original_prompt="",
+        redacted_text="",
+        max_retries=0,
+    )
+    assert res_del.success is True
 
 
 @pytest.mark.unit
 def test_fetch_web_page_success(monkeypatch):
     """Test fetchWebPage tool with a mocked successful response."""
-    import jarvis.tools.registry as tools_mod
+    from jarvis.tools.builtin import fetch_web_page
     
     # Mock a successful HTTP response
     class MockResponse:
@@ -220,7 +215,7 @@ def test_fetch_web_page_success(monkeypatch):
     def mock_requests_get(url, **kwargs):
         return MockResponse()
     
-    monkeypatch.setattr(tools_mod.requests, 'get', mock_requests_get)
+    monkeypatch.setattr(fetch_web_page.requests, 'get', mock_requests_get)
     
     db = DummyDB()
     cfg = DummyCfg()
