@@ -1795,7 +1795,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         if not dialogue_memory or not hasattr(dialogue_memory, "record_tool_turn"):
             return
         try:
-            from ..memory.conversation import DialogueMemory, is_tool_message
+            from ..memory.conversation import is_tool_message
             tool_msgs = [
                 m for m in messages[user_msg_index + 1:] if is_tool_message(m)
             ]
