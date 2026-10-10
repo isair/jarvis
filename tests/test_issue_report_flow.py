@@ -281,3 +281,23 @@ def test_expanding_review_details_keeps_navigation_reachable(qapp, monkeypatch):
         assert corner.y() < dialog.height()
     assert dialog.width() <= 440
     dialog.close()
+
+
+def test_url_credentials_are_scrubbed_from_review_copy_and_browser(qapp, monkeypatch):
+    secret_url = 'http://alice:short@localhost:8080/v1'
+    dialog = report_dialog(qapp, monkeypatch, logs='Connection failed: ' + secret_url)
+    opened = []
+    monkeypatch.setattr('desktop_app.issue_report.webbrowser.open', lambda url: opened.append(url) or True)
+    dialog.problem_input.setPlainText('Connection failed: ' + secret_url)
+    dialog.review_button.click()
+    dialog.copy_button.click()
+    copied = qapp.clipboard().text()
+    for content in (dialog.preview.toPlainText(), dialog.technical_preview.toPlainText(), copied):
+        assert 'alice' not in content and 'short' not in content
+        assert 'localhost:8080/v1' in content
+    dialog.open_button.click()
+    query = urllib.parse.parse_qs(urllib.parse.urlparse(opened[0]).query)
+    assert query['body'] == [copied]
+    assert 'alice' not in query['title'][0] and 'short' not in query['title'][0]
+    qapp.clipboard().clear()
+    dialog.close()

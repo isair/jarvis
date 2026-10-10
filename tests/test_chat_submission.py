@@ -26,6 +26,11 @@ import pytest
 from jarvis import daemon
 from jarvis.memory.conversation import DialogueMemory
 
+_REDACTABLE_QUERIES = [
+    ('my email is test@example.com', 'test@example.com', '[REDACTED_EMAIL]'),
+    ('check http://alice:short@localhost:8080/v1', 'alice:short', 'http://localhost:8080/v1'),
+]
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -300,24 +305,25 @@ class TestSubmitTextQueryContract:
         _wait_for_complete(events)
         assert events[-1] == ("complete", None)
 
-    def test_start_event_carries_redacted_query(self, monkeypatch):
+    @pytest.mark.parametrize('query,secret,label', _REDACTABLE_QUERIES)
+    def test_start_event_carries_redacted_query(self, monkeypatch, query, secret, label):
         """on_start receives the redacted query, not the raw input. Verifies the
-        privacy boundary with a redactable pattern (email)."""
+        privacy boundary with structurally recognised secrets."""
         _install_dialogue_memory(cfg=object(), db=object())
         monkeypatch.setattr(
             "jarvis.reply.engine.run_reply_engine", lambda *a, **k: "ok"
         )
         events = []
         daemon.submit_text_query(
-            "my email is test@example.com",
+            query,
             on_start=lambda q: events.append(("start", q)),
             on_complete=lambda r: events.append(("complete", r)),
         )
         _wait_for_complete(events)
         start_query = next((e[1] for e in events if e[0] == "start"), None)
         assert start_query is not None
-        assert "test@example.com" not in start_query
-        assert "[REDACTED_EMAIL]" in start_query
+        assert secret not in start_query
+        assert label in start_query
 
     def test_redaction_failure_releases_lock_and_fails_open(self, monkeypatch):
         """If redact() raises on the caller's thread, submit_text_query must
@@ -489,7 +495,8 @@ class TestSubmitTextQueryIPC:
         )
         assert start_payload["data"] == "hello world"
 
-    def test_ipc_start_event_carries_redacted_query(self, monkeypatch, capsys):
+    @pytest.mark.parametrize('query,secret,label', _REDACTABLE_QUERIES)
+    def test_ipc_start_event_carries_redacted_query(self, monkeypatch, capsys, query, secret, label):
         """The start event carries the redacted query (the daemon redacts before
         the worker starts), so a redactable pattern never appears in the IPC
         stream. Verifies the spec's privacy boundary for the subprocess path."""
@@ -497,12 +504,12 @@ class TestSubmitTextQueryIPC:
         monkeypatch.setattr(
             "jarvis.reply.engine.run_reply_engine", lambda *a, **k: "ok"
         )
-        daemon.submit_text_query("my email is test@example.com", use_ipc=True)
+        daemon.submit_text_query(query, use_ipc=True)
         chat_lines = _wait_for_ipc_complete(capsys)
         start_line = next(ln for ln in chat_lines if '"start"' in ln)
         payload = json.loads(start_line[len(daemon.CHAT_IPC_PREFIX):])
-        assert "test@example.com" not in json.dumps(payload["data"])
-        assert "@" not in json.dumps(payload["data"])
+        assert secret not in payload["data"]
+        assert label in payload["data"]
 
 
 @pytest.mark.unit
