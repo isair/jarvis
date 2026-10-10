@@ -16,7 +16,9 @@ retains ownership until the worker finishes; a restart request cannot clear its
 stop event or start another stream during that interval. The worker retires
 itself and clears the playing indicator in its final cleanup, including failures
 before playback. Subsequent starts can create a fresh worker without another
-stop call.
+stop call. If the worker thread cannot start, ownership is released and the
+original exception reaches the caller. Stop remains safe and a later start can
+retry.
 
 The owning worker opens, starts and closes its audio stream. These device
 operations use the shared PortAudio lock. The caller does not abort or close

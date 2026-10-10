@@ -130,7 +130,12 @@ class TunePlayer:
             debug_log("thinking tune: start", category="tune")
             self._stop_event.clear()
             self._thread = threading.Thread(target=self._play_tune, daemon=True)
-            self._thread.start()
+            try:
+                self._thread.start()
+            except Exception as exc:
+                self._thread = None
+                debug_log(f"thinking tune: worker creation failed: {exc!r}", category="tune")
+                raise
 
     def stop_tune(self) -> None:
         """Request stop and wait briefly for audio teardown.
