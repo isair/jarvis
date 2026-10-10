@@ -144,6 +144,10 @@ This means the tree depth itself encodes a raw→refined spectrum: surface-level
 Split quality safeguards:
 - Minimum 2 categories required (abort if LLM proposes fewer)
 - Each category must have at least one fact
+- Categories form a JSON array of objects with non-empty string names and
+  non-empty arrays of non-empty string facts. Every category is validated before
+  any child is created; an invalid category leaves the parent data and children
+  untouched.
 - If the split fails (LLM error, bad JSON), the node retains its data and the next write retries
 
 ## Auto-Merge (Future — requires LLM integration)
