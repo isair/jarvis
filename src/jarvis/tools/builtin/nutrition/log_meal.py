@@ -97,7 +97,7 @@ def _strip_code_fence(text: str) -> str:
 def _safe_float(x: Any) -> Optional[float]:
     """Safely convert value to float."""
     try:
-        if x is None:
+        if x is None or isinstance(x, bool):
             return None
         value = float(x)
         return value if math.isfinite(value) else None

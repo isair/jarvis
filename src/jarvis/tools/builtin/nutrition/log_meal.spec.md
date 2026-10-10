@@ -115,6 +115,7 @@ Logged via `Database.insert_meal(...)`, which uses parameterised SQL.
 `"unknown"`. Optional fields (potassium, micros, confidence) are stored as
 NULL when missing. Numeric fields are normalised to finite floats before
 formatting and persistence; invalid or non-finite values are stored as NULL.
+JSON booleans are invalid numeric estimates and are stored as NULL.
 The description and macro confirmation fields are prepared before inserting.
 A successful insert completes
 logging: coaching failures or empty coaching output return that confirmation
