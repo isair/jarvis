@@ -13,16 +13,18 @@ from jarvis.memory.graph import (
 pytestmark = pytest.mark.unit
 
 
-@pytest.fixture
-def store(tmp_path):
-    graph = GraphMemoryStore(str(tmp_path / 'graph.db'))
+@pytest.fixture(params=[1, 2], ids=['shared-store', 'independent-stores'])
+def stores(tmp_path, request):
+    graphs = [GraphMemoryStore(str(tmp_path / 'graph.db')) for _ in range(request.param)]
     try:
-        yield graph
+        yield graphs
     finally:
-        graph.close()
+        for graph in graphs:
+            graph.close()
 
 
-def test_concurrent_appends_retain_every_fact(store):
+def test_concurrent_appends_retain_every_fact(stores):
+    store = stores[0]
     node = store.create_node('User facts', 'Concurrent facts', parent_id='user')
     workers, rounds = 8, 12
     barrier = Barrier(workers)
@@ -30,7 +32,7 @@ def test_concurrent_appends_retain_every_fact(store):
     def append(worker):
         for index in range(rounds):
             barrier.wait(timeout=5)
-            store.append_to_node(node.id, f'fact-{worker}-{index}')
+            stores[worker % len(stores)].append_to_node(node.id, f'fact-{worker}-{index}')
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
         list(executor.map(append, range(workers)))
@@ -40,7 +42,8 @@ def test_concurrent_appends_retain_every_fact(store):
     assert len(result.data.splitlines()) == len(expected)
 
 
-def test_concurrent_updates_preserve_independent_fields(store):
+def test_concurrent_updates_preserve_independent_fields(stores):
+    store = stores[0]
     node = store.create_node('Initial name', 'Initial description', parent_id='user')
     barrier = Barrier(2)
 
@@ -48,7 +51,8 @@ def test_concurrent_updates_preserve_independent_fields(store):
         snapshots = []
         for index in range(12):
             barrier.wait(timeout=5)
-            store.update_node(node.id, **{field: f'{field}-{index}'})
+            writer = stores[0 if field == 'name' else -1]
+            writer.update_node(node.id, **{field: f'{field}-{index}'})
             barrier.wait(timeout=5)
             result = store.get_node(node.id)
             snapshots.append((index, result.name, result.description))
@@ -63,13 +67,14 @@ def test_concurrent_updates_preserve_independent_fields(store):
 
 
 @pytest.mark.parametrize('operation', ['update', 'append'])
-def test_mutation_listener_can_read_committed_data_from_another_thread(store, operation):
+def test_mutation_listener_can_read_committed_data_from_another_thread(stores, operation):
+    store = stores[0]
     node = store.create_node('User facts', 'Listener visibility', parent_id='user')
     observed = []
     with ThreadPoolExecutor(max_workers=1) as executor:
         def listener(**event):
             if event['node_id'] == node.id:
-                persisted = executor.submit(store.get_node, node.id).result(timeout=2)
+                persisted = executor.submit(stores[-1].get_node, node.id).result(timeout=2)
                 observed.append(persisted.data)
 
         register_graph_mutation_listener(listener)
@@ -81,3 +86,24 @@ def test_mutation_listener_can_read_committed_data_from_another_thread(store, op
             assert observed == ['Committed fact']
         finally:
             unregister_graph_mutation_listener(listener)
+
+
+@pytest.mark.parametrize('operation', ['update', 'append'])
+def test_failed_write_does_not_block_another_writer(stores, operation):
+    import sqlite3
+
+    first, other = stores[0], stores[-1]
+    blocked = first.create_node('Reject this write', 'Synthetic failure', data='Keep facts', parent_id='user')
+    writable = first.create_node('Other node', 'Writable', parent_id='user')
+    first.conn.execute(f"""CREATE TRIGGER reject_one_node BEFORE UPDATE ON memory_nodes
+        WHEN OLD.id = '{blocked.id}' BEGIN SELECT RAISE(ABORT, 'Synthetic write failure'); END""")
+    first.conn.commit()
+    other.conn.execute('PRAGMA busy_timeout = 100')
+    with pytest.raises(sqlite3.IntegrityError):
+        if operation == 'update':
+            first.update_node(blocked.id, data='Rejected facts')
+        else:
+            first.append_to_node(blocked.id, 'Rejected facts')
+    assert other.update_node(writable.id, data='Committed fact') is not None
+    assert first.get_node(blocked.id).data == 'Keep facts'
+    assert first.get_node(writable.id).data == 'Committed fact'

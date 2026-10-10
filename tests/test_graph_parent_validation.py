@@ -47,26 +47,32 @@ def test_valid_parent_edit_retains_subtree_and_facts(store, detach):
     assert store.get_node(child.id).data == 'Child facts'
 
 
-def test_concurrent_parent_edits_cannot_create_a_cycle(store):
+@pytest.mark.parametrize('independent_store', [False, True])
+def test_concurrent_parent_edits_cannot_create_a_cycle(store, independent_store):
     from concurrent.futures import ThreadPoolExecutor
     from threading import Barrier
 
     first = store.create_node('First category', 'First', parent_id='user')
     second = store.create_node('Second category', 'Second', parent_id='user')
+    other = GraphMemoryStore(store.db_path) if independent_store else store
     barrier = Barrier(2)
 
-    def move(pair):
-        node, parent = pair
+    def move(args):
+        writer, node, parent = args
         barrier.wait(timeout=5)
-        return store.update_node(node, parent_id=parent)
+        return writer.update_node(node, parent_id=parent)
 
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        results = list(executor.map(move, [(first.id, second.id), (second.id, first.id)]))
-    assert sum(result is not None for result in results) == 1
-    for node in (first, second):
-        path = store.get_ancestors(node.id)
-        assert path[0].id == 'root'
-        assert len({ancestor.id for ancestor in path}) == len(path)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(move, [(store, first.id, second.id), (other, second.id, first.id)]))
+        assert sum(result is not None for result in results) == 1
+        for node in (first, second):
+            path = store.get_ancestors(node.id)
+            assert path[0].id == 'root'
+            assert len({ancestor.id for ancestor in path}) == len(path)
+    finally:
+        if other is not store:
+            other.close()
 
 
 @pytest.mark.parametrize('node_id', ['root', *sorted(FIXED_BRANCH_IDS)])
