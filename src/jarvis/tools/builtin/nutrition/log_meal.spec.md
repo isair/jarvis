@@ -116,6 +116,9 @@ Logged via `Database.insert_meal(...)`, which uses parameterised SQL.
 NULL when missing. Numeric fields are normalised to finite floats before
 formatting and persistence; invalid or non-finite values are stored as NULL.
 JSON booleans are invalid numeric estimates and are stored as NULL.
+Descriptions have surrounding whitespace stripped; missing, blank or non-string
+descriptions use the generic meal label. The same label appears in the saved row,
+confirmation, resource reference and optional coaching input.
 The description and macro confirmation fields are prepared before inserting.
 A successful insert completes
 logging: coaching failures or empty coaching output return that confirmation
