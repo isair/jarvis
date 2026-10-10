@@ -95,12 +95,12 @@ def _strip_code_fence(text: str) -> str:
 
 
 def _safe_float(x: Any) -> Optional[float]:
-    """Safely convert value to float."""
+    """Convert a finite, non-negative nutritional amount or return None."""
     try:
         if x is None or isinstance(x, bool):
             return None
         value = float(x)
-        return value if math.isfinite(value) else None
+        return value if math.isfinite(value) and value >= 0 else None
     except Exception:
         return None
 
@@ -157,6 +157,8 @@ def extract_and_log_meal(db: Database, cfg: Any, original_text: str, source_app:
     for field in numeric_fields:
         raw_value = data.get(field)
         value = _safe_float(raw_value)
+        if field == "confidence" and value is not None and value > 1:
+            value = None
         if raw_value is not None and value is None:
             invalid_fields.append(field)
         data[field] = value

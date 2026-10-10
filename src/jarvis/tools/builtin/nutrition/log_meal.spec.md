@@ -117,7 +117,9 @@ Logged via `Database.insert_meal(...)`, which uses parameterised SQL.
 `"unknown"`. Optional fields (potassium, micros, confidence) are stored as
 NULL when missing. Numeric fields are normalised to finite floats before
 formatting and persistence; invalid or non-finite values are stored as NULL.
-JSON booleans are invalid numeric estimates and are stored as NULL.
+JSON booleans and negative amounts are invalid numeric estimates and are stored
+as NULL. Confidence is a probability from 0 to 1 inclusive; out-of-range
+confidence is stored as NULL without a percentage in the confirmation.
 Descriptions have surrounding whitespace stripped; missing, blank or non-string
 descriptions use the generic meal label. The same label appears in the saved row,
 confirmation, resource reference and optional coaching input.
