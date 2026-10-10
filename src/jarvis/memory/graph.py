@@ -288,8 +288,13 @@ class GraphMemoryStore:
         self.conn.row_factory = sqlite3.Row
         self._lock = threading.RLock()
         if not read_only:
-            self._init_schema()
-            self._ensure_root()
+            try:
+                self._init_schema()
+                self._ensure_root()
+            except BaseException:
+                self.conn.close()
+                debug_log("graph bootstrap failed: connection released", "memory")
+                raise
 
     # ── Schema & bootstrap ──────────────────────────────────────────────
 

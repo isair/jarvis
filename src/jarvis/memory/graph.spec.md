@@ -134,7 +134,9 @@ moves into or out of a relevant branch. Ancestor queries use indexed parent link
 and terminate on repeated nodes. Access-only touches and World-only writes leave
 the revision unchanged. Triggers operate within the writer's transaction,
 including writes from separate connections or processes. Schema initialisation
-preserves existing nodes and revision values.
+preserves existing nodes and revision values. Writable construction
+closes its connection if schema initialisation or branch seeding fails, releasing
+any open transaction before propagating the original error.
 
 The reply cache includes the database path and revision with its profile block.
 Each turn checks that signature before reuse, so committed external edits reach
