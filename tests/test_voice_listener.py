@@ -2120,7 +2120,8 @@ class TestBoundedWhisperCacheRecovery:
         assert "Recovery download disconnected" in final_failure[0]
 
 @pytest.fixture(autouse=True)
-def cached_whisper_files(monkeypatch):
-    """Model-loading tests use synthetic local files and never access the Hub."""
+def cached_whisper_files(monkeypatch, tmp_path):
+    """Model-loading tests use an isolated Hub cache and synthetic local files."""
+    monkeypatch.setattr("huggingface_hub.constants.HF_HUB_CACHE", str(tmp_path))
     monkeypatch.setattr("jarvis.listening.model_download.prepare_faster_whisper_model",
                         lambda name: name)
