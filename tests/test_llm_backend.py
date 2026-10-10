@@ -1,6 +1,6 @@
 """Behaviour tests for the pluggable LLM backend abstraction.
 
-PR 1 covers the Ollama backend only. These tests pin the
+These tests exercise the
 provider-agnostic ``LLMBackend`` interface against the ``OllamaBackend``
 implementation, and confirm that the function-style entry points
 (``call_llm_direct``, ``call_llm_streaming``, ``chat_with_messages``)
@@ -17,6 +17,8 @@ import json
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+pytestmark = pytest.mark.unit
 
 
 def _make_response(*, json_data=None, iter_lines=None, status_code=200, raise_http=None):
