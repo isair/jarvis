@@ -1,6 +1,6 @@
 """Fetch meals tool for nutrition tracking."""
 
-from typing import Dict, Any, Optional, List, Callable
+from typing import Dict, Any, Optional, List
 from datetime import datetime, timezone, timedelta
 
 from ....debug import debug_log
@@ -8,35 +8,34 @@ from ...base import Tool, ToolContext
 from ...types import ToolExecutionResult
 
 
-def _normalize_time_range(args: Optional[Dict[str, Any]]) -> tuple[str, str]:
-    """Normalize time range for meal fetching."""
+def _normalise_time_range(args: Optional[Dict[str, Any]]) -> tuple[str, str]:
+    """Resolve inclusive bounds into the stored UTC ISO timestamp format."""
+    if args is not None and not isinstance(args, dict):
+        raise ValueError("Meal time range must be an object")
     now = datetime.now(timezone.utc)
-    since: Optional[str] = None
-    until: Optional[str] = None
-    if args and isinstance(args, dict):
+
+    def parse_bound(name: str) -> Optional[datetime]:
+        value = args.get(name) if args else None
+        if value is None or value == "":
+            return None
+        if not isinstance(value, str):
+            raise ValueError(f"{name} must be an ISO timestamp")
         try:
-            since_val = args.get("since_utc")
-            since = str(since_val) if since_val else None
-        except Exception:
-            since = None
-        try:
-            until_val = args.get("until_utc")
-            until = str(until_val) if until_val else None
-        except Exception:
-            until = None
-    if since is None and until is None:
-        # Default last 24h
-        return (now - timedelta(days=1)).isoformat(), now.isoformat()
-    if since is None and until is not None:
-        # backfill 24h prior to until
-        try:
-            until_dt = datetime.fromisoformat(until.replace("Z", "+00:00"))
-        except Exception:
-            until_dt = now
-        return (until_dt - timedelta(days=1)).isoformat(), until_dt.isoformat()
-    if since is not None and until is None:
-        return since, now.isoformat()
-    return since or (now - timedelta(days=1)).isoformat(), until or now.isoformat()
+            instant = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as error:
+            raise ValueError(f"{name} must be an ISO timestamp") from error
+        if instant.tzinfo is None:
+            instant = instant.replace(tzinfo=timezone.utc)
+        return instant.astimezone(timezone.utc)
+
+    since, until = parse_bound("since_utc"), parse_bound("until_utc")
+    until = until or now
+    since = since or (until - timedelta(days=1))
+    if since > until:
+        raise ValueError("since_utc must not be after until_utc")
+    # Zero fractions sort after whole-second timestamps in the stored text
+    # format; explicit upper precision includes both at the same instant.
+    return since.isoformat(), until.isoformat(timespec="microseconds")
 
 
 def summarize_meals(meals: List[Any]) -> str:
@@ -103,7 +102,12 @@ class FetchMealsTool(Tool):
     def run(self, args: Optional[Dict[str, Any]], context: ToolContext) -> ToolExecutionResult:
         """Execute the fetch meals tool."""
         context.user_print("📖 Retrieving your meals…")
-        since, until = _normalize_time_range(args if isinstance(args, dict) else None)
+        try:
+            since, until = _normalise_time_range(args)
+        except ValueError as error:
+            debug_log(f"fetchMeals: invalid time range: {error}", "nutrition")
+            context.user_print("⚠️ The meal time range is invalid.")
+            return ToolExecutionResult(success=False, reply_text=None, error_message=str(error))
         debug_log(f"fetchMeals: range since={since} until={until}", "nutrition")
         meals = context.db.get_meals_between(since, until)
         debug_log(f"fetchMeals: count={len(meals)}", "nutrition")
