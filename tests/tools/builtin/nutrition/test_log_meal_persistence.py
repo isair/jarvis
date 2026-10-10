@@ -91,14 +91,35 @@ def test_failed_write_can_retry_before_a_meal_is_saved(monkeypatch, meal_context
     assert 'Follow-ups: Drink water.' in result.reply_text
 
 
-def test_missing_description_confirmation_matches_the_saved_meal(monkeypatch, meal_context):
-    meal = {'calories_kcal': 150}
-    monkeypatch.setattr(log_meal, 'call_llm_direct',
-                        lambda **kwargs: json.dumps(meal) if kwargs['system_prompt'] == log_meal.NUTRITION_SYS else '')
+@pytest.mark.parametrize('description', [None, '', '   ', True, 42, {'unexpected': 'value'}, ['eggs']])
+def test_unavailable_description_uses_the_same_record_label(monkeypatch, meal_context, description):
+    def answer(meal):
+        monkeypatch.setattr(log_meal, 'call_llm_direct', lambda **kwargs:
+                            json.dumps(meal) if kwargs['system_prompt'] == log_meal.NUTRITION_SYS else '')
+    answer({'calories_kcal': 150})
+    baseline = log_meal.LogMealTool().run({}, meal_context)
+    assert baseline.success
+    default_label = baseline.resource_references[0]['label']
+
+    answer({'description': description, 'calories_kcal': 150})
+    result = log_meal.LogMealTool().run({}, meal_context)
+    rows = saved_meals(meal_context.db)
+    assert result.success and len(rows) == 2
+    assert rows[-1]['description'] == default_label
+    assert result.resource_references[0]['label'] == default_label
+    assert f'Logged meal #{rows[-1]["id"]}: {default_label}:' in result.reply_text
+
+
+def test_recorded_description_has_no_surrounding_whitespace(monkeypatch, meal_context):
+    label = 'eggs with toast'
+    monkeypatch.setattr(log_meal, 'call_llm_direct', lambda **kwargs:
+                        json.dumps({'description': '  ' + label + '  ', 'calories_kcal': 150})
+                        if kwargs['system_prompt'] == log_meal.NUTRITION_SYS else '')
     result = log_meal.LogMealTool().run({}, meal_context)
     rows = saved_meals(meal_context.db)
     assert result.success and len(rows) == 1
-    assert f'Logged meal #{rows[0]["id"]}: {rows[0]["description"]}:' in result.reply_text
+    assert rows[0]['description'] == label
+    assert result.resource_references[0]['label'] == label
 
 
 @pytest.mark.parametrize('answer', ['NONE', ' none ', '```text\nNONE\n```', '```json\nNONE\n```'])

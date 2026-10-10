@@ -161,7 +161,11 @@ def extract_and_log_meal(db: Database, cfg: Any, original_text: str, source_app:
     if invalid_fields:
         debug_log(f"⚠️ logMeal ignored invalid numeric fields: {', '.join(invalid_fields)}", "nutrition")
 
-    description = str(data.get("description") or "meal")
+    description = data.get("description")
+    description = description.strip() if isinstance(description, str) else ''
+    if not description:
+        description = "meal"
+        debug_log("logMeal: nutrition description unavailable, using generic record label", "nutrition")
     # Format the saved fields before committing the meal.
     cals = data.get("calories_kcal")
     prot = data.get("protein_g")
