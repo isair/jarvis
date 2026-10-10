@@ -76,7 +76,7 @@ def test_invalid_model_call_cannot_advance_to_dependent_plan_action(mock_config,
     operations = []
     responses = iter([
         {'message': {'content': '```tool_call\n{"name": "localFiles", "arguments": ["read", "report.txt"]}\n```'}},
-        {'message': {'content': 'Please clarify the read arguments. The file was not deleted.'}},
+        {'message': {'content': '{"question":"Please clarify the read arguments. The file was not deleted."}'}},
     ])
     def run_tool(db, cfg, tool_name, tool_args, **kwargs):
         operations.append(tool_args)

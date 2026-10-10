@@ -4,19 +4,14 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import pytest
-from evals.helpers import voice_config
+from evals.helpers import judge_pass_fail, voice_config
 from evals.tool_routing import requires_judge_llm
 from jarvis.reply import engine
 
 pytestmark = [pytest.mark.eval, requires_judge_llm]
 
 
-@pytest.mark.parametrize('query, correction', [
-    ('I ate a Big Mac.', 'Delete that meal actually.'),
-    ('Mercimek çorbası içtim.', 'Aslında o öğünü sil.'),
-])
-@pytest.mark.parametrize('resolver_available', [True, False])
-def test_delete_logged_record_with_duplicate_label(eval_db, eval_dialogue_memory, query, correction, resolver_available):
+def _delete_logged_record_with_duplicate_label(eval_db, eval_dialogue_memory, query, correction, resolver_available):
     cfg = voice_config()
     cfg.location_enabled = False
     cfg.tool_result_digest_enabled = True
@@ -51,7 +46,36 @@ def test_delete_logged_record_with_duplicate_label(eval_db, eval_dialogue_memory
         assert reply
     rows = eval_db.get_meals_between((now - timedelta(hours=2)).isoformat(),
                                     (now + timedelta(hours=1)).isoformat())
+    return reply, rows, older, recent_id, keep
+
+@pytest.mark.parametrize('query, correction', [
+    ('I ate a Big Mac.', 'Delete that meal actually.'),
+    ('Mercimek çorbası içtim.', 'Aslında o öğünü sil.'),
+])
+@pytest.mark.parametrize('resolver_available', [True, False])
+def test_delete_logged_record_with_duplicate_label(eval_db, eval_dialogue_memory, query, correction, resolver_available):
+    reply, rows, older, recent_id, keep = _delete_logged_record_with_duplicate_label(
+        eval_db, eval_dialogue_memory, query, correction, resolver_available)
     assert [r['id'] for r in rows] == [older, keep], f'🗑️ Deletion did not target logged #{recent_id}: {[(r["id"], r["description"]) for r in rows]}'
+
+@pytest.mark.parametrize('query, correction', [
+    ('I ate a Big Mac.', 'Delete that meal actually.'),
+    ('Mercimek çorbası içtim.', 'Aslında o öğünü sil.'),
+])
+def test_followup_reply_matches_the_recorded_outcome(eval_db, eval_dialogue_memory, query, correction):
+    reply, rows, older, recent_id, keep = _delete_logged_record_with_duplicate_label(
+        eval_db, eval_dialogue_memory, query, correction, False)
+    identities = {row['id'] for row in rows}
+    assert {older, keep} <= identities, '🗑️ Other records must remain untouched'
+    outcome = 'still present, deletion did not occur' if recent_id in identities else 'deleted successfully'
+    verdict = judge_pass_fail(
+        'PASS requires the reply to agree with the recorded database outcome. '
+        'If deletion did not occur, a clarification or honest blocker is valid, '
+        'but a claim that the meal was deleted requires FAIL. If deletion occurred, '
+        'the reply should acknowledge it. Judge meaning in any language.',
+        f'Request: {correction}\nDatabase outcome for the referenced meal: {outcome}.\nReply: {reply}',
+    )
+    assert verdict == 'PASS', f'🗑️ Unsupported completion: outcome={outcome}; reply={reply}; verdict={verdict}'
 
 
 @pytest.mark.parametrize('kind, identity, label, query', [
