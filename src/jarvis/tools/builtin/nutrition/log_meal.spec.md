@@ -52,17 +52,32 @@ the tool returns a graceful failure (`success=False`) with a friendly
 "I didn't catch what you ate" prompt rather than calling the LLM with an
 empty body.
 
+### Recording eligibility
+
+Before extraction, the fast tier decides whether the actual request reports the
+user's own intake, explicitly requests a meal record, or supplies a bare meal
+description. Advice, possible future intake, denial and another person's intake
+alone do not authorise recording. An empty actual request uses the supplied
+description as direct input. The derived food description alone cannot override
+the actual request.
+
+The decision is exactly `{"record": true}` or `{"record": false}`. Unknown,
+unavailable or malformed decisions return a final unsuccessful result with an
+error, without extraction, coaching, retries or persistence. A valid negative
+decision returns a final non-recording result without an error. Requests or
+descriptions longer than 1200 characters return the unknown outcome instead of
+truncating away a qualification.
+
 ### Untrusted-data fence
 
-`original_text` (whether sourced from `meal` arg or `redacted_text`) is
-treated as untrusted data inside the prompt to `NUTRITION_SYS`. It is
-truncated to 1200 characters and wrapped in explicit delimiters:
-
-```
-<<<BEGIN UNTRUSTED USER TEXT>>>
-…meal description…
-<<<END UNTRUSTED USER TEXT>>>
-```
+Both the actual request and derived description are untrusted JSON string
+values, kept distinct as `user_request` and `meal_description`. The eligibility
+pass wraps them in `UNTRUSTED MEAL INPUT` delimiters. Extraction wraps the same
+source values in `UNTRUSTED USER TEXT` delimiters. The actual request takes
+precedence when food details conflict; derived details resolve referenced food
+when the request omits its name. Extraction describes and estimates only the
+user's eligible food, excluding another person's food and denied or considered
+intake. Its inputs are bounded to 1200 characters each.
 
 The instruction above the fence tells the model to treat the contents as
 data and ignore any embedded instructions. This is defence-in-depth: small
@@ -72,7 +87,9 @@ trivial "ignore previous instructions" injections in meal descriptions.
 
 ### LLM passes
 
-Two passes against the chat model (`cfg.llm_chat_model`):
+One eligibility pass uses `resolve_model(cfg, Tier.FAST)`, a 256-token generation
+budget, temperature 0, disabled thinking and `cfg.llm_chat_timeout_sec`. Approved
+requests then use two passes against the chat model (`cfg.llm_chat_model`):
 
 1. **Extraction** (`extract_and_log_meal` → `NUTRITION_SYS`): returns either
    a JSON object with the nutrition fields above OR the literal string
@@ -113,9 +130,10 @@ Follow-ups: <coach text>
 
 The follow-up line is present only when coaching returns non-empty text.
 The macro summary is a comma-joined list of present-only fields (kcal,
-protein, carbs, fat, fiber). On failure: `"Failed to log meal"` (extractor
-returned NONE or all retries raised) or `"No meal description provided"`
-(extract-text guard).
+protein, carbs, fat, fiber). A valid extractor `NONE` result confirms that no meal was described and no
+record created. Exhausted extraction retries return `"Failed to log meal"`;
+empty input returns `"No meal description provided"`. Eligibility outcomes are
+described above.
 
 ### Recorded resource reference
 

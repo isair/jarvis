@@ -12,7 +12,8 @@ pytestmark = pytest.mark.unit
 
 
 @pytest.fixture
-def meal_context():
+def meal_context(monkeypatch):
+    monkeypatch.setattr(log_meal, 'meal_recording_requested', lambda *args: True)
     db = Database(':memory:', sqlite_vss_path=None)
     cfg = SimpleNamespace(llm_chat_model='synthetic-model', llm_chat_timeout_sec=8,
                           llm_thinking_enabled=False, use_stdin=True)
@@ -67,7 +68,7 @@ def test_invalid_optional_macro_does_not_duplicate_a_saved_meal(monkeypatch, mea
 def test_non_object_extraction_is_a_graceful_failure(monkeypatch, meal_context, answer):
     monkeypatch.setattr(log_meal, 'call_llm_direct', lambda **kwargs: answer)
     assert log_meal.extract_and_log_meal(meal_context.db, meal_context.cfg,
-                                        meal_context.redacted_text, 'stdin') is None
+                                        meal_context.redacted_text, 'stdin', request_text=meal_context.redacted_text) is None
     assert not saved_meals(meal_context.db)
 
 
