@@ -7,6 +7,7 @@ Handles memory enrichment, tool planning and execution.
 from __future__ import annotations
 from typing import Optional, TYPE_CHECKING
 import json
+from hashlib import sha256
 
 from ..tools.types import ToolExecutionResult
 from ..memory.conversation import is_tool_message
@@ -888,6 +889,12 @@ def _previous_turn_failed_tool_names(recent_messages: list) -> list[str]:
     return list(reversed(failed_names_text_tool)) + failed_names_native
 
 
+def _conversation_cache_key(namespace: str, inputs: dict) -> str:
+    """Fingerprint JSON data inputs without retaining large prompt payloads."""
+    payload = json.dumps(inputs, sort_keys=True, separators=(",", ":"))
+    return f"{namespace}:{sha256(payload.encode('utf-8')).hexdigest()}"
+
+
 def _build_enrichment_context_hint(cfg, recent_messages: list) -> Optional[str]:
     """Compact summary of live context for the query extractor and tool router.
 
@@ -983,7 +990,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         except Exception as e:
             debug_log(f"MCP refresh on new conversation failed: {e}", "mcp")
 
-    # Load MCP tools cache now so the planner sees the full catalog.
+    # Load MCP definitions for routing and the planner catalogue.
     mcp_tools: dict = {}
     if getattr(cfg, "mcps", {}):
         try:
@@ -994,7 +1001,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             mcp_tools = {}
 
     # ── Step 3: Pre-flight planner ─────────────────────────────────────
-    # The planner runs FIRST, before any memory lookup or tool routing.
+    # The planner runs after routing and before memory lookup.
     # Its job is to decide up front what preparation this turn needs:
     #
     #   - Does answering require information the user shared in prior
@@ -1002,9 +1009,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     #     ``searchMemory topic='...'`` directive and we run diary + graph
     #     enrichment; otherwise we skip the keyword-extraction LLM call,
     #     the diary/graph queries, and the memory-digest LLM call.
-    #   - Are any external tools needed? The tool names the planner
-    #     references become the allow-list directly — we skip the
-    #     separate tool-router LLM call.
+    #   - Are any external tools needed? Tool names referenced by the
+    #     planner augment the router's selection for the reply loop.
     #
     # Fail-open: if the planner returns ``[]`` (short query, disabled,
     # LLM timeout, empty response), we fall through to the legacy safe
@@ -1041,18 +1047,20 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         strategy = ToolSelectionStrategy(getattr(cfg, "tool_selection_strategy", "llm"))
     except ValueError:
         strategy = ToolSelectionStrategy.LLM
-    # Hot-window cache: router output for the same redacted query and
-    # tool catalogue is reused within one conversation. Catalogue
-    # signature includes builtin + MCP tool names so a mid-window MCP
-    # refresh invalidates the cache. context_hint is intentionally not
-    # part of the key — time/location drift inside one hot window
-    # rarely changes the tool pick.
-    _router_cache_key = (
-        f"router:{redacted}|"
-        f"{strategy.value}|"
-        f"{','.join(sorted(BUILTIN_TOOLS.keys()))}|"
-        f"{','.join(sorted((mcp_tools or {}).keys()))}"
-    )
+    # Routing depends on live facts, recent dialogue and tool definitions.
+    # Stable JSON fingerprints keep keys bounded and ignore object-key order.
+    _router_cache_key = _conversation_cache_key("router", {
+        "query": redacted,
+        "strategy": strategy.value,
+        "context_hint": context_hint,
+        "catalogue": {
+            source: {
+                name: {"description": tool.description, "inputSchema": tool.inputSchema}
+                for name, tool in tools.items()
+            }
+            for source, tools in (("builtin", BUILTIN_TOOLS), ("mcp", mcp_tools or {}))
+        },
+    })
     _cached_routed = (
         dialogue_memory.hot_cache_get(_router_cache_key)
         if dialogue_memory and hasattr(dialogue_memory, "hot_cache_get") else None
@@ -1074,15 +1082,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             embed_timeout_sec=float(getattr(cfg, "llm_embedding_timeout_sec", 10.0)),
             context_hint=context_hint,
         )
-        # Don't cache the router's "fall open to all tools" fallback. That
-        # path fires when the LLM router times out, returns empty, or emits
-        # a response no token of which matches a known tool name — i.e. the
-        # router gave up. Caching its "give up = expose everything" output
-        # for the rest of the conversation pins ``allowed_tools`` to the
-        # full catalogue, overwhelms the planner (which then paraphrases
-        # tool steps as prose), and starves a small chat model into
-        # producing the empty-reply fallback. Re-rolling the router on the
-        # next turn is cheap and almost always recovers.
+        # Full-catalogue results do not provide a narrowed selection. Retry
+        # routing rather than persisting that exposure for identical inputs.
         _router_returned_full_catalog = (
             routed_tools is not None
             and len(routed_tools) == len(_full_catalog_names)
@@ -1322,11 +1323,11 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 # keyword selection tracks what the planner actually
                 # wanted to look up, not just the surface utterance.
                 _extractor_query = f"{redacted}\n[Memory topic: {_memory_topic_hint}]"
-            # Hot-window cache: extractor output is a pure function of
-            # the (query, topic-hint) pair, so identical follow-ups within
-            # one conversation reuse the keywords/questions/from/to dict
-            # and skip the LLM call entirely.
-            _extractor_cache_key = f"enrichment:{_extractor_query}"
+            # Follow-up referents and time bounds depend on the live hint.
+            _extractor_cache_key = _conversation_cache_key("enrichment", {
+                "query": _extractor_query,
+                "context_hint": context_hint,
+            })
             _cached_params = (
                 dialogue_memory.hot_cache_get(_extractor_cache_key)
                 if dialogue_memory and hasattr(dialogue_memory, "hot_cache_get") else None
