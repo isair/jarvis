@@ -118,8 +118,7 @@ Event shapes (mirrors the diary IPC):
 ```
 
 `__CHAT__:` lines must never contain unredacted user text. The `start` event
-carries the already-redacted query (redaction happens before the worker thread
-starts, so the IPC payload is safe to log).
+carries the query redacted inside the worker before notification or logging.
 
 ### Subprocess query-in channel (desktop → daemon)
 
@@ -151,11 +150,15 @@ itself is dropped so a re-submission does not duplicate it. Malformed
 rewind lines are swallowed (consumed, ignored), mirroring
 `__CHAT_QUERY__:` handling.
 
-Chat IPC lines are routed to the chat window and then **not** emitted to the
-general log viewer. The ``complete`` event carries the whole assistant reply,
-which can echo back whatever the user typed, and the log window is outside the
-redaction invariant the chat path maintains. Diary IPC still reaches the log
-viewer, which is what it is for.
+Chat IPC lines are routed to the chat window and excluded from the general
+log viewer. The daemon emits separate readable activity lines in both bundled
+and subprocess modes: `⌨️ Typed:` with the redacted accepted query, followed by
+`🤖 Jarvis` and the delivered reply with structural secrets scrubbed and
+multiline formatting preserved. The quiet engine leaves reply logging to the
+worker, after the cancellation check. Busy or invalid submissions do not create
+accepted-query entries; cancelled and empty replies do not create reply entries.
+An accepted query remains in the activity log if its reply fails or is cancelled.
+Diary IPC still reaches the log viewer.
 
 ## Desktop window
 
@@ -281,12 +284,13 @@ the app.
   context.
 - The transcript area shows the user's local echo (what they just typed) so
   the conversation reads naturally. The transcript is in-memory only and is
-  never persisted to disk; the diary remains the single durable record,
-  written through the existing `update_diary_from_dialogue_memory` path at
-  session end, and that path sees only the redacted query.
-- The `__CHAT__:` IPC lines carry only the redacted query (in the `start`
-  event) and event metadata, so the subprocess stdout stream (which the
-  desktop app captures for the log viewer) never leaks raw user input.
+  retained in memory. Redacted accepted queries and scrubbed delivered replies
+  also appear in the activity log, which users can export for diagnostics.
+  The diary is written through `update_diary_from_dialogue_memory` at session
+  end and sees only the redacted query.
+- The `__CHAT__:` IPC `start` event carries the redacted query. Activity-log
+  messages use the same redacted query and scrub secrets from replies.
+  Reply IPC events are delivered to the chat window without logging them.
 
 ## What the system does not do
 

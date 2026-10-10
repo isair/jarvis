@@ -131,11 +131,8 @@ class TestSubmitTextQueryContract:
         assert captured["language"] is None
         assert captured["text"] == "hi there"
 
-    def test_engine_called_with_quiet_so_reply_stays_out_of_logs(self, monkeypatch):
-        """Chat queries must run the engine in quiet mode: the engine prints
-        the reply to stdout, which subprocess mode forwards to the desktop
-        app's general log viewer — a surface outside the chat redaction
-        invariant. ``quiet=True`` suppresses that print."""
+    def test_engine_called_quietly_so_worker_owns_reply_logging(self, monkeypatch):
+        """The worker logs the scrubbed delivered reply once, after cancellation."""
         _install_dialogue_memory(cfg=object(), db=object())
         captured = {}
 
@@ -789,3 +786,61 @@ def test_ipc_capture_preserves_the_complete_event_sequence(monkeypatch, split):
         {'type': 'start', 'data': 'hello'},
         {'type': 'complete', 'data': 'reply'},
     ]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("use_ipc", [False, True], ids=["bundled", "subprocess"])
+@pytest.mark.parametrize("outcome", ["reply", "cancelled", "empty"])
+def test_chat_activity_log_records_accepted_exchange(monkeypatch, capsys, use_ipc, outcome):
+    from jarvis.utils.redact import redact, scrub_secrets
+
+    _reset_daemon_globals()
+    _install_dialogue_memory(cfg=object(), db=object())
+    query = "What about alice@example.org?\nAnd London?"
+    reply = "Contact bob@example.org\nThe weather looks pleasant."
+    finished = threading.Event()
+
+    def engine(*args, **kwargs):
+        if outcome == "cancelled":
+            daemon.cancel_active_chat_query()
+        return None if outcome == "empty" else reply
+
+    monkeypatch.setattr("jarvis.reply.engine.run_reply_engine", engine)
+    daemon.submit_text_query(
+        query, use_ipc=use_ipc,
+        on_complete=lambda result: finished.set(),
+    )
+    try:
+        assert finished.wait(5)
+        for worker in threading.enumerate():
+            if worker.name == "jarvis-chat-query":
+                worker.join(timeout=5)
+                assert not worker.is_alive()
+        output = capsys.readouterr().out
+        activity = "\n".join(line for line in output.splitlines()
+                             if not line.startswith(daemon.CHAT_IPC_PREFIX))
+        assert activity.count("⌨️ Typed:") == 1
+        assert redact(query) in activity
+        assert "alice@example.org" not in activity
+        assert "bob@example.org" not in activity
+        if outcome == "reply":
+            assert activity.count("🤖 Jarvis") == 1
+            assert "\n".join("  " + line for line in scrub_secrets(reply).splitlines()) in activity
+        else:
+            assert "🤖 Jarvis" not in activity
+            assert "weather looks pleasant" not in activity
+    finally:
+        _reset_daemon_globals()
+
+
+@pytest.mark.unit
+def test_rejected_chat_submission_does_not_log_an_accepted_query(capsys):
+    _reset_daemon_globals()
+    _install_dialogue_memory(cfg=object(), db=object())
+    daemon._chat_query_lock.acquire()
+    try:
+        daemon.submit_text_query("rejected message")
+        assert "Typed:" not in capsys.readouterr().out
+    finally:
+        daemon._chat_query_lock.release()
+        _reset_daemon_globals()

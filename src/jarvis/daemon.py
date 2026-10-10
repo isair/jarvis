@@ -455,8 +455,9 @@ def submit_text_query(
             # Done inside the worker's try/except so a redaction failure fails
             # open (complete(None)) and the shared lock is released in finally
             # rather than leaking and blocking every future submission.
-            from .utils.redact import redact
+            from .utils.redact import redact, scrub_secrets
             display_query = redact(text)
+            print(f'⌨️ Typed: "{display_query}"', flush=True)
             _notify_chat("start", display_query, callbacks=callbacks, use_ipc=use_ipc)
             from .reply.engine import run_reply_engine
             reply = run_reply_engine(
@@ -471,6 +472,11 @@ def submit_text_query(
             if cancel_event.is_set():
                 debug_log("chat query cancelled, dropping reply", "chat")
                 reply = None
+            if reply:
+                logged_reply = "\n".join(
+                    "  " + line for line in scrub_secrets(reply).splitlines()
+                )
+                print(f"\n🤖 Jarvis\n{logged_reply}\n", flush=True)
             _notify_chat("complete", reply, callbacks=callbacks, use_ipc=use_ipc)
         except Exception as exc:
             debug_log(f"chat query worker error: {exc}", "chat")
