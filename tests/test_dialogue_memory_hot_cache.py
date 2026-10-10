@@ -9,6 +9,9 @@ invalidated on demand via ``invalidate_warm_profile()``.
 """
 
 import time
+from types import SimpleNamespace
+
+from src.jarvis.memory import conversation
 
 import pytest
 
@@ -17,27 +20,22 @@ from src.jarvis.memory.conversation import DialogueMemory, is_tool_message
 
 @pytest.mark.unit
 class TestHotCachePrimitives:
-    def test_get_returns_none_for_missing_key(self):
+    @pytest.mark.parametrize('value', [{"v": 1}, "", [], {}, False, 0, None])
+    def test_cache_roundtrip_and_replacement(self, value):
         dm = DialogueMemory()
-        assert dm.hot_cache_get("nope") is None
+        assert dm.hot_cache_get("k") is None
+        dm.hot_cache_put("k", value)
+        assert dm.hot_cache_get("k") == value
+        dm.hot_cache_put("k", "replacement")
+        assert dm.hot_cache_get("k") == "replacement"
 
-    def test_put_then_get_roundtrips(self):
-        dm = DialogueMemory()
-        dm.hot_cache_put("k", {"v": 1})
-        assert dm.hot_cache_get("k") == {"v": 1}
-
-    def test_entries_persist_past_recent_window_age(self):
-        """Cache entries are conversation-scoped, not bounded by
-        RECENT_WINDOW_SEC. A long active conversation must keep the
-        cache hot even when the original write is older than the window.
-        """
+    def test_entries_persist_past_recent_window_age(self, monkeypatch):
+        """Elapsed time alone does not expire conversation-scoped entries."""
+        clock = {"now": time.time()}
+        monkeypatch.setattr(conversation, 'time', SimpleNamespace(time=lambda: clock['now']))
         dm = DialogueMemory(inactivity_timeout=300.0)
         dm.hot_cache_put("k", "v")
-        with dm._lock:
-            ts, value = dm._hot_cache["k"]
-            dm._hot_cache["k"] = (ts - (dm.RECENT_WINDOW_SEC + 10), value)
-        # Age alone must NOT cause the value to disappear; only explicit
-        # invalidation should drop it.
+        clock['now'] += dm.RECENT_WINDOW_SEC + 10
         assert dm.hot_cache_get("k") == "v"
 
     def test_invalidate_warm_profile_drops_only_that_key(self):
@@ -56,11 +54,6 @@ class TestHotCachePrimitives:
         assert dm.hot_cache_get("a") is None
         assert dm.hot_cache_get("b") is None
 
-    def test_put_overwrites_existing_value(self):
-        dm = DialogueMemory()
-        dm.hot_cache_put("k", "old")
-        dm.hot_cache_put("k", "new")
-        assert dm.hot_cache_get("k") == "new"
 
 
 @pytest.mark.unit
@@ -70,40 +63,35 @@ class TestHotCacheLRUCap:
     session would otherwise accumulate one entry per unique query.
     """
 
-    def test_size_never_exceeds_cap(self):
+    def test_only_the_latest_capacity_entries_remain(self):
         dm = DialogueMemory()
         cap = dm.HOT_CACHE_MAX_ENTRIES
-        for i in range(cap + 50):
+        count = cap + 50
+        for i in range(count):
             dm.hot_cache_put(f"key:{i}", i)
-        assert len(dm._hot_cache) == cap
+        for i in range(count):
+            assert dm.hot_cache_get(f"key:{i}") == (i if i >= count - cap else None)
 
-    def test_least_recently_used_entry_evicted_first(self):
+    @pytest.mark.parametrize('access', ['read', 'replace'])
+    @pytest.mark.parametrize('oldest_value', [0, False, '', [], {}, None])
+    def test_access_preserves_oldest_entry_and_evicts_next(self, access, oldest_value):
         dm = DialogueMemory()
         cap = dm.HOT_CACHE_MAX_ENTRIES
-        # Fill exactly to cap.
-        for i in range(cap):
+        dm.hot_cache_put("k0", oldest_value)
+        for i in range(1, cap):
             dm.hot_cache_put(f"k{i}", i)
-        # Touch the oldest entry so it becomes most-recently-used.
-        assert dm.hot_cache_get("k0") == 0
-        # Inserting one more entry should evict the next-oldest (k1),
-        # NOT k0 since we just touched it.
+        if access == 'read':
+            assert dm.hot_cache_get("k0") == oldest_value
+            expected = oldest_value
+        else:
+            expected = "updated"
+            dm.hot_cache_put("k0", expected)
         dm.hot_cache_put("new", "v")
-        assert dm.hot_cache_get("k0") == 0
+        assert dm.hot_cache_get("k0") == expected
         assert dm.hot_cache_get("k1") is None
         assert dm.hot_cache_get("new") == "v"
-
-    def test_overwriting_existing_key_does_not_evict(self):
-        dm = DialogueMemory()
-        cap = dm.HOT_CACHE_MAX_ENTRIES
-        for i in range(cap):
-            dm.hot_cache_put(f"k{i}", i)
-        # Overwrite an existing entry — size should stay at cap, no
-        # entry should disappear.
-        dm.hot_cache_put("k0", "updated")
-        assert len(dm._hot_cache) == cap
-        assert dm.hot_cache_get("k0") == "updated"
-        # The other keys are still present.
-        assert dm.hot_cache_get(f"k{cap - 1}") == cap - 1
+        for i in range(2, cap):
+            assert dm.hot_cache_get(f"k{i}") == i
 
 
 @pytest.mark.unit

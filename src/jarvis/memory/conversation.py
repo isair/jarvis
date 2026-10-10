@@ -750,23 +750,10 @@ class DialogueMemory:
         # tool-related messages. Excluded from `get_pending_chunks` so raw tool
         # payloads never reach the diary summariser.
         self._tool_turns: List[Tuple[float, List[dict]]] = []
-        # Conversation-scoped scratch cache: per-key (timestamp, value)
-        # entries that survive for the lifetime of the active conversation.
-        # The reply engine wipes this on new-conversation entry (when
-        # ``has_recent_messages`` was False at turn start), and individual
-        # entries can be invalidated on demand (e.g. ``invalidate_warm_profile``
-        # on graph mutations). The timestamp is retained so callers may
-        # inspect entry age, but reads are NOT bounded by RECENT_WINDOW_SEC
-        # any more — long active conversations would otherwise see warm
-        # profile / router caches expire while the session is still going.
-        # LRU-bounded so per-query keys (router cache, enrichment extractor
-        # cache) cannot grow without limit during long active sessions.
-        # Reads bump recency; writes evict the least-recently-used entry
-        # once the cap is reached. ``WARM_PROFILE_CACHE_KEY`` is a single
-        # query-agnostic entry so the cap easily covers it; explicit
-        # invalidation hooks (``clear_hot_cache``, ``invalidate_warm_profile``,
-        # new-conversation reset) still apply unchanged.
-        self._hot_cache: "OrderedDict[str, Tuple[float, object]]" = OrderedDict()
+        # Conversation-scoped values use bounded LRU storage. Reads and
+        # writes promote entries; the engine clears them on stop or a new
+        # conversation. Graph mutations invalidate the warm-profile entry.
+        self._hot_cache: OrderedDict[str, object] = OrderedDict()
         # Hard ceiling on stored tool turns. With the default
         # ``tool_carryover_max_turns=2`` re-injected per reply, 16 lets a
         # session accumulate roughly 8x the visible budget before the
@@ -1014,22 +1001,20 @@ class DialogueMemory:
         conversation reset in the engine.
         """
         with self._lock:
-            entry = self._hot_cache.get(key)
-            if not entry:
+            if key not in self._hot_cache:
                 return None
             self._hot_cache.move_to_end(key)
-            _ts, value = entry
-            return value
+            return self._hot_cache[key]
 
     def hot_cache_put(self, key: str, value: object) -> None:
-        """Store value under key with current timestamp.
+        """Store value and mark its key as most recently used.
 
         Evicts the least-recently-used entry once ``HOT_CACHE_MAX_ENTRIES``
         is exceeded so per-query keys (router/enrichment caches) cannot
         grow without bound during long sessions.
         """
         with self._lock:
-            self._hot_cache[key] = (time.time(), value)
+            self._hot_cache[key] = value
             self._hot_cache.move_to_end(key)
             while len(self._hot_cache) > self.HOT_CACHE_MAX_ENTRIES:
                 self._hot_cache.popitem(last=False)
