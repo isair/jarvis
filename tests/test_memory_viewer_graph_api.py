@@ -1,10 +1,4 @@
-"""Tests for the memory viewer graph HTTP API.
-
-Focused on the preset-protection contract: the seeded fixed branches and
-root must not be deletable through the public DELETE endpoint, and the
-``/api/graph/presets`` endpoint must surface the same set the backend
-guards (single source of truth for the JS UI).
-"""
+"""The graph HTTP API protects preset nodes and rejects invalid parent edits."""
 
 from __future__ import annotations
 
@@ -73,3 +67,14 @@ class TestGraphPresetProtection:
         assert resp.status_code == 200
         assert resp.get_json() == {"success": True}
         assert self.store.get_node(node.id) is None
+
+    @pytest.mark.parametrize('target', ['descendant', 'missing'])
+    def test_invalid_parent_edit_returns_controlled_error_without_writing(self, target):
+        node = self.store.create_node('Category', 'Keep description', data='Keep facts', parent_id='user')
+        child = self.store.create_node('Child', 'Child', parent_id=node.id)
+        parent = child.id if target == 'descendant' else 'absent-node'
+        before = self.store.get_node(node.id).to_dict()
+        response = self.client.put(f'/api/graph/node/{node.id}', json={'parent_id': parent, 'data': 'Changed facts'})
+        assert response.status_code == 404
+        assert response.get_json()['error']
+        assert self.store.get_node(node.id).to_dict() == before

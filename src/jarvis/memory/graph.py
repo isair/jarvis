@@ -477,11 +477,15 @@ class GraphMemoryStore:
         data: Optional[str] = None,
         parent_id: Optional[str] = ...,  # type: ignore[assignment]
     ) -> Optional[MemoryNode]:
-        """Update fields on an existing node. Returns the updated node."""
+        """Return the updated node, or None for an absent node or invalid parent."""
         with self._lock:
             node = self.get_node(node_id)
             if node is None:
                 return None
+            if parent_id is not ... and parent_id != node.parent_id:
+                if not self._valid_parent(node_id, parent_id):
+                    debug_log(f"graph update: rejected invalid parent for {node_id}", "memory")
+                    return None
 
             if name is not None:
                 node.name = name
@@ -498,6 +502,22 @@ class GraphMemoryStore:
 
         _notify_graph_mutation("update", node_id, branch)
         return node
+
+    def _valid_parent(self, node_id: str, parent_id: Optional[str]) -> bool:
+        """Check parent ancestry while the caller holds the store lock."""
+        if node_id == "root" or node_id in FIXED_BRANCH_IDS:
+            return False
+        visited = {node_id}
+        current_id = parent_id
+        while current_id is not None:
+            if current_id in visited:
+                return False
+            visited.add(current_id)
+            current = self.get_node(current_id)
+            if current is None:
+                return False
+            current_id = current.parent_id
+        return True
 
     def _persist_node(self, node: MemoryNode) -> None:
         """Commit a node snapshot while the caller holds the store lock."""
