@@ -4,6 +4,9 @@
 range. Optional `since_utc` and `until_utc` string fields accept ISO timestamps.
 Bounds with Z, an offset or a space separator are converted to the stored UTC
 format. Naive bounds are interpreted as UTC, as named by the public fields.
+Model-facing bounds declare the standard `date-time` format so relative
+calendar requests can use clock-grounded step resolution. Direct boundary
+normalisation retains the documented ISO variants.
 
 Absent or empty upper bounds resolve to the current UTC instant. Absent or
 empty lower bounds resolve to one day before the resolved upper bound.

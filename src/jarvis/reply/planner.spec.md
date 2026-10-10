@@ -259,6 +259,14 @@ The engine consumes the plan in two phases.
   descriptions and complete parameter schemas. Property descriptions, types,
   enums, formats, required fields and nested constraints remain available;
   argument names alone do not define the contract.
+- When a named step tool declares a standard `date`, `date-time` or `time`
+  format, including in nested schemas, model resolution receives UTC and
+  system-local ISO clock values from one current instant. Relative temporal arguments use this reference and the
+  schema's required format. The system-local calendar is the default;
+  explicit step or prior-result timezones take precedence. Concrete literal
+  calls retain their no-inference path and supplied timestamps. Other tool
+  steps retain the base resolver prompt and receive no clock block, even when
+  another allowed tool has temporal fields.
 - Returns `None` for synthesis steps (the LLM emits the literal
   `null`), unknown tools, or invalid JSON. All `None` paths fall back
   to the normal chat-model turn.
