@@ -349,7 +349,7 @@ class TestSelfContainedToolArguments:
         """
         Scenario:
         - Turn 1: "Who is Harry Styles?" -> webSearch("Harry Styles ...")
-        - Turn 2: "What are his most famous songs?" -> webSearch argument
+        - Turn 2: "Search the web for his most famous songs." -> webSearch argument
                   MUST contain "Harry Styles" (pronoun resolved from context).
         """
         from jarvis.reply.engine import run_reply_engine
@@ -380,11 +380,11 @@ class TestSelfContainedToolArguments:
             )
             turn1_calls = list(capture.calls)
 
-            # Turn 2: follow-up with pronoun
+            # An explicit lookup tests pronoun resolution in tool arguments.
             capture.clear()
             response2 = run_reply_engine(
                 db=eval_db, cfg=mock_config, tts=None,
-                text="What are his most famous songs?",
+                text="Search the web for his most famous songs.",
                 dialogue_memory=eval_dialogue_memory
             )
             turn2_calls = list(capture.calls)
@@ -404,19 +404,14 @@ class TestSelfContainedToolArguments:
             f"Got: {[c['name'] for c in turn2_calls]}"
         )
 
-        # Every search call's string argument must name the entity
+        # The query itself must identify the entity without prior turns.
         for call in search_calls:
-            args = call["args"] or {}
-            arg_values = " ".join(
-                str(v) for v in args.values() if isinstance(v, str)
-            ).lower()
-            assert "harry" in arg_values or "styles" in arg_values, (
-                f"❌ PRONOUN-RESOLUTION BUG: webSearch argument did not include "
-                f"the entity from the previous turn.\n"
-                f"   Args: {args}\n"
-                f"   Expected the string to contain 'Harry' or 'Styles' — the "
-                f"tool has no access to conversation history, so 'his' must be "
-                f"resolved by the model before the tool call."
+            query = (call["args"] or {}).get("search_query")
+            assert isinstance(query, str), "Search needs a string query"
+            normalised = " ".join(query.casefold().split())
+            assert "harry styles" in normalised, (
+                f"❌ Search query must include the complete entity from the "
+                f"previous turn. Got: {query!r}"
             )
 
         print(f"   ✅ webSearch argument resolved the pronoun correctly")
