@@ -211,6 +211,9 @@ The engine consumes the plan in two phases.
   the tool directly, bypassing the chat model for that turn. This
   keeps small models on-rails without relying on their native
   tool-call reliability.
+- An unresolved, rejected or failed step-resolution attempt hands unfinished
+  task decisions to the reply model for the remainder of that reply. A missing
+  concrete call is not an execution result.
 - A current-reply tool result with `success=False` suspends direct plan
   execution for the remainder of that reply. The failed result is retained,
   without a next-step or completion claim. The system message replaces the

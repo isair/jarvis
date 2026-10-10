@@ -217,11 +217,11 @@ def test_empty_plan_falls_through_to_existing_behaviour(
     )
 
 
+@pytest.mark.parametrize("resolution", ["missing", "error", "disallowed"])
 def test_resolver_failure_on_tool_step_falls_back_to_chat(
-    mock_config, db, dialogue_memory
+    mock_config, db, dialogue_memory, resolution
 ):
-    """When resolve_next_tool_call returns None for a tool step (not synthesis),
-    the engine must fall through to the normal chat-model turn for that step."""
+    """Unavailable resolution hands unfinished decisions to the reply model."""
     from jarvis.reply import engine as engine_mod
     from jarvis.tools.types import ToolExecutionResult
 
@@ -233,7 +233,10 @@ def test_resolver_failure_on_tool_step_falls_back_to_chat(
 
     def fake_chat(*args, **kwargs):
         chat_call_count[0] += 1
-        # First fallback turn: model emits a tool call itself
+        system = kwargs['messages'][0]['content']
+        assert "UNFINISHED TASKS TO REASSESS" in system
+        assert "ACTION PLAN for this query" not in system
+        # The reply model receives pending work, then chooses its own tool.
         if chat_call_count[0] == 1:
             return {
                 "message": {
@@ -256,6 +259,11 @@ def test_resolver_failure_on_tool_step_falls_back_to_chat(
         "Reply to the user with the combined findings.",
     ]
 
+    def resolve(**kwargs):
+        if resolution == "error":
+            raise RuntimeError("Resolver unavailable")
+        return ("not_registered", {}) if resolution == "disallowed" else None
+
     with patch.object(engine_mod, "run_tool_with_retries", side_effect=fake_tool_runner), \
          patch.object(engine_mod, "chat_with_messages", side_effect=fake_chat), \
          patch.object(engine_mod, "select_tools", return_value=["webSearch", "stop"]), \
@@ -265,7 +273,7 @@ def test_resolver_failure_on_tool_step_falls_back_to_chat(
              return_value={"keywords": []},
          ), \
          patch.object(engine_mod, "plan_query", return_value=plan), \
-         patch.object(engine_mod, "_resolve_plan_step", return_value=None):
+         patch.object(engine_mod, "_resolve_plan_step", side_effect=resolve):
         engine_mod.run_reply_engine(
             db=db,
             cfg=mock_config,

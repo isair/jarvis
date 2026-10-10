@@ -79,7 +79,9 @@ if TYPE_CHECKING:
 
 _PLAN_RECOVERY_HINT = (
     "\n\n[Reassess the unfinished tasks in the original request using the tool "
-    "outcomes. A failed tool is not a completed task. Try a different allowed "
+    "outcomes. The task list describes intended actions, not results. An "
+    "unexecuted or failed tool is not a completed task. Execute unfinished "
+    "actions through allowed tools. Try a different allowed "
     "approach or corrected arguments when the available information supports "
     "one. If information or access is missing, ask the user or explain the "
     "blocker. Do not perform a dependent action until its prerequisite succeeds, "
@@ -1694,7 +1696,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         )
         if len(action_plan) > 1 or _plan_has_tool_step:
             if _plan_in_recovery:
-                guidance.append("TASKS TO REASSESS AFTER A TOOL FAILURE:\n"
+                guidance.append("UNFINISHED TASKS TO REASSESS:\n"
                                 + "\n".join(action_plan) + _PLAN_RECOVERY_HINT)
             else:
                 guidance.append(format_plan_block(action_plan))
@@ -1997,7 +1999,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             return
         _plan_in_recovery = True
         messages[0] = {"role": "system", "content": _build_initial_system_message()}
-        debug_log("tool failed, returning unfinished task decisions to the reply model", "planning")
+        debug_log("planned execution incomplete, returning unfinished task decisions to the reply model", "planning")
         print("    ⚠️ Planned task needs recovery before continuing.", flush=True)
 
     while turn < max_turns:
@@ -2147,6 +2149,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     )
                 if _plan_exec_handled:
                     continue
+                _enter_plan_recovery()
 
         # Update the system message with fresh context (time/location) before each LLM call.
         # The block sits at the END of the system message's dynamic region (computed once per
