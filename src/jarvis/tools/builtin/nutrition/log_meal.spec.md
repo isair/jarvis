@@ -96,7 +96,9 @@ requests then use two passes against the chat model (`cfg.llm_chat_model`):
    `NONE` if no meal is described. Fences (` ```json … ``` `) added by
    small models are stripped before interpreting either outcome. A valid
    `NONE` decision returns a final unsuccessful tool result without inserting
-   a record, running coaching or retrying extraction. Non-object payloads and
+   a record, running coaching or retrying extraction. A one-item JSON array
+   containing a nutrition object is normalised to that single object. Empty,
+   multi-item or nested arrays are not combined or guessed. Other non-object payloads and
    parsing failures return `None` and the tool retries up to
    `context.max_retries`.
 2. **Follow-ups** (`generate_followups_for_meal`): a short coach prompt

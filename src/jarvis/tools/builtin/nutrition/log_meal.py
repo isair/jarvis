@@ -138,12 +138,14 @@ def extract_and_log_meal(db: Database, cfg: Any, original_text: str, source_app:
     if text.upper() == "NONE":
         debug_log(f"logMeal extractor returned NONE for text={original_text[:120]!r}", "nutrition")
         return ToolExecutionResult(success=False, reply_text="No meal was described; no record was created.")
-    data: Dict[str, Any]
     try:
         data = json.loads(text)
     except Exception as e:
         debug_log(f"logMeal extractor JSON parse failed: {e!r}; raw={text[:200]!r}", "nutrition")
         return None
+    if isinstance(data, list) and len(data) == 1 and isinstance(data[0], dict):
+        data = data[0]
+        debug_log("logMeal: normalised a single-meal JSON array", "nutrition")
     if not isinstance(data, dict):
         debug_log("⚠️ logMeal extractor returned a non-object payload", "nutrition")
         return None

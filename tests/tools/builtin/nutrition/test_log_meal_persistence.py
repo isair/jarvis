@@ -133,9 +133,10 @@ def test_valid_no_meal_decision_cannot_retry_into_a_written_record(monkeypatch, 
     assert not result.resource_references
 
 
-def test_malformed_extraction_can_recover_to_one_valid_record(monkeypatch, meal_context):
+@pytest.mark.parametrize('single_item_array', [False, True])
+def test_malformed_extraction_can_recover_to_one_valid_record(monkeypatch, meal_context, single_item_array):
     meal = {'description': 'eggs', 'calories_kcal': 150}
-    responses = iter(['{invalid', json.dumps(meal), 'Drink water.'])
+    responses = iter(['{invalid', json.dumps([meal] if single_item_array else meal), 'Drink water.'])
     monkeypatch.setattr(log_meal, 'call_llm_direct', lambda **kwargs: next(responses))
     result = log_meal.LogMealTool().run({}, meal_context)
     assert result.success, result.reply_text
@@ -157,3 +158,13 @@ def test_record_without_numeric_estimates_has_an_honest_confirmation(monkeypatch
     assert rows[0]['protein_g'] is None
     assert 'nutrition estimates unavailable' in result.reply_text
     assert 'approximate macros logged' not in result.reply_text
+
+
+@pytest.mark.parametrize('payload', [[], ['eggs'], [{'description': 'eggs'}, {'description': 'toast'}], [[{'description': 'eggs'}]]])
+def test_non_single_meal_envelopes_cannot_create_a_record(monkeypatch, meal_context, payload):
+    meal_context.max_retries = 0
+    monkeypatch.setattr(log_meal, 'call_llm_direct', lambda **kwargs: json.dumps(payload))
+    result = log_meal.LogMealTool().run({}, meal_context)
+    assert not result.success
+    assert not result.resource_references
+    assert saved_meals(meal_context.db) == []
