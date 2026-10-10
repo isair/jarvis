@@ -53,7 +53,7 @@ After creating a PR, run the `/review-pr` skill on it before considering the tas
 
 Squash-merged commits on `develop` should only carry the PR number in the title (e.g. `(#171)`), never the originating issue number. Issue references belong in the commit body as `Closes #NNN` so that they auto-close when the commit reaches `main` on release.
 
-Use real line breaks in commit messages and GitHub text. For multiline `gh` bodies, write UTF-8 text to a file and pass `--body-file`; do not encode line breaks as literal `\n` sequences. Put each closing reference on its own body line.
+Use real line breaks in commit messages and GitHub text. For multiline `gh` bodies, write UTF-8 text to a file and pass `--body-file`; do not encode line breaks as literal `\n` sequences. Put each closing reference on its own body line. After publishing a release, verify closure of referenced issues before marking the triage work complete.
 
 ## Issue Triage
 
