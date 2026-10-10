@@ -69,8 +69,8 @@ class TestDialogueMemory:
         with patch('time.time', return_value=time.time() + 2.0):
             assert dm.should_update_diary()  # Timeout passed
     
-    def test_clear_pending_updates(self):
-        """Test clearing pending diary updates."""
+    def test_saved_snapshot_stops_diary_update(self):
+        """Saving the captured snapshot leaves no diary update pending."""
         dm = DialogueMemory(inactivity_timeout=0.1)  # Short timeout for testing
         dm.add_interaction("Hello", "Hi")
         
@@ -78,7 +78,8 @@ class TestDialogueMemory:
         import time
         with patch('time.time', return_value=time.time() + 1.0):
             assert dm.should_update_diary()
-            dm.clear_pending_updates()
+            _, snapshot_timestamp = dm.get_pending_chunks_with_snapshot()
+            dm.mark_saved_up_to(snapshot_timestamp)
             assert not dm.should_update_diary()
 
 
@@ -379,55 +380,24 @@ class TestDialogueMemoryEdgeCases:
 
         assert len(errors) == 0, f"Thread safety errors: {errors}"
 
-    def test_new_message_during_diary_update_not_lost(self):
-        """Test that messages added during diary update are not incorrectly marked as saved."""
-        dm = DialogueMemory(inactivity_timeout=0.1)
+    @pytest.mark.parametrize('clock', [0.0, 1_000_000_000.0])
+    @pytest.mark.parametrize('later_count', [0, 1, 2])
+    def test_saved_snapshot_preserves_later_messages_with_a_stationary_clock(self, monkeypatch, clock, later_count):
+        """Saving a snapshot excludes later arrivals even within one clock tick."""
+        monkeypatch.setattr('time.time', lambda: clock)
+        dm = DialogueMemory()
+        dm.add_message('user', 'First message')
+        dm.add_message('assistant', 'First response')
+        chunks, snapshot_timestamp = dm.get_pending_chunks_with_snapshot()
+        assert chunks == ['User: First message', 'Assistant: First response']
 
-        # Add initial message
-        dm.add_message("user", "First message")
-        time.sleep(0.01)  # Small delay to ensure different timestamp
-        dm.add_message("assistant", "First response")
-
-        # Get current timestamp (simulating what update_diary_from_dialogue_memory does)
-        snapshot_timestamp = time.time()
-
-        # Get pending chunks (2 messages)
-        chunks_before = dm.get_pending_chunks()
-        assert len(chunks_before) == 2
-
-        # Simulate new message arriving during LLM summarization
-        time.sleep(0.01)
-        dm.add_message("user", "New message during update")
-
-        # Mark saved up to snapshot (not including new message)
+        later = [f'Later message {i}' for i in range(later_count)]
+        for message in later:
+            dm.add_message('user', message)
         dm.mark_saved_up_to(snapshot_timestamp)
 
-        # New message should still be pending
-        chunks_after = dm.get_pending_chunks()
-        assert len(chunks_after) == 1
-        assert "New message during update" in chunks_after[0]
-
-    def test_mark_saved_up_to_preserves_new_messages(self):
-        """Test that mark_saved_up_to only marks messages up to the given timestamp."""
-        dm = DialogueMemory()
-
-        # Add messages at different times
-        dm.add_message("user", "Old message 1")
-        time.sleep(0.05)
-        cutoff_time = time.time()
-        time.sleep(0.05)
-        dm.add_message("user", "New message 2")
-        time.sleep(0.05)
-        dm.add_message("user", "New message 3")
-
-        # Mark only old messages as saved
-        dm.mark_saved_up_to(cutoff_time)
-
-        # New messages should still be pending
-        pending = dm.get_pending_chunks()
-        assert len(pending) == 2
-        assert any("New message 2" in chunk for chunk in pending)
-        assert any("New message 3" in chunk for chunk in pending)
+        assert dm.get_pending_chunks() == [f'User: {message}' for message in later]
+        assert dm.has_pending_chunks() == bool(later)
 
     def test_long_conversation_forces_diary_update(self):
         """Test that very long conversations force diary update to prevent data loss."""
@@ -466,7 +436,8 @@ class TestDialogueMemoryEdgeCases:
         dm.add_message("user", "Message 2")
 
         # Mark all as saved
-        dm.clear_pending_updates()
+        _, snapshot_timestamp = dm.get_pending_chunks_with_snapshot()
+        dm.mark_saved_up_to(snapshot_timestamp)
 
         # Manually make messages old (beyond RECENT_WINDOW_SEC)
         with dm._lock:
@@ -509,7 +480,8 @@ class TestDialogueMemoryEdgeCases:
         assert dm.has_pending_chunks()
 
         # Mark as saved
-        dm.clear_pending_updates()
+        _, snapshot_timestamp = dm.get_pending_chunks_with_snapshot()
+        dm.mark_saved_up_to(snapshot_timestamp)
         assert not dm.has_pending_chunks()
 
     def test_should_update_diary_returns_false_when_no_pending(self):
@@ -521,7 +493,8 @@ class TestDialogueMemoryEdgeCases:
 
         # Add and save messages
         dm.add_message("user", "Hello")
-        dm.clear_pending_updates()
+        _, snapshot_timestamp = dm.get_pending_chunks_with_snapshot()
+        dm.mark_saved_up_to(snapshot_timestamp)
 
         # Even after timeout, should return False if no pending
         time.sleep(0.15)
@@ -548,7 +521,8 @@ class TestDialogueMemoryEdgeCases:
         """Snapshot excludes messages already marked as saved."""
         dm = DialogueMemory()
         dm.add_message("user", "Old message")
-        dm.clear_pending_updates()
+        _, snapshot_timestamp = dm.get_pending_chunks_with_snapshot()
+        dm.mark_saved_up_to(snapshot_timestamp)
         dm.add_message("user", "New message")
         chunks, _ = dm.get_pending_chunks_with_snapshot()
         assert len(chunks) == 1

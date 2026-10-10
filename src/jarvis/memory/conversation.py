@@ -1220,21 +1220,6 @@ class DialogueMemory:
             if ts >= cutoff or ts > self._last_saved_timestamp
         ]
 
-    def clear_pending_updates(self) -> None:
-        """Mark all current messages as saved. Thread-safe.
-
-        DEPRECATED: Use mark_saved_up_to() instead for proper timestamp tracking.
-        Kept for backward compatibility.
-        """
-        with self._lock:
-            self._diary_progress = None
-            if self._messages:
-                # Mark all current messages as saved
-                max_ts = max(ts for ts, _, _ in self._messages)
-                self._last_saved_timestamp = max_ts
-            self._cleanup_old_messages()
-
-
 def generate_conversation_summary(
     recent_chunks: List[str],
     previous_summary: Optional[str],
