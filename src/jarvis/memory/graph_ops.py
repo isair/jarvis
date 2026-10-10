@@ -654,9 +654,9 @@ def merge_node_data(
     Consolidation should only ever shrink or hold; runaway growth
     means the model invented content.
 
-    Fail-open on any error (LLM failure, parse failure, empty
-    rewrite, oversized rewrite). Caller's append path then writes the
-    fact directly. We never let a flaky LLM erase data — a
+    Fail-open on LLM failure, invalid output or a changed source node.
+    The caller appends new facts to the current node after a rejected
+    rewrite; an absent target produces no stored-fact report. We never let a flaky LLM erase data — a
     contradiction is recoverable, a silent wipe is not.
 
     Pass ``node`` if the caller has already fetched it; saves a
@@ -765,7 +765,10 @@ def merge_node_data(
             incorporated_indices.append(idx)
 
     new_data = "\n".join(cleaned)
-    store.update_node(node_id, data=new_data)
+    committed = store.update_node(node_id, data=new_data, expected_data=node.data)
+    if committed is None:
+        debug_log(f"merge: source node changed or disappeared for {node_id}", "memory")
+        return MergeResult(success=False)
     return MergeResult(success=True, incorporated_indices=incorporated_indices)
 
 
@@ -1048,7 +1051,10 @@ def update_graph_from_dialogue(
             # back to plain append for every queued fact so nothing
             # is lost.
             for branch_id, fact in items:
-                store.append_to_node(node_id, fact)
+                committed = store.append_to_node(node_id, fact)
+                if committed is None:
+                    debug_log(f"graph update: append target disappeared for {node_id}", "memory")
+                    continue
                 stored.append((fact, node_name))
                 debug_log(
                     f"graph update: appended '{fact[:50]}...' → "

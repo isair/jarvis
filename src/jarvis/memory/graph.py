@@ -518,13 +518,21 @@ class GraphMemoryStore:
         name: Optional[str] = None,
         description: Optional[str] = None,
         data: Optional[str] = None,
+        expected_data: Optional[str] = None,
         parent_id: Optional[str] = ...,  # type: ignore[assignment]
     ) -> Optional[MemoryNode]:
-        """Return the updated node, or None for an absent node or invalid parent."""
+        """Return the committed node, or None if absent, stale or invalid.
+
+        expected_data conditionally accepts a write only while its source
+        data matches the current row inside the write transaction.
+        """
         with self._lock, self.conn:
             self.conn.execute("BEGIN IMMEDIATE")
             node = self.get_node(node_id)
             if node is None:
+                return None
+            if expected_data is not None and node.data != expected_data:
+                debug_log(f"graph update: rejected stale data for {node_id}", "memory")
                 return None
             if parent_id is not ... and parent_id != node.parent_id:
                 if not self._valid_parent(node_id, parent_id):
@@ -615,16 +623,13 @@ class GraphMemoryStore:
         return {key for row in rows for line in row["data"].splitlines()
                 if (key := normalise_fact(line))}
 
-    def append_to_node(self, node_id: str, text: str) -> bool:
-        """Append text to a node's data field.
-
-        Returns True if the node's data_token_count now exceeds SPLIT_THRESHOLD.
-        """
+    def append_to_node(self, node_id: str, text: str) -> Optional[MemoryNode]:
+        """Append text and return the committed node, or None if absent."""
         with self._lock, self.conn:
             self.conn.execute("BEGIN IMMEDIATE")
             node = self.get_node(node_id)
             if node is None:
-                return False
+                return None
 
             separator = "\n" if node.data else ""
             node.data += separator + text
@@ -632,10 +637,9 @@ class GraphMemoryStore:
             node.updated_at = datetime.now(timezone.utc).isoformat()
             self._persist_node(node)
             branch = self._resolve_branch(node_id)
-            exceeded = node.data_token_count > SPLIT_THRESHOLD
 
         _notify_graph_mutation("update", node_id, branch)
-        return exceeded
+        return node
 
     def touch_node(self, node_id: str) -> None:
         """Increment access_count and update last_accessed."""
