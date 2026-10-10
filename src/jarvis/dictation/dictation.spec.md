@@ -105,7 +105,9 @@ After transcription, text passes through these stages in order:
 
 - The engine accepts an optional `voice_device` parameter, passed through from
   the daemon's configured device. Numeric indices and input-device names select
-  that device; a missing named input fails instead of recording another device.
+  that device. Unicode case-insensitive exact input-name matches take precedence
+  over the first partial input-name match; both skip output-only devices. A
+  missing named input fails instead of recording another device.
   The default input is resolved once per dictation session. An unavailable
   default produces Settings guidance and ends the session without recording.
 - The stream tries the selected device's native sample rate and mono input first.
