@@ -29,7 +29,7 @@ Design principles:
   the same language the user spoke.
 
 Contract:
-    plan_query(cfg, query, dialogue_context, memory_context, tools, *,
+    plan_query(cfg, query, dialogue_context, tools, *,
                timeout_sec) -> list[str]
 """
 
@@ -444,7 +444,6 @@ def plan_query(
     tools: Sequence[Tuple[str, str]],
     *,
     timeout_sec: Optional[float] = None,
-    memory_context: str = "",  # deprecated; planner now runs before memory
 ) -> List[str]:
     """Run a short planning LLM pass over the query + dialogue context.
 
@@ -454,12 +453,7 @@ def plan_query(
     A single ``["Reply to the user."]`` is a valid plan and means
     "answer directly; skip both memory and tools".
 
-    ``memory_context`` is accepted for backward compatibility with old
-    callers but no longer used: the planner runs before memory search
-    so it decides *whether* memory is needed, via the searchMemory
-    directive, rather than consulting memory itself.
     """
-    del memory_context  # intentionally unused since planner now runs first
     if not query or len(query.strip()) < MIN_QUERY_CHARS:
         return []
 

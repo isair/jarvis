@@ -92,6 +92,9 @@ one turn's allow-list.
 
 ### Prompt contract (plan_query)
 
+`plan_query` receives the query, recent dialogue and available tool catalogue.
+It runs before memory retrieval and emits directives for any required recall.
+
 The planner prompt instructs the model to emit:
 
 - Short imperative sub-tasks, one per line.
