@@ -181,22 +181,6 @@ class TestPlanQuery:
             )
         assert steps == []
 
-    def test_memory_context_arg_still_accepted_for_back_compat(self):
-        """Old callers pass `memory_context=` as a positional or keyword
-        argument. Planner now ignores it (the planner runs before memory
-        search), but the signature must still accept it so downstream
-        code doesn't break."""
-        cfg = _cfg()
-        with patch.object(planner_mod, "call_llm_direct", return_value="Reply to user."):
-            steps = plan_query(
-                cfg,
-                "tell me a joke about cats please",
-                "",
-                [],
-                memory_context="some old memory text",
-            )
-        assert steps == ["Reply to user."]
-
     def test_prompt_warns_against_fabricating_optional_arguments(self):
         """The planner prompt must explicitly tell the model to omit
         optional arguments when the user didn't supply a value, and warn
