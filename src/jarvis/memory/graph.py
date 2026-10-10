@@ -237,7 +237,6 @@ CREATE TABLE IF NOT EXISTS memory_graph_revisions (
     name TEXT PRIMARY KEY,
     revision INTEGER NOT NULL DEFAULT 0
 );
-INSERT OR IGNORE INTO memory_graph_revisions(name, revision) VALUES('warm_profile', 0);
 """
 
 
@@ -302,6 +301,12 @@ class GraphMemoryStore:
         with self._lock:
             self.conn.execute("PRAGMA foreign_keys = ON")
             self.conn.executescript(_GRAPH_SCHEMA_SQL + _WARM_PROFILE_TRIGGERS_SQL)
+            if self.conn.execute(
+                "SELECT 1 FROM memory_graph_revisions WHERE name = 'warm_profile'"
+            ).fetchone() is None:
+                self.conn.execute(
+                    "INSERT OR IGNORE INTO memory_graph_revisions(name, revision) VALUES('warm_profile', 0)"
+                )
             self.conn.commit()
 
     def _ensure_root(self) -> None:
@@ -330,9 +335,17 @@ class GraphMemoryStore:
                 self.conn.commit()
                 debug_log("Created root memory node", "memory")
 
-            # Insert missing branches only, keeping repeated bootstrap
-            # from firing insertion triggers for existing rows.
+            branch_ids = tuple(branch_id for branch_id, _, _ in FIXED_BRANCHES)
+            placeholders = ','.join('?' for _ in branch_ids)
+            existing_ids = {row['id'] for row in self.conn.execute(
+                f"SELECT id FROM memory_nodes WHERE id IN ({placeholders})",
+                branch_ids,
+            )}
+            # Existing branches require no writer lock. The insertion guard
+            # also prevents duplicate writes when another owner seeds first.
             for branch_id, name, description in FIXED_BRANCHES:
+                if branch_id in existing_ids:
+                    continue
                 self.conn.execute(
                     """INSERT OR IGNORE INTO memory_nodes
                        (id, name, description, data, parent_id,
