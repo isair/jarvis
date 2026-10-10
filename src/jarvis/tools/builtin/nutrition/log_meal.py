@@ -180,7 +180,7 @@ def extract_and_log_meal(db: Database, cfg: Any, original_text: str, source_app:
         summary_bits.append(f"{int(round(fat))}g fat")
     if fiber is not None:
         summary_bits.append(f"{int(round(fiber))}g fiber")
-    approx = ", ".join(summary_bits) if summary_bits else "approximate macros logged"
+    approx = ", ".join(summary_bits) if summary_bits else "nutrition estimates unavailable"
     conf_str = f" (confidence {conf:.0%})" if conf is not None else ""
 
     ts = datetime.now(timezone.utc).isoformat()

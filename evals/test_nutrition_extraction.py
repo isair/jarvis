@@ -471,11 +471,12 @@ class TestNutritionModelComparison:
 
 @pytest.mark.eval
 @requires_judge_llm
-def test_logged_meal_has_non_empty_follow_ups():
+@pytest.mark.parametrize("summary", ["~300 kcal, 35g protein", "nutrition estimates unavailable"])
+def test_logged_meal_has_non_empty_follow_ups(summary):
     """Coaching must emit useful text after its reasoning budget."""
     from jarvis.tools.builtin.nutrition.log_meal import generate_followups_for_meal
     followups = generate_followups_for_meal(
-        voice_config(), 'grilled chicken with broccoli', '~300 kcal, 35g protein',
+        voice_config(), 'grilled chicken with broccoli', summary,
     )
     assert followups.strip(), 'Empty inference is not successful coaching'
 

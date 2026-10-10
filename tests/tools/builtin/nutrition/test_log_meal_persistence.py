@@ -121,3 +121,18 @@ def test_malformed_extraction_can_recover_to_one_valid_record(monkeypatch, meal_
     rows = saved_meals(meal_context.db)
     assert len(rows) == 1
     assert rows[0]['description'] == meal['description']
+
+
+@pytest.mark.parametrize('estimates', [{}, {'calories_kcal': 'NaN', 'protein_g': 'not a number'}])
+def test_record_without_numeric_estimates_has_an_honest_confirmation(monkeypatch, meal_context, estimates):
+    meal = {'description': 'eggs with toast', **estimates}
+    monkeypatch.setattr(log_meal, 'call_llm_direct', lambda **kwargs:
+                        json.dumps(meal) if kwargs['system_prompt'] == log_meal.NUTRITION_SYS else '')
+    result = log_meal.LogMealTool().run({}, meal_context)
+    rows = saved_meals(meal_context.db)
+    assert result.success
+    assert len(rows) == 1
+    assert rows[0]['calories_kcal'] is None
+    assert rows[0]['protein_g'] is None
+    assert 'nutrition estimates unavailable' in result.reply_text
+    assert 'approximate macros logged' not in result.reply_text

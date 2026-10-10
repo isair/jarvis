@@ -132,7 +132,8 @@ Follow-ups: <coach text>
 
 The follow-up line is present only when coaching returns non-empty text.
 The macro summary is a comma-joined list of present-only fields (kcal,
-protein, carbs, fat, fiber). A valid extractor `NONE` result confirms that no meal was described and no
+protein, carbs, fat, fiber), or `nutrition estimates unavailable` when none are
+present. A valid extractor `NONE` result confirms that no meal was described and no
 record created. Exhausted extraction retries return `"Failed to log meal"`;
 empty input returns `"No meal description provided"`. Eligibility outcomes are
 described above.
