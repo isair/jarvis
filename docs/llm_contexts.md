@@ -176,6 +176,16 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 - **Output**: `MergeResult(success: bool, incorporated_indices: list[int])`. The revised fact list is written back as the node's full `data`; `incorporated_indices` tells the orchestrator which inputs survived as new lines (under NFKC + casefold matching) so consolidated-out facts aren't reported as "newly stored". Subsumes per-flush supersession, near-duplicate dedupe, and ongoing consolidation in a single call. Because the latest prompt rewrites the whole node, updated conventions propagate to old data without a separate migration step.
 - **Limits**: 20s timeout. **Hallucination guard**: rewrites with more than `len(existing) + len(new) + 2` lines are rejected as runaway output. Fail-open on any error, parse failure, oversized rewrite, or empty rewrite → caller falls back to plain `append_to_node` for each new fact so they still land (a contradiction is recoverable; a silent wipe or hallucinated bloat is not).
 
+## 11c. Knowledge Graph Node Split
+
+- **File**: [src/jarvis/memory/graph_ops.py](src/jarvis/memory/graph_ops.py), `auto_split_node()`.
+- **Trigger**: after a graph write exceeds `SPLIT_THRESHOLD`. Background.
+- **Model**: the graph update's `chat_model`, through the configured backend.
+- **Inputs**: node name, description and full stored fact text.
+- **System prompt**: inline category organisation, consolidation and common-knowledge pruning rules.
+- **Output**: category objects and a parent summary. Categories must form an array with at least two objects, each with a non-empty string name and a non-empty array of non-empty string facts. All categories are validated before creating children and clearing parent data. Invalid categories preserve the parent and its children.
+- **Limits**: 45s timeout, `max_tokens: 200`, 4096-token context; thinking follows the graph update. No retries in the split operation.
+
 ## 12. Task-list Planner (pre-flight decomposition, gates the whole turn)
 
 - **File**: [src/jarvis/reply/planner.py](src/jarvis/reply/planner.py) — `plan_query()`.
@@ -229,6 +239,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 | 10b | Graph fact hygiene | 0-1/extraction | non-empty candidates and remaining budget | same as #10 |
 | 11 | Graph best-child | 0-N | No (background) | SMALL (FAST tier) |
 | 11b | Graph node merge | 0-N (per node, batched) | No (background) | SMALL (FAST tier) |
+| 11c | Graph node split | 0-N | nodes above split threshold | same as #10 |
 | 12 | Planner (plan_query) | 1 | yes (planner_enabled) | LARGE/SMALL (tracks chat model) |
 | 13 | Plan step resolver | 0-N (SMALL only) | auto by size + plan | tracks chat model (CHAT tier; runs only when that model is SMALL) |
 | 14 | Tool-specific | per-tool | n/a | LARGE |

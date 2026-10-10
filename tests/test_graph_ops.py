@@ -417,20 +417,32 @@ class TestAutoSplitNode:
         result = auto_split_node(store, node.id, mock_config, "model")
         assert result is False
 
+    @pytest.mark.parametrize('invalid_category', [
+        None, 42, 'Category B',
+        {'name': 'Cat B', 'facts': []},
+        {'name': 'Cat B', 'facts': 'One fact'},
+        {'name': 'Cat B', 'facts': [True]},
+        {'name': 'Cat B', 'facts': ['']},
+        {'name': 'Cat B', 'facts': ['   ']},
+        {'name': True, 'facts': ['One fact']},
+        {'name': '   ', 'facts': ['One fact']},
+    ])
     @patch("src.jarvis.memory.graph_ops.call_llm_direct")
-    def test_split_aborts_on_category_missing_facts(self, mock_llm, store, mock_config):
+    def test_split_aborts_on_invalid_category(self, mock_llm, store, mock_config, invalid_category):
 
         node = self._make_large_node(store)
         mock_llm.return_value = json.dumps({
             "categories": [
                 {"name": "Cat A", "description": "First", "facts": ["Fact 1"]},
-                {"name": "Cat B", "description": "Second", "facts": []},
+                invalid_category,
             ],
             "summary": "Summary"
         })
 
         result = auto_split_node(store, node.id, mock_config, "model")
         assert result is False
+        assert store.get_node(node.id).data == node.data
+        assert store.get_children(node.id) == []
 
 
 # ── append_to_node ─────────────────────────────────────────────────────

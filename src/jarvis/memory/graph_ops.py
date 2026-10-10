@@ -903,21 +903,27 @@ def auto_split_node(
     summary = result.get("summary", node.description)
 
     # Validate: need at least 2 categories
-    if len(categories) < 2:
+    if not isinstance(categories, list) or len(categories) < 2:
         debug_log("auto-split: fewer than 2 categories proposed, aborting", "memory")
         return False
 
     # Validate: each category needs a name and at least one fact
     for cat in categories:
-        if not cat.get("name") or not cat.get("facts"):
-            debug_log(f"auto-split: invalid category {cat.get('name', '?')}, aborting", "memory")
+        if not isinstance(cat, dict):
+            debug_log("auto-split: non-object category, aborting", "memory")
+            return False
+        name, facts = cat.get("name"), cat.get("facts")
+        if (not isinstance(name, str) or not name.strip()
+                or not isinstance(facts, list) or not facts
+                or any(not isinstance(fact, str) or not fact.strip() for fact in facts)):
+            debug_log("auto-split: invalid category name or facts, aborting", "memory")
             return False
 
     # Create child nodes
     for cat in categories:
-        child_data = "\n".join(str(f) for f in cat["facts"])
+        child_data = "\n".join(cat["facts"])
         store.create_node(
-            name=str(cat["name"]),
+            name=cat["name"],
             description=str(cat.get("description", f"Memories about: {cat['name']}")),
             data=child_data,
             parent_id=node_id,
