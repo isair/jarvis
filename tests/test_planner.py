@@ -1,7 +1,7 @@
 """Unit tests for the task-list planner.
 
 These tests verify behaviours, not implementation: the parser cleans up
-messy LLM output, trivial single-reply plans don't leak out, the
+messy LLM output, explicit single-reply plans retain their meaning, the
 fail-open paths return an empty list, and the progress_nudge reflects
 accurate step progression.
 """
@@ -31,6 +31,9 @@ from jarvis.reply.planner import (
     tool_names_in_plan,
     tool_steps_of,
 )
+
+
+pytestmark = pytest.mark.unit
 
 
 def _cfg(**overrides):
