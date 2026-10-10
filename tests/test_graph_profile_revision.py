@@ -60,3 +60,57 @@ def test_existing_graph_data_survives_revision_schema_initialisation(tmp_path):
         assert store.get_node('user').data == 'Keep this stored fact\nNew fact'
     finally:
         store.close()
+
+
+@pytest.mark.parametrize('filename', ['graph.db', 'graph ?#%.db'])
+def test_read_only_store_reads_existing_facts_and_rejects_writes(tmp_path, filename):
+    path = str(tmp_path / filename)
+    writer = GraphMemoryStore(path)
+    try:
+        node = writer.create_node('Marker', 'Synthetic fact', data='Stored fact', parent_id='user')
+        revision = writer.get_warm_profile_revision()
+        reader = GraphMemoryStore(path, read_only=True)
+        try:
+            assert reader.get_node(node.id).data == 'Stored fact'
+            assert reader.get_warm_profile_revision() == revision
+            with pytest.raises(sqlite3.OperationalError, match='readonly'):
+                reader.append_to_node(node.id, 'Unwanted edit')
+        finally:
+            reader.close()
+        assert writer.get_node(node.id).data == 'Stored fact'
+        assert writer.get_warm_profile_revision() == revision
+    finally:
+        writer.close()
+
+
+def test_read_only_store_does_not_create_missing_database(tmp_path):
+    path = tmp_path / 'missing' / 'graph.db'
+    with pytest.raises(sqlite3.OperationalError):
+        GraphMemoryStore(str(path), read_only=True)
+    assert not path.parent.exists()
+
+
+def test_read_transaction_keeps_revision_and_facts_on_one_snapshot(tmp_path):
+    path = str(tmp_path / 'graph.db')
+    writer = GraphMemoryStore(path)
+    writer.conn.execute('PRAGMA journal_mode=WAL')
+    try:
+        node = writer.create_node('Marker', 'Synthetic fact', data='Earlier fact', parent_id='user')
+        reader = GraphMemoryStore(path, read_only=True)
+        try:
+            reader.conn.execute('BEGIN')
+            revision = reader.get_warm_profile_revision()
+            writer.update_node(node.id, data='Committed later fact')
+            assert writer.get_warm_profile_revision() > revision
+            assert reader.get_warm_profile_revision() == revision
+            assert reader.get_node(node.id).data == 'Earlier fact'
+        finally:
+            reader.close()
+        fresh = GraphMemoryStore(path, read_only=True)
+        try:
+            assert fresh.get_warm_profile_revision() == writer.get_warm_profile_revision()
+            assert fresh.get_node(node.id).data == 'Committed later fact'
+        finally:
+            fresh.close()
+    finally:
+        writer.close()

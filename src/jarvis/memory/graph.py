@@ -257,6 +257,7 @@ _WARM_PROFILE_TRIGGERS_SQL = "\n".join(
         UPDATE memory_graph_revisions SET revision = revision + 1 WHERE name = 'warm_profile';
     END;"""
     for name, event, row in (
+        ('insert_old', 'BEFORE INSERT', 'NEW'),
         ('insert', 'AFTER INSERT', 'NEW'),
         ('delete', 'BEFORE DELETE', 'OLD'),
         ('update_old', 'BEFORE UPDATE OF id, name, description, data, parent_id', 'OLD'),
@@ -275,16 +276,20 @@ class GraphMemoryStore:
     for fast retrieval: recent nodes, top nodes, and the root node.
     """
 
-    def __init__(self, db_path: str) -> None:
+    def __init__(self, db_path: str, *, read_only: bool = False) -> None:
         from pathlib import Path
-        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+        path = Path(db_path)
+        if not read_only:
+            path.parent.mkdir(parents=True, exist_ok=True)
 
         self.db_path = db_path
-        self.conn = sqlite3.connect(db_path, check_same_thread=False)
+        target = path.resolve().as_uri() + '?mode=ro' if read_only else db_path
+        self.conn = sqlite3.connect(target, uri=read_only, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self._lock = threading.RLock()
-        self._init_schema()
-        self._ensure_root()
+        if not read_only:
+            self._init_schema()
+            self._ensure_root()
 
     # ── Schema & bootstrap ──────────────────────────────────────────────
 
@@ -320,17 +325,17 @@ class GraphMemoryStore:
                 self.conn.commit()
                 debug_log("Created root memory node", "memory")
 
-            # Seed fixed top-level branches under root. Each row is
-            # inserted with INSERT OR IGNORE keyed on the stable id so
-            # repeated boots are no-ops.
+            # Insert missing branches only, keeping repeated bootstrap
+            # from firing insertion triggers for existing rows.
             for branch_id, name, description in FIXED_BRANCHES:
                 self.conn.execute(
                     """INSERT OR IGNORE INTO memory_nodes
                        (id, name, description, data, parent_id,
                         access_count, last_accessed, created_at, updated_at,
                         data_token_count)
-                       VALUES (?, ?, ?, '', 'root', 0, ?, ?, ?, 0)""",
-                    (branch_id, name, description, now, now, now),
+                       SELECT ?, ?, ?, '', 'root', 0, ?, ?, ?, 0
+                       WHERE NOT EXISTS (SELECT 1 FROM memory_nodes WHERE id = ?)""",
+                    (branch_id, name, description, now, now, now, branch_id),
                 )
             self.conn.commit()
 

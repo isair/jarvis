@@ -27,7 +27,7 @@ On first bootstrap the graph seeds three non-deletable branches under root, defi
 | `directives` | Directives | Imperatives the user issued at the assistant: reply style, tone rules, standing instructions |
 | `world` | World | External facts the assistant has learned: discoveries, practical knowledge, current events |
 
-These branches are created idempotently via `INSERT OR IGNORE` on stable IDs. The structure is intentionally shallow and purpose-driven — splits deepen each subtree over time, but the top layer stays fixed so the **warm profile** (see below) has a stable shape.
+These branches are created idempotently by inserting only missing stable IDs. The structure is intentionally shallow and purpose-driven — splits deepen each subtree over time, but the top layer stays fixed so the **warm profile** (see below) has a stable shape.
 
 No Other branch: the extractor defaults unknown classifications to `user`. A fact that genuinely belongs nowhere should not be stored.
 
@@ -124,7 +124,8 @@ Increments `access_count` and updates `last_accessed`. Called automatically when
 
 A persisted `warm_profile` revision in `memory_graph_revisions` tracks User and
 Directives profile inputs. SQLite triggers advance it for inserts, deletes and
-content/parent edits anywhere in those subtrees. Before/after update checks cover
+content/parent edits anywhere in those subtrees. Before-insert checks include
+the existing row for SQLite replacement writes. Before/after update checks cover
 moves into or out of a relevant branch. Ancestor queries use indexed parent links
 and terminate on repeated nodes. Access-only touches and World-only writes leave
 the revision unchanged. Triggers operate within the writer's transaction,
@@ -135,7 +136,11 @@ The reply cache includes the database path and revision with its profile block.
 Each turn checks that signature before reuse, so committed external edits reach
 the next turn without requiring an in-process callback. Changed profiles are
 rebuilt; an unavailable rebuild supplies no stale block. Temporary read stores
-are closed after use.
+are closed after use. Profile reads open the existing database with SQLite's
+read-only mode, without schema or branch seed writes. A read transaction keeps
+the revision and profile traversal on one committed snapshot. Bootstrap and
+schema initialisation belong to writable stores at daemon start-up or graph
+editing boundaries; opening a missing graph for reading creates no files.
 
 ### Mutation Listeners
 

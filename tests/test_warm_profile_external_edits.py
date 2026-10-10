@@ -32,7 +32,7 @@ def reply_context(monkeypatch, tmp_path, mock_config, db, dialogue_memory):
 
 
 @pytest.mark.parametrize('branch', ['user', 'directives'])
-@pytest.mark.parametrize('change', ['update', 'delete', 'insert', 'move_out', 'move_in'])
+@pytest.mark.parametrize('change', ['update', 'delete', 'insert', 'move_out', 'move_in', 'replace_out'])
 def test_external_edit_is_visible_in_same_conversation(reply_context, branch, change):
     store, reply, _ = reply_context
     node = store.create_node('Marker', 'Synthetic fact', data='Cache-visible fact: Alpha',
@@ -47,6 +47,12 @@ def test_external_edit_is_visible_in_same_conversation(reply_context, branch, ch
             SELECT id || '-copy', name, description, data, ?, last_accessed, created_at, updated_at
             FROM memory_nodes WHERE id = ?''', (branch, node.id))
         expected = 'Alpha'
+    elif change == 'replace_out':
+        store.conn.execute('''INSERT OR REPLACE INTO memory_nodes
+            (id, name, description, data, parent_id, last_accessed, created_at, updated_at)
+            SELECT id, name, description, data, 'world', last_accessed, created_at, updated_at
+            FROM memory_nodes WHERE id = ?''', (node.id,))
+        expected = 'Absent'
     elif change == 'delete':
         store.conn.execute('DELETE FROM memory_nodes WHERE id = ?', (node.id,))
         expected = 'Absent'
@@ -101,3 +107,19 @@ def test_switching_graph_files_cannot_reuse_another_profile(reply_context, tmp_p
         assert reply() == 'Supplied memory: Beta'
     finally:
         other.close()
+
+
+@pytest.mark.parametrize('cached', [False, True])
+def test_profile_remains_available_during_an_unrelated_writer(reply_context, cached):
+    store, reply, _ = reply_context
+    store.conn.execute('PRAGMA journal_mode=WAL')
+    store.create_node('Marker', 'Synthetic fact', data='Cache-visible fact: Alpha', parent_id='user')
+    world = store.create_node('World marker', 'External fact', parent_id='world')
+    if cached:
+        assert reply() == 'Supplied memory: Alpha'
+    store.conn.execute('BEGIN IMMEDIATE')
+    try:
+        store.conn.execute('UPDATE memory_nodes SET data = ? WHERE id = ?', ('Uncommitted world fact', world.id))
+        assert reply() == 'Supplied memory: Alpha'
+    finally:
+        store.conn.rollback()

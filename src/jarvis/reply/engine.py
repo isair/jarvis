@@ -1272,23 +1272,16 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             if _memory_topic_hint:
                 break
 
-    # Step 3.5: Warm profile — pull the User + Directives branches of
-    # the knowledge graph into a compact, query-agnostic block that gets
-    # injected into the system prompt on every turn. These two branches
-    # are bounded by design (identity + standing rules), don't depend on
-    # the query, and changing rarely — so loading them unconditionally
-    # is the right tradeoff. No LLM call, just a SQLite traversal.
-    #
-    # This is the architectural pivot that lets the planner stop routing
-    # personalisation queries through searchMemory: "news that might
-    # interest me" can be answered directly when the model already sees
-    # the user's interests in its system prompt.
+    # Step 3.5: Query-agnostic User/Directives profile. Compare the persisted
+    # revision and rebuild from one read-only snapshot, so external writes
+    # invalidate the conversation cache without bootstrapping every turn.
     warm_profile_block = ""
     _graph_store_warm = None
     try:
         from ..memory.graph import GraphMemoryStore
         from ..memory.graph_ops import build_warm_profile, format_warm_profile_block
-        _graph_store_warm = GraphMemoryStore(cfg.db_path)
+        _graph_store_warm = GraphMemoryStore(cfg.db_path, read_only=True)
+        _graph_store_warm.conn.execute('BEGIN')
         signature = (cfg.db_path, _graph_store_warm.get_warm_profile_revision())
         cached_profile = (
             dialogue_memory.hot_cache_get(DialogueMemory.WARM_PROFILE_CACHE_KEY)
