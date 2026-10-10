@@ -43,7 +43,7 @@ Design principles enforced by the engine:
    - The task-list planner (`plan_query` in `src/jarvis/reply/planner.py`) runs after tool routing and before memory lookup. It sees the query, a compact dialogue snippet, recorded resource references and the router-narrowed tool catalogue (names + one-line descriptions).
    - The planner emits an ordered list of short sub-tasks (max 5). Two of the tokens are structural for the engine:
      - `searchMemory topic='...'` as a leading step means "answering requires information from prior conversations"; the engine runs memory enrichment. Omitting it means "no memory needed".
-     - Concrete tool steps (e.g. `webSearch query='...'`) name specific tools; the engine uses those names as the allow-list directly.
+     - Concrete tool steps (e.g. `webSearch search_query='...'`) name specific tools; the engine adds those names to the router's selection for the reply loop.
    - An empty plan (disabled, LLM timeout, too short) is the fail-open state — the engine reverts to running the memory extractor and the `select_tools` router as before.
    - A single-step `["Reply to the user."]` plan is a positive "no memory, no tools" decision — the engine skips the memory extractor, the tool router, the diary / graph / digest LLM calls, and the direct-exec path entirely.
    - See `planner.spec.md` for the full prompt contract, helpers, and fail-open invariants.
