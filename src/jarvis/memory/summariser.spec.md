@@ -26,6 +26,10 @@ The summariser prompt is the only write-time defence. There is no post-process s
   resumable work; an in-flight superseded snapshot cannot commit. Flushes on the
   same dialogue memory do not overlap. The final write and watermark advance
   share the session mutation lock, without holding it during inference.
+  Dialogue save callers capture chunks and their timestamp together with
+  `get_pending_chunks_with_snapshot()` and advance the save watermark through
+  `mark_saved_up_to()`. Later messages remain pending even within the same
+  system-clock tick.
   Earlier user-stated facts, preferences, plans and attributed claims remain
   relevant even when absent from the current batch; correction chains are retained.
   Live diary tokens show only the final pass, keeping intermediate drafts private.
