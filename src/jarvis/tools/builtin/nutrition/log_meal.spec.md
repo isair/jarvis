@@ -77,9 +77,11 @@ Two passes against the chat model (`cfg.llm_chat_model`):
 1. **Extraction** (`extract_and_log_meal` → `NUTRITION_SYS`): returns either
    a JSON object with the nutrition fields above OR the literal string
    `NONE` if no meal is described. Fences (` ```json … ``` `) added by
-   small models are stripped before parsing. Non-object payloads and failure
-   to parse return
-   `None` and the tool retries up to `context.max_retries`.
+   small models are stripped before interpreting either outcome. A valid
+   `NONE` decision returns a final unsuccessful tool result without inserting
+   a record, running coaching or retrying extraction. Non-object payloads and
+   parsing failures return `None` and the tool retries up to
+   `context.max_retries`.
 2. **Follow-ups** (`generate_followups_for_meal`): a short coach prompt
    asking for 2-3 healthy, realistic follow-ups (hydration, protein,
    veggies, sodium/potassium balance, light activity).

@@ -98,3 +98,25 @@ def test_missing_description_confirmation_matches_the_saved_meal(monkeypatch, me
     rows = saved_meals(meal_context.db)
     assert result.success and len(rows) == 1
     assert f'Logged meal #{rows[0]["id"]}: {rows[0]["description"]}:' in result.reply_text
+
+
+@pytest.mark.parametrize('answer', ['NONE', ' none ', '```text\nNONE\n```', '```json\nNONE\n```'])
+def test_valid_no_meal_decision_cannot_retry_into_a_written_record(monkeypatch, meal_context, answer):
+    responses = iter([answer, json.dumps({'description': 'invented meal', 'calories_kcal': 150}), 'Drink water.'])
+    monkeypatch.setattr(log_meal, 'call_llm_direct', lambda **kwargs: next(responses))
+    meal_context.redacted_text = 'A general food question, not a consumed meal.'
+    result = log_meal.LogMealTool().run({}, meal_context)
+    assert not result.success, result.reply_text
+    assert not saved_meals(meal_context.db), 'A valid no-meal decision must not become an intake record'
+    assert not result.resource_references
+
+
+def test_malformed_extraction_can_recover_to_one_valid_record(monkeypatch, meal_context):
+    meal = {'description': 'eggs', 'calories_kcal': 150}
+    responses = iter(['{invalid', json.dumps(meal), 'Drink water.'])
+    monkeypatch.setattr(log_meal, 'call_llm_direct', lambda **kwargs: next(responses))
+    result = log_meal.LogMealTool().run({}, meal_context)
+    assert result.success, result.reply_text
+    rows = saved_meals(meal_context.db)
+    assert len(rows) == 1
+    assert rows[0]['description'] == meal['description']
