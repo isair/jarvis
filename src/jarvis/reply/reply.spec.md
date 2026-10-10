@@ -37,6 +37,7 @@ Design principles enforced by the engine:
      - **Memory enrichment extractor**: reuses keywords, questions and time bounds only when the redacted query (including any planner topic hint) and live context hint match.
      - **Tool router**: reuses selections only when the redacted query, strategy, live context hint and builtin/MCP definitions match. Descriptions and input schemas participate, so changed capabilities invalidate selections even when names stay the same. Full-catalogue results (detected by set equality) are not cached as narrowed selections; identical inputs can retry routing.
      - Router and enrichment keys use namespaced SHA-256 fingerprints of canonical JSON data inputs. Keys remain bounded; dictionary insertion order does not alter identity. Changed dialogue and live facts require fresh inference. Warm-profile caching remains query-agnostic.
+     - Storage: the bounded LRU cache stores values directly. Reads and replacement writes promote keys, including entries with empty, false or null values.
      - Lifetime: entries persist until (a) the `stop` signal clears the whole cache, (b) the engine detects a new conversation at turn entry (`has_recent_messages()` was False) and clears it before running, or (c) targeted invalidation (warm profile only) on graph mutations. Entries are *not* bounded by `RECENT_WINDOW_SEC` age, so a long active session keeps them warm.
 
 3. Pre-flight Planner

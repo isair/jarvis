@@ -272,16 +272,12 @@ def test_carryover_does_not_pollute_router_cache(
     mock_chat, mock_extract, _mock_extract_mem, _mock_plan,
     _mock_graph, _mock_warm, _mock_fmt,
 ):
-    """The router cache stores the raw router output. Carry-over is a
-    per-turn overlay layered on top — it must NOT be written back to the
-    cache, otherwise every replay of the same query inherits a
-    contaminated tool list.
-    """
+    """A cached route does not retain a resolved failure's tool exposure."""
     mock_chat.side_effect = [
         {"message": {"content": "Weather in London is 15°C."}},
+        {"message": {"content": "Here is the search result."}},
     ]
-    mock_extract.side_effect = ["Weather in London is 15°C."]
-
+    mock_extract.side_effect = ["Weather in London is 15°C.", "Here is the search result."]
     db = Mock()
     cfg = _mock_cfg()
     dm = DialogueMemory()
@@ -289,22 +285,18 @@ def test_carryover_does_not_pollute_router_cache(
     dm.record_tool_turn(_failed_tool_turn("getWeather"))
     dm.add_message("assistant", "I do not have a location set.")
 
-    with patch(
-        "src.jarvis.reply.engine.select_tools",
-        return_value=["webSearch"],
-    ):
+    with patch("src.jarvis.reply.engine._build_enrichment_context_hint", return_value="Stable context"), \
+         patch("src.jarvis.reply.engine.select_tools", side_effect=[
+             ["webSearch"], AssertionError("Router unavailable for the cached inputs"),
+         ]):
+        run_reply_engine(db=db, cfg=cfg, tts=None,
+                         text="I'm in London", dialogue_memory=dm)
+        assert "getWeather" in _tool_names_from_chat_call(mock_chat.call_args)
+        dm.clear_tool_carryover()
         run_reply_engine(db=db, cfg=cfg, tts=None,
                          text="I'm in London", dialogue_memory=dm)
 
-    cached_router_entries = [
-        (k, v) for k, v in dm._hot_cache.items() if k.startswith("router:")
-    ]
-    assert cached_router_entries, "router output should have been cached"
-    for key, (_ts, value) in cached_router_entries:
-        assert value == ["webSearch"], (
-            f"router cache for {key!r} should hold raw router output "
-            f"['webSearch']; got {value!r}"
-        )
+    assert _tool_names_from_chat_call(mock_chat.call_args) == {"webSearch", "stop", "toolSearchTool"}
 
 
 @pytest.mark.unit
