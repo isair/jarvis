@@ -1,11 +1,35 @@
 """Readable download output and desktop progress presentation."""
 
 import io
+import time
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
+from unittest.mock import MagicMock
 import pytest
 
 from desktop_app.log_output import LogStream, parse_progress
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("no_network")]
+
+
+@pytest.fixture
+def owned_clock(monkeypatch):
+    def install(owner, now):
+        clock = [now]
+        module_clock = MagicMock(wraps=time)
+        module_clock.monotonic.side_effect = lambda: clock[0]
+        monkeypatch.setattr(owner, 'time', module_clock)
+        return clock
+    return install
+
+
+def sample_background_clock():
+    def sample():
+        before = time.monotonic()
+        Event().wait(0.001)
+        return before, time.monotonic()
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(sample).result(timeout=5)
 
 
 def test_optional_location_warning_uses_warning_colour(qapp):
@@ -131,17 +155,21 @@ def test_unknown_size_is_indeterminate(qapp):
     window.close()
 
 
-def test_slow_download_does_not_fake_progress(qapp, monkeypatch):
-    from desktop_app.app import LogViewerWindow
-    clock = [1000.0]
-    monkeypatch.setattr("desktop_app.app.time.monotonic", lambda: clock[0])
-    window = LogViewerWindow()
+@pytest.mark.parametrize("background_wait", [False, True])
+def test_slow_download_does_not_fake_progress(qapp, owned_clock, background_wait):
+    from desktop_app import app
+    clock = owned_clock(app, 1000.0)
+    observed = sample_background_clock() if background_wait else None
+    window = app.LogViewerWindow()
     window.append_log("weights.npz: 20%|xx| 2M/10M [00:02<00:08, 1MB/s]\n")
     clock[0] += 30
     window._refresh_download_status()
     assert "No new progress for 30s" in window.download_detail.text()
     assert window.download_bar.value() == 20
     window.close()
+
+    if background_wait:
+        assert observed[1] > observed[0], "The progress clock froze an unrelated worker"
 
 
 def test_native_hub_byte_progress_reaches_non_terminal_desktop(monkeypatch):
@@ -163,19 +191,23 @@ def test_native_hub_byte_progress_reaches_non_terminal_desktop(monkeypatch):
 
 
 @pytest.mark.parametrize("known_size", [True, False])
-def test_piper_updates_are_throttled_and_complete(tmp_path, monkeypatch, known_size):
+@pytest.mark.parametrize("background_wait", [False, True])
+def test_piper_updates_are_throttled_and_complete(tmp_path, monkeypatch, owned_clock, known_size, background_wait):
     from jarvis.output import tts
     from unittest.mock import Mock
     response = Mock(headers={"content-length": "1000000"} if known_size else {})
     response.iter_content.side_effect = lambda **kw: iter([b"x" * 1000] * 1000)
     monkeypatch.setattr("requests.get", lambda *args, **kwargs: response)
     monkeypatch.setattr(tts, "_get_piper_models_dir", lambda: tmp_path)
-    monkeypatch.setattr(tts.time, "monotonic", lambda: 1.0)
+    owned_clock(tts, 1.0)
+    observed = sample_background_clock() if background_wait else None
     logs = []
     assert tts._download_piper_voice("en_GB-alan-medium", logs.append)
     assert len(logs) < 15
     assert (tmp_path / "en_GB-alan-medium.onnx").stat().st_size == 1_000_000
     assert any("100%" in line if known_size else "total size unknown" in line for line in logs)
+    if background_wait:
+        assert observed[1] > observed[0], "The download clock froze an unrelated worker"
 
 
 def test_loading_then_failure_is_not_reported_as_ready(qapp):
