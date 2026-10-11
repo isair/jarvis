@@ -1,4 +1,7 @@
 """Piper downloads recover transport failures without publishing partial files."""
+import time
+from unittest.mock import Mock
+from concurrent.futures import ThreadPoolExecutor
 import pytest
 import requests
 
@@ -29,14 +32,32 @@ def response(body=b'complete'):
 
 
 @pytest.fixture
-def download(monkeypatch, tmp_path):
+def retry_waits(monkeypatch):
+    waits = []
+    retry_clock = Mock(wraps=time)
+    retry_clock.sleep.side_effect = waits.append
+    monkeypatch.setattr(tts, 'time', retry_clock)
+    return waits
+
+
+@pytest.fixture
+def download(monkeypatch, tmp_path, retry_waits, request):
+    if request.node.get_closest_marker("integration") is None:
+        request.getfixturevalue("no_network")
     monkeypatch.setattr(tts, '_get_piper_models_dir', lambda: tmp_path)
-    monkeypatch.setattr(tts.time, 'sleep', lambda seconds: None)
     return lambda: tts._download_piper_voice('en_GB-alan-medium')
 
 
+def check_independent_wait(waits):
+    before = list(waits)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        pool.submit(time.sleep, 0.001).result(timeout=5)
+    assert waits == before, "An unrelated worker entered Piper retry waits"
+
+
+@pytest.mark.parametrize("background_wait", [False, True])
 @pytest.mark.parametrize('failure', [requests.ConnectionError('reset'), requests.Timeout('timed out')])
-def test_connection_failure_recovers_without_publishing_partial_model(monkeypatch, tmp_path, download, failure):
+def test_connection_failure_recovers_without_publishing_partial_model(monkeypatch, tmp_path, download, failure, retry_waits, background_wait):
     replies = iter([failure, response(b'voice'), response(b'{}')])
 
     def get(*args, **kwargs):
@@ -50,6 +71,9 @@ def test_connection_failure_recovers_without_publishing_partial_model(monkeypatc
     assert download() == str(tmp_path / 'en_GB-alan-medium.onnx')
     assert (tmp_path / 'en_GB-alan-medium.onnx').read_bytes() == b'voice'
     assert (tmp_path / 'en_GB-alan-medium.onnx.json').read_bytes() == b'{}'
+
+    if background_wait:
+        check_independent_wait(retry_waits)
 
 
 def test_mid_stream_reset_restarts_file_and_closes_failed_response(monkeypatch, tmp_path, download):
@@ -83,12 +107,16 @@ def test_persistent_transport_failure_is_bounded_and_cleans_partial_files(monkey
     assert not list(tmp_path.iterdir())
 
 
-def test_certificate_failure_is_not_retried(monkeypatch, download):
+@pytest.mark.parametrize("background_wait", [False, True])
+def test_certificate_failure_is_not_retried(monkeypatch, download, retry_waits, background_wait):
     def certificate_error(*args, **kwargs):
         raise requests.exceptions.SSLError('untrusted certificate')
     monkeypatch.setattr(requests, 'get', certificate_error)
     monkeypatch.setattr(tts.time, 'sleep', lambda seconds: pytest.fail('certificate failures must not back off'))
     assert download() is None
+
+    if background_wait:
+        check_independent_wait(retry_waits)
 
 
 def test_completed_model_is_retained_when_configuration_download_fails(monkeypatch, tmp_path, download):
