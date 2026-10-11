@@ -553,94 +553,89 @@ class TestPiperTTSThreadSafety:
         # (actual number depends on timing)
 
 
+@pytest.mark.usefixtures("no_network")
 class TestPiperVoiceDownloadRetry:
-    """Tests for retry logic when HuggingFace returns 429 Too Many Requests."""
+    """Retry voice downloads without altering unrelated threads' clocks."""
 
-    def test_429_retried_then_succeeds(self, tmp_path):
-        """Download retries on 429 and succeeds on subsequent attempt."""
+    @pytest.fixture
+    def retry_download(self, tmp_path, monkeypatch):
+        from jarvis.output import tts
+
+        monkeypatch.setattr(tts, "_get_piper_models_dir", lambda: tmp_path)
+        clock = MagicMock(wraps=time)
+        clock.sleep.return_value = None
+        monkeypatch.setattr(tts, "time", clock)
+        return tts._download_piper_voice, clock.sleep
+
+    def test_429_retried_then_succeeds(self, tmp_path, retry_download):
+        """Both voice files retry HTTP 429 and are published on success."""
         import requests
-        from src.jarvis.output.tts import _download_piper_voice
 
+        download, sleep = retry_download
         call_count = {"onnx": 0, "json": 0}
 
         def mock_get(url, **kwargs):
             resp = MagicMock()
-            is_json = url.endswith(".json")
-            key = "json" if is_json else "onnx"
+            key = "json" if url.endswith(".json") else "onnx"
             call_count[key] += 1
-
             if call_count[key] == 1:
-                # First call: 429
-                http_err = requests.exceptions.HTTPError(
-                    response=MagicMock(status_code=429)
+                resp.raise_for_status.side_effect = requests.exceptions.HTTPError(
+                    response=MagicMock(status_code=429),
                 )
-                http_err.response = MagicMock(status_code=429)
-                resp.raise_for_status.side_effect = http_err
-                return resp
-
-            # Subsequent calls: success
-            resp.raise_for_status.return_value = None
-            resp.headers = {"content-length": "4"}
-            resp.iter_content.return_value = [b"data"]
+            else:
+                resp.headers = {"content-length": "4"}
+                resp.iter_content.return_value = [b"data"]
             return resp
 
         with patch("requests.get", side_effect=mock_get):
-            with patch("src.jarvis.output.tts._get_piper_models_dir", return_value=tmp_path):
-                with patch("src.jarvis.output.tts.time.sleep") as mock_sleep:
-                    result = _download_piper_voice("en_GB-alan-medium")
+            result = download("en_GB-alan-medium")
 
         assert result is not None
         assert (tmp_path / "en_GB-alan-medium.onnx").exists()
-        # Verify exponential backoff: 2^1=2s for the onnx 429, 2^1=2s for the json 429
-        sleep_values = [c.args[0] for c in mock_sleep.call_args_list]
-        assert all(v == 2 for v in sleep_values)
+        assert (tmp_path / "en_GB-alan-medium.onnx.json").read_bytes() == b"data"
+        assert [c.args[0] for c in sleep.call_args_list] == [2, 2]
 
-    def test_429_gives_up_after_max_retries(self, tmp_path):
-        """Download gives up after exhausting retries on persistent 429."""
+    @pytest.mark.parametrize("background_wait", [False, True])
+    def test_429_gives_up_after_max_retries(self, retry_download, background_wait):
+        """Background waits must not enter the exact download backoff sequence."""
         import requests
-        from src.jarvis.output.tts import _download_piper_voice
+
+        download, sleep = retry_download
 
         def mock_get(url, **kwargs):
+            if background_wait:
+                worker = threading.Thread(target=lambda: time.sleep(0.01))
+                worker.start()
+                worker.join(timeout=2)
+                assert not worker.is_alive()
             resp = MagicMock()
-            http_err = requests.exceptions.HTTPError(
-                response=MagicMock(status_code=429)
+            resp.raise_for_status.side_effect = requests.exceptions.HTTPError(
+                response=MagicMock(status_code=429),
             )
-            http_err.response = MagicMock(status_code=429)
-            resp.raise_for_status.side_effect = http_err
             return resp
 
         with patch("requests.get", side_effect=mock_get):
-            with patch("src.jarvis.output.tts._get_piper_models_dir", return_value=tmp_path):
-                with patch("src.jarvis.output.tts.time.sleep") as mock_sleep:
-                    result = _download_piper_voice("en_GB-alan-medium")
+            result = download("en_GB-alan-medium")
 
         assert result is None
-        # Verify exponential backoff sequence: 2, 4, 8, 16
-        sleep_values = [c.args[0] for c in mock_sleep.call_args_list]
-        assert sleep_values == [2, 4, 8, 16]
+        assert [c.args[0] for c in sleep.call_args_list] == [2, 4, 8, 16]
 
-    def test_non_429_error_not_retried(self, tmp_path):
-        """Download does not retry on non-429 HTTP errors (e.g. 404)."""
+    def test_non_429_error_not_retried(self, retry_download):
+        """A non-rate-limit HTTP error fails without another request or delay."""
         import requests
-        from src.jarvis.output.tts import _download_piper_voice
 
-        get_call_count = 0
+        download, sleep = retry_download
 
         def mock_get(url, **kwargs):
-            nonlocal get_call_count
-            get_call_count += 1
             resp = MagicMock()
-            http_err = requests.exceptions.HTTPError(
-                response=MagicMock(status_code=404)
+            resp.raise_for_status.side_effect = requests.exceptions.HTTPError(
+                response=MagicMock(status_code=404),
             )
-            http_err.response = MagicMock(status_code=404)
-            resp.raise_for_status.side_effect = http_err
             return resp
 
-        with patch("requests.get", side_effect=mock_get):
-            with patch("src.jarvis.output.tts._get_piper_models_dir", return_value=tmp_path):
-                result = _download_piper_voice("en_GB-alan-medium")
+        with patch("requests.get", side_effect=mock_get) as get:
+            result = download("en_GB-alan-medium")
 
         assert result is None
-        # Should only call once for the onnx file (no retry)
-        assert get_call_count == 1
+        assert get.call_count == 1
+        assert not sleep.call_args_list
