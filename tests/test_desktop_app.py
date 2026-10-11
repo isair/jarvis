@@ -1353,115 +1353,110 @@ class TestMemoryViewerModulePath:
         )
 
 
+@pytest.mark.unit
+@pytest.mark.usefixtures("no_network")
 class TestDaemonSmokeTest:
-    """Tests for the --smoke-test flag on the daemon entry point."""
+    """Entry-point initialisation and cleanup with owned runtime dependencies."""
 
-    def test_smoke_test_prints_marker_and_returns(self):
-        """daemon.main(smoke_test=True) prints SMOKE_TEST_INIT_OK and returns."""
-        from unittest.mock import patch, MagicMock
-        import io
+    @pytest.fixture
+    def runtime(self, monkeypatch):
+        import threading
+        import jarvis.daemon as daemon
+        import jarvis.memory.graph as graph
+        import jarvis.dictation.dictation_engine as dictation
+        import jarvis.tools.external.mcp_runtime as mcp
+        from tests.conftest import MockConfig
 
-        # Mock all heavy dependencies so the smoke test path runs without
-        # needing a real database, Whisper model, TTS engine, etc.
-        with patch("jarvis.daemon.load_settings") as mock_load, \
-             patch("jarvis.daemon.Database") as mock_db, \
-             patch("jarvis.daemon.initialize_mcp_tools", return_value=({}, {})), \
-             patch("jarvis.daemon.DialogueMemory") as mock_dm, \
-             patch("jarvis.daemon.get_location_context", return_value="Location: Test"), \
-             patch("jarvis.daemon.create_tts_engine") as mock_tts, \
-             patch("jarvis.daemon.VoiceListener") as mock_vl, \
-             patch("jarvis.memory.graph.GraphMemoryStore") as mock_graph:
+        cfg = MockConfig(db_path=":memory:")
+        cfg.dictation_hotkey = "ctrl+shift+d"
+        database = MagicMock()
+        listener = MagicMock()
+        dictation_engine = MagicMock()
+        tts = MagicMock(enabled=False)
+        memory = MagicMock()
+        memory.get_pending_chunks.return_value = []
+        graph_store = MagicMock()
+        graph_store.migrate_legacy_shape.return_value = False
+        threads = MagicMock(wraps=threading)
+        threads.Thread = MagicMock()
+        monkeypatch.setenv("JARVIS_STDIN_IPC", "1")
+        for name, value in {
+            "load_settings": MagicMock(return_value=cfg),
+            "Database": MagicMock(return_value=database),
+            "DialogueMemory": MagicMock(return_value=memory),
+            "get_location_context": MagicMock(return_value="Location: Test"),
+            "create_tts_engine": MagicMock(return_value=tts),
+            "VoiceListener": MagicMock(return_value=listener),
+            "initialize_mcp_tools": MagicMock(return_value=({}, {})),
+            "_install_signal_handlers": MagicMock(),
+            "_diary_update_callbacks": {},
+            "threading": threads,
+        }.items():
+            monkeypatch.setattr(daemon, name, value)
+        monkeypatch.setattr(graph, "GraphMemoryStore", MagicMock(return_value=graph_store))
+        monkeypatch.setattr(graph, "register_graph_mutation_listener", MagicMock())
+        monkeypatch.setattr(graph, "unregister_graph_mutation_listener", MagicMock())
+        monkeypatch.setattr(dictation, "DictationEngine", MagicMock(return_value=dictation_engine))
+        monkeypatch.setattr(mcp, "shutdown_runtime", MagicMock())
+        # Restore the embedded runtime's references even if initialisation fails.
+        for name in (
+            "_global_cfg", "_global_db", "_global_dialogue_memory",
+            "_global_voice_listener", "_global_tts_engine", "_global_dictation_engine",
+            "_warm_profile_graph_listener", "_global_stop_requested",
+        ):
+            monkeypatch.setattr(daemon, name, None)
+        return daemon, database, listener, dictation_engine
 
-            from tests.conftest import MockConfig
-            mock_load.return_value = MockConfig(db_path=":memory:")
+    def test_smoke_test_prints_marker_and_returns(self, runtime, capsys):
+        daemon, database, listener, dictation = runtime
+        daemon.main(smoke_test=True)
+        assert "SMOKE_TEST_INIT_OK" in capsys.readouterr().out
+        assert daemon.VoiceListener.call_args.kwargs.get("on_low_confidence") is None
+        database.close.assert_called_once()
+        listener.stop.assert_called_once()
+        dictation.stop.assert_called_once()
 
-            mock_db_instance = MagicMock()
-            mock_db.return_value = mock_db_instance
+    @pytest.mark.parametrize("background_wait", [False, True])
+    def test_normal_mode_does_not_print_marker(self, runtime, monkeypatch, capsys, background_wait):
+        import threading
+        import time
 
-            mock_dm_instance = MagicMock()
-            mock_dm.return_value = mock_dm_instance
-
-            mock_tts_instance = MagicMock()
-            mock_tts_instance.enabled = False
-            mock_tts.return_value = mock_tts_instance
-
-            mock_vl_instance = MagicMock()
-            mock_vl.return_value = mock_vl_instance
-
-            mock_graph_instance = MagicMock()
-            mock_graph_instance.migrate_legacy_shape.return_value = False
-            mock_graph.return_value = mock_graph_instance
-
-            # Capture stdout
-            captured = io.StringIO()
-            with patch("sys.stdout", captured):
-                from jarvis.daemon import main
-                main(smoke_test=True)
-                assert mock_vl.call_args.kwargs.get('on_low_confidence') is None
-
-            output = captured.getvalue()
-            assert "SMOKE_TEST_INIT_OK" in output, (
-                f"Expected SMOKE_TEST_INIT_OK marker in output, got:\n{output}"
-            )
-            # Verify cleanup happened
-            mock_db_instance.close.assert_called_once()
-
-    def test_normal_mode_does_not_print_marker(self):
-        """daemon.main(smoke_test=False) does NOT print SMOKE_TEST_INIT_OK."""
-        # This test verifies the smoke test marker is exclusive to smoke_test mode.
-        # We mock enough to reach the branching point but the main loop would
-        # block forever, so we raise an exception right before it.
-        from unittest.mock import patch, MagicMock
-        import io
+        daemon, database, listener, dictation = runtime
 
         class StopBeforeMainLoop(Exception):
             pass
 
-        with patch("jarvis.daemon.load_settings") as mock_load, \
-             patch("jarvis.daemon.Database") as mock_db, \
-             patch("jarvis.daemon.initialize_mcp_tools", return_value=({}, {})), \
-             patch("jarvis.daemon.DialogueMemory") as mock_dm, \
-             patch("jarvis.daemon.get_location_context", return_value="Location: Test"), \
-             patch("jarvis.daemon.create_tts_engine") as mock_tts, \
-             patch("jarvis.daemon.VoiceListener") as mock_vl, \
-             patch("jarvis.memory.graph.GraphMemoryStore") as mock_graph, \
-             patch("jarvis.daemon.time.sleep", side_effect=StopBeforeMainLoop()):
+        def stop_loop(_seconds):
+            raise StopBeforeMainLoop()
 
-            from tests.conftest import MockConfig
-            mock_load.return_value = MockConfig(db_path=":memory:")
+        clock = MagicMock(wraps=time)
+        clock.sleep.side_effect = stop_loop
+        monkeypatch.setattr(daemon, "time", clock)
+        errors = []
 
-            mock_db_instance = MagicMock()
-            mock_db.return_value = mock_db_instance
+        def wait_in_background():
+            try:
+                time.sleep(0.01)
+            except Exception as exc:
+                errors.append(exc)
 
-            mock_dm_instance = MagicMock()
-            mock_dm.return_value = mock_dm_instance
+        def start_listener():
+            worker = threading.Thread(target=wait_in_background)
+            worker.start()
+            worker.join(timeout=2)
+            assert not worker.is_alive()
 
-            mock_tts_instance = MagicMock()
-            mock_tts_instance.enabled = False
-            mock_tts.return_value = mock_tts_instance
-
-            mock_vl_instance = MagicMock()
-            mock_vl.return_value = mock_vl_instance
-
-            mock_graph_instance = MagicMock()
-            mock_graph_instance.migrate_legacy_shape.return_value = False
-            mock_graph.return_value = mock_graph_instance
-
-            captured = io.StringIO()
-            with patch("sys.stdout", captured):
-                from jarvis.daemon import main
-                try:
-                    main(smoke_test=False)
-                except StopBeforeMainLoop:
-                    pass
-
-            output = captured.getvalue()
-            assert "SMOKE_TEST_INIT_OK" not in output, (
-                "SMOKE_TEST_INIT_OK should not appear in normal mode"
-            )
-            assert "✓ Daemon started" in output, (
-                f"Expected normal startup output, got:\n{output}"
-            )
+        if background_wait:
+            listener.start.side_effect = start_listener
+        with pytest.raises(StopBeforeMainLoop):
+            daemon.main(smoke_test=False)
+        output = capsys.readouterr().out
+        assert "SMOKE_TEST_INIT_OK" not in output
+        assert "✓ Daemon started" in output
+        assert not errors, f"Daemon loop clock escaped into a competing thread: {errors}"
+        database.close.assert_called_once()
+        listener.stop.assert_called_once()
+        dictation.stop.assert_called_once()
 
 
 class TestDesktopSmokeTest:
