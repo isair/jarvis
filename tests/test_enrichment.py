@@ -5,6 +5,8 @@ from unittest.mock import patch
 
 import pytest
 
+pytestmark = pytest.mark.unit
+
 from jarvis.reply.engine import (
     _build_enrichment_context_hint,
     _match_question,
