@@ -10,6 +10,9 @@ import pytest
 import subprocess
 import sys
 import tempfile
+import time
+from concurrent.futures import ThreadPoolExecutor
+from threading import Thread
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
@@ -1627,6 +1630,8 @@ class TestTrayMenuLayout:
             "Power and the Status line must share one menu section"
         )
 
+@pytest.mark.unit
+@pytest.mark.usefixtures("no_network")
 class TestListeningWindowVisibility:
     """Starting or stopping the assistant must never change the visibility
     of the log viewer or the face window.
@@ -1636,6 +1641,43 @@ class TestListeningWindowVisibility:
     start_daemon must not force them open and stop_daemon must not hide
     them (even when the diary dialog appears).
     """
+
+    @pytest.fixture(autouse=True)
+    def runtime(self, monkeypatch):
+        from desktop_app import app as app_mod
+
+        self._patch_face_state(monkeypatch)
+        for name in ("time", "threading", "subprocess"):
+            boundary = MagicMock(wraps=getattr(app_mod, name))
+            if name == "time":
+                boundary.sleep.return_value = None
+            monkeypatch.setattr(app_mod, name, boundary)
+
+    @pytest.mark.parametrize("boundary", ["thread", "subprocess", "wait"])
+    def test_runtime_keeps_unrelated_work_independent(self, qapp, monkeypatch, boundary):
+        from desktop_app import app as app_mod
+
+        if boundary == "wait":
+            self._tray_for_stop_bundled(monkeypatch)
+            before = list(app_mod.time.sleep.call_args_list)
+            worker = Thread(target=lambda: time.sleep(0.001))
+            worker.start()
+            worker.join(timeout=5)
+            assert not worker.is_alive()
+            assert list(app_mod.time.sleep.call_args_list) == before, "An unrelated wait entered shutdown timing"
+            return
+
+        self._tray_for_start(monkeypatch)
+        if boundary == "thread":
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                assert pool.submit(lambda: "independent").result(timeout=5) == "independent"
+        else:
+            token = "independent"
+            result = subprocess.run(
+                [sys.executable, "-c", f"print({token!r})"],
+                capture_output=True, text=True, timeout=5, check=True,
+            )
+            assert result.stdout.strip() == token
 
     def _tray_for_start(self, monkeypatch):
         import desktop_app.app as app_mod
@@ -1723,7 +1765,6 @@ class TestListeningWindowVisibility:
         monkeypatch.setattr(app_mod, "DiaryUpdateDialog", MagicMock(return_value=fake_dialog))
         monkeypatch.setattr("jarvis.daemon.set_diary_update_callbacks", MagicMock())
         monkeypatch.setattr("jarvis.daemon.request_stop", MagicMock())
-        monkeypatch.setattr(app_mod.time, "sleep", MagicMock())
         return tray, fake_dialog
 
     def test_stop_daemon_bundled_does_not_hide_windows(self, qapp, monkeypatch):
@@ -1762,7 +1803,6 @@ class TestListeningWindowVisibility:
 
         fake_dialog = MagicMock()
         monkeypatch.setattr(app_mod, "DiaryUpdateDialog", MagicMock(return_value=fake_dialog))
-        monkeypatch.setattr(app_mod.time, "sleep", MagicMock())
         return tray, fake_dialog
 
     @pytest.mark.parametrize("bundled", [False, True])
