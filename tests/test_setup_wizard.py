@@ -6,6 +6,10 @@ They treat the detection functions as black boxes, verifying inputs produce corr
 """
 
 import subprocess
+import os
+import shutil
+import sys
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 import pytest
@@ -25,6 +29,7 @@ from desktop_app.setup_wizard import (
     OpenAICompatiblePage,
 )
 from desktop_app.mcp_catalogue import get_wizard_entries
+from desktop_app import setup_wizard
 from jarvis.config import DEFAULT_CHAT_MODEL
 from jarvis.utils.location import (
     get_location_context,
@@ -68,39 +73,67 @@ def stub_openai_server():
         httpd.server_close()
 
 
+@pytest.fixture
+def real_executable_probe(tmp_path):
+    """Observe independent filesystem probes while a detection scenario runs."""
+    executable = sys.executable
+    absent_file = str(tmp_path / 'absent-executable')
+
+    def probe():
+        return (shutil.which(executable), os.path.isfile(executable),
+                os.access(executable, os.X_OK), os.access(absent_file, os.X_OK))
+
+    expected = probe()
+    assert expected == (executable, True, True, False)
+    with ThreadPoolExecutor(max_workers=1) as worker:
+        yield lambda: (worker.submit(probe).result(timeout=5), expected)
+
+
+@pytest.mark.unit
+@pytest.mark.usefixtures('no_network')
 class TestCheckOllamaCli:
     """Tests for Ollama CLI detection."""
 
-    def test_detects_ollama_in_path(self):
+    @pytest.fixture(autouse=True)
+    def detection_modules(self, monkeypatch):
+        """Keep detection stubs local to the wizard's imported modules."""
+        monkeypatch.setattr(setup_wizard, 'shutil', SimpleNamespace(**vars(shutil)))
+        monkeypatch.setattr(setup_wizard, 'os', SimpleNamespace(**{
+            **vars(os), 'path': SimpleNamespace(**vars(os.path)),
+        }))
+
+    def test_detects_ollama_in_path(self, real_executable_probe):
         """When ollama is in PATH, returns True with path."""
-        with patch("shutil.which", return_value="/usr/local/bin/ollama"):
+        with patch.object(setup_wizard.shutil, 'which', return_value='/usr/local/bin/ollama'):
             is_installed, path = check_ollama_cli()
 
             assert is_installed is True
             assert path == "/usr/local/bin/ollama"
+            actual, expected = real_executable_probe()
+            assert actual == expected
 
-    def test_returns_false_when_not_installed(self):
+    def test_returns_false_when_not_installed(self, real_executable_probe):
         """When ollama is not installed anywhere, returns False."""
-        with patch("shutil.which", return_value=None):
-            with patch("os.path.isfile", return_value=False):
-                is_installed, path = check_ollama_cli()
+        with patch.object(setup_wizard.shutil, 'which', return_value=None), \
+                patch.object(setup_wizard.os.path, 'isfile', return_value=False):
+            is_installed, path = check_ollama_cli()
 
-                assert is_installed is False
-                assert path is None
+            assert is_installed is False
+            assert path is None
+            actual, expected = real_executable_probe()
+            assert actual == expected
 
-    def test_checks_macos_homebrew_path(self):
+    def test_checks_macos_homebrew_path(self, real_executable_probe):
         """On macOS, checks Homebrew installation path."""
-        with patch("shutil.which", return_value=None):
-            with patch("os.path.isfile") as mock_isfile:
-                with patch("os.access", return_value=True):
-                    # First call for /usr/local/bin/ollama returns False
-                    # Second call for /opt/homebrew/bin/ollama returns True
-                    mock_isfile.side_effect = lambda p: p == "/opt/homebrew/bin/ollama"
+        with patch.object(setup_wizard.shutil, 'which', return_value=None), \
+                patch.object(setup_wizard.os.path, 'isfile', side_effect=lambda p: p == '/opt/homebrew/bin/ollama'), \
+                patch.object(setup_wizard.os, 'access', return_value=True):
+            is_installed, path = check_ollama_cli()
 
-                    is_installed, path = check_ollama_cli()
-
-                    assert is_installed is True
-                    assert path == "/opt/homebrew/bin/ollama"
+            assert is_installed is True
+            assert path == "/opt/homebrew/bin/ollama"
+            actual, expected = real_executable_probe()
+            assert actual == expected
 
 
 class TestCheckOllamaServer:
