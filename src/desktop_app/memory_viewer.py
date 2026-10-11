@@ -498,6 +498,7 @@ def graph_import_diary() -> Response:
     from jarvis.llm import resolve_model, Tier
 
     def generate():
+        db = None
         try:
             settings = load_settings()
             db_path = _get_db_path()
@@ -564,11 +565,12 @@ def graph_import_diary() -> Response:
                 "total_facts": total_facts,
             }) + "\n"
 
-            db.close()
-
         except Exception as e:
             debug_log(f"graph import failed: {e}", "memory")
             yield json.dumps({"type": "error", "message": str(e)}) + "\n"
+        finally:
+            if db is not None:
+                db.close()
 
     return Response(
         generate(),
