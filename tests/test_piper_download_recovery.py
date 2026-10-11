@@ -1,6 +1,4 @@
 """Piper downloads recover transport failures without publishing partial files."""
-from unittest.mock import Mock
-
 import pytest
 import requests
 
@@ -147,14 +145,34 @@ def test_real_http_disconnect_recovers_complete_voice_files(monkeypatch, tmp_pat
 
 def test_locked_partial_file_reports_failure_without_crashing(monkeypatch, tmp_path, download):
     from pathlib import Path
-    partial = tmp_path / 'en_GB-alan-medium.tmp'
-    partial.write_bytes(b'partial')
+
     unlink = Path.unlink
     def locked(path, *args, **kwargs):
-        if path == partial:
+        if path.parent == tmp_path and path.suffix == '.tmp':
             raise PermissionError('file is locked')
         return unlink(path, *args, **kwargs)
+
+    failed = response()
+    def interrupted(**kwargs):
+        yield b'partial'
+        raise requests.ConnectionError('reset')
+    failed.iter_content = interrupted
     monkeypatch.setattr(Path, 'unlink', locked)
-    monkeypatch.setattr(requests, 'get', Mock(side_effect=requests.ConnectionError('reset')))
+    monkeypatch.setattr(requests, 'get', lambda *args, **kwargs: failed)
     assert download() is None
+    assert failed.closed
     assert not (tmp_path / 'en_GB-alan-medium.onnx').exists()
+    assert [path.read_bytes() for path in tmp_path.iterdir()] == [b'partial']
+
+
+def test_cancelled_download_closes_response_and_removes_unpublished_file(monkeypatch, tmp_path, download):
+    failed = response()
+    def interrupted(**kwargs):
+        yield b'partial'
+        raise KeyboardInterrupt('cancelled download')
+    failed.iter_content = interrupted
+    monkeypatch.setattr(requests, 'get', lambda *args, **kwargs: failed)
+    with pytest.raises(KeyboardInterrupt):
+        download()
+    assert failed.closed
+    assert not list(tmp_path.iterdir())

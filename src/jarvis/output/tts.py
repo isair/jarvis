@@ -45,9 +45,9 @@ def _download_piper_file(url, target_path, desc, log, progress_callback):
     """Publish a complete voice file after bounded transport/rate-limit retries."""
     import requests
 
-    temp_path = target_path.with_suffix(".tmp")
     for attempt in range(_PIPER_DOWNLOAD_MAX_RETRIES + 1):
         response = None
+        temp_path = None
         retry_error = None
         try:
             response = requests.get(url, stream=True, timeout=60)
@@ -73,7 +73,10 @@ def _download_piper_file(url, target_path, desc, log, progress_callback):
                     progress_callback(message)
 
             report_progress()
-            with open(temp_path, "wb") as file:
+            with tempfile.NamedTemporaryFile(mode="wb", dir=target_path.parent,
+                                    prefix=f".{target_path.name}.", suffix=".tmp",
+                                    delete=False) as file:
+                temp_path = Path(file.name)
                 for chunk in response.iter_content(chunk_size=8192):
                     file.write(chunk)
                     downloaded += len(chunk)
@@ -81,7 +84,8 @@ def _download_piper_file(url, target_path, desc, log, progress_callback):
                         report_progress()
                         last_update = time.monotonic()
 
-            temp_path.rename(target_path)
+            temp_path.replace(target_path)
+            temp_path = None
             report_progress(complete=True)
             debug_log(f"Piper {desc} available: {target_path.name}", "tts")
             return
@@ -96,11 +100,17 @@ def _download_piper_file(url, target_path, desc, log, progress_callback):
                 requests.exceptions.ChunkedEncodingError) as exc:
             retry_error = exc
         finally:
-            if response is not None:
-                response.close()
+            try:
+                if response is not None:
+                    response.close()
+            finally:
+                if temp_path is not None:
+                    try:
+                        temp_path.unlink(missing_ok=True)
+                    except OSError as cleanup_error:
+                        log(f"  ⚠️ Cannot remove partial {target_path.name} download: {cleanup_error}")
+                        raise
 
-        if temp_path.exists():
-            temp_path.unlink()
         if attempt == _PIPER_DOWNLOAD_MAX_RETRIES:
             raise retry_error
         wait = 2 ** (attempt + 1)
@@ -168,11 +178,6 @@ def _download_piper_voice(voice_name: str, progress_callback: Optional[Callable[
     except Exception as exc:
         label = 'Download failed' if isinstance(exc, requests.RequestException) else 'Download error'
         log(f"  ❌ {label}: {exc}")
-        for path in (onnx_path, json_path):
-            try:
-                path.with_suffix(".tmp").unlink(missing_ok=True)
-            except OSError as cleanup_error:
-                log(f"  ⚠️ Cannot remove partial {path.name} download: {cleanup_error}")
         return None
 
 

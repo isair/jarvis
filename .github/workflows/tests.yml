@@ -41,3 +41,20 @@ jobs:
           python-version: '3.11'
       - name: Verify native daemon ownership
         run: python tests/fixtures/daemon_lock_probe.py
+
+  piper-download:
+    name: Piper downloads (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Install download test dependencies
+        run: python -m pip install pytest requests python-dotenv
+      - name: Verify voice download publication and recovery
+        run: python -m pytest -q tests/test_piper_download_concurrency.py tests/test_piper_download_recovery.py
