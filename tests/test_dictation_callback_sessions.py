@@ -214,3 +214,95 @@ def test_released_start_worker_cannot_pause_capture(capture, monkeypatch):
     monkeypatch.setattr(dictation, 'debug_log', release_at_notification)
     begin()
     assert state == ['idle']
+
+
+@pytest.mark.parametrize('phase', ['teardown', 'transcription'])
+def test_stop_releases_pause_without_late_presence_updates(capture, monkeypatch, phase):
+    engine, begin, _finish, _transcribed = capture
+    state = []
+    engine._on_dictation_start = lambda: state.append('recording')
+    engine._on_dictation_processing_start = lambda: state.append('processing')
+    engine._on_dictation_end = lambda: state.append('idle')
+    blocked, release, completed = threading.Event(), threading.Event(), threading.Event()
+    pasted = []
+    monkeypatch.setattr(dictation, '_clipboard_paste', pasted.append)
+    callback = begin()
+    audio = np.zeros(engine._target_sample_rate // 2, dtype=np.float32)
+    callback(audio, len(audio), None, None)
+    stream = engine._stream
+    close, finalise = dictation._close_stream, engine._finalise_and_transcribe
+
+    def wait():
+        blocked.set()
+        assert release.wait(5), 'Test did not release stopped dictation'
+
+    def close_stream(candidate):
+        if phase == 'teardown' and candidate is stream:
+            wait()
+        close(candidate)
+
+    def transcribe(audio):
+        if phase == 'transcription':
+            wait()
+        return 'released words'
+
+    def finalise_and_signal(*args):
+        try:
+            finalise(*args)
+        finally:
+            completed.set()
+
+    monkeypatch.setattr(dictation, '_close_stream', close_stream)
+    monkeypatch.setattr(engine, '_transcribe', transcribe)
+    monkeypatch.setattr(engine, '_finalise_and_transcribe', finalise_and_signal)
+    try:
+        engine._stop_recording()
+        assert blocked.wait(5)
+        engine.stop()
+        stopped_state = list(state)
+    finally:
+        release.set()
+        assert completed.wait(5)
+    assert stopped_state[-1] == 'idle', stopped_state
+    assert state == stopped_state, state
+    assert pasted == ['released words']
+    engine.history.add.assert_called_once()
+
+
+def test_stopped_engine_rejects_queued_press_and_can_restart(capture, monkeypatch):
+    from types import SimpleNamespace
+    engine, _begin, _finish, _transcribed = capture
+    states, workers = [], []
+    engine._on_dictation_start = lambda: states.append('recording')
+    engine._on_dictation_end = lambda: states.append('idle')
+
+    def worker(*args, **kwargs):
+        thread = threading.Thread(*args, **kwargs)
+        workers.append(thread)
+        return thread
+
+    monkeypatch.setattr(dictation, 'threading', SimpleNamespace(
+        Lock=threading.Lock, RLock=threading.RLock, Thread=worker,
+    ))
+    monkeypatch.setattr(dictation, 'pynput_keyboard', Mock())
+    monkeypatch.setattr(dictation, '_create_keyboard_listener', lambda **kwargs: Mock())
+    monkeypatch.setattr(dictation, 'sys', SimpleNamespace(platform='linux'))
+    try:
+        engine.stop()
+        engine._start_recording()
+        for thread in workers:
+            thread.join(timeout=5)
+            assert not thread.is_alive()
+        assert states == [], states
+        engine.start()
+        engine._start_recording()
+        for thread in workers:
+            thread.join(timeout=5)
+            assert not thread.is_alive()
+        assert states == ['recording']
+        engine.stop()
+        assert states == ['recording', 'idle']
+        engine.stop()
+        assert states == ['recording', 'idle']
+    finally:
+        engine.stop()

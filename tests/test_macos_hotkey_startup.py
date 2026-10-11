@@ -2,6 +2,7 @@
 import sys
 import threading
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
@@ -47,11 +48,9 @@ def _engine(monkeypatch, platform, mac_version="15.4"):
     monkeypatch.setattr(module.sys, "platform", platform)
     monkeypatch.setattr(module.platform, "mac_ver", lambda: (mac_version, (), ""))
     monkeypatch.setitem(sys.modules, "pynput._util.darwin", SimpleNamespace(ListenerMixin=QuartzLoop))
-    engine = module.DictationEngine.__new__(module.DictationEngine)
-    engine._started = False
-    engine._recording = False
-    engine._listener = None
-    engine._hotkey_str = "ctrl"
+    monkeypatch.setattr(module, "parse_hotkey", lambda hotkey: (frozenset(), None))
+    engine = module.DictationEngine(lambda: None, lambda: 'faster-whisper',
+                                    lambda: None, hotkey="ctrl", history=Mock())
     engine._on_key_press = lambda key: events.append(("pressed", key))
     engine._on_key_release = lambda key: events.append(("released", key))
     return engine, events

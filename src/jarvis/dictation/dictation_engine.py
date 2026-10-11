@@ -686,6 +686,8 @@ class DictationEngine:
         self._record_start_time: float = 0.0
         self._lock = threading.RLock()
         self._started = False
+        self._stopped = False
+        self._lifecycle_active = False
         # Monotonic recording-session token. Each press increments it; the
         # _begin_recording worker only mutates engine state while its token
         # is still current, so a stale worker from a superseded press can
@@ -737,6 +739,9 @@ class DictationEngine:
                 )
                 return
 
+        with self._lock:
+            self._stopped = False
+
         self._listener = _create_keyboard_listener(
             on_press=self._on_key_press,
             on_release=self._on_key_release,
@@ -747,8 +752,15 @@ class DictationEngine:
 
     def stop(self) -> None:
         """Stop the dictation engine and clean up."""
-        if self._recording:
-            self._stop_recording(discard=True)
+        with self._lock:
+            if not self._stopped:
+                self._stopped = True
+                self._session += 1
+            token = self._session
+        self._stop_recording(discard=True)
+        with self._lock:
+            if self._lifecycle_active:
+                self._notify_session(token, 'idle')
         if self._listener is not None:
             self._listener.stop()
             self._listener = None
@@ -885,7 +897,7 @@ class DictationEngine:
         # long, and opening PortAudio streams there raced the listener's
         # audio threads into a native abort (#462).
         with self._lock:
-            if self._recording:
+            if self._stopped or self._recording:
                 return
             self._recording = True
             self._session += 1
@@ -908,12 +920,18 @@ class DictationEngine:
             self._recording = False
             return True
 
-    def _notify_session(self, token: int, callback: Optional[Callable[[], None]], *, recording: bool = False) -> None:
+    def _notify_session(self, token: int, phase: str) -> None:
         """Deliver a lifecycle notification atomically with session ownership."""
         with self._lock:
-            if self._session != token or (recording and not self._recording):
+            if self._session != token or (phase == 'recording' and not self._recording):
                 debug_log("dictation lifecycle notification superseded", "dictation")
                 return
+            callback = {
+                'recording': self._on_dictation_start,
+                'processing': self._on_dictation_processing_start,
+                'idle': self._on_dictation_end,
+            }[phase]
+            self._lifecycle_active = phase != 'idle'
             if callback:
                 try:
                     callback()
@@ -928,7 +946,7 @@ class DictationEngine:
         if model is None and backend != "mlx":
             debug_log("whisper model not loaded — dictation skipped", "dictation")
             if self._abandon_session(token):
-                self._notify_session(token, self._on_dictation_end)
+                self._notify_session(token, 'idle')
             return
 
         # Bail early if the press was already released/superseded while the
@@ -942,7 +960,7 @@ class DictationEngine:
         debug_log("dictation recording started", "dictation")
 
         # Notify listeners (face state, pause main listener).
-        self._notify_session(token, self._on_dictation_start, recording=True)
+        self._notify_session(token, 'recording')
 
         # Play start beep
         _play_beep(_get_start_beep())
@@ -955,7 +973,7 @@ class DictationEngine:
             print(f'  ❌ Dictation microphone unavailable: {exc}', flush=True)
             debug_log(f'failed to select dictation microphone: {exc}', 'dictation')
             if self._abandon_session(token):
-                self._notify_session(token, self._on_dictation_end)
+                self._notify_session(token, 'idle')
             return
 
         # Query native sample rate
@@ -979,7 +997,7 @@ class DictationEngine:
         except Exception as exc:
             debug_log(f"failed to open dictation audio stream: {exc}", "dictation")
             if self._abandon_session(token):
-                self._notify_session(token, self._on_dictation_end)
+                self._notify_session(token, 'idle')
             return
 
         with self._lock:
@@ -998,7 +1016,7 @@ class DictationEngine:
             debug_log(f"failed to start dictation audio stream: {exc}", "dictation")
             _close_stream(stream)
             if self._abandon_session(token):
-                self._notify_session(token, self._on_dictation_end)
+                self._notify_session(token, 'idle')
             return
 
         # The hotkey may have been released (or pressed again, starting a
@@ -1050,7 +1068,7 @@ class DictationEngine:
             # Shutdown path — tear down synchronously so the caller knows
             # everything is finished before the engine is gone.
             _close_stream(stream)
-            self._notify_session(token, self._on_dictation_end)
+            self._notify_session(token, 'idle')
             return
 
         threading.Thread(
@@ -1077,12 +1095,12 @@ class DictationEngine:
             _play_beep(_get_stop_beep())
             duration = time.time() - start_time
             debug_log(f"dictation recording stopped ({duration:.1f}s)", "dictation")
-            self._notify_session(token, self._on_dictation_processing_start)
+            self._notify_session(token, 'processing')
             self._transcribe_and_paste(audio_frames, stream_sample_rate)
         except Exception as exc:
             debug_log(f"dictation finalise error: {exc}", "dictation")
         finally:
-            self._notify_session(token, self._on_dictation_end)
+            self._notify_session(token, 'idle')
 
     # ------------------------------------------------------------------
     # Transcription & paste
