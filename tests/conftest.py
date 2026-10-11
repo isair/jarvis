@@ -209,3 +209,20 @@ def qapp(_qapplication):
 def _isolate_daemon_lock(tmp_path, monkeypatch):
     """Daemon entry-point tests must not contend with the user's runtime."""
     monkeypatch.setenv("JARVIS_DAEMON_LOCK", str(tmp_path / "jarvis_daemon.lock"))
+
+
+@pytest.fixture
+def no_network(monkeypatch):
+    """Opt-in guard for tests that require every dependency to stay in-process."""
+    import socket
+
+    attempts = []
+
+    def blocked(sock, address):
+        attempts.append(address)
+        raise AssertionError("Offline test attempted a network connection")
+
+    monkeypatch.setattr(socket.socket, "connect", blocked)
+    monkeypatch.setattr(socket.socket, "connect_ex", blocked)
+    yield
+    assert not attempts, f"Unmocked network attempts: {attempts}"

@@ -8,7 +8,7 @@ import pytest
 from jarvis.memory import conversation, graph, graph_ops
 from jarvis.memory.db import Database
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("no_network")]
 
 
 @pytest.mark.parametrize('outcome', ['stored', 'update-error', 'no-summary', 'summary-read-error'])
@@ -22,6 +22,8 @@ def test_diary_save_releases_graph_store_for_every_graph_outcome(tmp_path, mock_
         return store
 
     monkeypatch.setattr(graph, 'GraphMemoryStore', open_graph)
+    # Optional embedding inference is independent of connection ownership.
+    monkeypatch.setattr(conversation, '_embed_text', lambda *args, **kwargs: None)
     summary = 'The user has a cat named Juniper.'
     monkeypatch.setattr(conversation, 'generate_conversation_summary', lambda *args, **kwargs: (summary, 'pets'))
     dialogue_memory.add_message('user', 'My cat is called Juniper.')
