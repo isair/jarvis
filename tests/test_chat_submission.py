@@ -767,10 +767,13 @@ class TestChatSessionControlsLockGuard:
 
 
 @pytest.mark.unit
+@pytest.mark.usefixtures("no_network")
+@pytest.mark.parametrize("background_wait", [False, True])
 @pytest.mark.parametrize('split', ['between-events', 'within-start', 'within-complete', 'empty-poll'])
-def test_ipc_capture_preserves_the_complete_event_sequence(monkeypatch, split):
+def test_ipc_capture_preserves_the_complete_event_sequence(monkeypatch, split, background_wait):
     """Polling retains earlier events and reconstructs lines split by capture reads."""
     from types import SimpleNamespace
+    from unittest.mock import Mock
 
     prefix = daemon.CHAT_IPC_PREFIX
     start = prefix + json.dumps({'type': 'start', 'data': 'hello'}) + '\n'
@@ -785,7 +788,10 @@ def test_ipc_capture_preserves_the_complete_event_sequence(monkeypatch, split):
         chunks = [start, '', complete]
     reads = iter(['unrelated log line\n'] + chunks)
     capture = SimpleNamespace(readouterr=lambda: SimpleNamespace(out=next(reads, '')))
-    monkeypatch.setattr(time, 'sleep', lambda seconds: None)
+    waits = []
+    polling_clock = Mock(wraps=time)
+    polling_clock.sleep.side_effect = waits.append
+    monkeypatch.setattr(sys.modules[__name__], 'time', polling_clock)
 
     lines = _wait_for_ipc_complete(capture, timeout=0.1)
     payloads = [json.loads(line[len(prefix):]) for line in lines]
@@ -793,6 +799,15 @@ def test_ipc_capture_preserves_the_complete_event_sequence(monkeypatch, split):
         {'type': 'start', 'data': 'hello'},
         {'type': 'complete', 'data': 'reply'},
     ]
+
+    if background_wait:
+        from concurrent.futures import ThreadPoolExecutor
+        import time as worker_clock
+
+        polling_waits = list(waits)
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            pool.submit(worker_clock.sleep, 0.001).result(timeout=5)
+        assert waits == polling_waits, "IPC polling intercepted an unrelated worker's wait"
 
 
 @pytest.mark.unit
