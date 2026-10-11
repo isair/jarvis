@@ -1,12 +1,16 @@
 """Graph memory retains only candidates with a complete semantic verdict."""
 import json
-from unittest.mock import patch
+import time
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
+from unittest.mock import MagicMock, patch
 
 import pytest
 
+from jarvis.memory import graph_ops
 from jarvis.memory.graph_ops import extract_graph_memories
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("no_network")]
 
 
 CANDIDATES = [
@@ -89,25 +93,48 @@ def test_unordered_verdicts_preserve_durable_facts_in_original_order(mock_config
         ]
 
 
-@pytest.mark.parametrize('elapsed_fraction', [0.0, 0.2, 0.99, 1.0, 1.2])
-def test_review_uses_only_the_remaining_extraction_budget(mock_config, elapsed_fraction):
-    budget = mock_config.llm_chat_timeout_sec
+@pytest.fixture
+def clock(monkeypatch):
     clock = [0.0]
+    module_clock = MagicMock(wraps=time)
+    module_clock.monotonic.side_effect = lambda: clock[0]
+    monkeypatch.setattr(graph_ops, 'time', module_clock)
+    return clock
+
+
+@pytest.mark.parametrize('elapsed_fraction,background_wait', [
+    (0.0, False), (0.2, False), (0.99, False), (1.0, False), (1.2, False),
+    pytest.param(0.2, True, id='concurrent-within-budget'),
+    pytest.param(1.0, True, id='concurrent-exhausted-budget'),
+])
+def test_review_uses_only_the_remaining_extraction_budget(mock_config, clock, elapsed_fraction, background_wait):
+    budget = mock_config.llm_chat_timeout_sec
+    observed = []
+
+    def background_clock():
+        before = time.monotonic()
+        Event().wait(0.001)
+        return before, time.monotonic()
 
     def backend(**kwargs):
         if kwargs['user_content'].startswith('Extract'):
+            if background_wait:
+                with ThreadPoolExecutor(max_workers=1) as pool:
+                    observed.append(pool.submit(background_clock).result(timeout=5))
             clock[0] += budget * elapsed_fraction
             return json.dumps(CANDIDATES)
         assert kwargs['timeout_sec'] == pytest.approx(budget - clock[0])
         return json.dumps({'0': 'TRANSIENT', '1': 'DURABLE', '2': 'INTERACTION', '3': 'DURABLE'})
 
-    with (patch('jarvis.memory.graph_ops.time.monotonic', side_effect=lambda: clock[0]),
-          patch('jarvis.memory.graph_ops.call_llm_direct', side_effect=backend)):
+    with patch('jarvis.memory.graph_ops.call_llm_direct', side_effect=backend):
         result = extract_graph_memories('Summary', mock_config, 'local-model', timeout_sec=budget)
 
     assert result == ([
         ('user', CANDIDATES[1]['fact']), ('directives', CANDIDATES[3]['fact']),
     ] if elapsed_fraction < 1.0 else [])
+    if background_wait:
+        assert observed
+        assert all(after > before for before, after in observed), "The graph budget clock froze an unrelated worker"
 
 
 def test_nonpositive_budget_does_not_start_extraction(mock_config):
