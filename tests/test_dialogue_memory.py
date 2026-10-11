@@ -3,11 +3,13 @@
 import pytest
 import time
 import threading
-from contextlib import closing
+from contextlib import closing, contextmanager
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 from datetime import datetime, timezone
 
+from jarvis.memory import conversation
 from jarvis.memory.db import Database
 
 from jarvis.memory.conversation import (
@@ -21,6 +23,12 @@ from jarvis.utils.redact import redact
 
 
 pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("no_network")]
+
+
+@pytest.fixture(autouse=True)
+def dialogue_clock(monkeypatch):
+    """Confine simulated timestamps to dialogue memory's clock."""
+    monkeypatch.setattr(conversation, "time", Mock(wraps=time))
 
 
 class TestDialogueMemory:
@@ -62,7 +70,7 @@ class TestDialogueMemory:
         
         # Mock time passage
         import time
-        with patch('time.time', return_value=time.time() + 2.0):
+        with patch.object(conversation.time, "time", return_value=time.time() + 2.0):
             assert dm.should_update_diary()  # Timeout passed
     
     def test_saved_snapshot_stops_diary_update(self):
@@ -73,7 +81,7 @@ class TestDialogueMemory:
         
         # Mock time passage to trigger diary update
         import time
-        with patch('time.time', return_value=time.time() + 1.0):
+        with patch.object(conversation.time, "time", return_value=time.time() + 1.0):
             assert dm.should_update_diary()
             _, snapshot_timestamp = dm.get_pending_chunks_with_snapshot()
             dm.mark_saved_up_to(snapshot_timestamp)
@@ -379,7 +387,7 @@ class TestDialogueMemoryEdgeCases:
     @pytest.mark.parametrize('later_count', [0, 1, 2])
     def test_saved_snapshot_preserves_later_messages_with_a_stationary_clock(self, monkeypatch, clock, later_count):
         """Saving a snapshot excludes later arrivals even within one clock tick."""
-        monkeypatch.setattr('time.time', lambda: clock)
+        monkeypatch.setattr(conversation.time, "time", lambda: clock)
         dm = DialogueMemory()
         dm.add_message('user', 'First message')
         dm.add_message('assistant', 'First response')
@@ -697,3 +705,43 @@ class TestDialogueMemorySessions:
         assert not any(m.get("role") == "tool" for m in turns), (
             "tool carryover must be cleared by a rewind"
         )
+
+
+@pytest.mark.parametrize("scenario,clock,later_count", [
+    ("idle", None, 0), ("saved", None, 0),
+] + [("stationary", clock, count)
+     for clock in (0.0, 1_000_000_000.0) for count in (0, 1, 2)])
+def test_dialogue_clock_preserves_native_worker_time(monkeypatch, scenario, clock, later_count):
+    """An unrelated worker retains its native clock during dialogue simulations."""
+    native_time = time.time
+    original_patch = patch
+    samples = []
+
+    def sample():
+        before = native_time()
+        observed = time.time()
+        return before, observed, native_time()
+
+    with ThreadPoolExecutor(max_workers=1) as worker:
+        @contextmanager
+        def observe(context):
+            with context as value:
+                samples.append(worker.submit(sample).result(timeout=3))
+                yield value
+
+        recorder = Mock(side_effect=lambda *args, **kwargs: observe(original_patch(*args, **kwargs)))
+        recorder.object = lambda *args, **kwargs: observe(original_patch.object(*args, **kwargs))
+        monkeypatch.setitem(globals(), "patch", recorder)
+        if scenario == "idle":
+            TestDialogueMemory().test_should_update_diary_logic()
+        elif scenario == "saved":
+            TestDialogueMemory().test_saved_snapshot_stops_diary_update()
+        else:
+            TestDialogueMemoryEdgeCases().test_saved_snapshot_preserves_later_messages_with_a_stationary_clock(
+                monkeypatch, clock, later_count,
+            )
+        if not samples:
+            samples.append(worker.submit(sample).result(timeout=3))
+
+    assert all(min(before, after) <= observed <= max(before, after)
+               for before, observed, after in samples)
