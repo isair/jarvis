@@ -465,3 +465,12 @@ content and the report-issue body, so these aborts become diagnosable.
 - macOS arm64 desktop builds include the MLX Whisper backend, its tokeniser/audio assets, native MLX libraries and `mlx/lib/mlx.metallib`. SciPy remains available for word alignment.
 - The MLX namespace is collected explicitly rather than recursively, and the optional PyTorch Whisper implementation is excluded from collection. Numba uses the PyInstaller dependency hook.
 - A missing Metal shader library stops the arm64 build. Intel Mac, Windows and Linux builds do not collect the Apple backend.
+
+
+## Memory Viewer Database Ownership
+
+The diary-to-graph import stream owns its temporary diary connection. It closes
+that connection after a complete or empty import, an early read or graph failure,
+and when the client closes the stream before completion. The shared graph store
+retains its separate viewer lifetime. Per-summary failures remain isolated so
+the stream can continue processing later entries.
