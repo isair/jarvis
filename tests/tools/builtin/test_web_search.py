@@ -8,6 +8,8 @@ from src.jarvis.tools.builtin.web_search import WebSearchTool
 from src.jarvis.tools.base import ToolContext
 from src.jarvis.tools.types import ToolExecutionResult
 
+pytestmark = pytest.mark.unit
+
 
 class TestWebSearchTool:
     """Test web search tool functionality."""
