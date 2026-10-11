@@ -30,7 +30,7 @@ window, with four preset options: `ctrl+alt`, `ctrl+cmd`, `ctrl+shift+d`,
 1. **Press hotkey** → start recording audio into buffer, play start beep,
    set face to `DICTATING`, pause main voice listener.
 2. **Hold hotkey** → audio frames accumulate in a dedicated
-   `sounddevice.InputStream`.
+   `sounddevice.InputStream`. Each stream callback retains its recording-session token. Frames from released or superseded sessions are discarded, including when release occurs during audio conversion. Frame acceptance and release snapshots share the engine lock.
 3. **Release hotkey** → stop recording, play stop beep, set face to
    `DICTATION_PROCESSING`, transcribe via shared Whisper model, apply
    post-processing pipeline, paste result into focused app via clipboard,

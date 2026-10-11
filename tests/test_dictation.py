@@ -301,7 +301,7 @@ class TestRecordingStateMachine:
 
             audio = np.zeros((48000, 2), dtype=np.float32)
             audio[:, 1] = 0.4
-            engine._audio_callback(audio, len(audio), None, None)
+            engine._audio_callback(engine._session, audio, len(audio), None, None)
             np.testing.assert_allclose(engine._audio_frames[-1], 0.2)
             with patch.object(engine, '_transcribe', return_value='') as transcribe:
                 engine._transcribe_and_paste(engine._audio_frames, engine._stream_sample_rate)
@@ -456,7 +456,7 @@ class TestRecordingStateMachine:
             # Send many frames — well past a hypothetical 60s cap
             for _ in range(100):
                 indata = np.random.randn(1600, 1).astype(np.float32)
-                engine._audio_callback(indata, 1600, None, None)
+                engine._audio_callback(engine._session, indata, 1600, None, None)
 
         # All frames accumulated; no stop was triggered
         assert len(engine._audio_frames) == 100
@@ -657,7 +657,7 @@ class TestAudioCallback:
         engine._max_frames = 1_000_000
 
         indata = np.random.randn(1600, 1).astype(np.float32)
-        engine._audio_callback(indata, 1600, None, None)
+        engine._audio_callback(engine._session, indata, 1600, None, None)
         assert len(engine._audio_frames) == 1
         assert len(engine._audio_frames[0]) == 1600
 
@@ -668,7 +668,7 @@ class TestAudioCallback:
         engine._audio_frames = []
 
         indata = np.random.randn(1600, 1).astype(np.float32)
-        engine._audio_callback(indata, 1600, None, None)
+        engine._audio_callback(engine._session, indata, 1600, None, None)
         assert len(engine._audio_frames) == 0
 
     def test_callback_accumulates_without_cap(self):
@@ -680,7 +680,7 @@ class TestAudioCallback:
 
         indata = np.random.randn(1600, 1).astype(np.float32)
         with patch.object(engine, "_stop_recording") as mock_stop:
-            engine._audio_callback(indata, 1600, None, None)
+            engine._audio_callback(engine._session, indata, 1600, None, None)
             # Frame should be appended; _stop_recording must NOT be called
             assert len(engine._audio_frames) == 2
             mock_stop.assert_not_called()

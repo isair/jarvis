@@ -109,7 +109,7 @@ def test_release_during_stream_start_retains_negotiated_rate(monkeypatch):
 
         def start(self):
             audio = np.full(rate, 0.25, dtype=np.float32)
-            engine._audio_callback(audio, len(audio), None, None)
+            engine._audio_callback(engine._session, audio, len(audio), None, None)
             engine._stop_recording()
 
         def stop(self):
