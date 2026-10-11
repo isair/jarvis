@@ -469,10 +469,8 @@ class TestRecordingStateMachine:
     def test_finalise_fires_on_dictation_end_when_beep_raises(self):
         """A failure in ``_play_beep`` must not strand the listener paused.
 
-        ``_on_dictation_end`` is normally fired from
-        ``_transcribe_and_paste``'s finally, but that step is never reached
-        if ``_close_stream`` or ``_play_beep`` raises.  ``_finalise_and_transcribe``
-        must therefore guarantee the callback fires on any error.
+        Finalisation guarantees completion notification even if stream
+        teardown or the stop beep fails before transcription.
         """
         import numpy as np
         end_called = threading.Event()
@@ -485,7 +483,7 @@ class TestRecordingStateMachine:
             engine._finalise_and_transcribe(
                 stream=None,
                 audio_frames=[np.zeros(1600, dtype=np.float32)],
-                start_time=time.time(), stream_sample_rate=engine._stream_sample_rate,
+                start_time=time.time(), stream_sample_rate=engine._stream_sample_rate, token=engine._session,
             )
 
         assert end_called.is_set(), (
@@ -709,7 +707,8 @@ class TestTranscribeAndPaste:
 
         # 0.1s of audio at 16kHz = 1600 samples (< 4800 needed for 0.3s)
         short_frames = [np.zeros(1600, dtype=np.float32)]
-        engine._transcribe_and_paste(short_frames, engine._stream_sample_rate)
+        with patch("src.jarvis.dictation.dictation_engine._play_beep"):
+            engine._finalise_and_transcribe(None, short_frames, time.time(), engine._stream_sample_rate, engine._session)
         assert end_called.is_set()
 
     def test_empty_frames_handled(self):
@@ -717,7 +716,8 @@ class TestTranscribeAndPaste:
         end_called = threading.Event()
         engine._on_dictation_end = lambda: end_called.set()
 
-        engine._transcribe_and_paste([], engine._stream_sample_rate)
+        with patch("src.jarvis.dictation.dictation_engine._play_beep"):
+            engine._finalise_and_transcribe(None, [], time.time(), engine._stream_sample_rate, engine._session)
         assert end_called.is_set()
 
     @patch("src.jarvis.dictation.dictation_engine._clipboard_paste")
@@ -910,12 +910,11 @@ class TestDictationProcessingCallback:
         )
 
         # Stub stream teardown and beep audio only. The real
-        # _transcribe_and_paste runs; with empty frames it short-circuits
-        # and still fires _on_dictation_end via its finally block, which is
-        # the wiring we want to verify.
+        # _transcribe_and_paste runs with empty frames; finalisation still
+        # reports processing and completion for the released session.
         with patch.object(de, "_close_stream"), patch.object(de, "_play_beep"):
             engine._finalise_and_transcribe(
-                stream=MagicMock(), audio_frames=[], start_time=time.time(), stream_sample_rate=engine._stream_sample_rate
+                stream=MagicMock(), audio_frames=[], start_time=time.time(), stream_sample_rate=engine._stream_sample_rate, token=engine._session
             )
 
         assert events == ["processing", "end"]
@@ -930,7 +929,7 @@ class TestDictationProcessingCallback:
              patch.object(de, "_play_beep"), \
              patch.object(engine, "_transcribe_and_paste"):
             # Should not raise
-            engine._finalise_and_transcribe(stream=MagicMock(), audio_frames=[], start_time=time.time(), stream_sample_rate=engine._stream_sample_rate)
+            engine._finalise_and_transcribe(stream=MagicMock(), audio_frames=[], start_time=time.time(), stream_sample_rate=engine._stream_sample_rate, token=engine._session)
 
 
 # ---------------------------------------------------------------------------

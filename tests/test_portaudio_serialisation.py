@@ -102,7 +102,7 @@ def isolated_dictation(monkeypatch):
         workers.append(thread)
         return thread
 
-    monkeypatch.setattr(de, "threading", SimpleNamespace(Lock=threading.Lock, Thread=worker))
+    monkeypatch.setattr(de, "threading", SimpleNamespace(Lock=threading.Lock, RLock=threading.RLock, Thread=worker))
     monkeypatch.setattr(de, "parse_hotkey", lambda hotkey: (frozenset(), None))
     monkeypatch.setattr(de, "_play_beep", lambda *args: None)
     yield
