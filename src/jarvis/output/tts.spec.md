@@ -17,7 +17,9 @@ unchanged; restarting Jarvis creates a fresh engine that can load a repaired mod
 
 Missing voice files are downloaded from the configured public model-file source.
 Existing model and configuration files are retained. Each missing file is written
-to a temporary sibling and published only after the response stream completes.
+to a unique temporary sibling and atomically published only after the response
+stream completes. Concurrent downloads own separate partial files; failure cleanup
+removes only the failing invocation's unpublished file.
 
 Connection failures, connect/read timeouts, interrupted response bodies and HTTP
 429 responses share a bounded retry budget per file. Backoff increases between
