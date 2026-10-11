@@ -1,6 +1,7 @@
 """Tests for web search tool."""
 
 import pytest
+import socket
 from unittest.mock import Mock, patch
 import requests
 
@@ -9,6 +10,30 @@ from src.jarvis.tools.base import ToolContext
 from src.jarvis.tools.types import ToolExecutionResult
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.fixture(autouse=True)
+def reject_external_network(monkeypatch):
+    attempts = []
+
+    def blocked(*args, **kwargs):
+        attempts.append('unmocked network or DNS access')
+        raise AssertionError(attempts[-1])
+
+    monkeypatch.setattr(socket.socket, 'connect', blocked)
+    monkeypatch.setattr(socket.socket, 'connect_ex', blocked)
+    monkeypatch.setattr(socket, 'getaddrinfo', blocked)
+    yield
+    assert not attempts, attempts
+
+
+@pytest.fixture
+def public_example_dns(monkeypatch):
+    def resolve(host, *args, **kwargs):
+        assert host == 'example.com', 'Add a synthetic DNS answer for this test host'
+        return [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, '', ('1.1.1.1', 0))]
+
+    monkeypatch.setattr(socket, 'getaddrinfo', resolve)
 
 
 class TestWebSearchTool:
@@ -696,7 +721,7 @@ class TestBraveSearchHelper:
         mock_get.assert_not_called()
 
     @patch("src.jarvis.tools.builtin.web_search.requests.get")
-    def test_parses_results(self, mock_get):
+    def test_parses_results(self, mock_get, public_example_dns):
         from src.jarvis.tools.builtin.web_search import _brave_search
         resp = Mock()
         resp.status_code = 200
@@ -722,7 +747,7 @@ class TestBraveSearchHelper:
         assert _brave_search("q", "BSA-key") == []
 
     @patch("src.jarvis.tools.builtin.web_search.requests.get")
-    def test_filters_unsafe_urls(self, mock_get):
+    def test_filters_unsafe_urls(self, mock_get, public_example_dns):
         """Private IPs and non-http(s) schemes must be rejected via _is_public_url."""
         from src.jarvis.tools.builtin.web_search import _brave_search
         resp = Mock()
