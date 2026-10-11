@@ -950,8 +950,7 @@ class TestCrossPlatformAudioHealthWarning:
                             def fake_get(timeout=0.2):
                                 get_calls[0] += 1
                                 if get_calls[0] >= 3:
-                                    assert decoded.wait(timeout=2), 'Captured speech did not reach Whisper'
-                                listener._should_stop = True
+                                    listener._should_stop = True
                                 raise q.Empty()
 
                             listener._audio_q = MagicMock()
@@ -1135,6 +1134,7 @@ class TestSampleRateFallback:
                                 if get_calls[0] == 2:
                                     from jarvis.listening.listener import _CapturedAudio
                                     return _CapturedAudio(np.zeros((4410, input_channels), dtype=np.float32), listener._audio_generation)
+                                assert decoded.wait(timeout=2), 'Captured speech did not reach Whisper'
                                 listener._should_stop = True
                                 raise q.Empty()
 
