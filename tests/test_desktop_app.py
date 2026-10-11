@@ -1,9 +1,4 @@
-"""
-Tests for desktop_app.py functionality.
-
-Tests crash detection, model support checking, and other utility functions.
-Note: GUI components are not tested here - only the underlying logic.
-"""
+"""Desktop contracts with controlled runtimes and temporary diagnostics."""
 
 import os
 import pytest
@@ -18,7 +13,10 @@ from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 
 
-pytestmark = pytest.mark.usefixtures("desktop_log_home")
+pytestmark = [
+    pytest.mark.unit,
+    pytest.mark.usefixtures("desktop_log_home", "no_network"),
+]
 
 
 class TestEntryPointImports:
@@ -411,8 +409,6 @@ class TestRuntimeStatusSnapshot:
         assert "\n🔌 MCP\n  Configured servers: 2" in text
 
 
-@pytest.mark.unit
-@pytest.mark.usefixtures("no_network")
 @pytest.mark.parametrize("platform", ["darwin", "win32", "linux"])
 def test_crash_paths_stay_in_the_test_home(tmp_path, monkeypatch, platform):
     from desktop_app import get_crash_paths, paths
@@ -431,8 +427,6 @@ def test_crash_paths_stay_in_the_test_home(tmp_path, monkeypatch, platform):
     assert all(path.is_relative_to(tmp_path) for path in crash_paths)
 
 
-@pytest.mark.unit
-@pytest.mark.usefixtures("no_network")
 class TestGetCrashPaths:
     """Tests for get_crash_paths() function."""
 
@@ -480,8 +474,6 @@ class TestGetCrashPaths:
             assert "Library" in str(crash_log) or "Logs" in str(crash_log)
 
 
-@pytest.mark.unit
-@pytest.mark.usefixtures("no_network")
 class TestCrashMarkerFunctions:
     """Tests for mark_session_started() and mark_session_clean_exit()."""
 
@@ -527,8 +519,6 @@ class TestCrashMarkerFunctions:
         mark_session_clean_exit()
 
 
-@pytest.mark.unit
-@pytest.mark.usefixtures("no_network")
 class TestCheckPreviousCrash:
     """Tests for check_previous_crash() function."""
 
@@ -1368,8 +1358,6 @@ class TestMemoryViewerModulePath:
         )
 
 
-@pytest.mark.unit
-@pytest.mark.usefixtures("no_network")
 class TestDaemonSmokeTest:
     """Entry-point initialisation and cleanup with owned runtime dependencies."""
 
@@ -1474,8 +1462,6 @@ class TestDaemonSmokeTest:
         dictation.stop.assert_called_once()
 
 
-@pytest.mark.unit
-@pytest.mark.usefixtures("no_network")
 class TestDesktopSmokeTest:
     """Desktop smoke startup, diagnostics and exit codes without native services."""
 
@@ -1534,7 +1520,6 @@ class TestDesktopSmokeTest:
         smoke.assert_called_once_with()
 
 
-@pytest.mark.unit
 class TestRuntimeStatusDialog:
     """The runtime-status dialog renders the snapshot as a structured,
     themed dialog rather than a plain text blob."""
@@ -1642,8 +1627,6 @@ class TestTrayMenuLayout:
             "Power and the Status line must share one menu section"
         )
 
-@pytest.mark.unit
-@pytest.mark.usefixtures("no_network")
 class TestListeningWindowVisibility:
     """Starting or stopping the assistant must never change the visibility
     of the log viewer or the face window.
