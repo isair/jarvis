@@ -7,7 +7,7 @@ from jarvis.reply import engine
 from jarvis.tools.builtin.nutrition import log_meal
 from jarvis.tools.base import ToolContext
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("no_network")]
 
 
 def test_logged_record_reference_is_grounded_in_saved_row(db, mock_config, monkeypatch):
@@ -110,6 +110,8 @@ def test_native_tool_execution_preserves_identity_for_followup(db, mock_config, 
     from jarvis.reply.prompts.model_variants import ModelSize
     mock_config.location_enabled = False
     mock_config.tool_result_digest_enabled = True
+    # An empty advisory plan triggers memory extraction independently of tool routing.
+    monkeypatch.setattr(engine, 'extract_search_params_for_memory', lambda *args, **kwargs: {})
     older = db.insert_meal('2026-10-05T00:00:00+00:00', 'fixture', 'Oats')
     monkeypatch.setattr(log_meal, 'meal_recording_requested', lambda *args: True)
     monkeypatch.setattr(log_meal, 'call_llm_direct', lambda **kwargs: json.dumps({'description':'Oats'}) if kwargs['system_prompt'] == log_meal.NUTRITION_SYS else '')
