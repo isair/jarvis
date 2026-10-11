@@ -25,6 +25,9 @@ def listener(rate=48000):
     obj._vad_error_logged = False
     obj._vad = None
     obj._should_stop = False
+    from jarvis.listening.state_manager import StateManager
+    obj.state_manager = StateManager()
+    obj._tune_player = None
     obj._capture_pause_reasons = frozenset()
     obj._capture_pause_reset_pending = False
     obj._capture_generation = 0
