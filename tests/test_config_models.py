@@ -1,7 +1,7 @@
 """
 Tests for model configuration in config.py.
 
-Tests the centralized model definitions that serve as the single source of truth
+Tests the centralised model definitions that serve as the single source of truth
 for supported chat models across the application.
 """
 
@@ -12,6 +12,9 @@ from jarvis.config import (
     get_supported_model_ids,
     get_default_config,
 )
+
+
+pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("no_network")]
 
 
 class TestSupportedChatModels:
