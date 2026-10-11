@@ -115,7 +115,7 @@ After transcription, text passes through these stages in order:
   same input, including the Whisper target rate. Access and unavailable-device
   errors fail immediately.
 - Multichannel samples are averaged to mono before transcription. The accepted
-  sample rate is stored in `_stream_sample_rate`.
+  sample rate is published to the active session under the engine lock before the stream starts. Superseded workers close their stream without changing the active rate. Released transcription jobs retain the sample rate captured with their audio frames, independently of subsequent recording sessions.
 - If the stream rate differs from the Whisper target rate, audio is resampled
   via linear interpolation before transcription.
 
