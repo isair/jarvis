@@ -89,7 +89,7 @@ class MockConfig:
     fast_model: str = ""
     memory_enrichment_max_results: int = 5
     memory_enrichment_source: str = "diary"
-    location_enabled: bool = True
+    location_enabled: bool = False
     location_ip_address: Optional[str] = None
     location_auto_detect: bool = False
     location_cgnat_resolve_public_ip: bool = False

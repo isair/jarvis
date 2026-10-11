@@ -4,6 +4,8 @@ from unittest.mock import patch
 
 import pytest
 
+pytestmark = pytest.mark.unit
+
 from jarvis.tools.builtin.tool_search import ToolSearchTool
 from jarvis.tools.base import ToolContext
 
