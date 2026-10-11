@@ -1,4 +1,4 @@
-"""Tests for dialogue memory and diary redaction functionality."""
+"""Dialogue, diary privacy and reply-loop contracts with controlled runtimes."""
 
 import pytest
 import time
@@ -10,16 +10,19 @@ from datetime import datetime, timezone
 
 from jarvis.memory.db import Database
 
-from src.jarvis.memory.conversation import (
+from jarvis.memory.conversation import (
     DialogueMemory,
     update_daily_conversation_summary,
     update_diary_from_dialogue_memory,
 )
-from src.jarvis.reply.engine import run_reply_engine
-from src.jarvis.utils.redact import redact
+from jarvis.reply.engine import run_reply_engine
+from jarvis.tools.types import ToolExecutionResult
+from jarvis.utils.redact import redact
 
 
-@pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("no_network")]
+
+
 class TestDialogueMemory:
     """Test dialogue memory conversation flow preservation."""
     
@@ -77,39 +80,47 @@ class TestDialogueMemory:
             assert not dm.should_update_diary()
 
 
+
+@pytest.fixture
+def reply_memory_runtime(tmp_path, mock_config, monkeypatch):
+    """Exercise the reply loop with synthetic decisions and owned storage."""
+    from jarvis.reply import engine
+    from jarvis.reply.prompts import ModelSize
+
+    mock_config.db_path = str(tmp_path / "dialogue.db")
+    mock_config.llm_chat_model = "test"
+    mock_config.ollama_chat_model = "test"
+    mock_config.embedding_model = ""
+    mock_config.location_enabled = False
+    mock_config.memory_enrichment_source = "diary"
+    mock_config.memory_digest_enabled = False
+    mock_config.tool_result_digest_enabled = False
+    monkeypatch.setattr(engine, "detect_model_size", lambda *args, **kwargs: ModelSize.LARGE)
+    monkeypatch.setattr(engine, "select_tools", lambda **kwargs: list(kwargs["builtin_tools"]))
+    monkeypatch.setattr(engine, "plan_query", lambda *args, **kwargs: [])
+    monkeypatch.setattr(engine, "extract_search_params_for_memory", lambda *args, **kwargs: {})
+    with closing(Database(mock_config.db_path)) as db:
+        yield db, mock_config
+
+
 class TestReplyEngineDialogueMemory:
     """Test reply engine dialogue memory integration."""
     
-    @patch('src.jarvis.reply.engine.chat_with_messages')
-    @patch('src.jarvis.reply.engine.extract_text_from_response')
-    def test_dialogue_memory_preserves_message_order(self, mock_extract, mock_chat):
+    @patch('jarvis.reply.engine.chat_with_messages')
+    def test_dialogue_memory_preserves_message_order(self, mock_chat, reply_memory_runtime):
         """Test that reply engine stores conversation in correct order."""
         # Mock dependencies
-        mock_extract.return_value = "Final response"
         mock_chat.return_value = {"message": {"content": "Final response"}}
 
-        # Mock database and config
-        mock_db = Mock()
-        mock_cfg = Mock()
-        mock_cfg.ollama_base_url = "http://localhost:11434"
-        mock_cfg.ollama_chat_model = "test"
-        mock_cfg.llm_chat_model = "test"
-        mock_cfg.voice_debug = False
-        mock_cfg.llm_tools_timeout_sec = 8.0
-        mock_cfg.llm_embedding_timeout_sec = 10.0
-        mock_cfg.llm_chat_timeout_sec = 45.0
-        mock_cfg.memory_enrichment_max_results = 5
-        mock_cfg.location_ip_address = None
-        mock_cfg.location_auto_detect = False
-        mock_cfg.agentic_max_turns = 8
-        
+        db, cfg = reply_memory_runtime
+
         # Create dialogue memory
         dialogue_memory = DialogueMemory()
         
         # Run reply engine
         result = run_reply_engine(
-            db=mock_db,
-            cfg=mock_cfg,
+            db=db,
+            cfg=cfg,
             tts=None,
             text="What's the weather in London?",
             dialogue_memory=dialogue_memory
@@ -123,13 +134,12 @@ class TestReplyEngineDialogueMemory:
         assert "User: What's the weather in London?" in chunks
         assert "Assistant: Final response" in chunks
     
-    @patch('src.jarvis.reply.engine.chat_with_messages')
-    @patch('src.jarvis.reply.engine.extract_text_from_response')
-    @patch('src.jarvis.reply.engine.run_tool_with_retries')
-    def test_dialogue_memory_filters_tool_calls(self, mock_tool, mock_extract, mock_chat):
+    @patch('jarvis.reply.engine.chat_with_messages')
+    @patch('jarvis.reply.engine.run_tool_with_retries')
+    def test_dialogue_memory_filters_tool_calls(self, mock_tool, mock_chat, reply_memory_runtime):
         """Test that JSON tool calls are filtered from dialogue memory."""
         # Mock dependencies
-        mock_tool.return_value = Mock(reply_text="Weather data", error_message=None)
+        mock_tool.return_value = ToolExecutionResult(success=True, reply_text="Weather data")
         
         # Mock multi-turn conversation: structured tool call then final response
         mock_chat.side_effect = [
@@ -147,36 +157,27 @@ class TestReplyEngineDialogueMemory:
             },
             {"message": {"content": "It's sunny in London today!"}}
         ]
-        mock_extract.side_effect = [
-            "",  # Empty content for tool call
-            "It's sunny in London today!"
-        ]
-        
-        # Mock database and config
-        mock_db = Mock()
-        mock_cfg = Mock()
-        mock_cfg.ollama_base_url = "http://localhost:11434"
-        mock_cfg.ollama_chat_model = "test"
-        mock_cfg.llm_chat_model = "test"
-        mock_cfg.voice_debug = False
-        mock_cfg.llm_tools_timeout_sec = 8.0
-        mock_cfg.llm_embedding_timeout_sec = 10.0
-        mock_cfg.llm_chat_timeout_sec = 45.0
-        mock_cfg.memory_enrichment_max_results = 5
-        mock_cfg.location_ip_address = None
-        mock_cfg.location_auto_detect = False
-        mock_cfg.agentic_max_turns = 8
+        db, cfg = reply_memory_runtime
 
         # Create dialogue memory
         dialogue_memory = DialogueMemory()
 
         # Run reply engine
         result = run_reply_engine(
-            db=mock_db,
-            cfg=mock_cfg,
+            db=db,
+            cfg=cfg,
             tts=None,
             text="What's the weather in London?",
             dialogue_memory=dialogue_memory
+        )
+
+        # Tool output reaches the response model without becoming dialogue text.
+        response_messages = mock_chat.call_args_list[-1].kwargs["messages"]
+        assert any(
+            message.get("role") == "tool"
+            and message.get("tool_call_id") == "call_12345"
+            and "Weather data" in message.get("content", "")
+            for message in response_messages
         )
 
         # Check that dialogue memory was updated
@@ -212,8 +213,6 @@ def _assert_diary_saved(db, result):
     assert saved["source_app"] == "test"
 
 
-@pytest.mark.unit
-@pytest.mark.usefixtures("no_network")
 class TestDiaryRedaction:
     """Test diary redaction functionality."""
     
@@ -227,7 +226,7 @@ class TestDiaryRedaction:
         assert "user@example.com" not in redacted
         assert "sk-abcd1234567890abcdef" not in redacted
     
-    @patch('src.jarvis.memory.conversation.generate_conversation_summary')
+    @patch('jarvis.memory.conversation.generate_conversation_summary')
     def test_diary_update_redacts_chunks(self, mock_summary, diary_redaction_runtime):
         """Test that diary updates redact sensitive information from chunks."""
         # Mock summary generation
@@ -263,7 +262,7 @@ class TestDiaryRedaction:
         assert "sensitive@example.com" not in redacted_text
         assert "sk-abcdef123456" not in redacted_text
     
-    @patch('src.jarvis.memory.conversation.generate_conversation_summary')
+    @patch('jarvis.memory.conversation.generate_conversation_summary')
     def test_diary_update_preserves_conversation_flow(self, mock_summary, diary_redaction_runtime):
         """Test that diary updates preserve conversation order after redaction."""
         # Mock summary generation
@@ -300,8 +299,6 @@ class TestDiaryRedaction:
         assert processed_chunks[3] == "Assistant: Let me check for you"
 
 
-@pytest.mark.unit
-@pytest.mark.usefixtures("no_network")
 class TestDialogueMemoryIntegration:
     """Integration tests for dialogue memory with redaction."""
     
@@ -323,7 +320,6 @@ class TestDialogueMemoryIntegration:
         assert 'sk-1234567890' in '\n'.join(chunks)
 
         # Simulate diary update redaction
-        from src.jarvis.utils.redact import redact
         redacted_chunks = [redact(chunk) for chunk in chunks]
         redacted_content = "\n".join(redacted_chunks)
         
@@ -340,7 +336,6 @@ class TestDialogueMemoryIntegration:
         assert "Assistant: Thanks, I'll process that securely" in redacted_content
 
 
-@pytest.mark.unit
 class TestDialogueMemoryEdgeCases:
     """Test edge cases for dialogue memory thread safety and long conversations."""
 
@@ -547,7 +542,7 @@ class TestDialogueMemoryEdgeCases:
         chunks_snapshot, _ = dm.get_pending_chunks_with_snapshot()
         assert chunks_simple == chunks_snapshot
 
-    @patch('src.jarvis.memory.conversation.update_daily_conversation_summary')
+    @patch('jarvis.memory.conversation.update_daily_conversation_summary')
     def test_update_diary_preserves_new_messages_during_slow_llm(self, mock_summary):
         """Integration test: messages arriving during slow LLM call are preserved."""
         dm = DialogueMemory(inactivity_timeout=0.1)
@@ -592,7 +587,6 @@ class TestDialogueMemoryEdgeCases:
         assert "Message during LLM call" in pending[0]
 
 
-@pytest.mark.unit
 class TestDialogueMemoryUnifiedDurations:
     """Test that DialogueMemory durations are unified from inactivity_timeout."""
 
@@ -621,7 +615,6 @@ class TestDialogueMemoryUnifiedDurations:
 
 
 
-@pytest.mark.unit
 class TestDialogueMemorySessions:
     """Session archive / restore / rewind primitives backing the text-chat
     sessions feature. Everything is in-memory only; these methods never
