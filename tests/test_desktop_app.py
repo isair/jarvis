@@ -1459,78 +1459,64 @@ class TestDaemonSmokeTest:
         dictation.stop.assert_called_once()
 
 
+@pytest.mark.unit
+@pytest.mark.usefixtures("no_network")
 class TestDesktopSmokeTest:
-    """Tests for the --smoke-test flag on the desktop app entry point."""
+    """Desktop smoke startup, diagnostics and exit codes without native services."""
 
-    def test_smoke_test_main_calls_daemon_with_smoke_flag(self):
-        """_smoke_test_main() calls daemon_main(smoke_test=True)."""
-        from unittest.mock import patch, MagicMock
+    @pytest.fixture
+    def runtime(self, monkeypatch):
+        import desktop_app.app as app
+        import jarvis.daemon as daemon
+        from PyQt6 import QtWidgets
 
-        mock_qapp = MagicMock()
-        mock_qapp.instance.return_value = mock_qapp
+        qt = MagicMock()
+        qt.instance.return_value = qt.return_value
+        daemon_main = MagicMock()
+        monkeypatch.setattr(QtWidgets, "QApplication", qt)
+        monkeypatch.setattr(daemon, "main", daemon_main)
+        # Stream replacements belong to this entry point, not the test process.
+        monkeypatch.setattr(app, "sys", SimpleNamespace(
+            platform=sys.platform, argv=["Jarvis"], frozen=False,
+            stdout=sys.stdout, stderr=sys.stderr,
+            __stdout__=sys.__stdout__, __stderr__=sys.__stderr__,
+        ))
+        monkeypatch.setenv("QT_QPA_PLATFORM", os.environ.get("QT_QPA_PLATFORM", "offscreen"))
+        return app, qt, daemon_main
 
-        with patch("PyQt6.QtWidgets.QApplication", mock_qapp), \
-             patch("jarvis.daemon.main") as mock_daemon_main:
+    @pytest.mark.parametrize("existing_app", [False, True])
+    def test_success_initialises_daemon_and_prints_marker(self, runtime, capsys, existing_app):
+        app, qt, daemon_main = runtime
+        if not existing_app:
+            qt.instance.return_value = None
+        assert app._smoke_test_main() == 0
+        daemon_main.assert_called_once_with(smoke_test=True)
+        assert "SMOKE_TEST_PASSED" in capsys.readouterr().out
 
-            from desktop_app.app import _smoke_test_main
-            result = _smoke_test_main()
+    @pytest.mark.parametrize("failure", ["qt", "daemon"])
+    def test_failure_returns_one_with_diagnostics(self, runtime, capsys, failure):
+        app, qt, daemon_main = runtime
+        error = RuntimeError("Simulated init failure")
+        if failure == "qt":
+            qt.instance.side_effect = error
+        else:
+            daemon_main.side_effect = error
+        assert app._smoke_test_main() == 1
+        output = capsys.readouterr()
+        assert "SMOKE_TEST_PASSED" not in output.out
+        assert "initialisation failed" in output.out
+        assert str(error) in output.out
+        assert str(error) in output.err
+        if failure == "qt":
+            daemon_main.assert_not_called()
 
-            mock_daemon_main.assert_called_once_with(smoke_test=True)
-            assert result == 0
-
-    def test_smoke_test_main_prints_pass_on_success(self):
-        """_smoke_test_main() prints SMOKE_TEST_PASSED when daemon succeeds."""
-        from unittest.mock import patch, MagicMock
-        import io
-
-        mock_qapp = MagicMock()
-        mock_qapp.instance.return_value = mock_qapp
-
-        with patch("PyQt6.QtWidgets.QApplication", mock_qapp), \
-             patch("jarvis.daemon.main") as mock_daemon_main:
-
-            mock_daemon_main.return_value = None
-
-            captured = io.StringIO()
-            with patch("sys.stdout", captured):
-                from desktop_app.app import _smoke_test_main
-                result = _smoke_test_main()
-
-            output = captured.getvalue()
-            assert "SMOKE_TEST_PASSED" in output, (
-                f"Expected SMOKE_TEST_PASSED in output, got:\n{output}"
-            )
-            assert result == 0
-
-    def test_smoke_test_main_returns_1_on_daemon_failure(self):
-        """_smoke_test_main() returns 1 when daemon_main raises."""
-        from unittest.mock import patch, MagicMock
-
-        mock_qapp = MagicMock()
-        mock_qapp.instance.return_value = mock_qapp
-
-        with patch("PyQt6.QtWidgets.QApplication", mock_qapp), \
-             patch("jarvis.daemon.main", side_effect=RuntimeError("Simulated init failure")):
-
-            from desktop_app.app import _smoke_test_main
-            result = _smoke_test_main()
-
-            assert result == 1, f"Expected exit code 1 on failure, got {result}"
-
-    def test_main_routes_smoke_test_flag(self):
-        """main() detects --smoke-test and calls _smoke_test_main()."""
-        from unittest.mock import patch
-
-        # The smoke test flag detection is a simple string check in sys.argv.
-        # We test it by patching _smoke_test_main to verify it is called.
-        with patch("desktop_app.app.sys.argv", ["Jarvis.exe", "--smoke-test"]), \
-             patch("desktop_app.app._smoke_test_main", return_value=42) as mock_smoke:
-
-            from desktop_app.app import main
-            result = main()
-
-            mock_smoke.assert_called_once()
-            assert result == 42  # return value propagated from _smoke_test_main
+    def test_main_routes_smoke_test_flag(self, runtime, monkeypatch):
+        app, _qt, _daemon_main = runtime
+        app.sys.argv = ["Jarvis", "--smoke-test"]
+        smoke = MagicMock(return_value=42)
+        monkeypatch.setattr(app, "_smoke_test_main", smoke)
+        assert app.main() == smoke.return_value
+        smoke.assert_called_once_with()
 
 
 @pytest.mark.unit
