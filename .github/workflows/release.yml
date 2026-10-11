@@ -11,7 +11,7 @@ on:
     # the release would otherwise never be published automatically.
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref_name }}
+  group: ${{ github.workflow }}-${{ github.ref_name }}-${{ github.ref_name == 'develop' && github.run_id || 'stable' }}
   cancel-in-progress: true
 
 jobs:
@@ -64,9 +64,31 @@ jobs:
 
           cat release_output.log
 
-  # ── Build desktop apps (develop only; main builds stable-stamped below) ─
-  build-desktop:
+  desktop-changes:
     if: github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      required: ${{ steps.changes.outputs.required }}
+    steps:
+      - name: 📥 Checkout complete history
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: 🔎 Check installer changes
+        id: changes
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+        run: python3 scripts/desktop_release_changes.py
+
+  # Only qualifying builds share cancellation; test-only runs cannot interrupt them.
+  build-desktop:
+    needs: [desktop-changes]
+    if: github.ref == 'refs/heads/develop' && needs.desktop-changes.outputs.required == 'true'
+    concurrency:
+      group: ${{ github.workflow }}-develop-build
+      cancel-in-progress: true
     uses: ./.github/workflows/build-desktop.yml
     with:
       version: dev-${{ github.sha }}
@@ -175,7 +197,7 @@ jobs:
   release-develop:
     needs: [build-desktop]
     runs-on: ubuntu-latest
-    if: always() && github.ref == 'refs/heads/develop'
+    if: always() && github.ref == 'refs/heads/develop' && needs.build-desktop.result == 'success'
 
     permissions:
       contents: write
