@@ -8,6 +8,7 @@ profiles, or TTS). Uses a shared Whisper model reference to avoid double memory.
 from __future__ import annotations
 
 import contextlib
+from functools import partial
 import io
 import math
 import os
@@ -922,10 +923,10 @@ class DictationEngine:
         with self._lock:
             if self._session != token or not self._recording:
                 return
+            self._audio_frames = []
+            self._record_start_time = time.time()
 
         debug_log("dictation recording started", "dictation")
-        self._audio_frames = []
-        self._record_start_time = time.time()
 
         # Notify listeners (face state, pause main listener)
         if self._on_dictation_start:
@@ -959,7 +960,7 @@ class DictationEngine:
             with _suppress_stderr():
                 stream, stream_sample_rate, channels = open_input_stream(
                     sd, native_rate, 100, stream_kwargs,
-                    callback=self._audio_callback, log_category='dictation',
+                    callback=partial(self._audio_callback, token), log_category='dictation',
                     fallback_rate=self._target_sample_rate,
                 )
             debug_log(
@@ -1003,18 +1004,16 @@ class DictationEngine:
             debug_log("dictation session superseded before stream opened — closing", "dictation")
             _close_stream(stream)
 
-    def _audio_callback(self, indata, frames, time_info, status) -> None:
-        """sounddevice callback — accumulate audio frames."""
-        # ``self._recording`` is read without the engine lock.  This is safe
-        # because writes happen under the lock in _start_recording and
-        # _stop_recording, and a single-word bool read/write is atomic under
-        # the GIL.  Worst case is one extra frame captured just after stop
-        # or one missed frame just after start — both benign.
-        if not self._recording:
+    def _audio_callback(self, token: int, indata, frames, time_info, status) -> None:
+        """Accept audio only for the active recording that opened this stream."""
+        if self._session != token or not self._recording:
             return
-        # No max duration cap — the user controls when to stop (release hotkey).
-        # A cap would paste prematurely mid-dictation and restart recording.
-        self._audio_frames.append(mono_capture(indata).copy())
+        audio = mono_capture(indata).copy()
+        # Conversion stays outside the state lock. Release and session changes
+        # may occur during it, so acceptance rechecks ownership under the lock.
+        with self._lock:
+            if self._session == token and self._recording:
+                self._audio_frames.append(audio)
 
     def _stop_recording(self, discard: bool = False) -> None:
         # Flip state and snapshot the work queue atomically, under minimal
