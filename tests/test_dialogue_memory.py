@@ -3,9 +3,12 @@
 import pytest
 import time
 import threading
+from contextlib import closing
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 from datetime import datetime, timezone
+
+from jarvis.memory.db import Database
 
 from src.jarvis.memory.conversation import (
     DialogueMemory,
@@ -189,6 +192,28 @@ class TestReplyEngineDialogueMemory:
             assert 'call_12345' not in chunk
 
 
+
+@pytest.fixture
+def diary_redaction_runtime(tmp_path, mock_config):
+    """Own the diary database with embeddings disabled."""
+    mock_config.llm_chat_model = "test"
+    mock_config.ollama_chat_model = "test"
+    mock_config.embedding_model = ""
+    mock_config.ollama_embed_model = "test"
+    with closing(Database(str(tmp_path / "diary.db"))) as db:
+        yield db, mock_config
+
+
+def _assert_diary_saved(db, result):
+    assert result is not None
+    saved = db.get_conversation_summary_by_id(result)
+    assert saved["summary"] == "Daily summary"
+    assert saved["topics"] == "topic1, topic2"
+    assert saved["source_app"] == "test"
+
+
+@pytest.mark.unit
+@pytest.mark.usefixtures("no_network")
 class TestDiaryRedaction:
     """Test diary redaction functionality."""
     
@@ -203,15 +228,12 @@ class TestDiaryRedaction:
         assert "sk-abcd1234567890abcdef" not in redacted
     
     @patch('src.jarvis.memory.conversation.generate_conversation_summary')
-    def test_diary_update_redacts_chunks(self, mock_summary):
+    def test_diary_update_redacts_chunks(self, mock_summary, diary_redaction_runtime):
         """Test that diary updates redact sensitive information from chunks."""
         # Mock summary generation
-        mock_summary.return_value = ("Daily summary", ["topic1", "topic2"])
+        mock_summary.return_value = ("Daily summary", "topic1, topic2")
         
-        # Mock database
-        mock_db = Mock()
-        mock_db.get_conversation_summary.return_value = None
-        mock_db.upsert_conversation_summary.return_value = 1
+        db, cfg = diary_redaction_runtime
         
         # Create chunks with sensitive information
         sensitive_chunks = [
@@ -221,19 +243,14 @@ class TestDiaryRedaction:
         ]
         
         # Call diary update function
-        cfg = SimpleNamespace(
-            llm_chat_model="test",
-            ollama_base_url="http://localhost:11434",
-            ollama_chat_model="test",
-            embedding_model="",
-            ollama_embed_model="test",
-        )
         result = update_daily_conversation_summary(
-            db=mock_db,
+            db=db,
             new_chunks=sensitive_chunks,
             cfg=cfg,
             source_app="test",
         )
+
+        _assert_diary_saved(db, result)
 
         # Verify summary was called with redacted chunks
         mock_summary.assert_called_once()
@@ -247,15 +264,12 @@ class TestDiaryRedaction:
         assert "sk-abcdef123456" not in redacted_text
     
     @patch('src.jarvis.memory.conversation.generate_conversation_summary')
-    def test_diary_update_preserves_conversation_flow(self, mock_summary):
+    def test_diary_update_preserves_conversation_flow(self, mock_summary, diary_redaction_runtime):
         """Test that diary updates preserve conversation order after redaction."""
         # Mock summary generation
-        mock_summary.return_value = ("Daily summary", ["topic1", "topic2"])
+        mock_summary.return_value = ("Daily summary", "topic1, topic2")
         
-        # Mock database
-        mock_db = Mock()
-        mock_db.get_conversation_summary.return_value = None
-        mock_db.upsert_conversation_summary.return_value = 1
+        db, cfg = diary_redaction_runtime
         
         # Create ordered conversation chunks
         chunks = [
@@ -266,20 +280,15 @@ class TestDiaryRedaction:
         ]
         
         # Call diary update function
-        cfg = SimpleNamespace(
-            llm_chat_model="test",
-            ollama_base_url="http://localhost:11434",
-            ollama_chat_model="test",
-            embedding_model="",
-            ollama_embed_model="test",
-        )
         result = update_daily_conversation_summary(
-            db=mock_db,
+            db=db,
             new_chunks=chunks,
             cfg=cfg,
             source_app="test",
         )
         
+        _assert_diary_saved(db, result)
+
         # Verify summary was called with chunks in correct order
         mock_summary.assert_called_once()
         processed_chunks = mock_summary.call_args[0][0]  # First argument
@@ -291,6 +300,8 @@ class TestDiaryRedaction:
         assert processed_chunks[3] == "Assistant: Let me check for you"
 
 
+@pytest.mark.unit
+@pytest.mark.usefixtures("no_network")
 class TestDialogueMemoryIntegration:
     """Integration tests for dialogue memory with redaction."""
     
