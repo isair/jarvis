@@ -304,7 +304,7 @@ class TestRecordingStateMachine:
             engine._audio_callback(audio, len(audio), None, None)
             np.testing.assert_allclose(engine._audio_frames[-1], 0.2)
             with patch.object(engine, '_transcribe', return_value='') as transcribe:
-                engine._transcribe_and_paste(engine._audio_frames)
+                engine._transcribe_and_paste(engine._audio_frames, engine._stream_sample_rate)
             whisper_audio = transcribe.call_args.args[0]
             assert len(whisper_audio) == 16000
             np.testing.assert_allclose(whisper_audio, 0.2)
@@ -485,7 +485,7 @@ class TestRecordingStateMachine:
             engine._finalise_and_transcribe(
                 stream=None,
                 audio_frames=[np.zeros(1600, dtype=np.float32)],
-                start_time=time.time(),
+                start_time=time.time(), stream_sample_rate=engine._stream_sample_rate,
             )
 
         assert end_called.is_set(), (
@@ -709,7 +709,7 @@ class TestTranscribeAndPaste:
 
         # 0.1s of audio at 16kHz = 1600 samples (< 4800 needed for 0.3s)
         short_frames = [np.zeros(1600, dtype=np.float32)]
-        engine._transcribe_and_paste(short_frames)
+        engine._transcribe_and_paste(short_frames, engine._stream_sample_rate)
         assert end_called.is_set()
 
     def test_empty_frames_handled(self):
@@ -717,7 +717,7 @@ class TestTranscribeAndPaste:
         end_called = threading.Event()
         engine._on_dictation_end = lambda: end_called.set()
 
-        engine._transcribe_and_paste([])
+        engine._transcribe_and_paste([], engine._stream_sample_rate)
         assert end_called.is_set()
 
     @patch("src.jarvis.dictation.dictation_engine._clipboard_paste")
@@ -734,7 +734,7 @@ class TestTranscribeAndPaste:
         )
 
         frames = [np.zeros(8000, dtype=np.float32)]  # 0.5s
-        engine._transcribe_and_paste(frames)
+        engine._transcribe_and_paste(frames, engine._stream_sample_rate)
         mock_paste.assert_called_once_with("hello world")
 
     @patch("src.jarvis.dictation.dictation_engine._clipboard_paste")
@@ -749,7 +749,7 @@ class TestTranscribeAndPaste:
         )
 
         frames = [np.zeros(8000, dtype=np.float32)]
-        engine._transcribe_and_paste(frames)
+        engine._transcribe_and_paste(frames, engine._stream_sample_rate)
         mock_paste.assert_not_called()
 
 
@@ -915,7 +915,7 @@ class TestDictationProcessingCallback:
         # the wiring we want to verify.
         with patch.object(de, "_close_stream"), patch.object(de, "_play_beep"):
             engine._finalise_and_transcribe(
-                stream=MagicMock(), audio_frames=[], start_time=time.time()
+                stream=MagicMock(), audio_frames=[], start_time=time.time(), stream_sample_rate=engine._stream_sample_rate
             )
 
         assert events == ["processing", "end"]
@@ -930,7 +930,7 @@ class TestDictationProcessingCallback:
              patch.object(de, "_play_beep"), \
              patch.object(engine, "_transcribe_and_paste"):
             # Should not raise
-            engine._finalise_and_transcribe(stream=MagicMock(), audio_frames=[], start_time=time.time())
+            engine._finalise_and_transcribe(stream=MagicMock(), audio_frames=[], start_time=time.time(), stream_sample_rate=engine._stream_sample_rate)
 
 
 # ---------------------------------------------------------------------------

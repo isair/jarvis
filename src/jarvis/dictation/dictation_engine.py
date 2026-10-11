@@ -957,19 +957,28 @@ class DictationEngine:
 
         try:
             with _suppress_stderr():
-                stream, self._stream_sample_rate, channels = open_input_stream(
+                stream, stream_sample_rate, channels = open_input_stream(
                     sd, native_rate, 100, stream_kwargs,
                     callback=self._audio_callback, log_category='dictation',
                     fallback_rate=self._target_sample_rate,
                 )
             debug_log(
-                f'dictation stream at {self._stream_sample_rate} Hz, {channels} channel(s) '
+                f'dictation stream at {stream_sample_rate} Hz, {channels} channel(s) '
                 f'(resamples to {self._target_sample_rate} Hz)', 'dictation',
             )
         except Exception as exc:
             debug_log(f"failed to open dictation audio stream: {exc}", "dictation")
             if self._abandon_session(token) and self._on_dictation_end:
                 self._on_dictation_end()
+            return
+
+        with self._lock:
+            current = self._session == token and self._recording
+            if current:
+                self._stream_sample_rate = stream_sample_rate
+        if not current:
+            debug_log("dictation session superseded before stream start", "dictation")
+            _close_stream(stream)
             return
 
         try:
@@ -1026,6 +1035,7 @@ class DictationEngine:
             audio_frames = self._audio_frames
             self._audio_frames = []
             start_time = self._record_start_time
+            stream_sample_rate = self._stream_sample_rate
 
         if discard:
             # Shutdown path — tear down synchronously so the caller knows
@@ -1040,7 +1050,7 @@ class DictationEngine:
 
         threading.Thread(
             target=self._finalise_and_transcribe,
-            args=(stream, audio_frames, start_time),
+            args=(stream, audio_frames, start_time, stream_sample_rate),
             daemon=True,
         ).start()
 
@@ -1049,6 +1059,7 @@ class DictationEngine:
         stream: Any,
         audio_frames: list,
         start_time: float,
+        stream_sample_rate: int,
     ) -> None:
         """Worker: close stream, play beep, transcribe, paste.
 
@@ -1078,7 +1089,7 @@ class DictationEngine:
             # _transcribe_and_paste has its own finally that fires
             # _on_dictation_end, so we defer to it on the happy path.
             end_fired = True
-            self._transcribe_and_paste(audio_frames)
+            self._transcribe_and_paste(audio_frames, stream_sample_rate)
         except Exception as exc:
             debug_log(f"dictation finalise error: {exc}", "dictation")
             if not end_fired and self._on_dictation_end:
@@ -1091,7 +1102,7 @@ class DictationEngine:
     # Transcription & paste
     # ------------------------------------------------------------------
 
-    def _transcribe_and_paste(self, frames: list) -> None:
+    def _transcribe_and_paste(self, frames: list, stream_sample_rate: int) -> None:
         try:
             if not frames:
                 debug_log("no audio frames captured", "dictation")
@@ -1100,8 +1111,8 @@ class DictationEngine:
             audio = np.concatenate(frames)
 
             # Resample to target rate if stream ran at a different rate
-            if self._stream_sample_rate != self._target_sample_rate:
-                audio = _resample(audio, self._stream_sample_rate, self._target_sample_rate)
+            if stream_sample_rate != self._target_sample_rate:
+                audio = _resample(audio, stream_sample_rate, self._target_sample_rate)
 
             # Require at least 0.3s of audio
             if len(audio) < self._target_sample_rate * 0.3:

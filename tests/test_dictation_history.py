@@ -592,7 +592,7 @@ class TestEngineHistoryIntegration:
         engine.history = DictationHistory(path=tmp_path / "h.json")
 
         frames = [np.zeros(8000, dtype=np.float32)]  # 0.5s
-        engine._transcribe_and_paste(frames)
+        engine._transcribe_and_paste(frames, engine._stream_sample_rate)
 
         assert engine.history.count == 1
         entry = engine.history.get_all()[0]
@@ -622,7 +622,7 @@ class TestEngineHistoryIntegration:
         engine.history = DictationHistory(path=tmp_path / "h.json")
 
         frames = [np.zeros(8000, dtype=np.float32)]
-        engine._transcribe_and_paste(frames)
+        engine._transcribe_and_paste(frames, engine._stream_sample_rate)
 
         assert len(results) == 1
         assert results[0]["text"] == "hello"
@@ -647,6 +647,6 @@ class TestEngineHistoryIntegration:
         engine.history = DictationHistory(path=tmp_path / "h.json")
 
         frames = [np.zeros(8000, dtype=np.float32)]
-        engine._transcribe_and_paste(frames)
+        engine._transcribe_and_paste(frames, engine._stream_sample_rate)
 
         assert engine.history.count == 0
