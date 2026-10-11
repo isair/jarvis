@@ -1,5 +1,8 @@
 """Native paste failures keep dictation text without unsafe keyboard fallbacks."""
+import time
+from threading import Thread
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -9,11 +12,18 @@ pytestmark = pytest.mark.unit
 
 
 @pytest.fixture
-def paste_scene(monkeypatch):
+def paste_clock(monkeypatch, no_network):
+    clock = MagicMock(wraps=time)
+    clock.sleep.return_value = None
+    monkeypatch.setattr(module, 'time', clock)
+    return clock.sleep
+
+
+@pytest.fixture
+def paste_scene(monkeypatch, paste_clock):
     clipboard, pasted = [], []
     monkeypatch.setattr(module.platform, 'system', lambda: 'Darwin')
     monkeypatch.setattr(module, '_clipboard_macos', clipboard.append)
-    monkeypatch.setattr(module.time, 'sleep', lambda seconds: None)
     monkeypatch.setattr(module, '_accessibility_warned', False)
     def unsafe_controller():
         raise RuntimeError('unsafe background TSM access')
@@ -69,7 +79,7 @@ def test_denied_accessibility_opens_settings_only_once(monkeypatch):
 
 
 @pytest.fixture
-def native_events(monkeypatch):
+def native_events(monkeypatch, paste_clock):
     posted, released, flags = [], [], {}
     events = {True: 101, False: 102}
     cg = SimpleNamespace(
@@ -79,7 +89,6 @@ def native_events(monkeypatch):
     )
     cf = SimpleNamespace(CFRelease=lambda event: released.append(event))
     monkeypatch.setattr('ctypes.cdll.LoadLibrary', lambda path: cg if 'CoreGraphics' in path else cf)
-    monkeypatch.setattr(module.time, 'sleep', lambda seconds: None)
     return cg, events, posted, released
 
 
@@ -110,3 +119,14 @@ def test_native_event_preparation_failure_posts_nothing_and_releases_both_events
     assert module._paste_cgevent() is False
     assert posted == []
     assert set(released) == {101, 102}
+
+
+@pytest.mark.parametrize('scene', ['paste_scene', 'native_events'])
+def test_paste_waits_do_not_replace_other_workers_sleep(request, paste_clock, scene):
+    request.getfixturevalue(scene)
+    before = list(paste_clock.call_args_list)
+    worker = Thread(target=lambda: time.sleep(0.001))
+    worker.start()
+    worker.join(timeout=5)
+    assert not worker.is_alive()
+    assert paste_clock.call_args_list == before, 'An unrelated worker entered simulated paste waits'
