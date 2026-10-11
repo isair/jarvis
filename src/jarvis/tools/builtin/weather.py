@@ -1,6 +1,7 @@
 """Weather tool implementation using Open-Meteo API (free, no API key required)."""
 
 import requests
+from datetime import date
 from typing import Dict, Any, Optional
 from ...debug import debug_log
 from ...llm import get_llm_backend
@@ -345,6 +346,12 @@ class WeatherTool(Tool):
                 f"Conditions: {weather_desc}",
             ]
 
+            observation_time = current.get("time")
+            if observation_time:
+                zone = weather_data.get("timezone")
+                zone_suffix = f" ({zone})" if zone else ""
+                lines.append(f"Local observation time: {observation_time}{zone_suffix}")
+
             if temp_c is not None:
                 lines.append(f"Temperature: {temp_c}°C ({temp_f}°F)")
 
@@ -402,7 +409,13 @@ class WeatherTool(Tool):
                 for i, date_str in enumerate(daily_dates):
                     if i < len(daily_max) and i < len(daily_min) and i < len(daily_codes):
                         desc = WMO_CODES.get(daily_codes[i], "")
-                        lines.append(f"  {date_str}: {daily_min[i]}–{daily_max[i]}°C, {desc}")
+                        try:
+                            weekday = date.fromisoformat(date_str).strftime("%A")
+                            calendar_label = f"{date_str} ({weekday})"
+                        except (TypeError, ValueError):
+                            calendar_label = str(date_str)
+                            debug_log("weather forecast row has no valid calendar date", "tools")
+                        lines.append(f"  {calendar_label}: {daily_min[i]}–{daily_max[i]}°C, {desc}")
 
             reply_text = "\n".join(lines)
 
