@@ -79,7 +79,11 @@ After transcription, text passes through these stages in order:
   modifying the complex listener code.
 - **Independent capture pause reason** on the main listener to prevent dictation
   speech being interpreted as commands. Dictation completion releases only its
-  own reason and cannot resume a user-paused assistant.
+  own reason and cannot resume a user-paused assistant. Start, processing and
+  completion notifications belong to their recording session and are serialised
+  with session transitions. Superseded workers cannot change the face or capture
+  pause state. Released audio still completes its transcription, paste and history
+  independently; finalisation reports completion even on teardown failure.
 - **No PortAudio work on the pynput hook thread.** The hotkey callbacks only
   flip state; stream open/start runs on a worker thread (`_begin_recording`)
   and stop/transcribe already ran on one. Windows silently unhooks slow hook
