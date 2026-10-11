@@ -18,6 +18,9 @@ from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 
 
+pytestmark = pytest.mark.usefixtures("desktop_log_home")
+
+
 class TestEntryPointImports:
     """Guardrails for the PyInstaller entry point (src/desktop_app/app.py).
 
@@ -408,6 +411,28 @@ class TestRuntimeStatusSnapshot:
         assert "\n🔌 MCP\n  Configured servers: 2" in text
 
 
+@pytest.mark.unit
+@pytest.mark.usefixtures("no_network")
+@pytest.mark.parametrize("platform", ["darwin", "win32", "linux"])
+def test_crash_paths_stay_in_the_test_home(tmp_path, monkeypatch, platform):
+    from desktop_app import get_crash_paths, paths
+
+    platform_view = MagicMock(wraps=sys)
+    platform_view.platform = platform
+    monkeypatch.setattr(paths, "sys", platform_view)
+    mkdir = Path.mkdir
+
+    def owned_mkdir(path, *args, **kwargs):
+        assert path.is_relative_to(tmp_path), "Crash diagnostics escaped the test home"
+        return mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", owned_mkdir)
+    crash_paths = get_crash_paths()
+    assert all(path.is_relative_to(tmp_path) for path in crash_paths)
+
+
+@pytest.mark.unit
+@pytest.mark.usefixtures("no_network")
 class TestGetCrashPaths:
     """Tests for get_crash_paths() function."""
 
@@ -455,6 +480,8 @@ class TestGetCrashPaths:
             assert "Library" in str(crash_log) or "Logs" in str(crash_log)
 
 
+@pytest.mark.unit
+@pytest.mark.usefixtures("no_network")
 class TestCrashMarkerFunctions:
     """Tests for mark_session_started() and mark_session_clean_exit()."""
 
@@ -500,25 +527,10 @@ class TestCrashMarkerFunctions:
         mark_session_clean_exit()
 
 
+@pytest.mark.unit
+@pytest.mark.usefixtures("no_network")
 class TestCheckPreviousCrash:
     """Tests for check_previous_crash() function."""
-
-    @pytest.fixture(autouse=True)
-    def _sandbox_crash_paths(self, tmp_path, monkeypatch):
-        """Point crash log/marker paths at a temp dir.
-
-        The real log dir (LOCALAPPDATA\\Jarvis) belongs to a running Jarvis
-        instance; tests must never write to, rename, or delete files there
-        (they are locked while the app runs).
-        """
-        from desktop_app.paths import get_log_dir
-
-        log_dir = tmp_path / "jarvis_logs"
-        log_dir.mkdir(parents=True, exist_ok=True)
-        monkeypatch.setattr(
-            "desktop_app.paths.get_log_dir",
-            lambda: log_dir,
-        )
 
     def test_returns_none_when_no_marker(self):
         """check_previous_crash() should return None if no crash marker exists."""

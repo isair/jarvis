@@ -12,6 +12,10 @@ from pathlib import Path
 
 from unittest.mock import patch
 
+import pytest
+
+pytestmark = pytest.mark.usefixtures("desktop_log_home")
+
 
 def _write_ips(path: Path, mtime: float, *, app_name: str = "Jarvis",
                exc_type: str = "SIGABRT", indicator: str = "DirtyVM_FLUSH",
