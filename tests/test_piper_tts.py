@@ -1,6 +1,8 @@
 """Tests for Piper TTS implementation."""
 
 import pytest
+
+pytestmark = pytest.mark.unit
 from unittest.mock import Mock, patch, MagicMock
 import threading
 import time
