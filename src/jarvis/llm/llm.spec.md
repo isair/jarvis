@@ -54,6 +54,8 @@ When a model rejects the `tools` parameter (Ollama returns HTTP 400 in that case
 
 Each backend parses its own stream format internally (Ollama JSONL, OpenAI SSE, Anthropic SSE event blocks). The public `on_token(str)` contract is identical across backends.
 
+`timeout_sec` covers elapsed streaming work from before the HTTP request. Each delivered line, including blank lines and keep-alives, and the final response are checked against a monotonic deadline. Exhausted streams return `None`, close the response and emit no further tokens. Tokens already delivered to a callback cannot be retracted. Checks run at line boundaries and after callbacks; they do not interrupt pending reads or callbacks. The HTTP read timeout bounds idle reads independently.
+
 ### Embeddings
 
 `embed()` is part of the same backend interface so the same provider can serve both chat and embeddings when capable. The `embedding_provider` config key lets users on runtimes without embeddings (e.g. some oMLX builds) route embeddings through Ollama while keeping chat on their preferred runtime. Every embedding call site under `src/jarvis/` resolves through `get_embedding_backend(cfg)`.

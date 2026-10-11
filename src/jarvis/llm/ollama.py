@@ -10,10 +10,12 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, List, Optional
 
 import json
+import time
 import requests
 
 from ..debug import debug_log
 from .errors import is_timeout_error
+from .streaming import check_stream_deadline, iter_stream_lines
 from .backend import LLMBackend, ToolsNotSupportedError, strip_nonstandard_message_fields
 
 
@@ -200,6 +202,7 @@ class OllamaBackend(LLMBackend):
             "think": _thinking_level(chat_model, thinking),
         }
 
+        deadline = time.monotonic() + timeout_sec
         try:
             with requests.post(
                 f"{self._base_url}/api/chat",
@@ -210,7 +213,7 @@ class OllamaBackend(LLMBackend):
                 resp.raise_for_status()
 
                 full_response: List[str] = []
-                for line in resp.iter_lines():
+                for line in iter_stream_lines(resp, deadline):
                     if line:
                         try:
                             data = json.loads(line)
@@ -223,10 +226,12 @@ class OllamaBackend(LLMBackend):
                         except json.JSONDecodeError:
                             continue
 
+                check_stream_deadline(deadline)
                 result = "".join(full_response)
                 return result if result.strip() else None
 
         except requests.exceptions.Timeout:
+            debug_log(f"ollama streaming: timeout after {timeout_sec}s", "llm")
             return None
         except Exception:
             return None
