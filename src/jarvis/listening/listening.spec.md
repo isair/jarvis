@@ -73,7 +73,10 @@ before status bookkeeping, pause checks or sample copies; a reset during
 admission cannot relabel old audio as fresh. Stale blocks
 are discarded after a reset, including blocks already dequeued. Remaining
 frames in a dequeued batch cannot append after a buffer reset. Transcript
-processing retains the result generation through buffer storage. Listener shutdown discards pending transcriptions and results;
+processing retains the result generation through buffer storage. Every listener
+exit, including failed intent or transcription handling, stops its thinking
+sound and cancels engagement timers. Listener shutdown discards pending
+transcriptions and results;
 workers receive bounded join grace periods. Invalidated voice queries cannot
 start a reply after waiting for the shared query lock, and an invalidated reply
 cannot produce speech or a spoken error, including invalidation during thinking

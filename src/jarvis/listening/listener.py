@@ -2068,6 +2068,7 @@ class VoiceListener(threading.Thread):
         try:
             self._run()
         finally:
+            self.stop()
             self._finish_audio_worker()
             if self._transcription_worker_thread is not None:
                 self._finish_transcription_worker()
