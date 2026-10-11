@@ -27,10 +27,12 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
 import json
+import time
 import requests
 
 from ..debug import debug_log
 from .errors import is_timeout_error
+from .streaming import check_stream_deadline, iter_stream_lines
 from .backend import LLMBackend, ToolsNotSupportedError, strip_nonstandard_message_fields
 
 
@@ -198,6 +200,7 @@ class OpenAICompatibleBackend(LLMBackend):
             "stream": True,
         }
 
+        deadline = time.monotonic() + timeout_sec
         try:
             with requests.post(
                 f"{self._base_url}/chat/completions",
@@ -209,7 +212,7 @@ class OpenAICompatibleBackend(LLMBackend):
                 resp.raise_for_status()
 
                 full_response: List[str] = []
-                for raw in resp.iter_lines():
+                for raw in iter_stream_lines(resp, deadline):
                     if not raw:
                         continue
                     line = raw.decode("utf-8", errors="ignore") if isinstance(raw, bytes) else raw
@@ -235,9 +238,11 @@ class OpenAICompatibleBackend(LLMBackend):
                         if on_token:
                             on_token(content)
 
+                check_stream_deadline(deadline)
                 result = "".join(full_response)
                 return result if result.strip() else None
         except requests.exceptions.Timeout:
+            debug_log(f"openai_compatible streaming: timeout after {timeout_sec}s", "llm")
             return None
         except Exception:
             return None
