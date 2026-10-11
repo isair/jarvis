@@ -8,6 +8,21 @@ from unittest.mock import patch, MagicMock, call
 import time
 import pytest
 
+pytestmark = pytest.mark.unit
+
+
+@pytest.fixture(autouse=True)
+def require_mocked_model_transport(monkeypatch):
+    """Listener unit tests cannot probe a running model server."""
+    import requests
+    attempts = []
+    def reject_request(*args, **kwargs):
+        attempts.append(True)
+        raise AssertionError('Model transport must be mocked in listener unit tests')
+    monkeypatch.setattr(requests.Session, 'request', reject_request)
+    yield
+    assert not attempts, 'Listener unit tests attempted an unmocked model request'
+
 
 def _mock_input_devices(audio, devices):
     """Expose the sounddevice list, default-input and indexed-query contracts."""
@@ -24,6 +39,10 @@ def _mock_input_devices(audio, devices):
 def _create_mock_config(**kwargs):
     """Create a mock config object with default values for voice listener tests."""
     mock_cfg = MagicMock()
+    mock_cfg.llm_chat_model = kwargs.get("llm_chat_model", "")
+    mock_cfg.ollama_chat_model = mock_cfg.llm_chat_model
+    mock_cfg.fast_model = kwargs.get("fast_model", "")
+    mock_cfg.embedding_model = kwargs.get("embedding_model", None)
     mock_cfg.whisper_model = kwargs.get("whisper_model", "small")
     mock_cfg.whisper_device = kwargs.get("whisper_device", "auto")
     mock_cfg.whisper_compute_type = kwargs.get("whisper_compute_type", "int8")
@@ -1038,7 +1057,16 @@ class TestSampleRateFallback:
     def test_fallback_to_native_rate_on_invalid_sample_rate(self, capsys, platform_name, input_channels):
         """Negotiated headset capture reaches Whisper at the correct duration."""
         mock_whisper_model = MagicMock()
-        mock_whisper_model.transcribe.return_value = ([], None)
+        import threading
+        decoded = threading.Event()
+        utterance_audio = []
+        def transcribe(audio, **kwargs):
+            # Warmup decodes one second; this captured utterance is shorter.
+            if len(audio) < mock_cfg.sample_rate:
+                utterance_audio.append(audio)
+                decoded.set()
+            return [], None
+        mock_whisper_model.transcribe.side_effect = transcribe
 
         with patch("jarvis.listening.listener.sys") as mock_sys:
             mock_sys.platform = platform_name
@@ -1106,6 +1134,7 @@ class TestSampleRateFallback:
                                 if get_calls[0] == 2:
                                     from jarvis.listening.listener import _CapturedAudio
                                     return _CapturedAudio(np.zeros((4410, input_channels), dtype=np.float32), listener._audio_generation)
+                                assert decoded.wait(timeout=2), 'Captured speech did not reach Whisper'
                                 listener._should_stop = True
                                 raise q.Empty()
 
@@ -1125,8 +1154,10 @@ class TestSampleRateFallback:
                             assert listener._stream_samplerate == 44100
                             assert listener._frame_samples == 44100 * mock_cfg.vad_frame_ms // 1000
                             assert capture_kwargs['blocksize'] == listener._frame_samples
-                            assert len(mock_whisper_model.transcribe.call_args[0][0]) == 6400
-                            np.testing.assert_allclose(mock_whisper_model.transcribe.call_args[0][0], .1, atol=.001)
+                            expected_samples = round(17640 / device_info['default_samplerate'] * mock_cfg.sample_rate)
+                            assert len(utterance_audio) == 1
+                            assert len(utterance_audio[0]) == expected_samples
+                            np.testing.assert_allclose(utterance_audio[0], .1, atol=.001)
 
                             captured = capsys.readouterr()
                             assert "44100" in captured.out
