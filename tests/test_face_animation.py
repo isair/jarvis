@@ -1,7 +1,12 @@
 """Rendered behaviour of the quiet desktop companion, with an isolated clock."""
 
+import random
+import time
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 from dataclasses import dataclass
 from pathlib import Path
+from unittest.mock import Mock
 
 import numpy as np
 import pytest
@@ -12,7 +17,7 @@ from desktop_app import face_widget
 from desktop_app.face_widget import JarvisState
 
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("no_network")]
 
 
 @dataclass
@@ -31,14 +36,35 @@ def scene(qapp, monkeypatch):
     clock = Clock()
     state = LocalState()
     monkeypatch.setattr(face_widget, 'get_jarvis_state', lambda: state)
-    monkeypatch.setattr(face_widget._time, 'monotonic', lambda: clock.now)
-    monkeypatch.setattr(face_widget.random, 'uniform', lambda low, high: (low + high) / 2)
+    scene_clock = Mock(wraps=time)
+    scene_clock.monotonic.side_effect = lambda: clock.now
+    monkeypatch.setattr(face_widget, '_time', scene_clock)
+    scene_random = Mock(wraps=random)
+    scene_random.uniform.side_effect = lambda low, high: (low + high) / 2
+    monkeypatch.setattr(face_widget, 'random', scene_random)
     window = face_widget.FaceWindow()
     window.show()
     qapp.processEvents()
     window.face._animation_timer.stop()
     yield window, state, clock
     window.close()
+
+
+@pytest.mark.parametrize("dependency", ["clock", "randomness"])
+def test_scene_keeps_background_workers_independent(scene, dependency):
+    def sample():
+        if dependency == "clock":
+            before = time.monotonic()
+            Event().wait(0.001)
+            return before, time.monotonic()
+        return [random.uniform(0, 1) for _ in range(4)]
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        observed = pool.submit(sample).result(timeout=5)
+    if dependency == "clock":
+        assert observed[1] > observed[0], "The scene froze an unrelated worker's clock"
+    else:
+        assert len(set(observed)) > 1, "The scene fixed an unrelated worker's random samples"
 
 
 def pixels(image):
