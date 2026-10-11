@@ -3,13 +3,24 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event
+import time
+from unittest.mock import MagicMock
 
 import pytest
 
 from jarvis.memory import conversation
 from jarvis.memory.db import Database
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("no_network")]
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    clock = SimpleNamespace(now=100.)
+    module_clock = MagicMock(wraps=time)
+    module_clock.monotonic.side_effect = lambda: clock.now
+    monkeypatch.setattr(conversation, 'time', module_clock)
+    return clock
 
 
 @pytest.fixture
@@ -75,11 +86,20 @@ def test_failed_later_batch_preserves_the_existing_diary(monkeypatch, diary_db, 
     assert row['summary'] == existing and row['topics'] == 'preferences'
 
 
-def test_exhausted_overall_deadline_does_not_commit_a_partial_diary(monkeypatch, diary_db, diary_cfg, diary_callback):
-    clock = SimpleNamespace(now=100.)
+@pytest.mark.parametrize("background_wait", [False, True])
+def test_exhausted_overall_deadline_does_not_commit_a_partial_diary(monkeypatch, diary_db, diary_cfg, diary_callback, clock, background_wait):
+    samples = []
+
+    def sample_background_clock():
+        before = time.monotonic()
+        Event().wait(0.001)
+        return before, time.monotonic()
+
     timeout = 8.
-    monkeypatch.setattr(conversation.time, 'monotonic', lambda: clock.now)
     def direct(cfg, system, user, **kwargs):
+        if background_wait:
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                samples.append(executor.submit(sample_background_clock).result(timeout=5.))
         clock.now += timeout + 1
         return synthetic_summary(user)
     monkeypatch.setattr(conversation, '_direct_llm', direct)
@@ -88,6 +108,9 @@ def test_exhausted_overall_deadline_does_not_commit_a_partial_diary(monkeypatch,
     )
     assert result is None
     assert stored_diary(diary_db) is None
+    if background_wait:
+        assert samples
+        assert all(after > before for before, after in samples), samples
 
 
 def test_complete_flush_saves_old_facts_and_keeps_new_messages_pending(monkeypatch, diary_db, diary_cfg, diary_callback):
@@ -111,9 +134,7 @@ def test_complete_flush_saves_old_facts_and_keeps_new_messages_pending(monkeypat
     assert memory.get_pending_chunks() == [f'User: {late}']
 
 
-def test_deadline_failure_keeps_the_snapshot_available_for_retry(monkeypatch, diary_db, diary_cfg, diary_callback):
-    clock = SimpleNamespace(now=100.)
-    monkeypatch.setattr(conversation.time, 'monotonic', lambda: clock.now)
+def test_deadline_failure_keeps_the_snapshot_available_for_retry(monkeypatch, diary_db, diary_cfg, diary_callback, clock):
     memory = conversation.DialogueMemory()
     for chunk in pending_conversation():
         memory.add_message('user', chunk.removeprefix('User: '))
@@ -154,9 +175,7 @@ def test_streaming_displays_only_the_completed_snapshot(monkeypatch, diary_db, d
     assert all(fact in row['summary'] for fact in ('Pip', 'Kyoto'))
 
 
-def test_fixed_budget_retries_finish_the_snapshot_without_saving_new_arrivals(monkeypatch, diary_db, diary_cfg, diary_callback):
-    clock = SimpleNamespace(now=100.)
-    monkeypatch.setattr(conversation.time, 'monotonic', lambda: clock.now)
+def test_fixed_budget_retries_finish_the_snapshot_without_saving_new_arrivals(monkeypatch, diary_db, diary_cfg, diary_callback, clock):
     memory = conversation.DialogueMemory()
     for chunk in pending_conversation():
         memory.add_message('user', chunk.removeprefix('User: '))
@@ -195,9 +214,7 @@ def test_empty_flush_does_not_hide_later_messages(monkeypatch, diary_db, diary_c
     assert memory.get_pending_chunks() == []
 
 
-def test_replacing_the_diary_between_attempts_keeps_replacement_facts(monkeypatch, diary_db, diary_cfg):
-    clock = SimpleNamespace(now=100.)
-    monkeypatch.setattr(conversation.time, 'monotonic', lambda: clock.now)
+def test_replacing_the_diary_between_attempts_keeps_replacement_facts(monkeypatch, diary_db, diary_cfg, clock):
     memory = conversation.DialogueMemory()
     for chunk in pending_conversation():
         memory.add_message('user', chunk.removeprefix('User: '))
@@ -270,9 +287,7 @@ def test_overlapping_flush_does_not_process_the_snapshot_twice(monkeypatch, diar
     assert memory.get_pending_chunks() == ['User: My next dog will be called Nova.']
 
 
-def test_cached_final_summary_is_displayed_when_the_retry_commits(monkeypatch, diary_db, diary_cfg):
-    clock = SimpleNamespace(now=100.)
-    monkeypatch.setattr(conversation.time, 'monotonic', lambda: clock.now)
+def test_cached_final_summary_is_displayed_when_the_retry_commits(monkeypatch, diary_db, diary_cfg, clock):
     memory = conversation.DialogueMemory()
     memory.add_message('user', 'My dog is Pip.')
     def streaming(cfg, system, user, *, on_token, **kwargs):
@@ -296,9 +311,7 @@ def test_cached_final_summary_is_displayed_when_the_retry_commits(monkeypatch, d
     assert memory.get_pending_chunks() == []
 
 
-def test_streaming_shutdown_resumes_background_progress_with_a_shorter_budget(monkeypatch, diary_db, diary_cfg):
-    clock = SimpleNamespace(now=100.)
-    monkeypatch.setattr(conversation.time, 'monotonic', lambda: clock.now)
+def test_streaming_shutdown_resumes_background_progress_with_a_shorter_budget(monkeypatch, diary_db, diary_cfg, clock):
     memory = conversation.DialogueMemory()
     for chunk in pending_conversation():
         memory.add_message('user', chunk.removeprefix('User: '))
