@@ -1,19 +1,14 @@
-"""
-Regression tests for #467: tilde paths in config.json crash the daemon.
-
-The app's own example config uses "~/.local/share/jarvis/jarvis.db", but
-``load_settings`` passed path-like values through verbatim. ``mkdir`` then
-created (or failed to create) a literal ``~`` directory — on macOS the
-daemon died at boot with ``OSError: [Errno 30] Read-only file system: '~'``.
-
-All user-supplied path-like settings must be tilde-expanded on load.
-"""
+"""Config loading expands local paths and preserves model identifiers."""
 
 import json
 from pathlib import Path, PureWindowsPath
 
+import pytest
+
 import jarvis.config as config_module
 from jarvis.config import load_settings
+
+pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("no_network")]
 
 
 def _write_config(tmp_path, monkeypatch, values):
