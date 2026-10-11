@@ -153,6 +153,18 @@ def _isolate_runtime_tempfiles(runtime_temp_root, monkeypatch):
 
 
 @pytest.fixture
+def desktop_log_home(tmp_path, monkeypatch):
+    """Resolve desktop diagnostics inside this test's temporary home."""
+    from unittest.mock import MagicMock
+    from desktop_app import paths
+
+    owned_path = MagicMock(wraps=Path)
+    owned_path.home.return_value = tmp_path
+    monkeypatch.setattr(paths, "Path", owned_path)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "appdata"))
+
+
+@pytest.fixture
 def db():
     """Provide an in-memory database for unit tests."""
     from jarvis.memory.db import Database
