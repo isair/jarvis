@@ -1,10 +1,12 @@
 """Desktop daemon ownership during shutdown and queued completion."""
+import time
+from threading import Thread
 from unittest.mock import MagicMock
 
 import pytest
 from desktop_app import app as app_mod
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("no_network")]
 
 
 @pytest.fixture
@@ -28,7 +30,9 @@ def tray(monkeypatch, qapp):
     tray._set_chat_daemon_status = MagicMock()
     tray._set_face_asleep = MagicMock()
     monkeypatch.setattr(app_mod, "DiaryUpdateDialog", MagicMock())
-    monkeypatch.setattr(app_mod.time, "sleep", lambda seconds: None)
+    clock = MagicMock(wraps=time)
+    clock.sleep.return_value = None
+    monkeypatch.setattr(app_mod, "time", clock)
     monkeypatch.setattr("jarvis.daemon.request_stop", lambda: None)
     monkeypatch.setattr("jarvis.daemon.set_diary_update_callbacks", lambda **kwargs: None)
     return tray
@@ -53,13 +57,22 @@ def test_delayed_completion_cannot_stop_replacement(tray):
     assert tray.daemon_thread is current
 
 
-def test_completion_during_stop_wait_is_successful(tray, monkeypatch):
+@pytest.mark.parametrize("background_wait", [False, True])
+def test_completion_during_stop_wait_is_successful(tray, monkeypatch, background_wait):
     worker = tray.daemon_thread
     completed = False
+    observed = []
     def events():
         nonlocal completed
         if not completed:
             completed = True
+            if background_wait:
+                before = list(app_mod.time.sleep.call_args_list)
+                background = Thread(target=lambda: time.sleep(0.001))
+                background.start()
+                background.join(timeout=5)
+                assert not background.is_alive()
+                observed.append((before, list(app_mod.time.sleep.call_args_list)))
             worker.isFinished.return_value = True
             tray._on_daemon_finished(worker)
     tray.app.processEvents.side_effect = events
@@ -68,6 +81,9 @@ def test_completion_during_stop_wait_is_successful(tray, monkeypatch):
     assert not tray.is_listening
     logs = "".join(call.args[0] for call in tray.log_signals.new_log.emit.call_args_list)
     assert "Failed to stop" not in logs
+    if background_wait:
+        assert observed
+        assert all(after == before for before, after in observed), "An unrelated wait entered daemon shutdown waits"
 
 
 def test_finished_timeout_owner_can_be_restarted(tray, monkeypatch):
