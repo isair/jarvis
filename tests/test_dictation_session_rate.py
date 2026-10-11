@@ -12,6 +12,11 @@ from jarvis.dictation import dictation_engine as dictation
 pytestmark = pytest.mark.unit
 
 
+@pytest.fixture(autouse=True)
+def synthetic_hotkey(monkeypatch):
+    monkeypatch.setattr(dictation, 'parse_hotkey', lambda hotkey: (frozenset(), None))
+
+
 @pytest.mark.parametrize('recorded_rate,next_rate', [(48000, 16000), (16000, 48000), (44100, 48000)])
 def test_released_audio_uses_its_recorded_rate(recorded_rate, next_rate, monkeypatch):
     closing = threading.Event()
