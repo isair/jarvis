@@ -7,9 +7,30 @@ and the next turn calls the newly-surfaced tool (``getWeather``). The final
 content is delivered immediately.
 """
 
+import socket
 from unittest.mock import patch
 
 import pytest
+
+pytestmark = pytest.mark.unit
+
+
+@pytest.fixture(autouse=True)
+def isolate_reply_loop(monkeypatch):
+    """The loop scenarios use a mocked plan and make no network calls."""
+    from jarvis.reply import engine
+
+    monkeypatch.setattr(engine, 'plan_query', lambda **kwargs: [])
+    attempts = []
+
+    def reject_connection(sock, address):
+        attempts.append(address)
+        raise AssertionError('Reply-loop tests must not open network connections')
+
+    monkeypatch.setattr(socket.socket, 'connect', reject_connection)
+    monkeypatch.setattr(socket.socket, 'connect_ex', reject_connection)
+    yield
+    assert not attempts, f'Unexpected network connections: {attempts}'
 
 
 def _assistant_tool_call(name: str, args: dict, call_id: str = "call_1"):
@@ -37,8 +58,6 @@ def test_loop_merges_toolsearchtool_results_into_allowlist(
 ):
     from jarvis.reply import engine as engine_mod
     from jarvis.tools.types import ToolExecutionResult
-
-    mock_config.ollama_chat_model = "gpt-oss:20b"  # LARGE → no forced text tools
 
     mock_config.llm_chat_model = "gpt-oss:20b"  # LARGE → no forced text tools
 
@@ -122,8 +141,6 @@ def test_initial_allowlist_always_includes_toolsearchtool(
     from jarvis.reply import engine as engine_mod
     from jarvis.tools.types import ToolExecutionResult
 
-    mock_config.ollama_chat_model = "gpt-oss:20b"
-
     mock_config.llm_chat_model = "gpt-oss:20b"
 
     captured_allow_lists: list[list[str]] = []
@@ -179,8 +196,6 @@ def test_schema_regenerated_after_toolsearchtool_merge(
     tool name."""
     from jarvis.reply import engine as engine_mod
     from jarvis.tools.types import ToolExecutionResult
-
-    mock_config.ollama_chat_model = "gpt-oss:20b"  # LARGE → native tools
 
     mock_config.llm_chat_model = "gpt-oss:20b"  # LARGE → native tools
 
@@ -248,8 +263,6 @@ def test_tool_search_max_calls_cap(mock_config, db, dialogue_memory):
     """F5: toolSearchTool invocations are capped per reply."""
     from jarvis.reply import engine as engine_mod
     from jarvis.tools.types import ToolExecutionResult
-
-    mock_config.ollama_chat_model = "gpt-oss:20b"
 
     mock_config.llm_chat_model = "gpt-oss:20b"
     mock_config.tool_search_max_calls = 2
@@ -351,8 +364,6 @@ def test_max_turns_produces_digest(mock_config, db, dialogue_memory):
     from jarvis.reply import engine as engine_mod
     from jarvis.tools.types import ToolExecutionResult
 
-    mock_config.ollama_chat_model = "gpt-oss:20b"
-
     mock_config.llm_chat_model = "gpt-oss:20b"
     mock_config.agentic_max_turns = 3
 
@@ -410,8 +421,6 @@ def test_max_turns_digest_failure_falls_back_to_generic_error(
     from jarvis.reply import engine as engine_mod
     from jarvis.tools.types import ToolExecutionResult
 
-    mock_config.ollama_chat_model = "gpt-oss:20b"
-
     mock_config.llm_chat_model = "gpt-oss:20b"
     mock_config.agentic_max_turns = 2
 
@@ -465,8 +474,6 @@ def test_toolsearchtool_empty_result_does_not_register_sentence_as_tool(
     """
     from jarvis.reply import engine as engine_mod
     from jarvis.tools.types import ToolExecutionResult
-
-    mock_config.ollama_chat_model = "gpt-oss:20b"
 
     mock_config.llm_chat_model = "gpt-oss:20b"
 
