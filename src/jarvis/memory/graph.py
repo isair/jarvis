@@ -690,15 +690,26 @@ class GraphMemoryStore:
         return node
 
     def touch_node(self, node_id: str) -> None:
-        """Increment access_count and update last_accessed."""
+        """Track access without waiting for a writer or interrupting retrieval."""
         now = datetime.now(timezone.utc).isoformat()
-        with self._lock, self.conn:
-            self.conn.execute(
-                """UPDATE memory_nodes
-                   SET access_count = access_count + 1, last_accessed = ?
-                   WHERE id = ?""",
-                (now, node_id),
-            )
+        with self._lock:
+            if self.conn.in_transaction:
+                debug_log("Graph access tracking skipped: caller transaction active", "memory")
+                return
+            wait_ms = self.conn.execute("PRAGMA busy_timeout").fetchone()[0]
+            try:
+                self.conn.execute("PRAGMA busy_timeout = 0")
+                with self.conn:
+                    self.conn.execute(
+                        """UPDATE memory_nodes
+                           SET access_count = access_count + 1, last_accessed = ?
+                           WHERE id = ?""",
+                        (now, node_id),
+                    )
+            except sqlite3.DatabaseError as exc:
+                debug_log(f"Graph access tracking skipped: {exc}", "memory")
+            finally:
+                self.conn.execute(f"PRAGMA busy_timeout = {int(wait_ms)}")
 
     # ── Entry points ────────────────────────────────────────────────────
 

@@ -23,19 +23,38 @@ _RECALL_CRITERION = (
 )
 
 
+@pytest.fixture(autouse=True)
+def factual_reply_sampling(monkeypatch):
+    chat = engine.chat_with_messages
+    def factual_chat(*args, **kwargs):
+        options = dict(kwargs.get('extra_options') or {})
+        options['temperature'] = 0.0
+        return chat(*args, **(kwargs | {'extra_options': options}))
+    monkeypatch.setattr(engine, 'chat_with_messages', factual_chat)
+
+
+@pytest.mark.parametrize('tracking', ['available', 'busy', 'rejected'])
 @pytest.mark.parametrize('query', [
     'Please remind me of the saved opening time for Cafe Aurora.',
     'Lütfen daha önce kaydedilmiş bilgiye göre Aurora adlı kafenin açılış saatini söyler misin?',
 ])
-def test_graph_recall_supplies_saved_facts_after_reader_cleanup(tmp_path, eval_db, eval_dialogue_memory, query):
+def test_graph_recall_supplies_saved_facts_after_reader_cleanup(tmp_path, eval_db, eval_dialogue_memory, query, tracking):
     cfg = voice_config()
     cfg.db_path = str(tmp_path / 'graph.db')
     cfg.memory_enrichment_source = 'graph'
     cfg.memory_digest_enabled = False
+    cfg.location_enabled = False
     store = GraphMemoryStore(cfg.db_path)
     try:
         store.conn.execute('PRAGMA journal_mode=WAL')
         store.create_node('Cafe Aurora', 'Opening time', data='Cafe Aurora opens at 06:35 each weekday.', parent_id='world')
+        if tracking == 'busy':
+            store.conn.execute('BEGIN IMMEDIATE')
+        elif tracking == 'rejected':
+            store.conn.execute("""CREATE TRIGGER reject_access BEFORE UPDATE ON memory_nodes
+                WHEN NEW.access_count != OLD.access_count
+                BEGIN SELECT RAISE(ABORT, 'Synthetic access failure'); END""")
+            store.conn.commit()
         with (
             patch.object(engine, 'plan_query', return_value=["searchMemory topic='Cafe Aurora opening time'", 'Reply to the user.']),
             patch.object(engine, 'select_tools', return_value=[]),

@@ -111,15 +111,16 @@ def test_failed_write_does_not_block_another_writer(stores, operation, failure_s
     if failure_stage == 'commit':
         first.conn.execute('PRAGMA defer_foreign_keys = ON')
     other.conn.execute('PRAGMA busy_timeout = 100')
-    with pytest.raises(sqlite3.IntegrityError):
-        if operation == 'update':
-            first.update_node(blocked.id, data='Rejected facts')
-        elif operation == 'append':
-            first.append_to_node(blocked.id, 'Rejected facts')
-        elif operation == 'delete':
-            first.delete_node(blocked.id)
-        else:
-            first.touch_node(blocked.id)
+    if operation == 'touch':
+        first.touch_node(blocked.id)
+    else:
+        with pytest.raises(sqlite3.IntegrityError):
+            if operation == 'update':
+                first.update_node(blocked.id, data='Rejected facts')
+            elif operation == 'append':
+                first.append_to_node(blocked.id, 'Rejected facts')
+            else:
+                first.delete_node(blocked.id)
     assert other.update_node(writable.id, data='Committed fact') is not None
     assert first.get_node(blocked.id).to_dict() == saved
     assert first.get_node('synthetic-orphan') is None

@@ -134,10 +134,18 @@ listeners run after successful commit, outside the store lock.
 
 ### Touch
 
-Increments `access_count` and updates `last_accessed` in one transaction. Called
-automatically when a node is viewed in the UI or retrieved during query traversal.
-Failed access updates preserve the saved counters and timestamps, roll back and
-release the database write lock so other writes can continue.
+Access tracking is optional bookkeeping. `touch_node` attempts to increment
+`access_count` and update `last_accessed` in one transaction, without waiting for
+another database writer. The store lock protects the temporary zero busy timeout;
+the connection's configured timeout is restored after every attempt. An existing
+caller-owned transaction is left intact and its tracking attempt is skipped, so
+bookkeeping cannot commit pending content or release a read snapshot.
+
+Unavailable or rejected tracking writes roll back, preserve the saved counters
+and timestamps, release the database write lock and emit a diagnostic. They do
+not interrupt graph search, viewer reads or already committed content writes.
+Actual content reads and mutations retain their normal failure behaviour.
+Successful access tracking does not change the warm-profile revision.
 
 ### Warm Profile Revision
 
