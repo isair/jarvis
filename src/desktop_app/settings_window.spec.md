@@ -43,6 +43,14 @@ FieldMeta (dataclass)
 | `device` | QComboBox | Dynamically populated from sounddevice |
 | `list` | QListWidget + Add/Edit/Remove buttons | Stores as JSON array in config |
 
+Choice and device dropdowns retain the configured value when it is absent from
+their option list, including local model references and unavailable microphones.
+They display that value as an additional selected option. Saving another field
+preserves it; choosing an alternative or resetting to defaults replaces it.
+Whisper choices come from the shared `whisper_models.py` catalogue, including
+`large-v3-turbo` and English-only variants. The setup wizard uses the same model
+records and derives its memory labels and estimates from them.
+
 ## Layout
 
 The settings window uses a sidebar navigation pattern: a fixed-width `QListWidget` on the left lists categories, and a `QStackedWidget` on the right shows the selected category's form. This avoids horizontal overflow from too many tabs.

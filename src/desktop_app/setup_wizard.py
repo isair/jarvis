@@ -22,6 +22,7 @@ from urllib.parse import urlsplit
 
 import requests
 
+from desktop_app.whisper_models import get_whisper_vram_mb, wizard_model_options
 from jarvis.debug import debug_log
 from jarvis.config import SUPPORTED_CHAT_MODELS, DEFAULT_CHAT_MODEL, DEFAULT_FAST_MODEL, SUPPORTED_FAST_MODEL_IDS
 from jarvis.utils.vram import (
@@ -1383,7 +1384,7 @@ class OpenAICompatiblePage(ScrollableWizardPage):
         except Exception:
             settings = None
         whisper_id = getattr(settings, "whisper_model", "small") or "small"
-        self._whisper_memory_mb = WhisperSetupPage.get_whisper_vram_mb(whisper_id)
+        self._whisper_memory_mb = get_whisper_vram_mb(whisper_id)
         self._ollama_embed_model_id = (
             getattr(settings, "ollama_embed_model", "nomic-embed-text")
             or "nomic-embed-text"
@@ -2141,25 +2142,22 @@ class ModelsPage(ScrollableWizardPage):
 
     # VRAM overhead for always-running companion models (MB).
     # nomic-embed-text: ~1 GB for ~1.5K dim semantic search.
-    # Whisper small: ~2 GB (the wizard balance default).
     _EMBED_VRAM_MB = 1024
-    _WHISPER_VRAM_MB = 2048
 
     def _whisper_vram_mb(self) -> int:
         """VRAM in MB for the currently-configured whisper model.
 
-        Reads the saved whisper model from config (set by WhisperSetupPage
-        which now runs before this page).  Falls back to ``_WHISPER_VRAM_MB``
-        (2048 MB = whisper small) when unavailable.
+        Reads the saved Whisper model from config and falls back to the
+        catalogue's small-model estimate when settings are unavailable.
         """
         try:
             cfg = load_settings()
             model_id = getattr(cfg, "whisper_model", None)
             if model_id:
-                return WhisperSetupPage.get_whisper_vram_mb(model_id)
+                return get_whisper_vram_mb(model_id)
         except Exception:
             pass
-        return self._WHISPER_VRAM_MB
+        return get_whisper_vram_mb("small")
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -2644,45 +2642,6 @@ def _get_effective_whisper_backend(
 class WhisperSetupPage(ScrollableWizardPage):
     """Page for setting up Whisper speech recognition (all platforms)."""
 
-    # Multilingual models - support ~99 languages
-    # File sizes from HuggingFace (Systran/faster-whisper-*), VRAM from OpenAI
-    # (id, name, file_size, vram_required, description)
-    WHISPER_MODEL_OPTIONS = [
-        ("tiny", "Tiny", "~75MB", "~1GB VRAM", "Fastest, lower accuracy"),
-        ("base", "Base", "~140MB", "~1GB VRAM", "Fast, decent accuracy"),
-        ("small", "Small", "~465MB", "~2GB VRAM", "Good balance of speed and accuracy"),
-        ("medium", "Medium", "~1.5GB", "~5GB VRAM", "Best balance (Recommended)"),
-        ("large-v3-turbo", "Large V3 Turbo", "~1.5GB", "~6GB VRAM", "Best accuracy, needs more VRAM"),
-    ]
-
-    # English-only models - optimised for English, slightly better accuracy
-    # Note: large/turbo models don't have .en variants
-    WHISPER_MODEL_OPTIONS_EN = [
-        ("tiny.en", "Tiny", "~75MB", "~1GB VRAM", "Fastest, English optimised"),
-        ("base.en", "Base", "~140MB", "~1GB VRAM", "Fast, English optimised"),
-        ("small.en", "Small", "~465MB", "~2GB VRAM", "Good balance of speed and accuracy"),
-        ("medium.en", "Medium", "~1.5GB", "~5GB VRAM", "Best balance (Recommended)"),
-    ]
-
-    # VRAM in MB per whisper model ID (used by ModelsPage for total VRAM budget).
-    _WHISPER_VRAM_MAP: dict[str, int] = {
-        "tiny": 1024,
-        "base": 1024,
-        "small": 2048,
-        "medium": 5120,
-        "large-v3-turbo": 6144,
-    }
-
-    @staticmethod
-    def get_whisper_vram_mb(model_id: str) -> int:
-        """Return VRAM in MB for a given whisper model ID.
-
-        Strips the ``.en`` suffix for lookup so ``small.en`` maps to the same
-        VRAM as ``small``.  Returns 2048 (small default) for unknown IDs.
-        """
-        base = model_id.replace(".en", "")
-        return WhisperSetupPage._WHISPER_VRAM_MAP.get(base, 2048)
-
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setTitle("")
@@ -2951,7 +2910,7 @@ class WhisperSetupPage(ScrollableWizardPage):
         load it.  MLX supports turbo on Apple Silicon; faster-whisper needs a
         version that includes the model.
         """
-        options = self.WHISPER_MODEL_OPTIONS_EN if self._is_english_only else self.WHISPER_MODEL_OPTIONS
+        options = wizard_model_options(self._is_english_only)
         backend = _get_effective_whisper_backend(self._is_apple_silicon)
         if backend != "mlx" and not _is_faster_whisper_turbo_supported():
             options = [opt for opt in options if opt[0] != "large-v3-turbo"]

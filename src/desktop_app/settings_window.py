@@ -30,6 +30,7 @@ from jarvis.config import (
 from jarvis.debug import debug_log
 from desktop_app.themes import apply_theme
 from desktop_app.mcp_catalogue import CATALOGUE, CATALOGUE_BY_NAME, MCPEntry
+from desktop_app.whisper_models import settings_model_choices
 
 
 # ---------------------------------------------------------------------------
@@ -243,10 +244,9 @@ def _build_field_metadata() -> List[FieldMeta]:
       "wake", "float", min_val=0.5, max_val=1.0, step=0.01)
     # --- Whisper ---
     f("whisper_model", "Model Size",
-      "Whisper model size (tiny/base/small/medium/large)",
+      "Whisper model size or local model reference",
       "whisper", "choice",
-      choices=[("tiny", "Tiny"), ("base", "Base"), ("small", "Small"),
-               ("medium", "Medium"), ("large-v3", "Large v3")])
+      choices=settings_model_choices())
     f("whisper_backend", "Backend",
       "Speech recognition backend",
       "whisper", "choice",
@@ -584,27 +584,18 @@ class SettingsWindow(QDialog):
             w.setToolTip(fm.description)
             return w
 
-        if fm.field_type == "choice":
+        if fm.field_type in ("choice", "device"):
             w = QComboBox()
-            for val, display in (fm.choices or []):
+            choices = get_input_devices() if fm.field_type == "device" else (fm.choices or [])
+            for val, display in choices:
                 w.addItem(display, val)
-            # Set current value
             cur_str = str(current) if current is not None else ""
             idx = w.findData(cur_str)
-            if idx >= 0:
-                w.setCurrentIndex(idx)
-            w.setToolTip(fm.description)
-            return w
-
-        if fm.field_type == "device":
-            w = QComboBox()
-            devices = get_input_devices()
-            for val, display in devices:
-                w.addItem(display, val)
-            cur_str = str(current) if current not in (None, "") else ""
-            idx = w.findData(cur_str)
-            if idx >= 0:
-                w.setCurrentIndex(idx)
+            if idx < 0:
+                w.addItem(cur_str, cur_str)
+                idx = w.count() - 1
+                debug_log(f"preserving unlisted selection for {fm.key}", "settings")
+            w.setCurrentIndex(idx)
             w.setToolTip(fm.description)
             return w
 

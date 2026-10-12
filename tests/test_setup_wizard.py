@@ -16,6 +16,7 @@ from unittest.mock import patch, MagicMock
 import pytest
 import requests
 
+from desktop_app.whisper_models import wizard_model_options
 from desktop_app.setup_wizard import (
     check_ollama_cli,
     check_ollama_server,
@@ -1619,18 +1620,14 @@ class TestWhisperModelOptions:
 
     def test_whisper_multilingual_model_options_available(self):
         """Multilingual whisper model options include recommended and lightweight options."""
-        from desktop_app.setup_wizard import WhisperSetupPage
-
-        model_ids = [m[0] for m in WhisperSetupPage.WHISPER_MODEL_OPTIONS]
+        model_ids = [m[0] for m in wizard_model_options()]
         assert "small" in model_ids
         assert "tiny" in model_ids
         assert "large-v3-turbo" in model_ids
 
     def test_whisper_english_model_options_available(self):
         """English-only whisper model options include recommended and lightweight options."""
-        from desktop_app.setup_wizard import WhisperSetupPage
-
-        model_ids = [m[0] for m in WhisperSetupPage.WHISPER_MODEL_OPTIONS_EN]
+        model_ids = [m[0] for m in wizard_model_options(True)]
         assert "small.en" in model_ids
         assert "tiny.en" in model_ids
         assert "medium.en" in model_ids
@@ -1639,9 +1636,7 @@ class TestWhisperModelOptions:
 
     def test_whisper_multilingual_model_options_have_required_fields(self):
         """Each multilingual whisper model option has required info fields."""
-        from desktop_app.setup_wizard import WhisperSetupPage
-
-        for model_tuple in WhisperSetupPage.WHISPER_MODEL_OPTIONS:
+        for model_tuple in wizard_model_options():
             assert len(model_tuple) == 5, f"Whisper model tuple should have 5 elements: {model_tuple}"
             model_id, name, file_size, ram, desc = model_tuple
             assert model_id, "Model ID should not be empty"
@@ -1659,8 +1654,6 @@ class TestWhisperModelOptions:
         page = MagicMock(spec=WhisperSetupPage)
         page._is_english_only = False
         page._is_apple_silicon = False
-        page.WHISPER_MODEL_OPTIONS = WhisperSetupPage.WHISPER_MODEL_OPTIONS
-        page.WHISPER_MODEL_OPTIONS_EN = WhisperSetupPage.WHISPER_MODEL_OPTIONS_EN
 
         with patch("desktop_app.setup_wizard._is_faster_whisper_turbo_supported", return_value=False):
             options = WhisperSetupPage._get_current_model_options(page)
@@ -1675,8 +1668,6 @@ class TestWhisperModelOptions:
         page = MagicMock(spec=WhisperSetupPage)
         page._is_english_only = False
         page._is_apple_silicon = False
-        page.WHISPER_MODEL_OPTIONS = WhisperSetupPage.WHISPER_MODEL_OPTIONS
-        page.WHISPER_MODEL_OPTIONS_EN = WhisperSetupPage.WHISPER_MODEL_OPTIONS_EN
 
         with patch("desktop_app.setup_wizard._is_faster_whisper_turbo_supported", return_value=True):
             options = WhisperSetupPage._get_current_model_options(page)
@@ -1690,8 +1681,6 @@ class TestWhisperModelOptions:
         page = MagicMock(spec=WhisperSetupPage)
         page._is_english_only = False
         page._is_apple_silicon = True
-        page.WHISPER_MODEL_OPTIONS = WhisperSetupPage.WHISPER_MODEL_OPTIONS
-        page.WHISPER_MODEL_OPTIONS_EN = WhisperSetupPage.WHISPER_MODEL_OPTIONS_EN
 
         with patch("desktop_app.setup_wizard._is_faster_whisper_turbo_supported", return_value=False), \
              patch("desktop_app.setup_wizard.check_mlx_whisper_installed", return_value=False), \
@@ -1707,8 +1696,6 @@ class TestWhisperModelOptions:
         page = MagicMock(spec=WhisperSetupPage)
         page._is_english_only = False
         page._is_apple_silicon = True
-        page.WHISPER_MODEL_OPTIONS = WhisperSetupPage.WHISPER_MODEL_OPTIONS
-        page.WHISPER_MODEL_OPTIONS_EN = WhisperSetupPage.WHISPER_MODEL_OPTIONS_EN
 
         with patch("desktop_app.setup_wizard._is_faster_whisper_turbo_supported", return_value=False), \
              patch("desktop_app.setup_wizard.check_mlx_whisper_installed", return_value=True), \
@@ -1724,8 +1711,6 @@ class TestWhisperModelOptions:
         page = MagicMock(spec=WhisperSetupPage)
         page._is_english_only = False
         page._is_apple_silicon = True
-        page.WHISPER_MODEL_OPTIONS = WhisperSetupPage.WHISPER_MODEL_OPTIONS
-        page.WHISPER_MODEL_OPTIONS_EN = WhisperSetupPage.WHISPER_MODEL_OPTIONS_EN
 
         with patch("desktop_app.setup_wizard._is_faster_whisper_turbo_supported", return_value=True), \
              patch("desktop_app.setup_wizard.check_mlx_whisper_installed", return_value=False), \
@@ -1741,8 +1726,6 @@ class TestWhisperModelOptions:
         page = MagicMock(spec=WhisperSetupPage)
         page._is_english_only = False
         page._is_apple_silicon = True
-        page.WHISPER_MODEL_OPTIONS = WhisperSetupPage.WHISPER_MODEL_OPTIONS
-        page.WHISPER_MODEL_OPTIONS_EN = WhisperSetupPage.WHISPER_MODEL_OPTIONS_EN
 
         with patch("desktop_app.setup_wizard._is_faster_whisper_turbo_supported", return_value=False), \
              patch("desktop_app.setup_wizard.check_mlx_whisper_installed", return_value=True), \
@@ -1784,9 +1767,7 @@ class TestWhisperModelOptions:
 
     def test_whisper_english_model_options_have_required_fields(self):
         """Each English-only whisper model option has required info fields."""
-        from desktop_app.setup_wizard import WhisperSetupPage
-
-        for model_tuple in WhisperSetupPage.WHISPER_MODEL_OPTIONS_EN:
+        for model_tuple in wizard_model_options(True):
             assert len(model_tuple) == 5, f"Whisper model tuple should have 5 elements: {model_tuple}"
             model_id, name, file_size, ram, desc = model_tuple
             assert model_id, "Model ID should not be empty"
