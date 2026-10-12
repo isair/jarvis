@@ -7,6 +7,8 @@ Privacy-first: all data stays on disk, never leaves the machine.
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 import threading
 import time
 import uuid
@@ -114,8 +116,21 @@ class DictationHistory:
     def _save(self) -> None:
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
-            with self._path.open("w", encoding="utf-8") as f:
-                json.dump(self._entries, f, ensure_ascii=False, indent=2)
+            temporary = None
+            try:
+                with tempfile.NamedTemporaryFile(
+                    mode="w", encoding="utf-8", dir=self._path.parent,
+                    prefix=f".{self._path.name}.", suffix=".tmp", delete=False,
+                ) as stream:
+                    temporary = Path(stream.name)
+                    json.dump(self._entries, stream, ensure_ascii=False, indent=2)
+                os.replace(temporary, self._path)
+            finally:
+                if temporary is not None:
+                    try:
+                        temporary.unlink(missing_ok=True)
+                    except OSError:
+                        pass
         except Exception as exc:
             from jarvis.debug import debug_log
             debug_log(f"failed to save dictation history: {exc}", "dictation")
