@@ -58,6 +58,28 @@ class TestDictationHistory:
         assert h.delete("nonexistent-id") is False
         assert h.count == 1
 
+    @pytest.mark.unit
+    @pytest.mark.parametrize("change", ["addition", "deletion", "replacement"])
+    def test_delete_uses_current_disk_entries(self, tmp_path, change):
+        from jarvis.dictation.history import DictationHistory
+
+        path = tmp_path / "history.json"
+        desktop = DictationHistory(path=path)
+        target = desktop.add("Delete this dictation")
+        survivor = desktop.add("Keep this dictation")
+        daemon = DictationHistory(path=path)
+        if change == "deletion":
+            daemon.delete(survivor["id"])
+        elif change == "replacement":
+            daemon.delete(target["id"])
+        added = daemon.add("New dictation from the daemon")
+        expected = [entry for entry in daemon.get_all() if entry["id"] != target["id"]]
+
+        assert desktop.delete(target["id"]) is (change != "replacement")
+        assert desktop.get_all() == expected
+        assert DictationHistory(path=path).get_all() == expected
+        assert added in expected
+
     def test_clear(self, tmp_path):
         h = self._make_history(tmp_path)
         h.add("one")
@@ -203,6 +225,34 @@ class TestDictationHistoryWindow:
             window.set_history(history)
             labels = [label.text() for label in window.centralWidget().findChildren(QLabel)]
             assert entry["text"] in labels
+        finally:
+            window.close()
+            window.deleteLater()
+
+    @pytest.mark.unit
+    def test_delete_button_preserves_an_unseen_external_dictation(self, qapp, tmp_path):
+        from PyQt6.QtWidgets import QLabel, QPushButton
+        from desktop_app.dictation_history import DictationHistoryWindow, _DictationCard
+        from jarvis.dictation.history import DictationHistory
+
+        path = tmp_path / "history.json"
+        desktop = DictationHistory(path=path)
+        entry = desktop.add("Delete the displayed dictation")
+        window = DictationHistoryWindow(history=desktop)
+        try:
+            window.show()
+            qapp.processEvents()
+            card = next(card for card in window.findChildren(_DictationCard)
+                        if card._entry["id"] == entry["id"])
+            button = next(button for button in card.findChildren(QPushButton)
+                          if button.text() == "🗑️ Delete")
+            external = DictationHistory(path=path).add("A newly saved dictation")
+            # Click before the window's external-write polling gets a turn.
+            button.click()
+            labels = [label.text() for label in window.centralWidget().findChildren(QLabel)]
+            assert external["text"] in labels
+            assert entry["text"] not in labels
+            assert DictationHistory(path=path).get_all() == [external]
         finally:
             window.close()
             window.deleteLater()

@@ -68,6 +68,7 @@ class DictationHistory:
     def delete(self, entry_id: str) -> bool:
         """Delete an entry by ID. Returns True if found and removed."""
         with self._lock:
+            self._entries = self._load()
             before = len(self._entries)
             self._entries = [e for e in self._entries if e["id"] != entry_id]
             if len(self._entries) < before:
