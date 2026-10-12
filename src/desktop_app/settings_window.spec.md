@@ -12,7 +12,7 @@ The Settings Window provides a graphical interface for editing `config.json` wit
 2. **Minimal config files**: Only non-default values are written to `config.json`. Removing a field from the config reverts it to the default.
 3. **Preserves unknown keys**: Keys not managed by the UI (e.g. `mcps`, `_config_version`, future additions) are preserved when saving.
 4. **Theme-consistent**: Uses the shared Jarvis theme from `themes.py`.
-5. **Active controls**: Speech detection is configured by `vad_enabled` in Voice Input. The Whisper category has no separate VAD filter toggle; settings expose controls that the runtime applies.
+5. **Active controls**: Speech detection is configured by `vad_enabled` in Voice Activity Detection. The Speech Recognition category has no separate VAD filter toggle; settings expose controls that the runtime applies.
 
 ## Architecture
 
