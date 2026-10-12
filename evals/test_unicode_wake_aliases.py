@@ -27,3 +27,23 @@ def test_canonical_alias_reaches_native_intent_judge(alias, heard_form, alias_fo
     assert result.directed is True, result
     assert result.stop is False, result
     assert segment.text == heard, 'Prompt normalisation must preserve captured speech'
+
+
+@pytest.mark.parametrize('heard,aliases', [
+    ('hey cab\u0301, what time is it?', ['hey', 'hey cab']),
+    ('cab-cab\u0301, what time is it?', ['cab', 'cab-cab']),
+    ('hey cab, what time is it?', ['hey', 'hey cab']),
+])
+def test_overlapping_alias_reaches_native_intent_judge(heard, aliases):
+    assert is_wake_word_detected(heard, 'Jarvis', aliases, fuzzy_ratio=1.0)
+    cfg = voice_config()
+    judge = IntentJudge(IntentJudgeConfig(assistant_name='Jarvis', aliases=aliases,
+                                        cfg=cfg, model=cfg.fast_model, timeout_sec=10.0))
+    segment = TranscriptSegment(heard, 1000.0, 1002.0)
+    result = judge.judge(segments=[segment], wake_timestamp=1000.5,
+                         last_tts_text='', last_tts_finish_time=0.0,
+                         in_hot_window=False, current_text=heard)
+    assert result is not None, 'Native judge returned no usable decision'
+    assert result.directed is True, result
+    assert result.stop is False, result
+    assert segment.text == heard, 'Prompt normalisation must preserve captured speech'

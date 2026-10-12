@@ -103,3 +103,15 @@ def test_alias_replacement_treats_configured_name_literally():
     from jarvis.listening.intent_judge import IntentJudge, IntentJudgeConfig
     judge = IntentJudge(IntentJudgeConfig(assistant_name=r'Jarvis\1', aliases=['computer']))
     assert judge._normalize_aliases('computer, hello') == r'Jarvis\1, hello'
+
+
+@pytest.mark.parametrize('heard,aliases,expected', [
+    ('hey cab\u0301, what time is it?', ['hey', 'hey cab'], 'Jarvis cab\u0301, what time is it?'),
+    ('cab-cab\u0301, what time is it?', ['cab', 'cab-cab'], 'Jarvis-cab\u0301, what time is it?'),
+    ('hey cab, what time is it?', ['hey', 'hey cab'], 'Jarvis, what time is it?'),
+])
+def test_valid_shorter_alias_is_not_hidden_by_invalid_longer_alias(heard, aliases, expected):
+    from jarvis.listening.intent_judge import IntentJudge, IntentJudgeConfig
+    assert is_wake_word_detected(heard, 'jarvis', aliases, fuzzy_ratio=1.0)
+    judge = IntentJudge(IntentJudgeConfig(assistant_name='Jarvis', aliases=aliases))
+    assert judge._normalize_aliases(heard) == expected

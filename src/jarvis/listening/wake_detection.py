@@ -8,33 +8,29 @@ import unicodedata
 from ..debug import debug_log
 
 
-def _wake_name_pattern(wake_word: str, aliases: List[str]) -> Optional[re.Pattern[str]]:
+def _wake_name_pattern(text: str, wake_word: str, aliases: List[str]) -> Optional[re.Pattern[str]]:
     """Match literal configured names at Unicode word boundaries."""
     names = {unicodedata.normalize("NFC", name.strip())
              for name in [wake_word, *aliases] if name.strip()}
     if not names:
         return None
     alternatives = "|".join(re.escape(name) for name in sorted(names, key=len, reverse=True))
-    return re.compile(r"(?<!\w)(?:" + alternatives + r")(?!\w)", re.IGNORECASE)
+    marks = {char for char in text if unicodedata.category(char).startswith("M")}
+    word = r"[\w" + re.escape("".join(sorted(marks))) + "]"
+    return re.compile(r"(?<!" + word + r")(?:" + alternatives + r")(?!" + word + ")", re.IGNORECASE)
 
 
 def _is_word_character(char: str) -> bool:
     return char.isalnum() or char == "_" or unicodedata.category(char).startswith("M")
 
 
-def _is_whole_name_match(match: re.Match[str], text: str) -> bool:
-    return ((match.start() == 0 or not _is_word_character(text[match.start() - 1]))
-            and (match.end() == len(text) or not _is_word_character(text[match.end()])))
-
-
 def normalise_wake_aliases(text: str, aliases: List[str], assistant_name: str) -> str:
     """Canonicalise the judge's text copy and replace complete literal aliases."""
-    pattern = _wake_name_pattern("", aliases)
-    if not text or pattern is None:
+    if not text or not aliases:
         return text
-    text = unicodedata.normalize("NFC", text)
-    return pattern.sub(lambda match: assistant_name if _is_whole_name_match(match, text)
-                       else match.group(), text)
+    canonical = unicodedata.normalize("NFC", text)
+    pattern = _wake_name_pattern(canonical, "", aliases)
+    return pattern.sub(lambda match: assistant_name, canonical) if pattern else text
 
 
 def is_wake_word_detected(text_lower: str, wake_word: str, aliases: List[str], fuzzy_ratio: float = 0.78) -> bool:
@@ -43,9 +39,8 @@ def is_wake_word_detected(text_lower: str, wake_word: str, aliases: List[str], f
         return False
 
     text_lower = unicodedata.normalize("NFC", text_lower)
-    pattern = _wake_name_pattern(wake_word, aliases)
-    if pattern and any(_is_whole_name_match(match, text_lower)
-                       for match in pattern.finditer(text_lower)):
+    pattern = _wake_name_pattern(text_lower, wake_word, aliases)
+    if pattern and pattern.search(text_lower):
         return True
 
     # Aliases already represent known mishearings; do not approximate them again.
