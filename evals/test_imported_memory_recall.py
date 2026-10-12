@@ -12,7 +12,7 @@ from jarvis.system_prompt import build_system_prompt
 
 pytestmark = [pytest.mark.eval, requires_judge_llm]
 
-@pytest.mark.parametrize('provider', ['ChatGPT', 'Claude', 'Claude Code'])
+@pytest.mark.parametrize('provider', ['ChatGPT', 'Claude', 'Claude Code', 'Codex'])
 @pytest.mark.parametrize('sample',range(2))
 def test_imported_personal_facts_and_address_preference(tmp_path,provider,sample):
     facts = 'My name is Mira. I live in London. I go to the office three days a week.'

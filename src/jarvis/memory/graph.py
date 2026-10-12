@@ -571,7 +571,7 @@ class GraphMemoryStore:
                 elif record.source_date is None and (record.branch, key) in known:
                     node_id = known[(record.branch, key)]
                 else:
-                    node = self._insert_node(f'{record.provider}: {record.reviewed_text.splitlines()[0][:72]}',
+                    node = self._insert_node(f'{record.provider} memory {record.item_id[:8]}',
                            f'Reviewed import from {record.provider}. Scope: {record.source_scope}.',
                            record.reviewed_text, record.branch)
                     created.append((node, record.branch))

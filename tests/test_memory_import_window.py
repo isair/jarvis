@@ -86,3 +86,35 @@ def test_file_picker_reviews_a_supported_local_file(window, tmp_path, monkeypatc
     assert window.rows[0].text.toPlainText()=='I prefer concise replies.'
     assert window.rows[0].destination.currentData()=='world'
     assert path.read_text()=='I prefer concise replies.'
+
+
+def test_real_menu_action_opens_the_import_window_with_configured_database(tmp_path,monkeypatch):
+    import sys
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from desktop_app.app import JarvisSystemTray
+    import jarvis.config as config
+    app=QApplication.instance() or QApplication([])
+    tray=object.__new__(JarvisSystemTray)
+    tray.memory_import_window=None
+    tray.tray_icon=Mock();tray.face_window=Mock()
+    for name in ('show_log_viewer','show_memory_viewer','show_dictation_history','show_chat',
+                 'show_setup_wizard','show_settings','show_runtime_status','show_face_window',
+                 'check_for_updates','open_config_directory','open_data_directory',
+                 'toggle_listening','quit_app','_maybe_add_cuda_recovery_action'):
+        monkeypatch.setattr(tray,name,Mock())
+    db_path=str(tmp_path/'configured.db')
+    monkeypatch.setattr(config,'load_config',lambda:{'db_path':db_path})
+    monkeypatch.setattr(config,'load_settings',lambda:SimpleNamespace(db_path=db_path))
+    errors=[]
+    monkeypatch.setattr(sys,'excepthook',lambda *error:errors.append(error))
+    tray.create_menu()
+    try:
+        tray.memory_import_action.trigger();app.processEvents()
+        assert errors==[]
+        assert tray.memory_import_window is not None
+        assert tray.memory_import_window.db_path==db_path
+        assert tray.memory_import_window.isVisible()
+    finally:
+        if tray.memory_import_window is not None:tray.memory_import_window.close()
+        tray._voice_pause_timer.stop();tray.menu.close();tray.menu.deleteLater()

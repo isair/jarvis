@@ -11,7 +11,7 @@ from desktop_app.themes import JARVIS_THEME_STYLESHEET
 from jarvis.debug import debug_log
 from jarvis.memory.graph import GraphMemoryStore
 from jarvis.memory.imports import (DESTINATIONS, PROVIDERS, ImportChoice, MemoryImportError,
-    MemorySource, commit_import, discover_sources, preview_text, read_source)
+    MemorySource, commit_import, discover_codex_sources, discover_sources, preview_text, read_source)
 
 
 class ImportWorker(KeepAliveWorker):
@@ -91,6 +91,9 @@ class MemoryImportWindow(QWidget):
         self.find_button = QPushButton('Find Claude Code files')
         self.find_button.clicked.connect(self.discover)
         source_layout.addWidget(self.find_button)
+        self.codex_button = QPushButton('Find Codex instructions')
+        self.codex_button.clicked.connect(self.discover_codex)
+        source_layout.addWidget(self.codex_button)
         self.local_sources = QComboBox()
         self.local_sources.setAccessibleName('Discovered local memory files')
         source_layout.addWidget(self.local_sources)
@@ -141,7 +144,7 @@ class MemoryImportWindow(QWidget):
         footer.addStretch()
         footer.addWidget(self.save_button)
         outer.addLayout(footer)
-        self.controls = [self.provider, self.find_button, self.local_sources, self.read_button,
+        self.controls = [self.provider, self.find_button, self.codex_button, self.local_sources, self.read_button,
                          self.file_button, self.pasted, self.paste_button, self.back_button, self.save_button]
         self._update_buttons()
 
@@ -205,9 +208,14 @@ class MemoryImportWindow(QWidget):
             self.local_sources.addItem(source.label, source)
             self.local_sources.setItemData(self.local_sources.count()-1, str(source.path), Qt.ItemDataRole.ToolTipRole)
         self.status.setText(f'Found {len(discovery.sources)} local files. Select one to review.' if discovery.sources
-                            else 'No documented Claude Code memory files found. Choose a file or paste text.')
+                            else 'No documented local files found. Choose a file or paste text.')
         if discovery.limited:
             self.status.setText(self.status.text()+' The inventory is incomplete; choose other files directly.')
+
+    def discover_codex(self):
+        configured = os.environ.get('CODEX_HOME')
+        root = Path(configured).expanduser() if configured else None
+        self._run(lambda: discover_codex_sources(self.home, codex_home=root), self._show_sources)
 
     def review_local(self):
         source = self.local_sources.currentData()
