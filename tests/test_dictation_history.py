@@ -3,10 +3,9 @@ Tests for dictation history storage and UI integration.
 """
 
 import json
-import tempfile
 import time
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -584,115 +583,38 @@ class TestDictationHistoryWindow:
         assert "second new dictation" in rendered_texts
 
 
-# ---------------------------------------------------------------------------
-# Engine integration — history is saved on successful dictation
-# ---------------------------------------------------------------------------
+@pytest.mark.unit
+@pytest.mark.parametrize("text", ["A dictated entry, café", ""])
+def test_dictation_history_persists_before_announcing_the_result(monkeypatch, text):
+    import numpy as np
+    from jarvis.dictation import dictation_engine as engine_module
+    from jarvis.dictation.history import DictationHistory
 
-class TestEngineHistoryIntegration:
-    """Tests that the dictation engine saves to history."""
+    pasted, announced = [], []
+    monkeypatch.setattr(engine_module, "_clipboard_paste", pasted.append)
+    monkeypatch.setattr(engine_module, "parse_hotkey", lambda combo: (frozenset(), None))
+    def on_result(entry):
+        announced.append((entry, DictationHistory().get_all()))
+    engine = engine_module.DictationEngine(
+        whisper_model_ref=lambda: None, whisper_backend_ref=lambda: None,
+        mlx_repo_ref=lambda: None, on_dictation_result=on_result,
+    )
+    monkeypatch.setattr(engine, "_transcribe", lambda audio: text)
+    frames = [np.zeros(8000, dtype=np.float32)]
+    engine._transcribe_and_paste(frames, engine._stream_sample_rate)
 
-    @pytest.fixture(autouse=True)
-    def _skip_if_no_deps(self):
-        try:
-            import numpy  # noqa: F401
-            import pynput  # noqa: F401
-        except ImportError:
-            pytest.skip("required dependencies not installed")
-
-    def test_engine_has_history_attribute(self):
-        from jarvis.dictation.dictation_engine import DictationEngine
-        import threading
-        engine = DictationEngine(
-            whisper_model_ref=lambda: MagicMock(),
-            whisper_backend_ref=lambda: "faster-whisper",
-            mlx_repo_ref=lambda: None,
-            hotkey="ctrl+shift+d",
-            transcribe_lock=threading.Lock(),
-        )
-        assert hasattr(engine, "history")
-        assert engine.history is not None
-
-    @patch("jarvis.dictation.dictation_engine._clipboard_paste")
-    def test_successful_dictation_saves_to_history(self, mock_paste, tmp_path):
-        import numpy as np
-        import threading
-        from jarvis.dictation.dictation_engine import DictationEngine
-        from jarvis.dictation.history import DictationHistory
-
-        mock_model = MagicMock()
-        mock_seg = MagicMock()
-        mock_seg.text = "dictated text"
-        mock_model.transcribe.return_value = ([mock_seg], MagicMock())
-
-        engine = DictationEngine(
-            whisper_model_ref=lambda: mock_model,
-            whisper_backend_ref=lambda: "faster-whisper",
-            mlx_repo_ref=lambda: None,
-            hotkey="ctrl+shift+d",
-            transcribe_lock=threading.Lock(),
-        )
-        # Replace history with one using temp path
-        engine.history = DictationHistory(path=tmp_path / "h.json")
-
-        frames = [np.zeros(8000, dtype=np.float32)]  # 0.5s
-        engine._transcribe_and_paste(frames, engine._stream_sample_rate)
-
-        assert engine.history.count == 1
-        entry = engine.history.get_all()[0]
-        assert entry["text"] == "dictated text"
-
-    @patch("jarvis.dictation.dictation_engine._clipboard_paste")
-    def test_on_dictation_result_callback_called(self, mock_paste, tmp_path):
-        import numpy as np
-        import threading
-        from jarvis.dictation.dictation_engine import DictationEngine
-        from jarvis.dictation.history import DictationHistory
-
-        mock_model = MagicMock()
-        mock_seg = MagicMock()
-        mock_seg.text = "hello"
-        mock_model.transcribe.return_value = ([mock_seg], MagicMock())
-
-        results = []
-        engine = DictationEngine(
-            whisper_model_ref=lambda: mock_model,
-            whisper_backend_ref=lambda: "faster-whisper",
-            mlx_repo_ref=lambda: None,
-            hotkey="ctrl+shift+d",
-            transcribe_lock=threading.Lock(),
-            on_dictation_result=lambda entry: results.append(entry),
-        )
-        engine.history = DictationHistory(path=tmp_path / "h.json")
-
-        frames = [np.zeros(8000, dtype=np.float32)]
-        engine._transcribe_and_paste(frames, engine._stream_sample_rate)
-
-        assert len(results) == 1
-        assert results[0]["text"] == "hello"
-
-    @patch("jarvis.dictation.dictation_engine._clipboard_paste")
-    def test_empty_transcription_not_saved(self, mock_paste, tmp_path):
-        import numpy as np
-        import threading
-        from jarvis.dictation.dictation_engine import DictationEngine
-        from jarvis.dictation.history import DictationHistory
-
-        mock_model = MagicMock()
-        mock_model.transcribe.return_value = ([], MagicMock())
-
-        engine = DictationEngine(
-            whisper_model_ref=lambda: mock_model,
-            whisper_backend_ref=lambda: "faster-whisper",
-            mlx_repo_ref=lambda: None,
-            hotkey="ctrl+shift+d",
-            transcribe_lock=threading.Lock(),
-        )
-        engine.history = DictationHistory(path=tmp_path / "h.json")
-
-        frames = [np.zeros(8000, dtype=np.float32)]
-        engine._transcribe_and_paste(frames, engine._stream_sample_rate)
-
-        assert engine.history.count == 0
+    stored = DictationHistory().get_all()
+    if not text:
+        assert stored == []
+        assert pasted == []
+        assert announced == []
+        return
+    assert pasted == [text]
+    assert len(stored) == 1
+    assert stored[0]["text"] == text
+    expected_duration = sum(len(frame) for frame in frames) / engine._stream_sample_rate
+    assert stored[0]["duration"] == pytest.approx(expected_duration)
+    assert announced == [(stored[0], stored)]
 
 
 @pytest.mark.unit
