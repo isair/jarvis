@@ -67,6 +67,10 @@ class TestShortFollowUpEchoBoundary:
         ('Mañana estará nublado.', '¿Y mañana?'),
         ('कल मौसम साफ रहेगा।', 'कला?'),
         ('วันนี้ไม่มี ฝน', 'ฝัน?'),
+        ('Rain today.', 'Train today costs twelve pounds'),
+        ('Ready now.', 'Read now the full text'),
+        ('कल शाम', 'कला शाम विषय अलग है'),
+        ('ฝน วันนี้', 'ฝัน วันนี้ เป็น เรื่อง อื่น'),
     ])
     def test_real_judge_accepts_short_follow_up_after_overlapping_tts(self, tts, text):
         listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=3)
