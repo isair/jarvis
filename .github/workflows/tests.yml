@@ -74,4 +74,4 @@ jobs:
       - name: Install history test dependencies
         run: python -m pip install pytest python-dotenv filelock==3.32.7
       - name: Verify saved history publication and writer coordination
-        run: python -m pytest -q tests/test_dictation_history_writers.py tests/test_dictation_history_atomic_save.py
+        run: python -m pytest -q tests/test_dictation_history_writers.py tests/test_dictation_history_atomic_save.py tests/test_dictation_history_read_failure.py
