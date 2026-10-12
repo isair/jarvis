@@ -260,9 +260,6 @@ def _build_field_metadata() -> List[FieldMeta]:
       "Quantisation level for inference",
       "whisper", "choice",
       choices=[("int8", "INT8 (Fast)"), ("float16", "Float16"), ("float32", "Float32")])
-    f("whisper_vad", "Use VAD Filter",
-      "Filter audio with VAD before transcription",
-      "whisper", "bool")
     f("whisper_min_confidence", "Min Confidence",
       "Filter low-confidence segments (hallucination guard)",
       "whisper", "float", min_val=0.0, max_val=1.0, step=0.05)

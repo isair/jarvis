@@ -518,3 +518,33 @@ class TestMCPCatalogueDialogLogic:
         """_is_node_available returns False when _resolve_command raises."""
         with patch("jarvis.tools.external.mcp_client._resolve_command", side_effect=FileNotFoundError("not found")):
             assert _MCPCatalogueDialog._is_node_available() is False
+
+
+@pytest.mark.unit
+def test_settings_keep_one_active_speech_detector_control(settings_config_path, monkeypatch):
+    from PyQt6.QtWidgets import QLabel
+    from desktop_app import settings_window as sw
+    from jarvis.config import load_settings
+    from jarvis.listening import listener as capture
+    from types import SimpleNamespace
+    import numpy as np
+
+    path = settings_config_path
+    path.write_text(json.dumps({'whisper_vad': True, 'vad_enabled': True}), encoding='utf-8')
+    window = sw.SettingsWindow()
+    assert 'Use VAD Filter' not in [label.text() for label in window.findChildren(QLabel)]
+    window._widgets['vad_enabled'].setChecked(False)
+    window._on_save()
+    saved = json.loads(path.read_text(encoding='utf-8'))
+    assert saved['vad_enabled'] is False
+    assert saved['whisper_vad'] is True, 'Unmanaged disk keys must be preserved'
+
+    monkeypatch.setenv('JARVIS_CONFIG_PATH', str(path))
+    cfg = load_settings()
+    monkeypatch.setattr(capture, 'create_intent_judge', lambda cfg: None)
+    monkeypatch.setattr(capture, 'webrtcvad', SimpleNamespace(
+        Vad=lambda level: SimpleNamespace(is_speech=lambda *args: True),
+    ))
+    voice = capture.VoiceListener(None, cfg, None, None)
+    frame = np.full(320, cfg.voice_min_energy / 2, dtype=np.float32)
+    assert voice._is_speech_frame(frame) is False
