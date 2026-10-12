@@ -834,6 +834,10 @@ def _run_daemon(smoke_test: bool = False) -> None:
 
     _install_signal_handlers()
 
+    from . import get_version
+    version, release_channel = get_version()
+    print(f"📦 Jarvis {version} ({release_channel})", flush=True)
+
     cfg = load_settings()
     db = Database(cfg.db_path, cfg.sqlite_vss_path)
     # Expose cfg + db so the text-chat submission path shares the same store
