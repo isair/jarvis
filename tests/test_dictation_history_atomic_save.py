@@ -2,6 +2,7 @@
 
 import json
 import os
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -25,16 +26,18 @@ def test_partial_serialisation_preserves_saved_history(tmp_path, monkeypatch, op
 
     monkeypatch.setattr(history_module, "json", MagicMock(wraps=json))
     monkeypatch.setattr(history_module.json, "dump", interrupted_dump)
-    if operation == "add":
-        history.add("New unsaved dictation")
-    elif operation == "delete":
-        history.delete(entry["id"])
-    else:
-        history.clear()
+    with pytest.raises(history_module.HistoryUpdateError):
+        if operation == "add":
+            history.add("New unsaved dictation")
+        elif operation == "delete":
+            history.delete(entry["id"])
+        else:
+            history.clear()
 
     assert path.read_bytes() == before
+    assert history.get_all() == [entry]
     assert history_module.DictationHistory(path=path).get_all() == [entry]
-    assert list(tmp_path.iterdir()) == [path]
+    assert set(tmp_path.iterdir()) == {path, Path(str(path) + ".lock")}
 
 
 def test_successful_save_publishes_complete_unicode_entries(tmp_path):
@@ -44,7 +47,7 @@ def test_successful_save_publishes_complete_unicode_entries(tmp_path):
     second = history.add("Another complete entry")
     assert history_module.DictationHistory(path=path).get_all() == [second, first]
     assert "東京" in path.read_text(encoding="utf-8")
-    assert list(path.parent.iterdir()) == [path]
+    assert set(path.parent.iterdir()) == {path, Path(str(path) + ".lock")}
 
 
 @pytest.mark.parametrize("existing", [False, True])
@@ -57,13 +60,15 @@ def test_failed_replacement_preserves_the_destination(tmp_path, monkeypatch, exi
     monkeypatch.setattr(history_module, "os", module_os, raising=False)
     module_os.replace.side_effect = PermissionError("Synthetic replacement denied")
 
-    history.add("Not published")
+    with pytest.raises(history_module.HistoryUpdateError):
+        history.add("Not published")
 
     assert path.exists() is existing
     if existing:
         assert path.read_bytes() == before
+    assert history.get_all() == saved
     assert history_module.DictationHistory(path=path).get_all() == saved
-    assert list(tmp_path.iterdir()) == ([path] if existing else [])
+    assert set(tmp_path.iterdir()) == ({path, Path(str(path) + ".lock")} if existing else {Path(str(path) + ".lock")})
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX file-mode contract")

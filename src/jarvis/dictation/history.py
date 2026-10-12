@@ -12,6 +12,9 @@ import tempfile
 import threading
 import time
 import uuid
+from contextlib import contextmanager
+
+from filelock import FileLock
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -21,6 +24,10 @@ def _default_history_path() -> Path:
     base = Path.home() / ".local" / "share" / "jarvis"
     base.mkdir(parents=True, exist_ok=True)
     return base / "dictation_history.json"
+
+
+class HistoryUpdateError(RuntimeError):
+    """A requested history mutation could not be published."""
 
 
 class DictationHistory:
@@ -37,6 +44,8 @@ class DictationHistory:
         self._path = path or _default_history_path()
         self._max_entries = max_entries
         self._lock = threading.Lock()
+        self._file_lock = FileLock(str(self._path) + ".lock", timeout=2, mode=0o600,
+                                   fallback_to_soft=False, preserve_lock_file=True)
         self._entries: List[Dict[str, Any]] = self._load()
 
     # ------------------------------------------------------------------
@@ -51,10 +60,7 @@ class DictationHistory:
             "timestamp": time.time(),
             "duration": round(duration, 1),
         }
-        with self._lock:
-            # Re-read from disk to pick up external changes (e.g. deletions
-            # made by the desktop app while the daemon runs in a subprocess).
-            self._entries = self._load()
+        with self._write_transaction(wait_for_writer=True):
             self._entries.append(entry)
             # Trim oldest entries if over limit
             if len(self._entries) > self._max_entries:
@@ -67,10 +73,9 @@ class DictationHistory:
         with self._lock:
             return list(reversed(self._entries))
 
-    def delete(self, entry_id: str) -> bool:
+    def delete(self, entry_id: str, *, wait_for_writer: bool = True) -> bool:
         """Delete an entry by ID. Returns True if found and removed."""
-        with self._lock:
-            self._entries = self._load()
+        with self._write_transaction(wait_for_writer=wait_for_writer):
             before = len(self._entries)
             self._entries = [e for e in self._entries if e["id"] != entry_id]
             if len(self._entries) < before:
@@ -78,9 +83,9 @@ class DictationHistory:
                 return True
             return False
 
-    def clear(self) -> None:
+    def clear(self, *, wait_for_writer: bool = True) -> None:
         """Delete all entries."""
-        with self._lock:
+        with self._write_transaction(wait_for_writer=wait_for_writer):
             self._entries = []
             self._save()
 
@@ -113,24 +118,41 @@ class DictationHistory:
             pass
         return []
 
-    def _save(self) -> None:
+    @contextmanager
+    def _write_transaction(self, *, wait_for_writer: bool):
+        """Serialise a complete mutation, or immediately reject foreground contention."""
         try:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            temporary = None
-            try:
-                with tempfile.NamedTemporaryFile(
-                    mode="w", encoding="utf-8", dir=self._path.parent,
-                    prefix=f".{self._path.name}.", suffix=".tmp", delete=False,
-                ) as stream:
-                    temporary = Path(stream.name)
-                    json.dump(self._entries, stream, ensure_ascii=False, indent=2)
-                os.replace(temporary, self._path)
-            finally:
-                if temporary is not None:
-                    try:
-                        temporary.unlink(missing_ok=True)
-                    except OSError:
-                        pass
+            timeout = self._file_lock.timeout if wait_for_writer else 0
+            with self._file_lock.acquire(timeout=timeout):
+                if not self._lock.acquire(blocking=wait_for_writer):
+                    raise HistoryUpdateError("Dictation history is busy")
+                try:
+                    self._entries = self._load()
+                    yield
+                except Exception:
+                    self._entries = self._load()
+                    raise
+                finally:
+                    self._lock.release()
         except Exception as exc:
             from jarvis.debug import debug_log
-            debug_log(f"failed to save dictation history: {exc}", "dictation")
+            debug_log(f"dictation history update failed: {type(exc).__name__}", "dictation")
+            raise HistoryUpdateError("Unable to save dictation history. Please try again.") from exc
+
+    def _save(self) -> None:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=self._path.parent,
+                prefix=f".{self._path.name}.", suffix=".tmp", delete=False,
+            ) as stream:
+                temporary = Path(stream.name)
+                json.dump(self._entries, stream, ensure_ascii=False, indent=2)
+            os.replace(temporary, self._path)
+        finally:
+            if temporary is not None:
+                try:
+                    temporary.unlink(missing_ok=True)
+                except OSError:
+                    pass
