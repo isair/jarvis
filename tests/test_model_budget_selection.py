@@ -20,7 +20,7 @@ def model_settings(monkeypatch):
 
 def overhead(settings):
     return (setup_wizard.ModelsPage._EMBED_VRAM_MB
-            + setup_wizard.WhisperSetupPage.get_whisper_vram_mb(settings.whisper_model))
+            + setup_wizard.get_whisper_vram_mb(settings.whisper_model))
 
 
 def smallest_fast_model():

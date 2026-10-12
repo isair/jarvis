@@ -30,6 +30,20 @@ from jarvis.config import get_default_config
 class TestFieldMetadata:
     """Tests for the config field metadata registry."""
 
+    @pytest.mark.unit
+    def test_settings_offer_every_wizard_model(self):
+        from desktop_app.setup_wizard import WhisperSetupPage
+
+        choices = dict(next(fm for fm in FIELD_METADATA if fm.key == "whisper_model").choices)
+        for english_only in (False, True):
+            page = MagicMock(spec=WhisperSetupPage)
+            page._is_english_only = english_only
+            page._is_apple_silicon = False
+            with patch("desktop_app.setup_wizard._is_faster_whisper_turbo_supported", return_value=True):
+                options = WhisperSetupPage._get_current_model_options(page)
+            for model_id, *_ in options:
+                assert model_id in choices
+
     def test_all_fields_reference_valid_categories(self):
         """Every field's category must appear in CATEGORIES."""
         valid_cats = {key for key, _ in CATEGORIES}

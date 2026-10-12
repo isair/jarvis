@@ -30,6 +30,7 @@ from jarvis.config import (
 from jarvis.debug import debug_log
 from desktop_app.themes import apply_theme
 from desktop_app.mcp_catalogue import CATALOGUE, CATALOGUE_BY_NAME, MCPEntry
+from desktop_app.whisper_models import settings_model_choices
 
 
 # ---------------------------------------------------------------------------
@@ -245,9 +246,7 @@ def _build_field_metadata() -> List[FieldMeta]:
     f("whisper_model", "Model Size",
       "Whisper model size or local model reference",
       "whisper", "choice",
-      choices=[("tiny", "Tiny"), ("base", "Base"), ("small", "Small"),
-               ("medium", "Medium"), ("large-v3", "Large v3"),
-               ("large-v3-turbo", "Large v3 Turbo")])
+      choices=settings_model_choices())
     f("whisper_backend", "Backend",
       "Speech recognition backend",
       "whisper", "choice",
