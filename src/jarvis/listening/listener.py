@@ -2507,6 +2507,10 @@ class VoiceListener(threading.Thread):
 
         # Calculate energy before clearing frames for transcript processing
         utterance_energy = self._calculate_audio_energy(self._utterance_frames[-10:] if self._utterance_frames else [])
+        peak_frame_energy = max(
+            (self._calculate_audio_energy([frame]) for frame in self._utterance_frames),
+            default=0.0,
+        )
 
         # Reset state before processing
         self.is_speech_active = False
@@ -2514,6 +2518,11 @@ class VoiceListener(threading.Thread):
         self._utterance_frames = []
 
         if audio is None or audio.size == 0:
+            return
+
+        if not (peak_frame_energy >= self.cfg.voice_min_energy):
+            debug_log("utterance stays below the configured voice energy floor, ignoring", "voice")
+            self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
             return
 
         # Resample to Whisper's expected rate if the stream ran at a different rate
