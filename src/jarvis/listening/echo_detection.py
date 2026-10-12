@@ -147,7 +147,7 @@ class EchoDetector:
                      if (token := _normalise_echo_token(word))]
         if not heard_words or not tts_words:
             return False
-        if len(heard_words) <= 4:
+        if min(len(heard_words), len(tts_words)) <= 4:
             return any(tts_words[start:start+len(heard_words)] == heard_words
                        for start in range(len(tts_words)-len(heard_words)+1))
         heard_count, tts_count = len(heard_text.split()), len(tts_text.split())
@@ -440,12 +440,14 @@ class EchoDetector:
             """Check if two word lists match, allowing fuzzy per-word comparison."""
             if len(a) != len(b):
                 return False
+            fuzzy_allowed = (min(sum(bool(word) for word in a), sum(bool(word) for word in b))
+                             >= self.min_salvage_words)
             for wa, wb in zip(a, b):
                 if wa == wb:
                     continue
                 # Allow fuzzy match for words Whisper may transcribe differently
                 # (e.g. "tbilisi" vs "tvalisi")
-                if fuzz.ratio(wa, wb) >= 70:
+                if fuzzy_allowed and fuzz.ratio(wa, wb) >= 70:
                     continue
                 return False
             return True
@@ -457,7 +459,8 @@ class EchoDetector:
                 break
 
         # Only cleanup if there's a remainder and the overlap is at least 2 words.
-        if 0 < max_overlap < len(heard_words) and max_overlap >= 2:
+        if (0 < max_overlap < len(heard_words)
+                and sum(bool(word) for word in heard_clean[:max_overlap]) >= 2):
             # Use original words for output (preserving capitalization etc.)
             # But we need to map normalized word count to original word count
             # This is approximate - normalized may have different word count
@@ -472,6 +475,7 @@ class EchoDetector:
             debug_log(f"cleaned leading echo. Overlap: '{overlap_text}'. Cleaned: '{cleaned_text}'", "echo")
             return cleaned_text
 
+        debug_log("🗣️ Echo prefix not established; retaining recognised speech", "echo")
         return heard_text
     
     def should_reject_as_echo(self, heard_text: str, current_energy: float,

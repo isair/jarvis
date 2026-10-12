@@ -217,14 +217,16 @@ Return only JSON: {{"directed": true/false, "stop": true/false,
 "confidence": "high"/"medium"/"low", "reasoning": "brief explanation"}}.
 Classify only the CURRENT utterance. Never rewrite or generate a replacement query.
 
-A genuine user follow-up is directed=true. An assistant name is not required.
+Default directed=true for the current non-echo utterance in this active conversation.
+An assistant name is not required. The exceptions are clear other-person speech
+and pure repetition of assistant TTS output.
 The hot window permits follow-ups; it does not make every nearby conversation
 addressed to the assistant. Speech clearly addressed to another person, including
 an explanation to that person about speaking to the assistant, is directed=false
 and stop=false. A current statement that the user is talking to someone else is
 also directed=false. Use the current addressee, not mere proximity or a mentioned
-assistant name. When there is no evidence of another addressee, treat a non-echo
-follow-up as directed=true.
+assistant name. A statement, command or question need not refer to the preceding
+assistant response to be addressed to the assistant.
 Fragments, one-word replies, statements, thanks, corrections and philosophical
 opinions are all directed. A follow-up can change the topic. Neither a full
 sentence nor an explicit request is required. This applies in every language.
