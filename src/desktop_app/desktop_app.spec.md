@@ -416,6 +416,7 @@ A Flask-based web interface for browsing conversation history:
 - **Bundled mode**: Flask runs in a daemon thread
 - **Development mode**: Flask runs as subprocess
 - Opens in embedded QWebEngineView or system browser (macOS fallback)
+- Viewer typography uses system fonts. Styling and static resources are local or inline, with no third-party font or stylesheet requests when opening the viewer.
 - Meal descriptions display as literal text, including markup-like content. Saved descriptions cannot introduce HTML elements, resource requests or event handlers.
 - Maintenance progress rows display streamed dates, node names and error details as literal text. Each row is appended without reparsing existing rows as HTML, and the log follows its latest entry.
 
