@@ -261,7 +261,7 @@ class TestGraphEnrichmentGating:
                 return []
 
         with patch("jarvis.reply.engine.extract_search_params_for_memory", return_value=extract_return), \
-             patch("jarvis.memory.graph.GraphMemoryStore", _FakeStore):
+             patch("jarvis.memory.graph.GraphMemoryStore", _FixtureStore):
             run_reply_engine(db=None, cfg=cfg, tts=None, text="q", dialogue_memory=_DM())
 
         return store_calls
@@ -308,28 +308,13 @@ class TestGraphContextReachesSystemMessage:
     def test_graph_context_appears_in_system_prompt(self):
         from jarvis.reply.engine import run_reply_engine
 
-        class _Node:
-            def __init__(self):
-                self.id = "n1"
-                self.name = "Food Preferences"
-                self.data = "User loves sushi and spicy ramen."
-                self.data_token_count = 10
+        from jarvis.memory.graph import GraphMemoryStore
 
-        class _Ancestor:
-            name = "Root"
-
-        class _FakeStore:
-            def __init__(self, *a, **kw):
-                pass
-
-            def close(self):
-                pass
-
-            def search_nodes(self, query, limit=5):
-                return [_Node()]
-
-            def get_ancestors(self, node_id):
-                return [_Ancestor()]
+        class _FixtureStore(GraphMemoryStore):
+            def __init__(self, *args, **kwargs):
+                super().__init__(":memory:")
+                self.create_node("Food Preferences", "Preferred food", parent_id="world",
+                                 data="User loves sushi and spicy ramen.")
 
         class _DM:
             def has_recent_messages(self):
@@ -372,7 +357,7 @@ class TestGraphContextReachesSystemMessage:
         with patch(
             "jarvis.reply.engine.extract_search_params_for_memory",
             return_value={"keywords": ["food"], "questions": ["what cuisine does the user enjoy?"]},
-        ), patch("jarvis.memory.graph.GraphMemoryStore", _FakeStore), \
+        ), patch("jarvis.memory.graph.GraphMemoryStore", _FixtureStore), \
              patch("jarvis.reply.engine.chat_with_messages", side_effect=fake_chat), \
              patch("jarvis.tools.selection.select_tools", return_value=[]):
             run_reply_engine(db=None, cfg=cfg, tts=None, text="what do you know about me?", dialogue_memory=_DM())

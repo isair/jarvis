@@ -1231,7 +1231,7 @@ def _collect_branch_text(
         if node is None:
             continue
         if node.data:
-            snippet = node.data.strip()
+            snippet = store.get_context_data(node, max_chars=remaining, suffix='…')
             if len(snippet) > remaining:
                 snippet = snippet[: max(0, remaining - 1)].rstrip() + "…"
             if snippet:
@@ -1284,6 +1284,9 @@ def format_warm_profile_block(profile: dict[str, str]) -> str:
     CLAUDE.md note on denial-template mirroring.
     """
     user = (profile.get("user") or "").strip()
+    from .imports import IMPORT_CONTEXT_BEGIN, IMPORT_CONTEXT_GUIDANCE
+    if IMPORT_CONTEXT_BEGIN in user:
+        user = IMPORT_CONTEXT_GUIDANCE+'\n'+user
     directives = (profile.get("directives") or "").strip()
     if not user and not directives:
         return ""
