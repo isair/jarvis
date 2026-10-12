@@ -34,3 +34,11 @@ def test_adjacent_punctuation_and_unicode_keep_email_coverage(scrubber, address)
     assert address not in result
     assert result == 'Before ([REDACTED_EMAIL]), after'
     assert scrubber(result) == result
+
+
+@pytest.mark.parametrize('scrubber', [redact, scrub_secrets])
+@pytest.mark.parametrize('text', ['first@a.test+second@b.test',
+                                  'first@a.test_second@b.test',
+                                  'first@a.test.second+third@b.test'])
+def test_adjacent_addresses_are_all_masked(scrubber,text):
+    assert scrubber(text)=='[REDACTED_EMAIL][REDACTED_EMAIL]'
