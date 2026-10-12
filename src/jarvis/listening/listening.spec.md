@@ -377,7 +377,11 @@ events. Accepted segments and segments without confidence metadata retain their
 existing backend-specific filtering behaviour. The listener does not directly
 trigger TTS, update widgets, add transcript-buffer entries, or dispatch queries
 for these events. Accepted speech in a mixed utterance continues through the
-normal pipeline. Without a callback, the listener filters and logs rejected
+normal pipeline. Detected language metadata updates the reply locale only
+for non-empty, non-repetitive recognised text. Empty results, including results
+with only rejected segments, and repetitive hallucinations retain the locale
+from the latest eligible speech. A fresh eligible utterance can select any
+language reported by its backend. Without a callback, the listener filters and logs rejected
 segments without notifying any consumer.
 
 The daemon uses the listener's filtering and diagnostic logs without a
