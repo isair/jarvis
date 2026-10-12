@@ -31,7 +31,7 @@ class IntentJudgeTestCase:
 
 # Single-segment cases - one per distinct behaviour axis.
 INTENT_JUDGE_TEST_CASES = [
-    # Wake word + simple question (canonical directed+extract)
+    # Wake word with a simple question
     IntentJudgeTestCase(
         name="wake_word_simple_question",
         transcript="Jarvis what time is it",
@@ -761,14 +761,23 @@ class TestIntentJudgePromptQuality:
 
         assert "nice and sunny" in prompt
 
-    def test_system_prompt_has_echo_guidance(self):
+    @pytest.mark.parametrize('hot', [False, True])
+    def test_echo_reference_and_current_speech_are_distinct(self, hot):
+        import json
         from jarvis.listening.intent_judge import IntentJudge
-
         judge = IntentJudge()
-        prompt = judge._build_system_prompt(False)
-
-        assert "echo" in prompt.lower()
-        assert "(during TTS)" in prompt
+        spoken, current = 'The weather is sunny.', 'What about tomorrow?'
+        echo = create_transcript_segment(spoken)
+        echo.is_during_tts = True
+        user = create_transcript_segment(current)
+        prompt = judge._build_user_prompt([echo, user], None, spoken, 999.0,
+                                          hot, current)
+        data = json.loads(prompt.split('<<<BEGIN SPEECH>>>\n')[1].split('\n<<<END SPEECH>>>')[0])
+        assert data['current_utterance'] == current
+        assert data['last_TTS_output'] == spoken
+        assert [(item['text'], item['during_tts']) for item in data['transcript']] == [
+            (spoken, True), (current, False),
+        ]
 
 
 class TestIntentJudgeFallback:
