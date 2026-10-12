@@ -6,6 +6,7 @@ They treat the detection functions as black boxes, verifying inputs produce corr
 """
 
 import subprocess
+import json
 import os
 import shutil
 import sys
@@ -13,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 import pytest
+import requests
 
 from desktop_app.setup_wizard import (
     check_ollama_cli,
@@ -31,6 +33,7 @@ from desktop_app.setup_wizard import (
 from desktop_app.mcp_catalogue import get_wizard_entries
 from desktop_app import setup_wizard
 from jarvis.config import DEFAULT_CHAT_MODEL
+from jarvis.llm import ollama
 from jarvis.utils.location import (
     get_location_context,
     is_location_available,
@@ -136,37 +139,58 @@ class TestCheckOllamaCli:
             assert actual == expected
 
 
+@pytest.fixture
+def real_http_protocol_probe():
+    """Exercise independent HTTP protocol validation without opening a socket."""
+    with ThreadPoolExecutor(max_workers=1) as worker:
+        yield lambda: worker.submit(requests.get, 'jarvis-test://unsupported-transport', timeout=1).result(timeout=5)
+
+
+@pytest.mark.unit
+@pytest.mark.usefixtures('no_network')
 class TestCheckOllamaServer:
     """Tests for Ollama server detection."""
 
-    def test_detects_running_server(self):
-        """When server is running, returns True with version."""
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {"version": "0.1.23"}
+    @pytest.fixture(autouse=True)
+    def detection_transport(self, monkeypatch, mock_config):
+        """Use owned configuration and isolate the backend HTTP stub."""
+        mock_config.ollama_base_url = 'http://wizard-test.invalid:11434'
+        monkeypatch.setattr(setup_wizard, 'load_settings', lambda: mock_config)
+        monkeypatch.setattr(ollama, 'requests', SimpleNamespace(**vars(requests)))
 
-        with patch("requests.get", return_value=mock_response):
+    def test_detects_running_server(self, real_http_protocol_probe):
+        """When server is running, returns True with version."""
+        mock_response = requests.Response()
+        mock_response.status_code = 200
+        mock_response._content = json.dumps({'version': '0.1.23'}).encode()
+
+        with patch.object(ollama.requests, 'get', return_value=mock_response):
             is_running, version = check_ollama_server()
 
             assert is_running is True
             assert version == "0.1.23"
+            with pytest.raises(requests.exceptions.InvalidSchema):
+                real_http_protocol_probe()
 
-    def test_returns_false_when_server_not_running(self):
+    def test_returns_false_when_server_not_running(self, real_http_protocol_probe):
         """When server is not responding, returns False."""
-        with patch("requests.get", side_effect=Exception("Connection refused")):
+        with patch.object(ollama.requests, 'get', side_effect=requests.exceptions.ConnectionError('Connection refused')):
             is_running, version = check_ollama_server()
 
             assert is_running is False
             assert version is None
+            with pytest.raises(requests.exceptions.InvalidSchema):
+                real_http_protocol_probe()
 
-    def test_handles_timeout(self):
+    def test_handles_timeout(self, real_http_protocol_probe):
         """When request times out, returns False."""
-        import requests
-        with patch("requests.get", side_effect=requests.exceptions.Timeout):
+        with patch.object(ollama.requests, 'get', side_effect=requests.exceptions.Timeout):
             is_running, version = check_ollama_server()
 
             assert is_running is False
             assert version is None
+            with pytest.raises(requests.exceptions.InvalidSchema):
+                real_http_protocol_probe()
 
 
 class TestGetRequiredModels:
