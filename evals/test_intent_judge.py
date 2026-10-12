@@ -711,6 +711,9 @@ class TestHotWindowAddressee:
         assert result.directed is directed, result
         assert result.stop is False, result
 
+        if not directed:
+            assert result.confidence == 'high', 'A clear other-person verdict must prevent fallback admission'
+
 
 class TestIntentJudgeAccuracy:
     """Evals for intent judge accuracy."""

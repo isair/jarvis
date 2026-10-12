@@ -240,6 +240,8 @@ Examples:
 - 'What about Germany' -> {{"directed":true,"stop":false,"confidence":"high","reasoning":"non-echo follow-up"}}
 - 'I think absurdism is better' -> {{"directed":true,"stop":false,"confidence":"high","reasoning":"replying to the assistant"}}
 - 'And tomorrow' -> {{"directed":true,"stop":false,"confidence":"high","reasoning":"fragment in active follow-up window"}}
+- 'Thanks' -> {{"directed":true,"stop":false,"confidence":"high","reasoning":"acknowledgement to the assistant, no action required"}}
+- 'Do you already know where I live?' -> {{"directed":true,"stop":false,"confidence":"high","reasoning":"follow-up about the assistant's knowledge"}}
 - 'stop' -> {{"directed":true,"stop":true,"confidence":"high","reasoning":"direct cancellation"}}
 """
 
