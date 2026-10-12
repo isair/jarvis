@@ -319,15 +319,13 @@ def commit_import(store: GraphMemoryStore, preview: ImportPreview, choices: Sequ
 
 def render_memory_context(text: str, kind: str, records: Sequence[dict], *, max_chars: int) -> str:
     """Keep source dates with bounded, fenced memory text, without new dates."""
-    from .graph import normalise_fact
     text = scrub_secrets(text)
     if not text.strip():
         return ''
     if kind == 'directives':
         return text if len(text) <= max_chars else ''
     matches = [record for record in records if record['current_binding'] and
-               normalise_fact(text) in {normalise_fact(line) for line in
-                                       (record['original_text'], *record['original_text'].splitlines())}]
+               text == record['reviewed_text']]
     dates = {record['source_date'] for record in matches}
     original_date = next(iter(dates)) if len(dates) == 1 else None
     archive = [] if matches else [{'date': r['source_date'], 'quote': scrub_secrets(r['original_text'])[:100]}

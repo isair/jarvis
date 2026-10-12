@@ -92,6 +92,32 @@ def test_repeat_import_preserves_human_edits_and_source_quote(tmp_path):
         assert records[0]['source_date'] is None
 
 
+@pytest.mark.parametrize('branch,moved_to', [('user', 'world'), ('directives', 'user'), ('world', 'directives')])
+def test_new_source_respects_destination_after_a_manual_move(tmp_path, branch, moved_to):
+    text = 'Use /srv/Data.'
+    first_preview = imports.preview_text('Claude', text, label='First export')
+    first_choice = imports.ImportChoice(first_preview.items[0].id, text, branch, source_date=None)
+    with closing(GraphMemoryStore(str(tmp_path/'test.db'))) as store:
+        first = imports.commit_import(store, first_preview, [first_choice])
+        original_id = first.node_ids[0]
+        store.update_node(original_id, parent_id=moved_to)
+        repeat = imports.commit_import(store, first_preview, [first_choice])
+        assert repeat.created == 0 and repeat.node_ids == (original_id,)
+        second_preview = imports.preview_text('ChatGPT', text, label='Second export')
+        second_choice = imports.ImportChoice(second_preview.items[0].id, text, branch, source_date=None)
+        second = imports.commit_import(store, second_preview, [second_choice])
+        assert second.created == 1
+        assert [node.id for node in store.get_children(branch)] == list(second.node_ids)
+        assert store.get_node(original_id).parent_id == moved_to
+        assert store.get_node(original_id).data == text
+        assert {record['provider'] for record in store.get_import_provenance(original_id)} == {'Claude'}
+        assert {record['provider'] for record in store.get_import_provenance(second.node_ids[0])} == {'ChatGPT'}
+        third_preview = imports.preview_text('Codex', text, label='Third export')
+        third_choice = imports.ImportChoice(third_preview.items[0].id, text, branch, source_date=None)
+        third = imports.commit_import(store, third_preview, [third_choice])
+        assert third.created == 0 and third.node_ids == second.node_ids
+
+
 def test_source_date_is_preserved_and_is_not_an_import_date(tmp_path):
     preview = imports.preview_text('ChatGPT', 'An outing was planned for tomorrow.', label='Old memories')
     with closing(GraphMemoryStore(str(tmp_path/'test.db'))) as store:
@@ -233,6 +259,32 @@ def test_recall_context_carries_original_dates_without_import_timestamp(tmp_path
         assert '2020-01-01' in context and node.data in context
         assert store.get_import_provenance(node.id)[0]['imported_at'] not in context
         assert len(store.get_context_data(node, max_chars=300)) <= 300
+
+
+@pytest.mark.parametrize('original,reviewed,child_text,expected_date', [
+    ('Original note.', 'Reviewed note.', None, '2020-01-01'),
+    ('Use /srv/Data.', 'Use /srv/Data.', 'Use /srv/data.', None),
+    ('  Run --Queue', '  Run --Queue', 'Run --Queue', None),
+    ('Use /srv/K.', 'Use /srv/K.', 'Use /srv/K.', None),
+    ('No outing planned.\nAn outing is planned for tomorrow.',
+     'No outing planned.\nAn outing is planned for tomorrow.',
+     'An outing is planned for tomorrow.', None),
+    ('Original note.', 'Original note.', 'Original note.', '2020-01-01'),
+])
+def test_current_date_binds_only_to_the_complete_reviewed_entry(tmp_path, original, reviewed, child_text, expected_date):
+    preview = imports.preview_text('Claude', original, label='Notes')
+    with closing(GraphMemoryStore(str(tmp_path/'test.db'))) as store:
+        result = imports.commit_import(store, preview, [
+            imports.ImportChoice(preview.items[0].id, reviewed, 'world', source_date='2020-01-01')])
+        node = store.get_node(result.node_ids[0])
+        if child_text is not None:
+            assert store.split_node(node, children=[('Part', 'Part', child_text)], summary='Parts')
+            node = store.get_children(node.id)[0]
+        context = store.get_context_data(node, max_chars=2000)
+        frame = json.loads(context.split(imports.IMPORT_CONTEXT_BEGIN+'\n')[1].split('\n'+imports.IMPORT_CONTEXT_END)[0])
+        assert frame['date'] == expected_date
+        assert frame['text'] == node.data
+        assert store.get_import_provenance(node.id)[0]['source_date'] == '2020-01-01'
 
 
 def test_metadata_edits_keep_dates_but_data_writes_invalidate_the_binding(tmp_path):
