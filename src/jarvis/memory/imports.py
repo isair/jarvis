@@ -221,12 +221,12 @@ def _paragraphs(text: str) -> list[str]:
             fence = '' if fence == marker else marker if not fence else fence
         if not line.strip() and not fence:
             if current:
-                blocks.append('\n'.join(current).strip())
+                blocks.append('\n'.join(current))
                 current = []
         else:
             current.append(line)
     if current:
-        blocks.append('\n'.join(current).strip())
+        blocks.append('\n'.join(current))
     return blocks
 
 
@@ -253,7 +253,7 @@ def _claude_metadata(text: str) -> tuple[str, tuple[tuple[str, str], ...]]:
         metadata.append((key, scrub_secrets(value)))
     if opaque:
         metadata.append(('header', scrub_secrets('\n'.join(lines[1:end]))))
-    return '\n'.join(lines[end+1:]).strip(), tuple(metadata)
+    return '\n'.join(lines[end+1:]).strip('\r\n'), tuple(metadata)
 
 
 def _preview(source: MemorySource, text: str) -> ImportPreview:
@@ -299,8 +299,8 @@ def commit_import(store: GraphMemoryStore, preview: ImportPreview, choices: Sequ
     for choice in choices:
         if choice.item_id not in originals or choice.branch not in DESTINATIONS or not isinstance(choice.text, str):
             raise MemoryImportError('The selection is invalid. Review the memories again.')
-        text = scrub_secrets(choice.text).strip()
-        if not text or len(text) > MAX_ENTRY_CHARS or '\0' in text:
+        text = scrub_secrets(choice.text)
+        if not text.strip() or len(text) > MAX_ENTRY_CHARS or '\0' in text:
             raise MemoryImportError('Each selected memory must contain brief, readable text.')
         source_date = choice.source_date
         if source_date is not None:
@@ -320,7 +320,9 @@ def commit_import(store: GraphMemoryStore, preview: ImportPreview, choices: Sequ
 def render_memory_context(text: str, kind: str, records: Sequence[dict], *, max_chars: int) -> str:
     """Keep source dates with bounded, fenced memory text, without new dates."""
     from .graph import normalise_fact
-    text = scrub_secrets(text).strip()
+    text = scrub_secrets(text)
+    if not text.strip():
+        return ''
     if kind == 'directives':
         return text if len(text) <= max_chars else ''
     matches = [record for record in records if record['current_binding'] and

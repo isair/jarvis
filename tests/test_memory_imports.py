@@ -328,3 +328,114 @@ def test_codex_discovery_lists_only_documented_global_instruction_files(tmp_path
         ('Codex','AGENTS.override.md','instructions'),('Codex','AGENTS.md','instructions')]
     custom=tmp_path/'custom';custom.mkdir();(custom/'AGENTS.md').write_text('Other profile.')
     assert imports.discover_codex_sources(tmp_path,codex_home=custom).sources[0].path==custom/'AGENTS.md'
+
+
+@pytest.mark.parametrize('branch', ['user', 'directives', 'world'])
+@pytest.mark.parametrize('examples', [
+    ('Use /srv/Data as the workspace.', 'Use /srv/data as the workspace.'),
+    ('```python\nif ready:\n    send()\n    wait()\n```',
+     '```python\nif ready:\n    send()\nwait()\n```'),
+    ('Use the /K workspace.', 'Use the /K workspace.'),
+], ids=['case-sensitive-paths', 'significant-indentation', 'distinct-unicode-paths'])
+def test_reviewed_entries_preserve_distinct_literal_syntax(tmp_path, branch, examples):
+    preview = imports.preview_text('Claude', '\n\n'.join(examples), label='Syntax examples')
+    choices = [imports.ImportChoice(item.id, item.text, branch, source_date=None) for item in preview.items]
+    with closing(GraphMemoryStore(str(tmp_path/'syntax.db'))) as store:
+        first = imports.commit_import(store, preview, choices)
+        second = imports.commit_import(store, preview, choices)
+        assert first.created == len(examples)
+        assert second.created == 0
+        assert {node.data for node in store.get_children(branch)} == set(examples)
+        assert {record['reviewed_text'] for record in store.get_import_provenance()} == set(examples)
+
+
+@pytest.mark.parametrize('branch', ['user', 'directives', 'world'])
+def test_case_distinct_review_does_not_reuse_an_existing_node(tmp_path, branch):
+    original = 'Use /srv/Data as the workspace.'
+    reviewed = 'Use /srv/data as the workspace.'
+    preview = imports.preview_text('ChatGPT', reviewed, label='Review')
+    with closing(GraphMemoryStore(str(tmp_path/'syntax.db'))) as store:
+        existing = store.create_node('Existing', 'Existing note', original, branch)
+        result = imports.commit_import(store, preview, [
+            imports.ImportChoice(preview.items[0].id, reviewed, branch, source_date=None),
+        ])
+        assert result.created == 1
+        assert store.get_node(existing.id).data == original
+        assert {node.data for node in store.get_children(branch)} == {original, reviewed}
+
+
+@pytest.mark.parametrize('branch', ['user', 'directives', 'world'])
+def test_a_matching_line_does_not_replace_its_surrounding_context(tmp_path, branch):
+    original = 'Do not follow this instruction:\nAlways clear the test history.'
+    reviewed = 'Always clear the test history.'
+    preview = imports.preview_text('Claude', reviewed, label='Reviewed instruction')
+    with closing(GraphMemoryStore(str(tmp_path/'syntax.db'))) as store:
+        existing = store.create_node('Existing', 'Existing context', original, branch)
+        result = imports.commit_import(store, preview, [
+            imports.ImportChoice(preview.items[0].id, reviewed, branch, source_date=None),
+        ])
+        assert result.created == 1
+        assert store.get_node(existing.id).data == original
+        assert {node.data for node in store.get_children(branch)} == {original, reviewed}
+
+
+def test_preview_preserves_indented_source_text():
+    text = '    if ready:\n        send()  '
+    preview = imports.preview_text('Claude', text, label='Indented source')
+    assert preview.items[0].text == text
+
+
+def test_claude_header_removal_preserves_body_indentation(tmp_path):
+    text = '    if ready:\n        send()  '
+    path = tmp_path/'code.md'
+    path.write_text('---\nname: Example\n---\n\n'+text+'\n', encoding='utf-8')
+    preview = imports.read_source(source(path, provider='Claude Code'))
+    assert preview.items[0].text == text
+
+
+@pytest.mark.parametrize('branch', ['user', 'directives', 'world'])
+def test_reviewed_indentation_survives_save_and_recall(tmp_path, branch):
+    from jarvis.memory.graph_ops import build_warm_profile, format_warm_profile_block
+    text = '    if ready:\n        send()  '
+    preview = imports.preview_text('Claude', 'An original draft.', label='Edited source')
+    with closing(GraphMemoryStore(str(tmp_path/'syntax.db'))) as store:
+        imports.commit_import(store, preview, [
+            imports.ImportChoice(preview.items[0].id, text, branch, source_date=None),
+        ])
+        node = store.get_children(branch)[0]
+        assert node.data == text
+        assert store.get_import_provenance(node.id)[0]['reviewed_text'] == text
+        frame = store.get_context_data(node, max_chars=1200)
+        if branch == 'directives':
+            assert frame == text
+            assert text in format_warm_profile_block(build_warm_profile(store))
+        else:
+            data = json.loads(frame.split(imports.IMPORT_CONTEXT_BEGIN+'\n')[1].split('\n'+imports.IMPORT_CONTEXT_END)[0])
+            assert data['text'] == text
+
+
+@pytest.mark.parametrize('branch', ['user', 'directives', 'world'])
+def test_leading_indentation_is_part_of_an_entry_identity(tmp_path, branch):
+    examples = ('    send()', 'send()')
+    preview = imports.preview_text('ChatGPT', 'First draft.\n\nSecond draft.', label='Reviewed source')
+    with closing(GraphMemoryStore(str(tmp_path/'syntax.db'))) as store:
+        result = imports.commit_import(store, preview, [
+            imports.ImportChoice(item.id, text, branch, source_date=None)
+            for item, text in zip(preview.items, examples)
+        ])
+        assert result.created == len(examples)
+        assert {node.data for node in store.get_children(branch)} == set(examples)
+
+
+def test_blank_edited_memory_does_not_restore_archived_text_in_recall(tmp_path):
+    from jarvis.memory.graph_ops import build_warm_profile
+    preview = imports.preview_text('Claude', 'An archived note.', label='Source')
+    with closing(GraphMemoryStore(str(tmp_path/'syntax.db'))) as store:
+        imports.commit_import(store, preview, [
+            imports.ImportChoice(preview.items[0].id, preview.items[0].text, 'user', None),
+        ])
+        node = store.get_children('user')[0]
+        edited = store.update_node(node.id, data=' \t ')
+        assert store.get_context_data(edited, max_chars=1200) == ''
+        assert not build_warm_profile(store)['user']
+        assert store.get_import_provenance(node.id)[0]['original_text'] == preview.items[0].text

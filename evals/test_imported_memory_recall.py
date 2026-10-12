@@ -33,3 +33,26 @@ def test_imported_personal_facts_and_address_preference(tmp_path,provider,sample
     assert start>=0,answer
     result,_=json.JSONDecoder().raw_decode(answer[start:])
     assert result=={'name':'Mira','home':'London','office_days':3,'address':'Captain'},answer
+
+
+@pytest.mark.parametrize('sample', range(2))
+def test_imported_parameter_examples_preserve_case(tmp_path, sample):
+    flags = ('--Queue', '--queue')
+    text = '\n\n'.join('CLI parameter example: '+flag for flag in flags)
+    preview = preview_text('Claude', text, label='Synthetic parameter examples')
+    with closing(GraphMemoryStore(str(tmp_path/'examples.db'))) as store:
+        commit_import(store, preview, [ImportChoice(item.id, item.text, 'user', None)
+                                      for item in preview.items])
+        profile = format_warm_profile_block(build_warm_profile(store))
+    cfg = voice_config()
+    answer = get_llm_backend(cfg).direct(
+        cfg.llm_chat_model, build_system_prompt()+'\n'+profile,
+        'List every saved CLI parameter example exactly, keeping its case. '
+        'Return only a JSON array of parameter strings.',
+        timeout_sec=60, temperature=0.0, max_tokens=1024,
+    )
+    assert answer, 'No reply'
+    start = answer.find('[')
+    assert start >= 0, answer
+    result, _ = json.JSONDecoder().raw_decode(answer[start:])
+    assert isinstance(result, list) and len(result) == len(flags) and set(result) == set(flags), answer

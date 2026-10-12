@@ -1287,7 +1287,9 @@ def format_warm_profile_block(profile: dict[str, str]) -> str:
     from .imports import IMPORT_CONTEXT_BEGIN, IMPORT_CONTEXT_GUIDANCE
     if IMPORT_CONTEXT_BEGIN in user:
         user = IMPORT_CONTEXT_GUIDANCE+'\n'+user
-    directives = (profile.get("directives") or "").strip()
+    directives = profile.get("directives") or ""
+    if not directives.strip():
+        directives = ""
     if not user and not directives:
         return ""
 
