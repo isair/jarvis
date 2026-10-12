@@ -517,44 +517,26 @@ class TestDictationHistoryWindow:
                 "the current container."
             )
 
-    def test_card_timestamp_does_not_feed_emoji_to_strftime(self, qapp):
-        """The card timestamp label must not pass emojis through strftime.
+    @pytest.mark.unit
+    def test_card_timestamp_renders_under_a_restricted_locale(self, qapp, monkeypatch):
+        from datetime import datetime
+        from PyQt6.QtWidgets import QLabel
+        from desktop_app import dictation_history
 
-        On Windows with the bundled Python 3.11, datetime.strftime routes
-        through the C locale encoder which cannot encode non-BMP emoji
-        codepoints and raises UnicodeEncodeError. When that exception
-        escapes a Qt slot invocation (e.g. the deferred reload fired from
-        showEvent), Qt6Core triggers a fast-fail (0xc0000409) rather than
-        surfacing a catchable error, crashing the whole app.
+        class RestrictedLocaleDateTime(datetime):
+            def strftime(self, format_string):
+                format_string.encode("cp1252")
+                return super().strftime(format_string)
 
-        This test reproduces the failure mode by forcing a locale whose
-        encoder can't handle U+1F4C5 — mirrors the bundled-Windows
-        behaviour that broke open-after-dictate for real users.
-        """
-        import locale
-        import inspect
-        from desktop_app.dictation_history import _DictationCard
-
-        # Source check: the card source must not pass emoji literals into
-        # strftime. Catches future regressions even on locales where the
-        # runtime encoder happens to accept the codepoint.
-        source = inspect.getsource(_DictationCard.__init__)
-        for line in source.splitlines():
-            stripped = line.strip()
-            if "strftime(" not in stripped:
-                continue
-            # Allow only ASCII format specifiers inside strftime().
-            start = stripped.index("strftime(")
-            arg = stripped[start + len("strftime("):]
-            # Grab until matching close paren (simple heuristic, format
-            # strings don't contain parens).
-            close = arg.find(")")
-            if close >= 0:
-                arg = arg[:close]
-            assert arg.isascii(), (
-                f"strftime argument must be ASCII-only to survive Windows "
-                f"locale encoders; found non-ASCII in: {stripped!r}"
-            )
+        monkeypatch.setattr(dictation_history, "datetime", RestrictedLocaleDateTime)
+        timestamp = time.time()
+        dt = datetime.fromtimestamp(timestamp)
+        expected = f"📅 {dt.strftime('%Y-%m-%d')}  🕐 {dt.strftime('%H:%M:%S')}"
+        card = dictation_history._DictationCard({"id": "fixture", "text": "A saved dictation", "timestamp": timestamp})
+        try:
+            assert expected in [label.text() for label in card.findChildren(QLabel)]
+        finally:
+            card.deleteLater()
 
     def test_show_event_reloads_entries_written_by_another_process(
         self, qapp, tmp_path
