@@ -126,11 +126,18 @@ detached with a null parent, retaining their subtree.
 
 ### Delete
 
-Any node except root can be deleted. Children are orphaned (parent_id set to NULL via FK). The UI should warn before deleting nodes with children.
+Root and the fixed top-level branches are protected. Other nodes can be deleted;
+children are detached (parent_id set to NULL via FK). The UI should warn before
+deleting nodes with children. Deletion and child detachment share one transaction.
+Failed deletion rolls back and releases the database write lock. Mutation
+listeners run after successful commit, outside the store lock.
 
 ### Touch
 
-Increments `access_count` and updates `last_accessed`. Called automatically when a node is viewed in the UI or retrieved during query traversal.
+Increments `access_count` and updates `last_accessed` in one transaction. Called
+automatically when a node is viewed in the UI or retrieved during query traversal.
+Failed access updates preserve the saved counters and timestamps, roll back and
+release the database write lock so other writes can continue.
 
 ### Warm Profile Revision
 
