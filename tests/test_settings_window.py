@@ -2,7 +2,8 @@
 Tests for settings window metadata and config I/O logic.
 
 Tests verify the metadata registry, value extraction, and save/load behaviour
-without touching the GUI. Widget creation is tested via mock Qt objects where needed.
+with real settings dialogues for dropdown selection and saving, and isolated
+config files and device enumeration.
 """
 
 import json
@@ -288,6 +289,56 @@ class TestInputDevices:
 
 class TestConfigSaveLogic:
     """Tests for save/load round-trip behaviour."""
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize("key,value", [
+        ("whisper_model", "large-v3-turbo"),
+        ("whisper_model", "local/custom-whisper"),
+        ("whisper_compute_type", "int8_float16"),
+        ("voice_device", "99"),
+    ])
+    def test_changing_input_device_preserves_other_selections(
+        self, qapp, tmp_path, monkeypatch, key, value
+    ):
+        from desktop_app import settings_window as sw
+
+        path = tmp_path / "config.json"
+        path.write_text(json.dumps({key: value}), encoding="utf-8")
+        monkeypatch.setattr(sw, "default_config_path", lambda: path)
+        monkeypatch.setattr(sw, "get_input_devices", lambda: [("", "Default"), ("7", "Microphone")])
+        monkeypatch.setattr(sw.QMessageBox, "information", lambda *args: None)
+        window = sw.SettingsWindow()
+        assert window._widgets[key].currentData() == value
+
+        # Change an unrelated field through the actual dropdown and save path.
+        changed_key = "voice_device" if key != "voice_device" else "whisper_device"
+        changed = window._widgets[changed_key]
+        selected = "7" if changed_key == "voice_device" else "cpu"
+        changed.setCurrentIndex(changed.findData(selected))
+        window._on_save()
+        saved = json.loads(path.read_text(encoding="utf-8"))
+        assert saved[key] == value
+        assert saved[changed_key] == selected
+
+        reopened = sw.SettingsWindow()
+        assert reopened._widgets[key].currentData() == value
+
+    @pytest.mark.unit
+    def test_reset_custom_selection_then_save_omits_defaults(self, qapp, tmp_path, monkeypatch):
+        from desktop_app import settings_window as sw
+
+        path = tmp_path / "config.json"
+        path.write_text(json.dumps({"whisper_model": "local/custom-whisper"}), encoding="utf-8")
+        monkeypatch.setattr(sw, "default_config_path", lambda: path)
+        monkeypatch.setattr(sw, "get_input_devices", lambda: [("", "Default")])
+        monkeypatch.setattr(sw.QMessageBox, "information", lambda *args: None)
+        monkeypatch.setattr(sw.QMessageBox, "question", lambda *args: sw.QMessageBox.StandardButton.Yes)
+        window = sw.SettingsWindow()
+        window._on_reset()
+        assert window._widgets["whisper_model"].currentData() == get_default_config()["whisper_model"]
+        assert json.loads(path.read_text(encoding="utf-8"))["whisper_model"] == "local/custom-whisper"
+        window._on_save()
+        assert "whisper_model" not in json.loads(path.read_text(encoding="utf-8"))
 
     def test_only_non_defaults_are_saved(self):
         """Saving default values should produce an empty config file."""
