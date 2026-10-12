@@ -603,27 +603,6 @@ class TestDictationHistoryWindow:
 
 
 # ---------------------------------------------------------------------------
-# Menu integration tests
-# ---------------------------------------------------------------------------
-
-class TestMenuIntegration:
-    """Tests that the dictation history menu item is wired up in app.py."""
-
-    def test_create_menu_has_dictation_action(self):
-        """The create_menu method should define a dictation history action."""
-        import inspect
-        from desktop_app.app import JarvisSystemTray
-        source = inspect.getsource(JarvisSystemTray.create_menu)
-        assert "Dictation History" in source
-        assert "dictation_history_action" in source
-
-    def test_show_dictation_history_method_exists(self):
-        from desktop_app.app import JarvisSystemTray
-        assert hasattr(JarvisSystemTray, "show_dictation_history")
-        assert callable(getattr(JarvisSystemTray, "show_dictation_history"))
-
-
-# ---------------------------------------------------------------------------
 # Engine integration — history is saved on successful dictation
 # ---------------------------------------------------------------------------
 

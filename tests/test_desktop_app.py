@@ -1609,6 +1609,34 @@ class TestTrayMenuLayout:
         tray.create_menu()
         return tray.menu
 
+    def test_dictation_menu_action_opens_saved_history(self, qapp, tmp_path, monkeypatch):
+        from desktop_app.app import JarvisSystemTray
+        from desktop_app.dictation_history import DictationHistoryWindow
+        from jarvis.dictation.history import DictationHistory
+        from PyQt6.QtWidgets import QLabel, QSystemTrayIcon
+
+        history = DictationHistory(path=tmp_path / "history.json")
+        entry = history.add("A saved dictation, café")
+        tray = JarvisSystemTray.__new__(JarvisSystemTray)
+        tray.tray_icon = QSystemTrayIcon()
+        tray.dictation_history_window = DictationHistoryWindow(history)
+        monkeypatch.setattr(tray, "_maybe_add_cuda_recovery_action", lambda: None)
+        tray.create_menu()
+        try:
+            assert not tray.dictation_history_window.isVisible()
+            action = next(action for action in tray.menu.actions() if "Dictation History" in action.text())
+            action.trigger()
+            qapp.processEvents()
+            assert tray.dictation_history_window.isVisible()
+            assert entry["text"] in [label.text() for label in tray.dictation_history_window.findChildren(QLabel)]
+        finally:
+            tray.dictation_history_window.close()
+            tray.dictation_history_window.deleteLater()
+            tray._voice_pause_timer.stop()
+            tray._voice_pause_timer.deleteLater()
+            tray.menu.deleteLater()
+            tray.tray_icon.deleteLater()
+
     def test_power_toggle_is_above_voice_pause_and_status_in_same_section(self, qapp):
         menu = self._tray_menu(qapp)
         actions = list(menu.actions())
