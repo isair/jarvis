@@ -1,5 +1,9 @@
 ## Prompts Module Spec
 
+### Runtime execution feedback
+
+The reply loop uses execution-status feedback when a selected continuation of a failed task lacks a successful current result. It requests a real tool call with arguments grounded in the current request and dialogue, or an explicit question/blocker envelope. A rejected draft is absent from subsequent prompt context. Feedback occupies one existing loop turn, preserves the current tool protocol and limits, and does not enable planning or add a model context.
+
 This module provides model-size-aware prompt generation for the reply engine.
 
 ### Problem Statement

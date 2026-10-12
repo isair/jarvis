@@ -29,6 +29,8 @@ def load_case(monkeypatch, case):
     original = getattr(namespace[cls](), method)
 
     def run(db, dialogue):
+        if module == 'followup':
+            return original(db, dialogue, planner_enabled=False)
         if module != 'graph':
             return original(db, dialogue)
         from jarvis.memory.graph import GraphMemoryStore
@@ -131,7 +133,7 @@ def test_weather_fixture_rejects_an_unrelated_location(monkeypatch, case):
     assert all(result.reply_text != forecast for result in results)
 
 
-def test_followup_eval_accepts_clarifying_without_a_failed_tool_call(monkeypatch):
+def test_followup_eval_rejects_setup_without_a_failed_tool_call(monkeypatch):
     from jarvis.reply import engine
 
     run, forecast = load_case(monkeypatch, CASES[2])
@@ -145,7 +147,8 @@ def test_followup_eval_accepts_clarifying_without_a_failed_tool_call(monkeypatch
 
     monkeypatch.setattr(engine, 'run_reply_engine', reply)
     monkeypatch.setattr(requests, 'post', lambda *args, **kwargs: pytest.fail('🧠 Guard checks must not contact a model'))
-    run(MagicMock(), MagicMock())
+    with pytest.raises(AssertionError, match='first lookup must actually run'):
+        run(MagicMock(), MagicMock())
 
 
 @pytest.mark.parametrize('case', CASES)
