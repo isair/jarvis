@@ -125,6 +125,7 @@ class _DictationCard(QFrame):
         # Text content
         text = entry.get("text", "")
         text_label = QLabel(text)
+        text_label.setTextFormat(Qt.TextFormat.PlainText)
         text_label.setWordWrap(True)
         text_label.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse

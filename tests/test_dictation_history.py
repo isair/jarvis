@@ -816,3 +816,28 @@ def test_busy_history_keeps_the_qt_event_loop_responsive(qapp, tmp_path, monkeyp
             worker.join(timeout=1)
         window.close()
         window.deleteLater()
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("text", ["<b>Keep these literal tags</b>", '<img src="not-a-real-image.png">', "A plain dictation"])
+def test_history_card_renders_dictations_as_literal_text(qapp, text):
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtWidgets import QLabel
+    from desktop_app.dictation_history import _DictationCard
+
+    card = _DictationCard({"id": "fixture", "text": text, "timestamp": time.time(), "duration": 0})
+    reference = None
+    try:
+        displayed = next(label for label in card.findChildren(QLabel) if label.text() == text)
+        reference = QLabel(text)
+        reference.setWordWrap(True)
+        reference.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        reference.setStyleSheet(displayed.styleSheet())
+        reference.setTextFormat(Qt.TextFormat.PlainText)
+        displayed.ensurePolished()
+        reference.ensurePolished()
+        assert displayed.sizeHint() == reference.sizeHint()
+    finally:
+        card.deleteLater()
+        if reference is not None:
+            reference.deleteLater()
