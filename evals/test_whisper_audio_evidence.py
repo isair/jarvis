@@ -103,3 +103,35 @@ def test_native_recognition_preserves_quiet_requests(local_audio_assets, monkeyp
     assert len(jobs) == 1
     result = mlx_whisper.transcribe(jobs[0].audio, path_or_hf_repo=str(model), language=None)
     assert re.findall(r"\w+", result["text"].casefold()) == words
+
+
+def test_native_request_language_survives_rejected_recognition(local_audio_assets, monkeypatch):
+    from jarvis.config import load_settings
+    from jarvis.listening import listener as capture
+    from jarvis.reply import engine
+
+    model, audio = local_audio_assets
+    jobs = captured_jobs(audio["weather"], monkeypatch)
+    assert len(jobs) == 1
+    cfg = replace(load_settings(), sample_rate=16000)
+    obj = capture.VoiceListener(None, cfg, None, None)
+    obj._whisper_backend = "mlx"
+    obj._mlx_model_repo = str(model)
+    obj._transcription_jobs_q.put(jobs[0])
+    obj._transcription_jobs_q.put(None)
+    obj._run_transcription_worker()
+    accepted = obj._transcription_results_q.get_nowait()
+    assert re.findall(r"\w+", accepted.text.casefold()) == [
+        "how", "is", "the", "weather", "tomorrow", "jarvis",
+    ]
+    assert accepted.language == "en"
+    obj._process_transcript = lambda *args, **kwargs: None
+    obj._handle_transcription_result(accepted)
+    obj._handle_transcription_result(replace(accepted, text="", language="ko"))
+    observed = []
+    def reply(*args, language, **kwargs):
+        observed.append((args[3], language))
+        return None
+    monkeypatch.setattr(engine, "run_reply_engine", reply)
+    obj._dispatch_query(accepted.text, generation=obj._capture_generation)
+    assert observed == [(accepted.text, accepted.language)]

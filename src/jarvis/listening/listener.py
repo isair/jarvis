@@ -453,9 +453,8 @@ class VoiceListener(threading.Thread):
         self._capture_pause_reset_pending = False
         self._capture_generation = 0
         self._first_utterance = True  # Suppress turn separator before the very first transcription
-        # The listener loop applies each worker result's detected language
-        # before processing its transcript, so dispatched queries keep their
-        # own locale even while later utterances are being transcribed.
+        # Only non-empty, non-repetitive recognised speech supplies a reply
+        # language. Rejected results cannot replace that locale.
         self._last_detected_language: Optional[str] = None
 
         # Audio processing components
@@ -1508,7 +1507,6 @@ class VoiceListener(threading.Thread):
             self._emit_low_confidence(event)
         if not self._transcription_is_current(result.capture_generation):
             return
-        self._last_detected_language = result.language
         text = result.text
         if not text or not text.strip():
             self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
@@ -1523,6 +1521,8 @@ class VoiceListener(threading.Thread):
             self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
             return
 
+        self._last_detected_language = result.language
+        debug_log(f"recognised speech language: {result.language}", "voice")
         self._transcript_buffer.add(
             text=text,
             start_time=result.start_time,
