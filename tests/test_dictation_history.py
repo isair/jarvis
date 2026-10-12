@@ -192,19 +192,19 @@ class TestDictationHistoryWindow:
 
     def test_window_can_be_created(self):
         """Window should instantiate without errors."""
-        from src.desktop_app.dictation_history import DictationHistoryWindow
+        from desktop_app.dictation_history import DictationHistoryWindow
         # Just check it doesn't crash (no QApplication needed for class inspection)
         assert DictationHistoryWindow is not None
 
     def test_window_has_signals(self):
         """Window should expose a signals object with new_entry."""
-        from src.desktop_app.dictation_history import DictationHistorySignals
+        from desktop_app.dictation_history import DictationHistorySignals
         signals = DictationHistorySignals()
         assert hasattr(signals, "new_entry")
 
     def test_set_history_stores_reference(self, tmp_path):
         """set_history should accept a DictationHistory instance."""
-        from src.desktop_app.dictation_history import DictationHistoryWindow
+        from desktop_app.dictation_history import DictationHistoryWindow
         from jarvis.dictation.history import DictationHistory
         h = DictationHistory(path=tmp_path / "h.json")
         # Instantiate without QApplication — just test the attribute
@@ -220,7 +220,7 @@ class TestDictationHistoryWindow:
         on each _reload() — what matters is that the cards live inside
         whatever container is now in the scroll area, not the old one.
         """
-        from src.desktop_app.dictation_history import DictationHistoryWindow
+        from desktop_app.dictation_history import DictationHistoryWindow
         from jarvis.dictation.history import DictationHistory
 
         history = DictationHistory(path=tmp_path / "h.json")
@@ -246,7 +246,7 @@ class TestDictationHistoryWindow:
         """A card inserted via the new-entry signal must be parented to the
         container, not promoted to a top-level widget.
         """
-        from src.desktop_app.dictation_history import (
+        from desktop_app.dictation_history import (
             DictationHistoryWindow,
             _DictationCard,
         )
@@ -288,7 +288,7 @@ class TestDictationHistoryWindow:
         paste).  When the user later opens the window, showEvent pulls the
         fresh entries from history and rebuilds from scratch.
         """
-        from src.desktop_app.dictation_history import DictationHistoryWindow
+        from desktop_app.dictation_history import DictationHistoryWindow
         from jarvis.dictation.history import DictationHistory
 
         history = DictationHistory(path=tmp_path / "h.json")
@@ -335,7 +335,7 @@ class TestDictationHistoryWindow:
         The tray menu opens the window every time, so show/hide cycles over a
         session need to keep the list layout healthy.
         """
-        from src.desktop_app.dictation_history import DictationHistoryWindow
+        from desktop_app.dictation_history import DictationHistoryWindow
         from jarvis.dictation.history import DictationHistory
 
         history = DictationHistory(path=tmp_path / "h.json")
@@ -365,7 +365,7 @@ class TestDictationHistoryWindow:
         via QTimer.singleShot(0, ...) so it lands on the next event-loop
         tick, after the initial show paint has completed.
         """
-        from src.desktop_app.dictation_history import (
+        from desktop_app.dictation_history import (
             DictationHistoryWindow,
             _DictationCard,
         )
@@ -407,7 +407,7 @@ class TestDictationHistoryWindow:
         atomic-swap rebuild replaces the container wholesale, so the new
         container's direct children are exactly the layout contents.
         """
-        from src.desktop_app.dictation_history import DictationHistoryWindow
+        from desktop_app.dictation_history import DictationHistoryWindow
         from jarvis.dictation.history import DictationHistory
         from PyQt6.QtCore import Qt
         from PyQt6.QtWidgets import QWidget
@@ -451,7 +451,7 @@ class TestDictationHistoryWindow:
         """
         import locale
         import inspect
-        from src.desktop_app.dictation_history import _DictationCard
+        from desktop_app.dictation_history import _DictationCard
 
         # Source check: the card source must not pass emoji literals into
         # strftime. Catches future regressions even on locales where the
@@ -486,7 +486,7 @@ class TestDictationHistoryWindow:
         in-memory cache and the user would see no new dictations from the
         current session.
         """
-        from src.desktop_app.dictation_history import DictationHistoryWindow
+        from desktop_app.dictation_history import DictationHistoryWindow
         from jarvis.dictation.history import DictationHistory
 
         path = tmp_path / "h.json"
@@ -530,13 +530,13 @@ class TestMenuIntegration:
     def test_create_menu_has_dictation_action(self):
         """The create_menu method should define a dictation history action."""
         import inspect
-        from src.desktop_app.app import JarvisSystemTray
+        from desktop_app.app import JarvisSystemTray
         source = inspect.getsource(JarvisSystemTray.create_menu)
         assert "Dictation History" in source
         assert "dictation_history_action" in source
 
     def test_show_dictation_history_method_exists(self):
-        from src.desktop_app.app import JarvisSystemTray
+        from desktop_app.app import JarvisSystemTray
         assert hasattr(JarvisSystemTray, "show_dictation_history")
         assert callable(getattr(JarvisSystemTray, "show_dictation_history"))
 
