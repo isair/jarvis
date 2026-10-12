@@ -261,7 +261,7 @@ class TestGraphEnrichmentGating:
                 return []
 
         with patch("jarvis.reply.engine.extract_search_params_for_memory", return_value=extract_return), \
-             patch("jarvis.memory.graph.GraphMemoryStore", _FixtureStore):
+             patch("jarvis.memory.graph.GraphMemoryStore", _FakeStore):
             run_reply_engine(db=None, cfg=cfg, tts=None, text="q", dialogue_memory=_DM())
 
         return store_calls
@@ -313,7 +313,7 @@ class TestGraphContextReachesSystemMessage:
         class _FixtureStore(GraphMemoryStore):
             def __init__(self, *args, **kwargs):
                 super().__init__(":memory:")
-                self.create_node("Food Preferences", "Preferred food", parent_id="world",
+                self.create_node("Food Preferences", "Cuisine the user enjoys", parent_id="world",
                                  data="User loves sushi and spicy ramen.")
 
         class _DM:
