@@ -1,6 +1,7 @@
 """Large local text remains responsive while structural secrets are masked."""
 import subprocess
 import sys
+from pathlib import Path
 import pytest
 
 from jarvis.utils.redact import redact, scrub_secrets
@@ -13,14 +14,16 @@ def test_large_text_completes_with_correct_redaction(ending):
     # A child bounds the pathological control so a failure cannot stall pytest.
     script = """
 import sys
+sys.path.insert(0, sys.argv[1])
 from jarvis.utils.redact import redact, scrub_secrets
-text = 'g' * 131072 + sys.argv[1]
-expected = '[REDACTED_EMAIL]' if sys.argv[1] == '@example.test' else text
+text = 'g' * 131072 + sys.argv[2]
+expected = '[REDACTED_EMAIL]' if sys.argv[2] == '@example.test' else text
 assert scrub_secrets(text) == expected
 assert redact(text, max_len=len(text)+100) == expected
 print('completed')
 """
-    result = subprocess.run([sys.executable, '-c', script, ending],
+    source_root = Path(__file__).resolve().parents[1] / 'src'
+    result = subprocess.run([sys.executable, '-c', script, str(source_root), ending],
                             capture_output=True, text=True, timeout=5)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == 'completed'
