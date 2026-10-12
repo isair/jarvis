@@ -28,7 +28,7 @@ def test_concrete_value_matches_declared_type(monkeypatch, field_type, literal, 
             'properties': {'value': {'type': field_type} if field_type is not None else {}}, 'required': ['value']},
     }}]
     monkeypatch.setattr(planner, 'call_llm_direct', lambda **kwargs: pytest.fail('🗺️ Concrete primitive values need no model'))
-    resolved = planner.resolve_next_tool_call(voice_config(), f'localValue value={literal}', [], schema)
+    resolved = planner.resolve_next_tool_call(voice_config(), f'localValue value={literal}', [], schema, original_query=f'localValue value={literal}')
     assert resolved is not None and resolved[1] == {'value': expected}
     assert type(resolved[1]['value']) is type(expected)
 
@@ -44,7 +44,7 @@ def test_planned_recursion_respects_the_directory_boundary(monkeypatch, tmp_path
     monkeypatch.setattr('os.path.expanduser', lambda path: str(tmp_path) if path == '~' else original_expand(path))
     monkeypatch.setattr(planner, 'call_llm_direct', lambda **kwargs: pytest.fail('📂 Fully specified listing needs no model'))
     schema = [{'type': 'function', 'function': {'name': tool.name, 'parameters': tool.inputSchema}}]
-    resolved = planner.resolve_next_tool_call(voice_config(), f"localFiles operation='list' path='{tmp_path}' recursive={str(recursive).lower()}", [], schema)
+    resolved = planner.resolve_next_tool_call(voice_config(), f"localFiles operation='list' path='{tmp_path}' recursive={str(recursive).lower()}", [], schema, original_query=f"localFiles operation='list' path='{tmp_path}' recursive={str(recursive).lower()}")
     assert resolved is not None
     context = ToolContext(None, voice_config(), '', '', '', 0, lambda message: None)
     result = tool.run(resolved[1], context)
@@ -67,7 +67,7 @@ def test_unresolved_typed_values_return_to_the_model(monkeypatch, field_type, li
             'properties': {'value': {'type': field_type}}, 'required': ['value']},
     }}]
     monkeypatch.setattr(planner, 'call_llm_direct', lambda **kwargs: 'null')
-    assert planner.resolve_next_tool_call(voice_config(), f'localValue value={literal}', [], schema) is None
+    assert planner.resolve_next_tool_call(voice_config(), f'localValue value={literal}', [], schema, original_query=f'localValue value={literal}') is None
 
 
 def test_unresolved_typed_value_can_be_completed_by_the_model(monkeypatch):
@@ -76,4 +76,4 @@ def test_unresolved_typed_value_can_be_completed_by_the_model(monkeypatch):
             'properties': {'value': {'type': 'boolean'}}, 'required': ['value']},
     }}]
     monkeypatch.setattr(planner, 'call_llm_direct', lambda **kwargs: '{"name":"localValue","arguments":{"value":false}}')
-    assert planner.resolve_next_tool_call(voice_config(), 'localValue value=no', [], schema) == ('localValue', {'value': False})
+    assert planner.resolve_next_tool_call(voice_config(), 'localValue value=no', [], schema, original_query='localValue value=no') == ('localValue', {'value': False})

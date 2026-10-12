@@ -35,5 +35,5 @@ def test_planner_wire_budget_leaves_room_for_structured_answer(monkeypatch,provi
         schema=[{'type':'function','function':{'name':'webSearch','description':'Search the web',
                  'parameters':{'type':'object','properties':{'query':{'type':'string'}}}}}]
         result=resolve_next_tool_call(cfg,"webSearch query='<director from prior result> filmography'",
-                  [('webSearch','Possessor director','Director: Brandon Cronenberg')],schema)
+                  [('webSearch','Possessor director','Director: Brandon Cronenberg')],schema, original_query="webSearch query='<director from prior result> filmography'")
         assert result==('webSearch',{'query':'Brandon Cronenberg filmography'}), 'Generation ended before tool arguments'

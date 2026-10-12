@@ -21,7 +21,7 @@ def resolve(monkeypatch, path, key, value, metadata):
         raw = json.dumps({'name': 'localLookup', 'arguments': {key: value}})
         monkeypatch.setattr(planner, 'call_llm_direct', lambda **kwargs: raw)
         step = f'localLookup {key}=<discovered value>'
-    return planner.resolve_next_tool_call(voice_config(), step, [], schema)
+    return planner.resolve_next_tool_call(voice_config(), step, [], schema, original_query=step)
 
 
 @pytest.mark.parametrize('path', ['concrete', 'model'])

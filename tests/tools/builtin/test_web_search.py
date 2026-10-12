@@ -1182,7 +1182,13 @@ class TestLanguagePlumbingEndToEnd:
 
         listener = VoiceListener.__new__(VoiceListener)
         listener.db = object()
-        listener.cfg = object()
+        from types import SimpleNamespace
+        from src.jarvis.listening.transcript_buffer import TranscriptBuffer
+        from src.jarvis.listening.echo_detection import EchoDetector
+        listener.cfg = SimpleNamespace(wake_word="jarvis", wake_aliases=[])
+        listener._buffer_duration = 120.0
+        listener._transcript_buffer = TranscriptBuffer()
+        listener.echo_detector = EchoDetector()
         listener.dialogue_memory = object()
         listener.tts = None
         listener._capture_generation = 0

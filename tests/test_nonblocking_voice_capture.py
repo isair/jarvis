@@ -137,7 +137,7 @@ def test_invalidated_intent_result_does_not_start_query(synthetic_listener, inva
         else:
             obj.set_capture_paused('dictation', True)
             obj.set_capture_paused('dictation', False)
-        return IntentJudgment(directed=True, query='weather', stop=False,
+        return IntentJudgment(directed=True,  stop=False,
                               confidence='high', reasoning='Addressed to Jarvis')
     obj._intent_judge = SimpleNamespace(available=True, judge=judge)
     obj._process_transcript('Jarvis weather', captured_during_tts=False,
@@ -376,7 +376,7 @@ def test_transcript_keeps_capture_generation_across_buffer_storage(synthetic_lis
         obj.set_capture_paused('dictation', False)
     obj._transcript_buffer.add = add
     obj._intent_judge = SimpleNamespace(available=True, judge=lambda **kw:
-        IntentJudgment(directed=True, query='weather', stop=False,
+        IntentJudgment(directed=True, stop=False,
                       confidence='high', reasoning='Addressed to Jarvis'))
     result = _TranscriptionResult('Jarvis weather', 'en', (), 1., 2., .1,
                                    obj._capture_generation, False, 0.)
@@ -395,7 +395,7 @@ def test_confident_mention_rejection_does_not_start_query(synthetic_listener, te
     from jarvis.listening.intent_judge import IntentJudgment
     obj = synthetic_listener
     obj._intent_judge = SimpleNamespace(available=True, judge=lambda **kwargs:
-        IntentJudgment(directed=False, query='', stop=False, confidence='high',
+        IntentJudgment(directed=False,  stop=False, confidence='high',
                        reasoning='Assistant mentioned while addressing another person'))
     obj._process_transcript(text, captured_during_tts=False,
                             captured_tts_start_time=0., generation=obj._capture_generation)
@@ -407,7 +407,7 @@ def test_direct_address_and_inconclusive_fallback_remain_usable(synthetic_listen
     from jarvis.listening.intent_judge import IntentJudgment
     obj = synthetic_listener
     obj._intent_judge = SimpleNamespace(available=True, judge=lambda **kwargs:
-        IntentJudgment(directed=directed, query='I am tired' if directed else '',
+        IntentJudgment(directed=directed,
                        stop=False, confidence=confidence, reasoning='Address or uncertainty'))
     obj._process_transcript('Jarvis I am tired', captured_during_tts=False,
                             captured_tts_start_time=0., generation=obj._capture_generation)
@@ -424,7 +424,7 @@ def test_whole_alias_gate_keeps_ambient_words_out_of_reply_collection(synthetic_
     from jarvis.listening.intent_judge import IntentJudgment
     obj = synthetic_listener
     obj._intent_judge = SimpleNamespace(available=True, judge=lambda **kwargs:
-        IntentJudgment(directed=True, query='what time is it', stop=False,
+        IntentJudgment(directed=True,  stop=False,
                        confidence='high', reasoning='Synthetic directed decision'))
     obj._process_transcript(text, captured_during_tts=False,
                             captured_tts_start_time=0., generation=obj._capture_generation)

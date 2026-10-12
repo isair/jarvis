@@ -19,14 +19,15 @@ Design principles enforced by the engine:
 ### Entry and Inputs
 - Entry point: the reply engine receives a user query from the ingestion layer.
 - Inputs:
-  - text (string): a redaction-eligible user query.
+  - text (string): the original redaction-eligible user request.
+  - speech_context (optional): an immutable snapshot of retained ambient speech and TTS metadata. Redacted and fenced as reference data for routing, planning, step resolution, every reply turn, relevance digests and mid-loop tool discovery. Only relevant address metadata and earlier speech are rendered; the current segment is not repeated as a prior reference. It is scoped to this request and is not stored as dialogue or diary content. The current request takes priority; earlier instructions and echo cannot trigger actions.
   - persistent store: a database-like service, optionally with vector search.
   - configuration: model endpoints, timeouts, feature flags, and tool settings.
   - speech synthesizer (optional): for spoken output and hot-window activation.
 
 ### Steps and Branches (Agentic Messages Loop)
 1. Redact
-   - Redact input to remove sensitive data.
+   - Redact the current request and all text in the speech-context snapshot. Escape angle brackets in JSON reference data so transcript text cannot close its fence.
 
 2. Recent Dialogue Context
    - Include short-term dialogue memory (last 5 minutes) as prior messages.
@@ -34,8 +35,8 @@ Design principles enforced by the engine:
    - A **recall gate** (`src/jarvis/memory/recall_gate.py`, deterministic, no LLM) skips diary / graph / memory-digest enrichment when the hot window already covers the topic (≥50% content-word overlap with a fresh tool-result row). Language-agnostic via `\w{3,}` with `re.UNICODE`. Fail-open on any error. The gate is bypassed when the planner explicitly emitted a `searchMemory` step, planner intent always wins over coverage heuristics. See `src/jarvis/memory/recall_gate.spec.md`.
    - **Conversation-scoped scratch cache** (`DialogueMemory.hot_cache_get` / `hot_cache_put`): a small primitive used by the engine to memoise three idempotent per-turn computations for the lifetime of the active conversation:
      - **Warm profile** (`DialogueMemory.WARM_PROFILE_CACHE_KEY`, query-agnostic): skips the SQLite traversal of the User + Directives branches on every follow-up turn. Each cached block carries the database path and persisted warm-profile revision. Every turn checks that signature, detecting committed User/Directives changes from separate connections or processes, including moves between branches. In-process mutation listeners also invalidate it promptly. World-only writes and access-only touches preserve reuse. Profile checks and traversal share a read-only transaction, avoiding bootstrap writes or contention with WAL writers. Temporary graph connections are closed after the check/load, and an unavailable rebuild does not inject stale cached data.
-     - **Memory enrichment extractor**: reuses keywords, questions and time bounds only when the redacted query (including any planner topic hint) and live context hint match.
-     - **Tool router**: reuses selections only when the redacted query, strategy, live context hint and builtin/MCP definitions match. Descriptions and input schemas participate, so changed capabilities invalidate selections even when names stay the same. Full-catalogue results (detected by set equality) are not cached as narrowed selections; identical inputs can retry routing.
+     - **Memory enrichment extractor**: reuses keywords, questions and time bounds only when the redacted query (including any planner topic hint) and live context hint plus redacted speech snapshot match.
+     - **Tool router**: reuses selections only when the redacted query, strategy, live context hint, redacted speech snapshot and builtin/MCP definitions match. Descriptions and input schemas participate, so changed capabilities invalidate selections even when names stay the same. Full-catalogue results (detected by set equality) are not cached as narrowed selections; identical inputs can retry routing.
      - Router and enrichment keys use namespaced SHA-256 fingerprints of canonical JSON data inputs. Keys remain bounded; dictionary insertion order does not alter identity. Changed dialogue and live facts require fresh inference. Warm-profile caching remains query-agnostic.
      - Storage: the bounded LRU cache stores values directly. Reads and replacement writes promote keys, including entries with empty, false or null values.
      - Lifetime: entries persist until (a) the `stop` signal clears the whole cache, (b) the engine detects a new conversation at turn entry (`has_recent_messages()` was False) and clears it before running, or (c) targeted invalidation (warm profile only) on graph mutations. Entries are *not* bounded by `RECENT_WINDOW_SEC` age, so a long active session keeps them warm.

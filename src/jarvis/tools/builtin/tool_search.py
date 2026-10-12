@@ -82,6 +82,7 @@ class ToolSearchTool(Tool):
         try:
             selected = select_tools(
                 query=query,
+                transcript_context=context.transcript_context,
                 builtin_tools=BUILTIN_TOOLS,
                 mcp_tools=mcp_tools,
                 strategy=strategy,

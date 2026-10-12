@@ -232,7 +232,7 @@ class EchoDetector:
             return heard_text
 
         tts_words = self._last_tts_text.lower().strip().split()
-        heard_words = heard_text.lower().strip().split()
+        heard_words = heard_text.strip().split()
 
         if not tts_words or not heard_words:
             return heard_text
@@ -425,7 +425,7 @@ class EchoDetector:
 
         heard_words = heard_normalized.split()
         tts_words = tts_normalized.split()
-        original_heard_words = heard_text.lower().strip().split()
+        original_heard_words = heard_text.strip().split()
 
         if not heard_words or not tts_words:
             return heard_text
@@ -463,8 +463,8 @@ class EchoDetector:
             if original_word_count == normalized_word_count:
                 cleaned_text = " ".join(original_heard_words[max_overlap:])
             else:
-                # Word count differs due to normalization - use normalized words
-                cleaned_text = " ".join(heard_words[max_overlap:])
+                # An uncertain source boundary must not manufacture replacement speech.
+                return heard_text
             overlap_text = " ".join(heard_words[:max_overlap])
             debug_log(f"cleaned leading echo. Overlap: '{overlap_text}'. Cleaned: '{cleaned_text}'", "echo")
             return cleaned_text

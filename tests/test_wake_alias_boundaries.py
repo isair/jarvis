@@ -52,10 +52,15 @@ def test_empty_alias_cannot_wake_ambient_speech():
     ('jarvis explain jarvisian philosophy', 'explain jarvisian philosophy'),
     ('jarvis tell me about chavisville', 'tell me about chavisville'),
 ])
-def test_query_extraction_keeps_names_inside_other_words(text, expected):
-    from jarvis.listening.wake_detection import extract_query_after_wake
-    cfg = get_default_config()
-    assert extract_query_after_wake(text, cfg['wake_word'], cfg['wake_aliases']) == expected
+def test_request_preservation_keeps_names_inside_other_words(text, expected):
+    from test_hot_window_input import _create_listener, _process_transcript
+    listener, _ = _create_listener()
+    try:
+        _process_transcript(listener, text)
+        assert listener.state_manager.get_pending_query() == text
+        assert expected in listener.state_manager.get_pending_query()
+    finally:
+        listener.stop()
 
 
 def test_explicit_fuzzy_threshold_is_respected():

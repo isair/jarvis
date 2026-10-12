@@ -94,5 +94,5 @@ def test_planner_uses_recorded_identity_for_other_resources(kind, identity, labe
     steps = tool_steps_of(plan)
     assert steps
     tools = [{'type':'function','function':{'name':tool,'description':'Delete a recorded resource','parameters':schema}}]
-    call = resolve_next_tool_call(cfg, steps[0], [], tools)
+    call = resolve_next_tool_call(cfg, steps[0], [], tools, original_query=steps[0])
     assert call == (tool, {'id':identity}), f'🧾 Identity not retained: {plan}, {call}'
