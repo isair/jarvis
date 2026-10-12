@@ -6,6 +6,10 @@ WisprFlow-like dictation: hold a hotkey to record speech, release to type the
 transcription into the focused application. Completely independent from the
 assistant pipeline (no wake words, intent judge, profiles, or TTS).
 
+Dictation results persist in `~/.local/share/jarvis/dictation_history.json`.
+The store and desktop file watcher resolve this default through the lightweight
+`paths.py` boundary. An explicit history path overrides the default.
+
 ## Configuration
 
 | Key                            | Type   | Default (per-platform)                         | Description                                     |

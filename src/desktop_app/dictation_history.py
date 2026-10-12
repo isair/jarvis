@@ -355,8 +355,8 @@ class DictationHistoryWindow(QMainWindow):
     def _get_history_file_mtime(self) -> float:
         """Return the mtime of the history JSON file, or 0 if missing."""
         try:
-            from jarvis.dictation.history import _default_history_path
-            p = _default_history_path()
+            from jarvis.dictation import paths
+            p = paths.default_history_path()
             return p.stat().st_mtime if p.exists() else 0.0
         except Exception:
             return 0.0

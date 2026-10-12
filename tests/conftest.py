@@ -125,6 +125,14 @@ def mock_config():
     return MockConfig()
 
 
+@pytest.fixture(autouse=True)
+def _isolate_dictation_history_path(tmp_path, monkeypatch):
+    """Default-history consumers share this test's private storage boundary."""
+    from jarvis.dictation import paths
+
+    monkeypatch.setattr(paths, "default_history_path", lambda: tmp_path / "default-history.json")
+
+
 @pytest.fixture(scope="session")
 def runtime_temp_root(tmp_path_factory):
     return tmp_path_factory.mktemp("jarvis_runtime_sandbox")

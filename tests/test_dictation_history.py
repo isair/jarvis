@@ -10,12 +10,6 @@ from unittest.mock import MagicMock
 import pytest
 
 
-@pytest.fixture(autouse=True)
-def temporary_default_history(tmp_path, monkeypatch):
-    from jarvis.dictation import history
-    monkeypatch.setattr(history, "_default_history_path", lambda: tmp_path / "default-history.json")
-
-
 # ---------------------------------------------------------------------------
 # DictationHistory storage tests
 # ---------------------------------------------------------------------------
