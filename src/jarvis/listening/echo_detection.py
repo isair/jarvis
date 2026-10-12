@@ -11,9 +11,10 @@ from rapidfuzz import fuzz
 
 
 def _normalise_echo_token(token: str) -> str:
-    """Retain Unicode letters and numbers when comparing echo words."""
+    """Retain Unicode letters, marks and numbers when comparing echo words."""
     normalised = unicodedata.normalize("NFC", token).casefold()
-    return "".join(char for char in normalised if char.isalnum() or char == "'")
+    return "".join(char for char in normalised
+                   if char.isalnum() or unicodedata.category(char).startswith('M') or char == "'")
 
 
 class EchoDetector:

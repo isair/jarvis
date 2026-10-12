@@ -66,7 +66,7 @@ CLASS_DESCRIPTIONS = {
     "TestIntentJudgeFallback": "Intent judge fallback behaviour when unavailable",
     "TestIntentJudgeMultiSegment": "Intent judge with multi-segment buffers and multi-person conversations",
     "TestWakeWordValidationSafetyNet": "Integration: listener rejects judge hallucinations when no wake word present",
-    "TestEchoReasoningDistrust": "Integration: listener overrides judge echo claims when EchoDetector cleared",
+    "TestFollowUpAfterTTS": "Integration: genuine directed follow-ups are admitted after TTS",
     "TestHotWindowHeuristicAccuracy": "Integration: could_be_hot_window heuristic passes correct mode to judge",
     "TestProcessedSegmentFilteringIntegration": "Integration: processed segments excluded from judge prompt",
     "TestHotWindowUsesRawText": "Integration: hot-window and wake-word requests preserve recognised user speech",

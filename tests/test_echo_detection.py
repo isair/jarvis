@@ -12,6 +12,16 @@ pytestmark = pytest.mark.unit
 from jarvis.listening.echo_detection import EchoDetector
 
 
+@pytest.mark.parametrize('tts,heard', [
+    ('कल शाम', 'कला शाम विषय अलग है'),
+    ('ฝน วันนี้', 'ฝัน วันนี้ เป็น เรื่อง อื่น'),
+])
+def test_distinct_marked_words_do_not_strip_user_speech(tts, heard):
+    detector = EchoDetector()
+    detector.track_tts_start(tts)
+    assert detector.cleanup_leading_echo(heard) == heard
+
+
 class TestTextNormalization:
     """Tests for text normalization handling TTS/Whisper differences."""
 
