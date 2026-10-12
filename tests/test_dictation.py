@@ -721,6 +721,7 @@ class TestTranscribeAndPaste:
         assert end_called.is_set()
 
     @patch("jarvis.dictation.dictation_engine._clipboard_paste")
+    @patch("jarvis.dictation.dictation_engine.parse_hotkey", new=lambda _: (frozenset(), None))
     def test_successful_transcription_pastes(self, mock_paste):
         import numpy as np
         mock_model = MagicMock()

@@ -20,6 +20,8 @@ from filelock import FileLock
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from . import paths
+
 
 def _validate_entries(entries: Any) -> None:
     """Require records their existing consumers can read without coercion."""
@@ -41,13 +43,6 @@ def _validate_entries(entries: Any) -> None:
         datetime.fromtimestamp(entry.get("timestamp", 0))
 
 
-def _default_history_path() -> Path:
-    """Return the default path for dictation history storage."""
-    base = Path.home() / ".local" / "share" / "jarvis"
-    base.mkdir(parents=True, exist_ok=True)
-    return base / "dictation_history.json"
-
-
 class HistoryUpdateError(RuntimeError):
     """A requested history mutation could not be published."""
 
@@ -63,7 +58,7 @@ class DictationHistory:
     """
 
     def __init__(self, path: Optional[Path] = None, max_entries: int = 500) -> None:
-        self._path = path or _default_history_path()
+        self._path = path or paths.default_history_path()
         self._max_entries = max_entries
         self._lock = threading.Lock()
         self._file_lock = FileLock(str(self._path) + ".lock", timeout=2, mode=0o600,

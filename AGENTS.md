@@ -109,6 +109,8 @@ Run your changes and test them manually, iterate until everything is good.
 
 Always use TDD: write failing tests first, then implement the fix. Tests should verify **behaviours**, not implementation details. Test what the system does (observable outcomes), not how it does it (internal state, mock call counts, etc.).
 
+Tests must isolate user stores across the whole suite, including default dictation history. Fake transcriptions belong in temporary test storage and must never reach a user's saved history.
+
 Ensure all your changes are covered by all appropriate form of automated tests - unit, integration, visual regression, evals, etc.
 
 Tests should verify mechanisms, not current values. Assert against config-driven or computed references rather than hardcoding specifics that change between migrations.
