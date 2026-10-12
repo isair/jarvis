@@ -73,6 +73,8 @@ The project uses a micromamba environment at `.mamba_env/`. Always activate it b
 eval "$(micromamba.exe shell hook --shell bash)" && micromamba activate "C:/Users/baris/projects/jarvis/.mamba_env"
 ```
 
+Frontend rendering tests require Node.js 22 or later to execute the viewer JavaScript. Node.js is a development test dependency; Jarvis does not require it at runtime.
+
 ## README Maintenance
 
 Keep README.md up-to-date when making changes that affect user-facing functionality. Update the README when:

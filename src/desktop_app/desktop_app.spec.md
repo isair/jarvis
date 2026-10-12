@@ -417,6 +417,7 @@ A Flask-based web interface for browsing conversation history:
 - **Development mode**: Flask runs as subprocess
 - Opens in embedded QWebEngineView or system browser (macOS fallback)
 - Meal descriptions display as literal text, including markup-like content. Saved descriptions cannot introduce HTML elements, resource requests or event handlers.
+- Maintenance progress rows display streamed dates, node names and error details as literal text. Each row is appended without reparsing existing rows as HTML, and the log follows its latest entry.
 
 ## Error Handling
 
