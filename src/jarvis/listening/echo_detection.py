@@ -102,19 +102,6 @@ class EchoDetector:
 
         return normalized
 
-    def query_is_prior_echo(self, query: str, current_text: str, tts_text: str) -> bool:
-        """Identify an earlier spoken phrase absent from the current utterance."""
-        def words(text: str) -> list[str]:
-            return re.findall(r"\w+", self._normalize_for_comparison(text), re.UNICODE)
-
-        query_words = words(query)
-        if len(query_words) < self.min_salvage_words:
-            return False
-        phrase = " " + " ".join(query_words) + " "
-        spoken = " " + " ".join(words(tts_text)) + " "
-        current = " " + " ".join(words(current_text)) + " "
-        return phrase in spoken and phrase not in current
-
     def _check_text_similarity(self, heard_text: str, tts_text: str, threshold: int = 85) -> bool:
         """
         Check if heard text is similar to TTS text using fuzzy matching.
@@ -232,7 +219,7 @@ class EchoDetector:
             return heard_text
 
         tts_words = self._last_tts_text.lower().strip().split()
-        heard_words = heard_text.lower().strip().split()
+        heard_words = heard_text.strip().split()
 
         if not tts_words or not heard_words:
             return heard_text
@@ -425,7 +412,7 @@ class EchoDetector:
 
         heard_words = heard_normalized.split()
         tts_words = tts_normalized.split()
-        original_heard_words = heard_text.lower().strip().split()
+        original_heard_words = heard_text.strip().split()
 
         if not heard_words or not tts_words:
             return heard_text
@@ -463,8 +450,8 @@ class EchoDetector:
             if original_word_count == normalized_word_count:
                 cleaned_text = " ".join(original_heard_words[max_overlap:])
             else:
-                # Word count differs due to normalization - use normalized words
-                cleaned_text = " ".join(heard_words[max_overlap:])
+                # An uncertain source boundary must not manufacture replacement speech.
+                return heard_text
             overlap_text = " ".join(heard_words[:max_overlap])
             debug_log(f"cleaned leading echo. Overlap: '{overlap_text}'. Cleaned: '{cleaned_text}'", "echo")
             return cleaned_text

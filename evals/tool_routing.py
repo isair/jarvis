@@ -21,7 +21,7 @@ def routing_config():
     )
 
 
-def route_tools(cfg, query, *, timeout_sec=15.0, context_hint=None, mcp_tools=None):
+def route_tools(cfg, query, *, timeout_sec=15.0, context_hint=None, mcp_tools=None, transcript_context=""):
     """Return selected tools and a genuine router answer, rejecting fallback."""
     backend = get_llm_backend(cfg)
     model_reply = None
@@ -36,7 +36,7 @@ def route_tools(cfg, query, *, timeout_sec=15.0, context_hint=None, mcp_tools=No
             query=query, builtin_tools=BUILTIN_TOOLS, mcp_tools=mcp_tools or {},
             strategy=ToolSelectionStrategy.LLM, llm_backend=backend,
             llm_model=cfg.llm_chat_model or cfg.ollama_chat_model,
-            llm_timeout_sec=timeout_sec, context_hint=context_hint,
+            llm_timeout_sec=timeout_sec, context_hint=context_hint, transcript_context=transcript_context,
         )
     assert isinstance(model_reply, str) and model_reply.strip(), (
         "The router returned no model response; keyword fallback is not LLM accuracy"

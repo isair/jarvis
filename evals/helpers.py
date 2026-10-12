@@ -321,6 +321,29 @@ def voice_config() -> MockConfig:
     return cfg
 
 
+def isolated_voice_settings():
+    """Selected evaluation transport with production budgets and synthetic storage."""
+    import tempfile
+    from pathlib import Path
+    from unittest.mock import patch
+    from dataclasses import replace
+    from jarvis.config import load_settings
+    selected = voice_config()
+    with tempfile.TemporaryDirectory(prefix="jarvis-speech-eval-") as directory:
+        path = Path(directory) / "config.json"
+        path.write_text(json.dumps({
+            "llm_provider": selected.llm_provider, "llm_base_url": selected.llm_base_url,
+            "llm_chat_model": selected.llm_chat_model, "fast_model": selected.fast_model,
+            "ollama_base_url": selected.ollama_base_url, "db_path": ":memory:",
+            "memory_enrichment_source": "diary", "location_enabled": False,
+            "tts_enabled": False, "mcps": {},
+        }))
+        with patch.dict(os.environ, {"JARVIS_CONFIG_PATH": str(path)}):
+            cfg = load_settings()
+    return replace(cfg, llm_chat_model=selected.llm_chat_model,
+                   ollama_chat_model=selected.llm_chat_model, fast_model=selected.fast_model)
+
+
 @dataclass
 class EvalResult:
     """Result of a single eval test case."""

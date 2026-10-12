@@ -196,7 +196,8 @@ def test_voice_evals_reach_selected_backend(monkeypatch, provider, url, expected
             result = obj._intent_judge.judge([intent.create_transcript_segment('Jarvis weather')])
         finally:
             obj.state_manager.stop()
-    assert result is not None and result.query == 'weather'
+    assert result is not None and result.directed and not result.stop
+    assert not hasattr(result, 'query')
     import os
     assert calls == [(expected, os.environ['EVAL_JUDGE_MODEL'])]
 

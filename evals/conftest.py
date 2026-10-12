@@ -69,7 +69,7 @@ CLASS_DESCRIPTIONS = {
     "TestEchoReasoningDistrust": "Integration: listener overrides judge echo claims when EchoDetector cleared",
     "TestHotWindowHeuristicAccuracy": "Integration: could_be_hot_window heuristic passes correct mode to judge",
     "TestProcessedSegmentFilteringIntegration": "Integration: processed segments excluded from judge prompt",
-    "TestHotWindowUsesRawText": "Integration: hot window preserves full user text, wake word uses judge extraction",
+    "TestHotWindowUsesRawText": "Integration: hot-window and wake-word requests preserve recognised user speech",
     "TestMultiSegmentBufferIntegration": "Integration: multi-segment buffer with TTS echoes handled correctly",
     "TestStopCommandBypassesJudge": "Integration: stop commands during TTS bypass judge entirely",
     "TestKnowledgeExtractionQuality": "Tests that novel knowledge is correctly extracted from summaries",

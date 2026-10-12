@@ -271,7 +271,7 @@ class TestResolveNextToolCall:
         with patch.object(planner_mod, "call_llm_direct", return_value=raw):
             result = resolve_next_tool_call(
                 cfg, "webSearch query='weather in Paris'", [], self._schema()
-            )
+            , original_query="webSearch query='weather in Paris'")
         assert result == ("webSearch", {"query": "weather in Paris"})
 
     def test_rejects_unknown_tool(self):
@@ -280,14 +280,14 @@ class TestResolveNextToolCall:
         with patch.object(planner_mod, "call_llm_direct", return_value=raw):
             assert resolve_next_tool_call(
                 cfg, "do the thing", [], self._schema()
-            ) is None
+            , original_query="do the thing") is None
 
     def test_null_means_synthesis(self):
         cfg = _cfg()
         with patch.object(planner_mod, "call_llm_direct", return_value="null"):
             assert resolve_next_tool_call(
                 cfg, "Reply to user", [], self._schema()
-            ) is None
+            , original_query="Reply to user") is None
 
     def test_peels_markdown_fences(self):
         cfg = _cfg()
@@ -295,7 +295,7 @@ class TestResolveNextToolCall:
         with patch.object(planner_mod, "call_llm_direct", return_value=raw):
             result = resolve_next_tool_call(
                 cfg, "search for x", [], self._schema()
-            )
+            , original_query="search for x")
         assert result == ("webSearch", {"query": "x"})
 
     def test_invalid_json_returns_none(self):
@@ -303,11 +303,11 @@ class TestResolveNextToolCall:
         with patch.object(planner_mod, "call_llm_direct", return_value="not json"):
             assert resolve_next_tool_call(
                 cfg, "do the thing", [], self._schema()
-            ) is None
+            , original_query="do the thing") is None
 
     def test_missing_schema_returns_none(self):
         cfg = _cfg()
-        assert resolve_next_tool_call(cfg, "do the thing", [], []) is None
+        assert resolve_next_tool_call(cfg, "do the thing", [], [], original_query="do the thing") is None
 
     def test_drops_unknown_argument_keys(self):
         cfg = _cfg()
@@ -318,7 +318,7 @@ class TestResolveNextToolCall:
         with patch.object(planner_mod, "call_llm_direct", return_value=raw):
             result = resolve_next_tool_call(
                 cfg, "search weather", [], self._schema()
-            )
+            , original_query="search weather")
         assert result == ("webSearch", {"query": "weather"})
 
     def test_deterministic_parse_skips_llm_for_concrete_step(self):
@@ -346,7 +346,7 @@ class TestResolveNextToolCall:
                 "webSearch query='Justin Bieber most famous songs'",
                 [],
                 self._schema(),
-            )
+             original_query="webSearch query='Justin Bieber most famous songs'")
 
         assert result == (
             "webSearch",
@@ -367,7 +367,7 @@ class TestResolveNextToolCall:
                 "mysteryTool query='anything'",
                 [],
                 self._schema(),
-            ) is None
+             original_query="mysteryTool query='anything'") is None
 
     def test_falls_back_to_llm_when_step_has_placeholder(self):
         """Steps containing an ``<entity from step N>`` placeholder need
@@ -387,7 +387,7 @@ class TestResolveNextToolCall:
                 [("webSearch", '{"query": "Possessor director"}',
                   "Possessor directed by Brandon Cronenberg.")],
                 self._schema(),
-            )
+             original_query="webSearch query='films directed by <director name from step 1>'")
         assert result == (
             "webSearch",
             {"query": "films directed by Brandon Cronenberg"},
@@ -419,7 +419,7 @@ class TestResolveNextToolCall:
             }
         ]
         with patch.object(planner_mod, "call_llm_direct") as spy:
-            result = resolve_next_tool_call(cfg, "getWeather", [], schema)
+            result = resolve_next_tool_call(cfg, "getWeather", [], schema, original_query="getWeather")
         assert result == ("getWeather", {})
         assert not spy.called, (
             "Bare tool name must not trigger an LLM round-trip"
@@ -434,7 +434,7 @@ class TestResolveNextToolCall:
                 'webSearch query="weather in Paris"',
                 [],
                 self._schema(),
-            )
+             original_query='webSearch query="weather in Paris"')
         assert result == ("webSearch", {"query": "weather in Paris"})
         assert not spy.called
 
@@ -464,7 +464,7 @@ class TestResolveNextToolCall:
                 "chrome-devtools__navigate_page url='https://youtube.com'",
                 [],
                 schema,
-            )
+             original_query="chrome-devtools__navigate_page url='https://youtube.com'")
         assert result == (
             "chrome-devtools__navigate_page",
             {"url": "https://youtube.com"},
@@ -487,7 +487,7 @@ class TestResolveNextToolCall:
         ]
         raw = '{"name": "freeform", "arguments": {"anything": "goes"}}'
         with patch.object(planner_mod, "call_llm_direct", return_value=raw):
-            result = resolve_next_tool_call(cfg, "do it", [], schema)
+            result = resolve_next_tool_call(cfg, "do it", [], schema, original_query="do it")
         assert result == ("freeform", {"anything": "goes"})
 
 
@@ -537,7 +537,7 @@ class TestUrlArgNormalisation:
                 "chrome-devtools__navigate_page page='[youtube.com](http://youtube.com)'",
                 [],
                 self._navigate_schema(),
-            )
+             original_query="chrome-devtools__navigate_page page='[youtube.com](http://youtube.com)'")
         assert result == (
             "chrome-devtools__navigate_page",
             {"url": "http://youtube.com"},
@@ -555,7 +555,7 @@ class TestUrlArgNormalisation:
                 "chrome-devtools__navigate_page page='youtube.com'",
                 [],
                 self._navigate_schema(),
-            )
+             original_query="chrome-devtools__navigate_page page='youtube.com'")
         assert result == (
             "chrome-devtools__navigate_page",
             {"url": "https://youtube.com"},
@@ -572,7 +572,7 @@ class TestUrlArgNormalisation:
                 "chrome-devtools__navigate_page url='youtube.com'",
                 [],
                 self._navigate_schema(),
-            )
+             original_query="chrome-devtools__navigate_page url='youtube.com'")
         assert result == (
             "chrome-devtools__navigate_page",
             {"url": "https://youtube.com"},
@@ -587,7 +587,7 @@ class TestUrlArgNormalisation:
                 "chrome-devtools__navigate_page url='https://youtube.com/feed/trending'",
                 [],
                 self._navigate_schema(),
-            )
+             original_query="chrome-devtools__navigate_page url='https://youtube.com/feed/trending'")
         assert result == (
             "chrome-devtools__navigate_page",
             {"url": "https://youtube.com/feed/trending"},
@@ -620,7 +620,7 @@ class TestUrlArgNormalisation:
                 "webSearch find tutorials",
                 [],
                 schema,
-            )
+             original_query="webSearch find tutorials")
         assert result == ("webSearch", {"query": "youtube.com tutorials"})
 
 

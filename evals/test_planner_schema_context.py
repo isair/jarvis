@@ -29,7 +29,7 @@ def test_resolved_arguments_follow_nested_schema(step):
         'name': 'fetchRecords', 'description': 'Retrieve matching records.',
         'parameters': parameters,
     }}]
-    resolved = resolve_next_tool_call(voice_config(), step, [], schema, timeout_sec=60)
+    resolved = resolve_next_tool_call(voice_config(), step, [], schema, timeout_sec=60, original_query=step)
     assert resolved == ('fetchRecords', {
         'filter': {'state': 'pending'}, 'limit': 5, 'include_archived': False,
     }), resolved

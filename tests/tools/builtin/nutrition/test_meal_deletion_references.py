@@ -105,7 +105,7 @@ def test_literal_description_step_deletes_without_model_resolution(context, monk
         raise TimeoutError('Synthetic local model unavailable')
     monkeypatch.setattr(planner, 'call_llm_direct', unavailable)
     call = planner.resolve_next_tool_call(SimpleNamespace(llm_chat_model='synthetic'),
-                                         "deleteMeal meal_description='Big Mac'", [], schema)
+                                         "deleteMeal meal_description='Big Mac'", [], schema, original_query="deleteMeal meal_description='Big Mac'")
     assert call is not None
     assert tool.run(call[1], context).success
     assert [row['id'] for row in rows(context)] == [keep]

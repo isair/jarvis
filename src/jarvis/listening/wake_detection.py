@@ -41,31 +41,6 @@ def is_wake_word_detected(text_lower: str, wake_word: str, aliases: List[str], f
     return False
 
 
-def extract_query_after_wake(text_lower: str, wake_word: str, aliases: List[str]) -> str:
-    """
-    Extract the query portion after removing wake word.
-    
-    Args:
-        text_lower: Lowercase text containing wake word
-        wake_word: Primary wake word
-        aliases: List of wake word aliases
-    
-    Returns:
-        Query text with wake word removed
-    """
-    if not text_lower:
-        return ""
-    
-    pattern = _wake_name_pattern(wake_word, aliases)
-    fragment = pattern.sub(" ", text_lower) if pattern else text_lower
-    
-    # Clean up punctuation that might be left after wake word removal
-    fragment = fragment.strip().lstrip(",.!?;:")
-    fragment = fragment.strip()
-    
-    return fragment if fragment else ""
-
-
 def is_stop_command(text_lower: str, stop_commands: List[str], fuzzy_ratio: float = 0.8) -> bool:
     """
     Check if text contains a stop command.

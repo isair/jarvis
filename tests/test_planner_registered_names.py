@@ -27,7 +27,7 @@ def test_registered_names_remain_executable_plan_steps(mock_config, monkeypatch,
 
     assert tool_names_in_plan(plan, [name]) == [name]
     assert not plan_has_unresolved_tool_steps(plan, [name])
-    assert resolve_next_tool_call(mock_config, plan[0], [], schema) == (
+    assert resolve_next_tool_call(mock_config, plan[0], [], schema, original_query=plan[0]) == (
         name, {"path": "/tmp/notes.txt"}
     )
 

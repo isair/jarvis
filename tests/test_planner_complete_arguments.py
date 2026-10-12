@@ -24,7 +24,7 @@ SCHEMA = [{'type': 'function', 'function': {'name': 'localValue', 'parameters': 
 ])
 def test_ambiguous_concrete_step_cannot_dispatch_a_partial_value(monkeypatch, step):
     monkeypatch.setattr(planner, 'call_llm_direct', lambda **kwargs: 'null')
-    assert planner.resolve_next_tool_call(voice_config(), step, [], SCHEMA) is None
+    assert planner.resolve_next_tool_call(voice_config(), step, [], SCHEMA, original_query=step) is None
 
 
 def test_apostrophe_content_reaches_a_private_file_without_truncation(monkeypatch, tmp_path):
@@ -36,7 +36,7 @@ def test_apostrophe_content_reaches_a_private_file_without_truncation(monkeypatc
     original_expand = os.path.expanduser
     monkeypatch.setattr(os.path, 'expanduser', lambda path: str(tmp_path) if path == '~' else original_expand(path))
     schema = [{'type': 'function', 'function': {'name': tool.name, 'parameters': tool.inputSchema}}]
-    resolved = planner.resolve_next_tool_call(voice_config(), f"localFiles operation='write' path='{target}' content='{content}'", [], schema)
+    resolved = planner.resolve_next_tool_call(voice_config(), f"localFiles operation='write' path='{target}' content='{content}'", [], schema, original_query=f"localFiles operation='write' path='{target}' content='{content}'")
     assert resolved is not None
     result = tool.run(resolved[1], ToolContext(None, voice_config(), '', '', '', 0, lambda message: None))
     assert result.success
@@ -53,7 +53,7 @@ def test_apostrophe_content_reaches_a_private_file_without_truncation(monkeypatc
 ])
 def test_complete_literal_value_remains_available_without_inference(monkeypatch, step, expected):
     monkeypatch.setattr(planner, 'call_llm_direct', lambda **kwargs: pytest.fail('🗺️ Complete literals need no model'))
-    assert planner.resolve_next_tool_call(voice_config(), step, [], SCHEMA) == ('localValue', {'value': expected})
+    assert planner.resolve_next_tool_call(voice_config(), step, [], SCHEMA, original_query=step) == ('localValue', {'value': expected})
 
 
 @pytest.mark.parametrize('separator', [' ', ', '])
@@ -64,4 +64,4 @@ def test_complete_pairs_keep_whitespace_and_comma_separators(monkeypatch, separa
     }}}]
     monkeypatch.setattr(planner, 'call_llm_direct', lambda **kwargs: pytest.fail('🗺️ Complete pairs need no model'))
     step = f"localValue value='first'{separator}scope='local'"
-    assert planner.resolve_next_tool_call(voice_config(), step, [], schema) == ('localValue', {'value': 'first', 'scope': 'local'})
+    assert planner.resolve_next_tool_call(voice_config(), step, [], schema, original_query=step) == ('localValue', {'value': 'first', 'scope': 'local'})

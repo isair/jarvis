@@ -90,6 +90,10 @@ Note: the planner pays a cache miss relative to the tool router, which
 plan quality drives everything downstream, router quality only narrows
 one turn's allow-list.
 
+### Speech context
+
+Voice requests supply a separate redacted, fenced `transcript_context` to planning and step resolution. It contains timestamped ambient references, including processed and TTS markers. The current request is supplied separately. The current request takes priority; previous instructions are reference data. The planner resolves named entities, pronouns, parent brands and unanswered-question references without rewriting the user request. Text requests leave this context empty. Transcript references follow the stable tool catalogue in user content; system guidance does not contain per-request speech.
+
 ### Prompt contract (plan_query)
 
 `plan_query` receives the query, recent dialogue and available tool catalogue.
@@ -324,3 +328,5 @@ The engine consumes the plan in two phases.
 Concrete primitive arguments accept declared type unions. A valid non-string
 JSON primitive retains its type; otherwise an allowed string retains its literal
 value. Invalid values without a string alternative require model resolution.
+
+The step resolver receives the original redacted current request separately from the planned step and prior outcomes, so shortened plans retain the caller's explicit constraints during model resolution. Concrete typed calls retain their literal fast path.

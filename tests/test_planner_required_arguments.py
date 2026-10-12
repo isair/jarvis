@@ -28,13 +28,13 @@ def schema(required):
 def test_incomplete_required_arguments_cannot_resolve(monkeypatch, step, arguments, required):
     raw = 'null' if arguments is None else json.dumps({'name': 'localLookup', 'arguments': arguments})
     monkeypatch.setattr(planner, 'call_llm_direct', lambda **kwargs: raw)
-    assert planner.resolve_next_tool_call(voice_config(), step, [], schema(required)) is None
+    assert planner.resolve_next_tool_call(voice_config(), step, [], schema(required), original_query=step) is None
 
 
 def test_incomplete_concrete_step_can_be_completed_by_the_resolver(monkeypatch):
     raw = json.dumps({'name': 'localLookup', 'arguments': {'item': 'manual'}})
     monkeypatch.setattr(planner, 'call_llm_direct', lambda **kwargs: raw)
-    assert planner.resolve_next_tool_call(voice_config(), 'localLookup', [('catalogue', '{}', 'Item: manual')], schema(['item'])) == (
+    assert planner.resolve_next_tool_call(voice_config(), 'localLookup', [('catalogue', '{}', 'Item: manual')], schema(['item']), original_query='localLookup') == (
         'localLookup', {'item': 'manual'},
     )
 
@@ -43,7 +43,7 @@ def test_incomplete_concrete_step_can_be_completed_by_the_resolver(monkeypatch):
 def test_non_object_arguments_cannot_become_an_empty_call(monkeypatch, arguments):
     raw = json.dumps({'name': 'localLookup', 'arguments': arguments})
     monkeypatch.setattr(planner, 'call_llm_direct', lambda **kwargs: raw)
-    assert planner.resolve_next_tool_call(voice_config(), 'resolve <item>', [], schema([])) is None
+    assert planner.resolve_next_tool_call(voice_config(), 'resolve <item>', [], schema([]), original_query='resolve <item>') is None
 
 
 @pytest.mark.parametrize('step, required, expected', [
@@ -53,14 +53,14 @@ def test_non_object_arguments_cannot_become_an_empty_call(monkeypatch, arguments
 ])
 def test_complete_concrete_arguments_remain_available_without_inference(monkeypatch, step, required, expected):
     monkeypatch.setattr(planner, 'call_llm_direct', lambda **kwargs: pytest.fail('🗺️ Concrete valid arguments need no model'))
-    assert planner.resolve_next_tool_call(voice_config(), step, [], schema(required)) == ('localLookup', expected)
+    assert planner.resolve_next_tool_call(voice_config(), step, [], schema(required), original_query=step) == ('localLookup', expected)
 
 
 @pytest.mark.parametrize('arguments', [None, {}])
 def test_optional_empty_argument_objects_remain_available(monkeypatch, arguments):
     raw = json.dumps({'name': 'localLookup', 'arguments': arguments})
     monkeypatch.setattr(planner, 'call_llm_direct', lambda **kwargs: raw)
-    assert planner.resolve_next_tool_call(voice_config(), 'resolve <item>', [], schema([])) == ('localLookup', {})
+    assert planner.resolve_next_tool_call(voice_config(), 'resolve <item>', [], schema([]), original_query='resolve <item>') == ('localLookup', {})
 
 
 @pytest.mark.parametrize('arguments, expected', [
@@ -72,7 +72,7 @@ def test_freeform_schema_keeps_values_but_still_requires_declared_fields(monkeyp
     del freeform[0]['function']['parameters']['properties']
     raw = json.dumps({'name': 'localLookup', 'arguments': arguments})
     monkeypatch.setattr(planner, 'call_llm_direct', lambda **kwargs: raw)
-    assert planner.resolve_next_tool_call(voice_config(), 'resolve <item>', [], freeform) == expected
+    assert planner.resolve_next_tool_call(voice_config(), 'resolve <item>', [], freeform, original_query='resolve <item>') == expected
 
 
 def test_incomplete_plan_returns_to_chat_before_any_invalid_dispatch(monkeypatch, mock_config, db, dialogue_memory):

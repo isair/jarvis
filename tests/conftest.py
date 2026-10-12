@@ -53,6 +53,8 @@ class MockConfig:
     # branch get the legacy alias promoted into ``llm_chat_model`` by
     # ``__post_init__`` — same shape ``load_settings()`` produces.
     llm_chat_model: str = ""
+    wake_word: str = "jarvis"
+    wake_aliases: list = field(default_factory=list)
     whisper_model: str = "small"
     embedding_provider: str = ""
     embedding_base_url: str = ""

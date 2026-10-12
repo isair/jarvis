@@ -28,6 +28,6 @@ def test_declared_enum_can_drive_a_complete_resolved_call(monkeypatch):
         return json.dumps({'name': tool['name'], 'arguments': {'filter': {'state': permitted[0]}}})
 
     monkeypatch.setattr(planner, 'call_llm_direct', backend)
-    assert planner.resolve_next_tool_call(voice_config(), 'lookup selected records', [], schema) == (
+    assert planner.resolve_next_tool_call(voice_config(), 'lookup selected records', [], schema, original_query='lookup selected records') == (
         'lookup', {'filter': {'state': choices[0]}},
     )

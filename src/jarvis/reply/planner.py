@@ -254,6 +254,7 @@ def _build_user_message(
     query: str,
     dialogue_context: str,
     tools: Sequence[Tuple[str, str]],
+    transcript_context: str = "",
 ) -> str:
     parts = []
     if tools:
@@ -261,6 +262,8 @@ def _build_user_message(
         parts.append(f"AVAILABLE TOOLS:\n{tool_lines}")
     else:
         parts.append("AVAILABLE TOOLS: (none)")
+    if transcript_context:
+        parts.append(transcript_context)
     if dialogue_context.strip():
         parts.append(f"DIALOGUE CONTEXT (most recent last):\n{dialogue_context.strip()}")
     else:
@@ -444,6 +447,7 @@ def plan_query(
     tools: Sequence[Tuple[str, str]],
     *,
     timeout_sec: Optional[float] = None,
+    transcript_context: str = "",
 ) -> List[str]:
     """Run a short planning LLM pass over the query + dialogue context.
 
@@ -474,7 +478,7 @@ def plan_query(
     )
 
     system_prompt = _PROMPT_TEMPLATE.format(max_steps=MAX_STEPS)
-    user_content = _build_user_message(query, dialogue_context, tools)
+    user_content = _build_user_message(query, dialogue_context, tools, transcript_context)
 
     try:
         raw = call_llm_direct(
@@ -757,7 +761,9 @@ def resolve_next_tool_call(
     prior_results: Sequence[Tuple[str, str, str]],
     tools_schema: Sequence[dict],
     *,
+    original_query: str,
     timeout_sec: Optional[float] = None,
+    transcript_context: str = "",
 ) -> Optional[Tuple[str, dict]]:
     """Turn a planned step + prior results into a concrete tool call.
 
@@ -840,6 +846,8 @@ def resolve_next_tool_call(
         debug_log("planner.resolve_next_tool_call: added declared temporal clock context", "planning")
     user_content = (
         clock_context + f"ALLOWED TOOLS:\n{json.dumps(tool_catalogue, ensure_ascii=False, separators=(',', ':'))}\n\n"
+        + (f"{transcript_context}\n\n" if transcript_context else "")
+        + f"ORIGINAL CURRENT USER REQUEST:\n{json.dumps(original_query, ensure_ascii=False)}\n\n"
         f"PRIOR TOOL CALLS IN THIS SESSION:\n"
         f"{_format_prior_results(prior_results)}\n\n"
         f"NEXT PLANNED STEP: {next_step_text.strip()}\n\n"

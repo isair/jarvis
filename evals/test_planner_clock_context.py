@@ -28,7 +28,7 @@ def test_relative_calendar_day_uses_current_clock(monkeypatch, step):
     schema = [{'type': 'function', 'function': {
         'name': tool.name, 'description': tool.description, 'parameters': tool.inputSchema,
     }}]
-    result = planner.resolve_next_tool_call(voice_config(), step, [], schema, timeout_sec=60)
+    result = planner.resolve_next_tool_call(voice_config(), step, [], schema, timeout_sec=60, original_query=step)
     assert result is not None and result[0] == tool.name, result
     assert {'since_utc', 'until_utc'} <= result[1].keys(), result
     since, until = _normalise_time_range(result[1])

@@ -20,7 +20,7 @@ def test_weather_resolver_preserves_discovered_place(place):
         voice_config(), "getWeather location='<discovered city>'",
         [('localLookup', '{}', f'The selected city is {place}.')],
         schema, timeout_sec=60.0,
-    )
+     original_query="getWeather location='<discovered city>'")
     assert resolved is not None, '🌤️ A discovered city must remain resolvable'
     name, arguments = resolved
     assert name == 'getWeather', f'🌤️ Weather tool was changed: {resolved}'

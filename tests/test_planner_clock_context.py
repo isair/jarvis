@@ -34,7 +34,7 @@ def test_clock_grounded_call_uses_supplied_instant(monkeypatch, nested):
         parameters = {'type': 'object', 'properties': {'range': parameters}, 'required': ['range']}
     schema = [{'type': 'function', 'function': {'name': 'retrieve', 'parameters': parameters}}]
     expected = {'until': instant.isoformat()}
-    assert planner.resolve_next_tool_call(voice_config(), 'retrieve records up to now', [], schema) == (
+    assert planner.resolve_next_tool_call(voice_config(), 'retrieve records up to now', [], schema, original_query='retrieve records up to now') == (
         'retrieve', {'range': expected} if nested else expected,
     )
 
@@ -56,6 +56,6 @@ def test_unrelated_step_keeps_its_argument_context(monkeypatch, other_temporal_t
         return json.dumps({'name': 'localValue', 'arguments': {'value': value}})
 
     monkeypatch.setattr(planner, 'call_llm_direct', backend)
-    assert planner.resolve_next_tool_call(voice_config(), 'localValue preserve the selected value', [], schema) == (
+    assert planner.resolve_next_tool_call(voice_config(), 'localValue preserve the selected value', [], schema, original_query='localValue preserve the selected value') == (
         'localValue', {'value': 'literal'},
     )
