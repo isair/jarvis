@@ -258,7 +258,7 @@ notification time. Shutdown rejects further activation/reset scheduling and
 hot-window admission; manual expiry also cancels pending activation.
 
 
-**Behaviour:** Speech first passes through an early fuzzy echo check (rapidfuzz `partial_ratio`, threshold 70, with word-count guard to avoid catching mixed echo+speech). Pure echo is silently rejected **without calling the intent judge** — this keeps echo rejection instant and prevents it from blocking the audio loop. The hot window timer is **not** reset on echo rejection. Non-echo speech is sent to the intent judge, but if the judge rejects it, the rejection is overridden — all non-echo speech in the hot window is accepted as a follow-up query.
+**Behaviour:** Speech first passes through an early fuzzy echo check (rapidfuzz `partial_ratio`, threshold 70, with word-count guard to avoid catching mixed echo+speech). Pure echo is silently rejected **without calling the intent judge** — this keeps echo rejection instant and prevents it from blocking the audio loop. The hot window timer is **not** reset on echo rejection. Non-echo speech is sent to the intent judge. A confident rejection is respected in every engagement mode; speech addressed to another person cannot become a follow-up merely because the window is active. Inconclusive or unavailable judgements retain the existing engagement fallback.
 
 **Mixed echo+speech handling:** The early fuzzy echo check and deterministic echo salvage distinguish pure echo from speech that includes a user follow-up. The judge classifies engagement in mixed speech. Accepted text stays separate from the full transcript and last TTS text so downstream models can ignore echo when composing tool arguments.
 
@@ -321,7 +321,7 @@ class TranscriptBuffer:
 
 ### Intent Decisions and Speech References
 
-The listener selects a static wake-mode or hot-window classification prompt from its known engagement state. Inactive mode rules do not compete in the model input. The intent judge receives structured current-utterance, transcript, timing and TTS fields and decides `directed`, `stop`, `confidence` and `reasoning`. It never generates a replacement query. Declaratives addressing the assistant and hot-window follow-ups remain directed; quoted stop commands, narration and pure TTS echo are not cancellation requests.
+The listener selects a static wake-mode or hot-window classification prompt from its known engagement state. Inactive mode rules do not compete in the model input. The intent judge receives structured current-utterance, transcript, timing and TTS fields and decides `directed`, `stop`, `confidence` and `reasoning`. It never generates a replacement query. Declaratives addressing the assistant and genuine hot-window follow-ups remain directed. Clear other-person conversation remains undirected in the hot window; quoted stop commands, narration and pure TTS echo are not cancellation requests.
 
 A voice reply receives the original collected speech and an immutable `SpeechContext` snapshot, captured before waiting for the shared voice/text query lock. The snapshot copies retained speech, timing, TTS overlap, processed markers and last assistant speech. Rendering excludes the trailing current segment from prior references, includes only used wake aliases alongside the primary name, and omits context when no references or address metadata are needed. It is request-scoped reference data, redacted before model use, JSON-quoted with escaped fence delimiters, and is not persisted in dialogue or diary memory. Text-chat requests have no ambient transcript snapshot.
 
@@ -339,7 +339,7 @@ To minimise perceived latency, audio and visual feedback starts **immediately af
 - **Hot window:** If voice started during an active (or pending) hot window, start the thinking beep and set face state to LISTENING.
 - **No trigger:** If neither condition is met, no feedback is given.
 
-If the intent judge later rejects the query (and no hot window override applies), the beep is stopped and face state reverts to IDLE. This brief false-positive beep is acceptable — users prefer immediate acknowledgement over delayed but perfect accuracy.
+If the intent judge later rejects the query with high confidence, the beep is stopped and face state reverts to IDLE. This brief false-positive beep is acceptable — users prefer immediate acknowledgement over delayed but perfect accuracy.
 
 **Face state is not set during TTS** — the beep is suppressed while TTS is playing to avoid self-triggering.
 
@@ -458,7 +458,7 @@ When components are unavailable, the system degrades gracefully:
 
 | Component | Unavailable Behaviour |
 |-----------|---------------------|
-| Intent Judge | Text-based wake detection with original speech; hot window override still applies |
+| Intent Judge | Text-based wake detection with original speech; non-echo hot-window fallback applies when the judge is unavailable |
 | Unsupported input format | Retry channel count and native sample rate on the selected device, then convert to 16 kHz mono for Whisper |
 | Transcript Buffer | Process each utterance independently |
 
