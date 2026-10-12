@@ -56,6 +56,27 @@ def isolated_face_state(monkeypatch, tmp_path):
 # Helpers
 # ---------------------------------------------------------------------------
 
+
+@pytest.mark.eval
+class TestShortFollowUpEchoBoundary:
+    @requires_voice_model
+    @pytest.mark.parametrize('tts,text', [
+        ('Tomorrow in London is forecast to be cloudy.', 'And tomorrow?'),
+        ('Light rain showers are likely.', 'How?'),
+        ('Morgen wird es bewölkt.', 'Und morgen?'),
+        ('Mañana estará nublado.', '¿Y mañana?'),
+    ])
+    def test_real_judge_accepts_short_follow_up_after_overlapping_tts(self, tts, text):
+        listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=3)
+        listener.echo_detector.track_tts_start(tts)
+        _simulate_tts_finish(listener)
+        assert _wait_for_hot_window_active(listener)
+        now = time.time()
+        _add_buffer_segment(listener, text, now, now+0.1)
+        _process_transcript(listener, text, utterance_energy=0.01,
+                            utterance_start_time=now, utterance_end_time=now+0.1)
+        assert _accepted_query(listener) == text
+
 def _create_listener(**kwargs):
     """Create a VoiceListener with mocked audio and a real intent judge.
 

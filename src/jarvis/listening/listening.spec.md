@@ -258,7 +258,7 @@ notification time. Shutdown rejects further activation/reset scheduling and
 hot-window admission; manual expiry also cancels pending activation.
 
 
-**Behaviour:** Speech first passes through an early fuzzy echo check (rapidfuzz `partial_ratio`, threshold 70, with word-count guard to avoid catching mixed echo+speech). Pure echo is silently rejected **without calling the intent judge** — this keeps echo rejection instant and prevents it from blocking the audio loop. The hot window timer is **not** reset on echo rejection. Non-echo speech is sent to the intent judge. A confident rejection is respected in every engagement mode; speech addressed to another person cannot become a follow-up merely because the window is active. Inconclusive or unavailable judgements retain the existing engagement fallback.
+**Behaviour:** Speech first passes through a shared hot-window echo check. Utterances of at most four non-empty Unicode tokens require a contiguous whole-token match in TTS text, with canonical Unicode, casing and punctuation normalised. Character substring overlap alone does not reject a short follow-up. Longer utterances use rapidfuzz `partial_ratio` at threshold 70 with a word-count guard to avoid catching mixed echo+speech. The early check, unavailable-judge fallback and directed-result safety check use this same policy. Pure echo is silently rejected **without calling the intent judge** — this keeps echo rejection instant and prevents it from blocking the audio loop. The hot window timer is **not** reset on echo rejection. Non-echo speech is sent to the intent judge. A confident rejection is respected in every engagement mode; speech addressed to another person cannot become a follow-up merely because the window is active. Inconclusive or unavailable judgements retain the existing engagement fallback.
 
 **Mixed echo+speech handling:** The early fuzzy echo check and deterministic echo salvage distinguish pure echo from speech that includes a user follow-up. The judge classifies engagement in mixed speech. Accepted text stays separate from the full transcript and last TTS text so downstream models can ignore echo when composing tool arguments.
 
@@ -442,7 +442,7 @@ Wake Detection Check:
     └→ Text contains wake word? → Start thinking beep + LISTENING face
     ↓
 If wake detected OR in hot window:
-    → Fuzzy echo check (partial_ratio ≥ 70 = echo → reject + reset timer)
+    → Shared hot-window echo check (short whole-token match or longer fuzzy echo → reject without extending timer)
     → Send buffer + context to Intent Judge
     ↓
 If judge.directed and a current engagement signal exists:
