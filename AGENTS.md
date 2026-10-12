@@ -111,6 +111,9 @@ Ensure all your changes are covered by all appropriate form of automated tests -
 
 Tests should verify mechanisms, not current values. Assert against config-driven or computed references rather than hardcoding specifics that change between migrations.
 
+Tests and patch targets use the runtime package names (`jarvis.*` and `desktop_app.*`).
+Do not add `src.` to imports, which creates separate module state and bypasses runtime subscribers or patches.
+
 Run evals after finalising a change that can affect agent accuracy.
 
 Any change to LLM prompts (system prompts, tool incentives, constraints, etc.) must be verified against a relevant eval case. If no eval exists for the behaviour being changed, write one first. The eval should demonstrate the improvement — i.e. it should fail or show worse results before the prompt change and pass or improve after.

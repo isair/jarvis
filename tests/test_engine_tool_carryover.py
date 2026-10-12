@@ -7,8 +7,8 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from src.jarvis.memory.conversation import DialogueMemory
-from src.jarvis.reply.engine import run_reply_engine
+from jarvis.memory.conversation import DialogueMemory
+from jarvis.reply.engine import run_reply_engine
 
 
 def _mock_cfg():
@@ -41,11 +41,11 @@ def _mock_cfg():
 
 
 @pytest.mark.unit
-@patch("src.jarvis.reply.engine.plan_query", return_value=[])
-@patch("src.jarvis.reply.engine.extract_search_params_for_memory", return_value={})
-@patch("src.jarvis.reply.engine.run_tool_with_retries")
-@patch("src.jarvis.reply.engine.extract_text_from_response")
-@patch("src.jarvis.reply.engine.chat_with_messages")
+@patch("jarvis.reply.engine.plan_query", return_value=[])
+@patch("jarvis.reply.engine.extract_search_params_for_memory", return_value={})
+@patch("jarvis.reply.engine.run_tool_with_retries")
+@patch("jarvis.reply.engine.extract_text_from_response")
+@patch("jarvis.reply.engine.chat_with_messages")
 def test_tool_carryover_makes_prior_result_visible_to_next_turn(
     mock_chat, mock_extract, mock_tool, _mock_extract, _mock_plan
 ):
@@ -109,18 +109,18 @@ def test_tool_carryover_makes_prior_result_visible_to_next_turn(
 
 
 @pytest.mark.unit
-@patch("src.jarvis.reply.engine.plan_query", return_value=[])
-@patch("src.jarvis.reply.engine.extract_search_params_for_memory", return_value={})
-@patch("src.jarvis.reply.engine.run_tool_with_retries")
-@patch("src.jarvis.reply.engine.extract_text_from_response")
-@patch("src.jarvis.reply.engine.chat_with_messages")
+@patch("jarvis.reply.engine.plan_query", return_value=[])
+@patch("jarvis.reply.engine.extract_search_params_for_memory", return_value={})
+@patch("jarvis.reply.engine.run_tool_with_retries")
+@patch("jarvis.reply.engine.extract_text_from_response")
+@patch("jarvis.reply.engine.chat_with_messages")
 def test_stop_signal_clears_tool_carryover(
     mock_chat, mock_extract, mock_tool, _mock_extract, _mock_plan
 ):
     """Turn 1 runs a tool; turn 2 receives the stop signal. After turn 2,
     carryover must be empty so the next wake-word turn starts fresh.
     """
-    from src.jarvis.tools.builtin.stop import STOP_SIGNAL
+    from jarvis.tools.builtin.stop import STOP_SIGNAL
 
     mock_tool.side_effect = [
         Mock(reply_text="Justin Bieber is a Canadian singer.", error_message=None),
@@ -159,11 +159,11 @@ def test_stop_signal_clears_tool_carryover(
 
 
 @pytest.mark.unit
-@patch("src.jarvis.reply.engine.plan_query", return_value=[])
-@patch("src.jarvis.reply.engine.extract_search_params_for_memory", return_value={})
-@patch("src.jarvis.reply.engine.run_tool_with_retries")
-@patch("src.jarvis.reply.engine.extract_text_from_response")
-@patch("src.jarvis.reply.engine.chat_with_messages")
+@patch("jarvis.reply.engine.plan_query", return_value=[])
+@patch("jarvis.reply.engine.extract_search_params_for_memory", return_value={})
+@patch("jarvis.reply.engine.run_tool_with_retries")
+@patch("jarvis.reply.engine.extract_text_from_response")
+@patch("jarvis.reply.engine.chat_with_messages")
 def test_tool_carryover_text_tool_mode(
     mock_chat, mock_extract, mock_tool, _mock_extract, _mock_plan
 ):

@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from src.jarvis.memory.graph import (
+from jarvis.memory.graph import (
     GraphMemoryStore,
     MemoryNode,
     _estimate_tokens,

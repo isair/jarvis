@@ -4,13 +4,13 @@ import pytest
 from unittest.mock import Mock, patch
 import requests
 
-from src.jarvis.tools.builtin.weather import (
+from jarvis.tools.builtin.weather import (
     WeatherTool,
     WMO_CODES,
     _extract_place_from_user_text,
 )
-from src.jarvis.tools.base import ToolContext
-from src.jarvis.tools.types import ToolExecutionResult
+from jarvis.tools.base import ToolContext
+from jarvis.tools.types import ToolExecutionResult
 
 
 class TestWeatherTool:
@@ -117,7 +117,7 @@ class TestWeatherTool:
         assert result.success is False
         assert "could not find" in result.reply_text.lower()
 
-    @patch('src.jarvis.tools.builtin.weather.get_location_info')
+    @patch('jarvis.tools.builtin.weather.get_location_info')
     def test_run_empty_location_uses_fallback(self, mock_location):
         """Test weather with empty location uses user's detected location as fallback."""
         # When location detection fails, should return error
@@ -130,7 +130,7 @@ class TestWeatherTool:
         assert result.success is False
         assert result.reply_text and any(kw in result.reply_text.lower() for kw in ("location", "city"))
 
-    @patch('src.jarvis.tools.builtin.weather.get_location_info')
+    @patch('jarvis.tools.builtin.weather.get_location_info')
     def test_run_none_location_uses_fallback(self, mock_location):
         """Test weather with location=None uses user's detected location (not geocode 'None')."""
         # When location detection fails, should return error - NOT try to geocode "None"
@@ -147,7 +147,7 @@ class TestWeatherTool:
         # Verify location detection was called (fallback was attempted)
         mock_location.assert_called_once()
 
-    @patch('src.jarvis.tools.builtin.weather.get_location_info')
+    @patch('jarvis.tools.builtin.weather.get_location_info')
     def test_run_no_args_uses_fallback(self, mock_location):
         """Test weather with no arguments uses user's detected location as fallback."""
         # When location detection fails, should return error
@@ -160,7 +160,7 @@ class TestWeatherTool:
         assert result.reply_text and any(kw in result.reply_text.lower() for kw in ("location", "city"))
 
     @patch('requests.get')
-    @patch('src.jarvis.tools.builtin.weather.get_location_info')
+    @patch('jarvis.tools.builtin.weather.get_location_info')
     def test_run_no_location_with_successful_fallback(self, mock_location, mock_get):
         """Test weather with no location but successful user location detection."""
         # Mock successful location detection with coordinates (no geocoding needed)
@@ -201,8 +201,8 @@ class TestWeatherTool:
         assert mock_get.call_count == 1
 
     @patch('requests.get')
-    @patch('src.jarvis.tools.builtin.weather._extract_place_from_user_text')
-    @patch('src.jarvis.tools.builtin.weather.get_location_info')
+    @patch('jarvis.tools.builtin.weather._extract_place_from_user_text')
+    @patch('jarvis.tools.builtin.weather.get_location_info')
     def test_auto_detect_fail_falls_back_to_user_text(
         self, mock_location, mock_extract, mock_get,
     ):
@@ -256,8 +256,8 @@ class TestWeatherTool:
         called_text = mock_extract.call_args[0][0]
         assert "London" in called_text
 
-    @patch('src.jarvis.tools.builtin.weather._extract_place_from_user_text')
-    @patch('src.jarvis.tools.builtin.weather.get_location_info')
+    @patch('jarvis.tools.builtin.weather._extract_place_from_user_text')
+    @patch('jarvis.tools.builtin.weather.get_location_info')
     def test_auto_detect_fail_and_no_place_in_text_asks_user(
         self, mock_location, mock_extract,
     ):
@@ -443,7 +443,7 @@ class TestExtractPlaceFromUserText:
         backend = Mock()
         backend.direct.return_value = return_value
         return patch(
-            "src.jarvis.tools.builtin.weather.get_llm_backend",
+            "jarvis.tools.builtin.weather.get_llm_backend",
             return_value=backend,
         )
 

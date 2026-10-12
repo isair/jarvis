@@ -11,11 +11,11 @@ invalidated on demand via ``invalidate_warm_profile()``.
 import time
 from types import SimpleNamespace
 
-from src.jarvis.memory import conversation
+from jarvis.memory import conversation
 
 import pytest
 
-from src.jarvis.memory.conversation import DialogueMemory, is_tool_message
+from jarvis.memory.conversation import DialogueMemory, is_tool_message
 
 
 @pytest.mark.unit

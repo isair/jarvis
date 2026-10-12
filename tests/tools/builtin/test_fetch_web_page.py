@@ -4,9 +4,9 @@ import pytest
 from unittest.mock import Mock, patch
 import requests
 
-from src.jarvis.tools.builtin.fetch_web_page import FetchWebPageTool
-from src.jarvis.tools.base import ToolContext
-from src.jarvis.tools.types import ToolExecutionResult
+from jarvis.tools.builtin.fetch_web_page import FetchWebPageTool
+from jarvis.tools.base import ToolContext
+from jarvis.tools.types import ToolExecutionResult
 
 
 def _make_response_mock(**attrs) -> Mock:

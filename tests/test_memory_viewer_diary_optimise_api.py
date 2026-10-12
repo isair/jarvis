@@ -39,7 +39,7 @@ class TestDiaryOptimiseTopicsEndpoint:
     @pytest.fixture(autouse=True)
     def setup_app(self, tmp_path):
         from src.desktop_app import memory_viewer
-        from src.jarvis.memory.db import Database
+        from jarvis.memory.db import Database
 
         self.db_path = str(tmp_path / "test.db")
         seed_db = Database(self.db_path)
@@ -78,7 +78,7 @@ class TestDiaryOptimiseTopicsEndpoint:
         with (
             patch("src.desktop_app.memory_viewer._get_db_path", return_value=self.db_path),
             patch("src.desktop_app.memory_viewer.load_settings", return_value=cfg),
-            patch("src.jarvis.memory.conversation.optimise_diary_topics", _make_fake_optimise(fake_events)),
+            patch("jarvis.memory.conversation.optimise_diary_topics", _make_fake_optimise(fake_events)),
             patch("jarvis.memory.conversation.optimise_diary_topics", _make_fake_optimise(fake_events)),
         ):
             resp = self.client.post("/api/diary/optimise-topics")

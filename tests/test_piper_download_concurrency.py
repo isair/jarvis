@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 import requests
-import src.jarvis.output.tts as tts
+import jarvis.output.tts as tts
 
 pytestmark = pytest.mark.unit
 

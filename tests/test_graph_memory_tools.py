@@ -6,7 +6,7 @@ These methods on GraphMemoryStore support both the automatic enrichment
 
 import pytest
 
-from src.jarvis.memory.graph import GraphMemoryStore
+from jarvis.memory.graph import GraphMemoryStore
 
 
 # ── Fixtures ───────────────────────────────────────────────────────────
