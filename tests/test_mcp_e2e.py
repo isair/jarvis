@@ -21,8 +21,8 @@ import pytest
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.jarvis.tools.registry import discover_mcp_tools, generate_tools_description
-from src.jarvis.config import load_settings
+from jarvis.tools.registry import discover_mcp_tools, generate_tools_description
+from jarvis.config import load_settings
 
 
 @pytest.mark.e2e
@@ -76,7 +76,7 @@ def test_mcp_discovery_with_mock():
             ]
 
     try:
-        with patch('src.jarvis.tools.registry.MCPClient', FakeMCPClient):
+        with patch('jarvis.tools.registry.MCPClient', FakeMCPClient):
             mcp_tools, _errors = discover_mcp_tools(fake_mcps)
 
         expected_tools = {
@@ -104,7 +104,7 @@ def test_tool_registration_in_descriptions():
     """Test that discovered tools appear in tool descriptions."""
     print("📝 Testing tool description generation...")
 
-    from src.jarvis.tools.registry import ToolSpec
+    from jarvis.tools.registry import ToolSpec
 
     # Create mock MCP tools
     mock_mcp_tools = {
@@ -169,7 +169,7 @@ def test_tool_name_format():
             return []
 
     try:
-        with patch('src.jarvis.tools.registry.MCPClient', FakeMCPClient):
+        with patch('jarvis.tools.registry.MCPClient', FakeMCPClient):
             mcps_config = {"my-server": {"command": "test"}}
             mcp_tools, _errors = discover_mcp_tools(mcps_config)
 
@@ -210,7 +210,7 @@ def test_error_handling():
             return []
 
     try:
-        with patch('src.jarvis.tools.registry.MCPClient', FaultyMCPClient):
+        with patch('jarvis.tools.registry.MCPClient', FaultyMCPClient):
             mcps_config = {
                 "good-server": {"command": "good"},
                 "bad-server": {"command": "bad"},

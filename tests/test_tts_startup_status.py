@@ -3,7 +3,7 @@ import sys
 
 import pytest
 
-import src.jarvis.output.tts as speech
+import jarvis.output.tts as speech
 
 pytestmark = pytest.mark.unit
 
@@ -32,7 +32,7 @@ def test_failed_model_load_disables_runtime_speech_output(monkeypatch, tmp_path,
 
 
 def test_daemon_reports_failed_speech_output_without_a_success_message(monkeypatch, tmp_path, capsys):
-    from src.jarvis import daemon
+    from jarvis import daemon
     engine = speech.PiperTTS(model_path=str(tmp_path / 'missing-voice.onnx'))
     monkeypatch.setattr(speech, '_download_piper_voice', lambda *args, **kwargs: None)
     try:
@@ -47,7 +47,7 @@ def test_daemon_reports_failed_speech_output_without_a_success_message(monkeypat
 @pytest.mark.parametrize('backend', ['piper', 'chatterbox'])
 def test_available_backend_starts_and_delivers_speech(monkeypatch, backend, capsys):
     import threading
-    from src.jarvis import daemon
+    from jarvis import daemon
     engine = speech.PiperTTS() if backend == 'piper' else speech.ChatterboxTTS()
     loader = '_ensure_initialized' if backend == 'piper' else '_ensure_model'
     monkeypatch.setattr(engine, loader, lambda: True)
@@ -68,7 +68,7 @@ def test_available_backend_starts_and_delivers_speech(monkeypatch, backend, caps
 
 
 def test_configured_disabled_speech_output_is_reported_without_model_loading(monkeypatch, capsys):
-    from src.jarvis import daemon
+    from jarvis import daemon
     engine = speech.PiperTTS(enabled=False)
     monkeypatch.setattr(engine, '_ensure_initialized', lambda: pytest.fail('unexpected model load'))
     daemon._start_tts_engine(engine)

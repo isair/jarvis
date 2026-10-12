@@ -4,9 +4,9 @@ import pytest
 from unittest.mock import Mock, patch
 import sys
 
-from src.jarvis.tools.builtin.screenshot import ScreenshotTool
-from src.jarvis.tools.base import ToolContext
-from src.jarvis.tools.types import ToolExecutionResult
+from jarvis.tools.builtin.screenshot import ScreenshotTool
+from jarvis.tools.base import ToolContext
+from jarvis.tools.types import ToolExecutionResult
 
 
 class TestScreenshotTool:

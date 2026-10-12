@@ -198,7 +198,7 @@ class TestDictationThinking:
     """Dictation engine respects the thinking config."""
 
     def test_llm_clean_dictation_sends_think_false(self):
-        from src.jarvis.dictation.dictation_engine import _llm_clean_dictation
+        from jarvis.dictation.dictation_engine import _llm_clean_dictation
 
         with patch("requests.post") as mock_post:
             mock_resp = MagicMock()
@@ -211,7 +211,7 @@ class TestDictationThinking:
             assert payload["think"] is False
 
     def test_llm_clean_dictation_sends_think_true(self):
-        from src.jarvis.dictation.dictation_engine import _llm_clean_dictation
+        from jarvis.dictation.dictation_engine import _llm_clean_dictation
 
         with patch("requests.post") as mock_post:
             mock_resp = MagicMock()
@@ -224,7 +224,7 @@ class TestDictationThinking:
             assert payload["think"] is True
 
     def test_engine_stores_thinking(self):
-        from src.jarvis.dictation.dictation_engine import DictationEngine
+        from jarvis.dictation.dictation_engine import DictationEngine
 
         engine = DictationEngine(
             whisper_model_ref=lambda: MagicMock(),

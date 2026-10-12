@@ -15,7 +15,7 @@ import pytest
 
 def _make_engine(**overrides):
     """Create a DictationEngine with sensible test defaults."""
-    from src.jarvis.dictation.dictation_engine import DictationEngine
+    from jarvis.dictation.dictation_engine import DictationEngine
 
     defaults = dict(
         whisper_model_ref=lambda: MagicMock(),
@@ -39,23 +39,23 @@ class TestBeepGeneration:
     """Tests for beep WAV generation."""
 
     def test_start_beep_is_valid_wav(self):
-        from src.jarvis.dictation.dictation_engine import _get_start_beep
+        from jarvis.dictation.dictation_engine import _get_start_beep
         wav = _get_start_beep()
         assert wav[:4] == b"RIFF"
         assert wav[8:12] == b"WAVE"
 
     def test_stop_beep_is_valid_wav(self):
-        from src.jarvis.dictation.dictation_engine import _get_stop_beep
+        from jarvis.dictation.dictation_engine import _get_stop_beep
         wav = _get_stop_beep()
         assert wav[:4] == b"RIFF"
         assert wav[8:12] == b"WAVE"
 
     def test_start_and_stop_beeps_differ(self):
-        from src.jarvis.dictation.dictation_engine import _get_start_beep, _get_stop_beep
+        from jarvis.dictation.dictation_engine import _get_start_beep, _get_stop_beep
         assert _get_start_beep() != _get_stop_beep()
 
     def test_generate_beep_wav_custom_params(self):
-        from src.jarvis.dictation.dictation_engine import _generate_beep_wav
+        from jarvis.dictation.dictation_engine import _generate_beep_wav
         wav = _generate_beep_wav(freq=1000, duration=0.05)
         assert wav[:4] == b"RIFF"
         assert len(wav) > 44  # At least a header
@@ -76,28 +76,28 @@ class TestHotkeyParsing:
             pytest.skip("pynput not installed")
 
     def test_parse_ctrl_shift_d(self):
-        from src.jarvis.dictation.dictation_engine import parse_hotkey
+        from jarvis.dictation.dictation_engine import parse_hotkey
         mods, trigger = parse_hotkey("ctrl+shift+d")
         assert len(mods) == 2
         assert trigger is not None
 
     def test_parse_modifier_only_combo(self):
         """A modifier-only hotkey like 'ctrl+cmd' should be valid."""
-        from src.jarvis.dictation.dictation_engine import parse_hotkey
+        from jarvis.dictation.dictation_engine import parse_hotkey
         mods, trigger = parse_hotkey("ctrl+cmd")
         assert len(mods) == 2
         assert trigger is None
 
     def test_parse_ctrl_alt(self):
         """macOS/Linux default: ctrl+alt should parse as two modifiers."""
-        from src.jarvis.dictation.dictation_engine import parse_hotkey
+        from jarvis.dictation.dictation_engine import parse_hotkey
         mods, trigger = parse_hotkey("ctrl+alt")
         assert len(mods) == 2
         assert trigger is None
 
     def test_parse_ctrl_win(self):
         """'win' modifier alias should map to the same key as 'cmd'."""
-        from src.jarvis.dictation.dictation_engine import parse_hotkey
+        from jarvis.dictation.dictation_engine import parse_hotkey
         mods_win, trigger_win = parse_hotkey("ctrl+win")
         mods_cmd, trigger_cmd = parse_hotkey("ctrl+cmd")
         assert mods_win == mods_cmd
@@ -105,24 +105,24 @@ class TestHotkeyParsing:
         assert trigger_cmd is None
 
     def test_parse_empty_string_raises(self):
-        from src.jarvis.dictation.dictation_engine import parse_hotkey
+        from jarvis.dictation.dictation_engine import parse_hotkey
         with pytest.raises(ValueError):
             parse_hotkey("")
 
     def test_parse_unknown_key_raises(self):
-        from src.jarvis.dictation.dictation_engine import parse_hotkey
+        from jarvis.dictation.dictation_engine import parse_hotkey
         with pytest.raises(ValueError):
             parse_hotkey("ctrl+nonexistentkey")
 
     def test_parse_alt_modifier(self):
-        from src.jarvis.dictation.dictation_engine import parse_hotkey
+        from jarvis.dictation.dictation_engine import parse_hotkey
         mods, trigger = parse_hotkey("alt+x")
         assert len(mods) == 1
         assert trigger is not None
 
     def test_parse_single_letter(self):
         """A single letter without modifiers should work as trigger."""
-        from src.jarvis.dictation.dictation_engine import parse_hotkey
+        from jarvis.dictation.dictation_engine import parse_hotkey
         # Technically no modifiers, just a trigger
         mods, trigger = parse_hotkey("f")
         assert len(mods) == 0
@@ -144,9 +144,9 @@ class TestEngineLifecycle:
         except ImportError:
             pytest.skip("pynput or sounddevice not installed")
 
-    @patch("src.jarvis.dictation.dictation_engine.platform")
-    @patch("src.jarvis.dictation.dictation_engine.sys")
-    @patch("src.jarvis.dictation.dictation_engine.pynput_keyboard")
+    @patch("jarvis.dictation.dictation_engine.platform")
+    @patch("jarvis.dictation.dictation_engine.sys")
+    @patch("jarvis.dictation.dictation_engine.pynput_keyboard")
     def test_start_creates_listener(self, mock_kb, mock_sys, mock_platform):
         # Force a platform where pynput is allowed (avoid macOS 26+ guard)
         mock_sys.platform = "linux"
@@ -166,10 +166,10 @@ class TestEngineLifecycle:
         engine.stop()
         assert engine._started is False
 
-    @patch("src.jarvis.dictation.dictation_engine.pynput_keyboard", None)
+    @patch("jarvis.dictation.dictation_engine.pynput_keyboard", None)
     def test_start_without_pynput_is_noop(self):
         """Engine should gracefully skip when pynput is missing."""
-        from src.jarvis.dictation.dictation_engine import DictationEngine
+        from jarvis.dictation.dictation_engine import DictationEngine
         # We can't use _make_engine because parse_hotkey needs pynput.
         # Directly test the start() guard.
         engine = DictationEngine.__new__(DictationEngine)
@@ -179,8 +179,8 @@ class TestEngineLifecycle:
         engine.start()
         assert engine._started is False
 
-    @patch("src.jarvis.dictation.dictation_engine.sd", None)
-    @patch("src.jarvis.dictation.dictation_engine.pynput_keyboard")
+    @patch("jarvis.dictation.dictation_engine.sd", None)
+    @patch("jarvis.dictation.dictation_engine.pynput_keyboard")
     def test_start_without_sounddevice_is_noop(self, mock_kb):
         """Engine should gracefully skip when sounddevice is missing."""
         mock_kb.Key = MagicMock()
@@ -192,9 +192,9 @@ class TestEngineLifecycle:
         engine.start()
         assert engine._started is False
 
-    @patch("src.jarvis.dictation.dictation_engine.platform")
-    @patch("src.jarvis.dictation.dictation_engine.sys")
-    @patch("src.jarvis.dictation.dictation_engine.pynput_keyboard")
+    @patch("jarvis.dictation.dictation_engine.platform")
+    @patch("jarvis.dictation.dictation_engine.sys")
+    @patch("jarvis.dictation.dictation_engine.pynput_keyboard")
     def test_start_skips_on_macos_26(self, mock_kb, mock_sys, mock_platform):
         """pynput crashes on macOS 26+ (TSM thread assertion). Engine must skip."""
         mock_sys.platform = "darwin"
@@ -209,9 +209,9 @@ class TestEngineLifecycle:
         assert engine._started is False
         mock_kb.Listener.assert_not_called()
 
-    @patch("src.jarvis.dictation.dictation_engine.platform")
-    @patch("src.jarvis.dictation.dictation_engine.sys")
-    @patch("src.jarvis.dictation.dictation_engine.pynput_keyboard")
+    @patch("jarvis.dictation.dictation_engine.platform")
+    @patch("jarvis.dictation.dictation_engine.sys")
+    @patch("jarvis.dictation.dictation_engine.pynput_keyboard")
     def test_start_allowed_on_windows(self, mock_kb, mock_sys, mock_platform):
         """Windows should not be affected by the macOS guard."""
         mock_sys.platform = "win32"
@@ -258,8 +258,8 @@ class TestRecordingStateMachine:
             whisper_backend_ref=lambda: "mlx",
             mlx_repo_ref=lambda: "mlx-community/whisper-small-mlx",
         )
-        with patch("src.jarvis.dictation.dictation_engine.sd") as mock_sd, \
-             patch("src.jarvis.dictation.dictation_engine._play_beep"):
+        with patch("jarvis.dictation.dictation_engine.sd") as mock_sd, \
+             patch("jarvis.dictation.dictation_engine._play_beep"):
             mock_stream = MagicMock()
             mock_sd.InputStream.return_value = mock_stream
             engine._start_recording()
@@ -275,8 +275,8 @@ class TestRecordingStateMachine:
         engine._recording = True
         engine._session = 1
 
-        with patch('src.jarvis.dictation.dictation_engine.sd') as mock_sd, \
-             patch('src.jarvis.dictation.dictation_engine._play_beep'):
+        with patch('jarvis.dictation.dictation_engine.sd') as mock_sd, \
+             patch('jarvis.dictation.dictation_engine._play_beep'):
             devices = [
                 {'name': None, 'max_input_channels': 1},
                 {'name': 'Headset microphone', 'max_input_channels': 2,
@@ -316,8 +316,8 @@ class TestRecordingStateMachine:
         engine._recording = True
         engine._session = 1
 
-        with patch('src.jarvis.dictation.dictation_engine.sd') as mock_sd, \
-             patch('src.jarvis.dictation.dictation_engine._play_beep'):
+        with patch('jarvis.dictation.dictation_engine.sd') as mock_sd, \
+             patch('jarvis.dictation.dictation_engine._play_beep'):
             mock_sd.query_devices.return_value = [
                 {'name': 'Built-in Microphone', 'max_input_channels': 1},
             ]
@@ -333,8 +333,8 @@ class TestRecordingStateMachine:
         engine._recording = True
         engine._session = 1
 
-        with patch('src.jarvis.dictation.dictation_engine.sd') as mock_sd, \
-             patch('src.jarvis.dictation.dictation_engine._play_beep'):
+        with patch('jarvis.dictation.dictation_engine.sd') as mock_sd, \
+             patch('jarvis.dictation.dictation_engine._play_beep'):
             mock_sd.query_devices.return_value = {
                 'max_input_channels': 2, 'default_samplerate': 48000,
             }
@@ -387,7 +387,7 @@ class TestRecordingStateMachine:
         # Short (< 0.3 s) audio so transcribe_and_paste exits quickly.
         engine._audio_frames = [np.zeros(1600, dtype=np.float32)]
 
-        with patch("src.jarvis.dictation.dictation_engine._play_beep"):
+        with patch("jarvis.dictation.dictation_engine._play_beep"):
             t0 = time.time()
             engine._stop_recording()
             elapsed = time.time() - t0
@@ -421,7 +421,7 @@ class TestRecordingStateMachine:
         engine._stream = stream_mock
         engine._audio_frames = [np.zeros(1600, dtype=np.float32)]
 
-        with patch("src.jarvis.dictation.dictation_engine._play_beep"):
+        with patch("jarvis.dictation.dictation_engine._play_beep"):
             # Two near-simultaneous calls from the listener.
             t1 = threading.Thread(target=engine._stop_recording)
             t2 = threading.Thread(target=engine._stop_recording)
@@ -452,7 +452,7 @@ class TestRecordingStateMachine:
         engine._stream = stream_mock
         engine._audio_frames = []
 
-        with patch("src.jarvis.dictation.dictation_engine._play_beep"):
+        with patch("jarvis.dictation.dictation_engine._play_beep"):
             # Send many frames — well past a hypothetical 60s cap
             for _ in range(100):
                 indata = np.random.randn(1600, 1).astype(np.float32)
@@ -477,7 +477,7 @@ class TestRecordingStateMachine:
         engine = _make_engine(on_dictation_end=lambda: end_called.set())
 
         with patch(
-            "src.jarvis.dictation.dictation_engine._play_beep",
+            "jarvis.dictation.dictation_engine._play_beep",
             side_effect=RuntimeError("beep broken"),
         ):
             engine._finalise_and_transcribe(
@@ -500,8 +500,8 @@ class TestRecordingStateMachine:
             on_dictation_end=lambda: end_called.set(),
         )
 
-        with patch("src.jarvis.dictation.dictation_engine.sd") as mock_sd, \
-             patch("src.jarvis.dictation.dictation_engine._play_beep"):
+        with patch("jarvis.dictation.dictation_engine.sd") as mock_sd, \
+             patch("jarvis.dictation.dictation_engine._play_beep"):
             mock_stream = MagicMock()
             mock_sd.InputStream.return_value = mock_stream
             engine._start_recording()
@@ -592,11 +592,11 @@ class TestTranscription:
 class TestClipboard:
     """Tests for clipboard/paste helper functions."""
 
-    @patch("src.jarvis.dictation.dictation_engine.platform")
-    @patch("src.jarvis.dictation.dictation_engine._clipboard_windows")
-    @patch("src.jarvis.dictation.dictation_engine.pynput_keyboard")
+    @patch("jarvis.dictation.dictation_engine.platform")
+    @patch("jarvis.dictation.dictation_engine._clipboard_windows")
+    @patch("jarvis.dictation.dictation_engine.pynput_keyboard")
     def test_clipboard_paste_windows(self, mock_kb, mock_clip_win, mock_platform):
-        from src.jarvis.dictation.dictation_engine import _clipboard_paste
+        from jarvis.dictation.dictation_engine import _clipboard_paste
         mock_platform.system.return_value = "Windows"
         mock_ctrl = MagicMock()
         mock_kb.Controller.return_value = mock_ctrl
@@ -605,15 +605,15 @@ class TestClipboard:
         _clipboard_paste("hello")
         mock_clip_win.assert_called_once_with("hello")
 
-    @patch("src.jarvis.dictation.dictation_engine._paste_cgevent", return_value=True)
-    @patch("src.jarvis.dictation.dictation_engine._check_macos_accessibility", return_value=True)
-    @patch("src.jarvis.dictation.dictation_engine.platform")
-    @patch("src.jarvis.dictation.dictation_engine._clipboard_macos")
-    @patch("src.jarvis.dictation.dictation_engine.pynput_keyboard")
+    @patch("jarvis.dictation.dictation_engine._paste_cgevent", return_value=True)
+    @patch("jarvis.dictation.dictation_engine._check_macos_accessibility", return_value=True)
+    @patch("jarvis.dictation.dictation_engine.platform")
+    @patch("jarvis.dictation.dictation_engine._clipboard_macos")
+    @patch("jarvis.dictation.dictation_engine.pynput_keyboard")
     def test_clipboard_paste_macos(
         self, mock_kb, mock_clip_mac, mock_platform, mock_ax, mock_cge
     ):
-        from src.jarvis.dictation.dictation_engine import _clipboard_paste
+        from jarvis.dictation.dictation_engine import _clipboard_paste
         mock_platform.system.return_value = "Darwin"
         mock_ctrl = MagicMock()
         mock_kb.Controller.return_value = mock_ctrl
@@ -627,7 +627,7 @@ class TestClipboard:
         mock_cge.assert_called_once()
 
     def test_clipboard_paste_empty_string_is_noop(self):
-        from src.jarvis.dictation.dictation_engine import _clipboard_paste
+        from jarvis.dictation.dictation_engine import _clipboard_paste
         # Should return immediately without error
         _clipboard_paste("")
         _clipboard_paste(None)
@@ -707,7 +707,7 @@ class TestTranscribeAndPaste:
 
         # 0.1s of audio at 16kHz = 1600 samples (< 4800 needed for 0.3s)
         short_frames = [np.zeros(1600, dtype=np.float32)]
-        with patch("src.jarvis.dictation.dictation_engine._play_beep"):
+        with patch("jarvis.dictation.dictation_engine._play_beep"):
             engine._finalise_and_transcribe(None, short_frames, time.time(), engine._stream_sample_rate, engine._session)
         assert end_called.is_set()
 
@@ -716,11 +716,11 @@ class TestTranscribeAndPaste:
         end_called = threading.Event()
         engine._on_dictation_end = lambda: end_called.set()
 
-        with patch("src.jarvis.dictation.dictation_engine._play_beep"):
+        with patch("jarvis.dictation.dictation_engine._play_beep"):
             engine._finalise_and_transcribe(None, [], time.time(), engine._stream_sample_rate, engine._session)
         assert end_called.is_set()
 
-    @patch("src.jarvis.dictation.dictation_engine._clipboard_paste")
+    @patch("jarvis.dictation.dictation_engine._clipboard_paste")
     def test_successful_transcription_pastes(self, mock_paste):
         import numpy as np
         mock_model = MagicMock()
@@ -737,7 +737,7 @@ class TestTranscribeAndPaste:
         engine._transcribe_and_paste(frames, engine._stream_sample_rate)
         mock_paste.assert_called_once_with("hello world")
 
-    @patch("src.jarvis.dictation.dictation_engine._clipboard_paste")
+    @patch("jarvis.dictation.dictation_engine._clipboard_paste")
     def test_empty_transcription_does_not_paste(self, mock_paste):
         import numpy as np
         mock_model = MagicMock()
@@ -764,7 +764,7 @@ class TestPasteActivationSuppression:
         """Get real pynput key objects for ctrl, shift, and d."""
         from pynput import keyboard
         import importlib
-        import src.jarvis.dictation.dictation_engine as de
+        import jarvis.dictation.dictation_engine as de
         importlib.reload(de)  # ensures _MODIFIER_MAP is populated
         return (
             keyboard.Key.ctrl_l,
@@ -775,7 +775,7 @@ class TestPasteActivationSuppression:
     def test_paste_in_progress_suppresses_restart(self):
         """Synthetic key events during paste must not trigger new recording."""
         from pynput import keyboard as pynput_kb
-        from src.jarvis.dictation.dictation_engine import DictationEngine
+        from jarvis.dictation.dictation_engine import DictationEngine
 
         engine = _make_engine(hotkey="ctrl+shift+d")
         ctrl, shift, d = self._make_keys()
@@ -836,7 +836,7 @@ class TestConfigIntegration:
     """Tests that dictation config fields are present in Settings."""
 
     def test_settings_has_dictation_fields(self):
-        from src.jarvis.config import Settings
+        from jarvis.config import Settings
         import inspect
         sig = inspect.signature(Settings)
         assert "dictation_enabled" in sig.parameters
@@ -844,7 +844,7 @@ class TestConfigIntegration:
 
     def test_default_config_has_dictation(self):
         import sys
-        from src.jarvis.config import get_default_config
+        from jarvis.config import get_default_config
         defaults = get_default_config()
         assert defaults["dictation_enabled"] is True
         # Platform-aware default (aligned with WisprFlow)
@@ -855,7 +855,7 @@ class TestConfigIntegration:
 
     def test_load_settings_includes_dictation(self):
         """load_settings should produce Settings with dictation fields."""
-        from src.jarvis.config import load_settings
+        from jarvis.config import load_settings
         settings = load_settings()
         assert hasattr(settings, "dictation_enabled")
         assert hasattr(settings, "dictation_hotkey")
@@ -900,7 +900,7 @@ class TestDictationProcessingCallback:
     def test_processing_callback_fires_before_end_callback(self):
         """End-to-end ordering: the processing callback must fire before the
         end callback during the full finalise → transcribe → paste chain."""
-        from src.jarvis.dictation import dictation_engine as de
+        from jarvis.dictation import dictation_engine as de
 
         events = []
 
@@ -921,7 +921,7 @@ class TestDictationProcessingCallback:
 
     def test_processing_callback_optional(self):
         """Engine must work when no processing callback is supplied."""
-        from src.jarvis.dictation import dictation_engine as de
+        from jarvis.dictation import dictation_engine as de
 
         engine = _make_engine(on_dictation_processing_start=None)
 
@@ -993,7 +993,7 @@ class TestListenerPauseFlag:
     @pytest.fixture()
     def listener(self):
         """Create a VoiceListener with mock dependencies."""
-        from src.jarvis.listening.listener import VoiceListener
+        from jarvis.listening.listener import VoiceListener
         cfg = MagicMock()
         cfg.sample_rate = 16000
         cfg.vad_enabled = False
@@ -1018,45 +1018,45 @@ class TestListenerPauseFlag:
 class TestFormatHotkeyDisplay:
     """Tests for platform-aware hotkey display formatting."""
 
-    @patch("src.jarvis.dictation.dictation_engine.platform")
+    @patch("jarvis.dictation.dictation_engine.platform")
     def test_windows_cmd_shows_win(self, mock_platform):
-        from src.jarvis.dictation.dictation_engine import format_hotkey_display
+        from jarvis.dictation.dictation_engine import format_hotkey_display
         mock_platform.system.return_value = "Windows"
         assert format_hotkey_display("ctrl+cmd") == "Ctrl + Win"
 
-    @patch("src.jarvis.dictation.dictation_engine.platform")
+    @patch("jarvis.dictation.dictation_engine.platform")
     def test_windows_super_shows_win(self, mock_platform):
-        from src.jarvis.dictation.dictation_engine import format_hotkey_display
+        from jarvis.dictation.dictation_engine import format_hotkey_display
         mock_platform.system.return_value = "Windows"
         assert format_hotkey_display("ctrl+super") == "Ctrl + Win"
 
-    @patch("src.jarvis.dictation.dictation_engine.platform")
+    @patch("jarvis.dictation.dictation_engine.platform")
     def test_windows_win_shows_win(self, mock_platform):
-        from src.jarvis.dictation.dictation_engine import format_hotkey_display
+        from jarvis.dictation.dictation_engine import format_hotkey_display
         mock_platform.system.return_value = "Windows"
         assert format_hotkey_display("ctrl+win") == "Ctrl + Win"
 
-    @patch("src.jarvis.dictation.dictation_engine.platform")
+    @patch("jarvis.dictation.dictation_engine.platform")
     def test_macos_cmd_shows_cmd(self, mock_platform):
-        from src.jarvis.dictation.dictation_engine import format_hotkey_display
+        from jarvis.dictation.dictation_engine import format_hotkey_display
         mock_platform.system.return_value = "Darwin"
         assert format_hotkey_display("ctrl+cmd") == "Ctrl + Cmd"
 
-    @patch("src.jarvis.dictation.dictation_engine.platform")
+    @patch("jarvis.dictation.dictation_engine.platform")
     def test_macos_alt_shows_option(self, mock_platform):
-        from src.jarvis.dictation.dictation_engine import format_hotkey_display
+        from jarvis.dictation.dictation_engine import format_hotkey_display
         mock_platform.system.return_value = "Darwin"
         assert format_hotkey_display("ctrl+alt") == "Ctrl + Option"
 
-    @patch("src.jarvis.dictation.dictation_engine.platform")
+    @patch("jarvis.dictation.dictation_engine.platform")
     def test_ctrl_shift_d(self, mock_platform):
-        from src.jarvis.dictation.dictation_engine import format_hotkey_display
+        from jarvis.dictation.dictation_engine import format_hotkey_display
         mock_platform.system.return_value = "Windows"
         assert format_hotkey_display("ctrl+shift+d") == "Ctrl + Shift + D"
 
-    @patch("src.jarvis.dictation.dictation_engine.platform")
+    @patch("jarvis.dictation.dictation_engine.platform")
     def test_linux_alt_stays_alt(self, mock_platform):
-        from src.jarvis.dictation.dictation_engine import format_hotkey_display
+        from jarvis.dictation.dictation_engine import format_hotkey_display
         mock_platform.system.return_value = "Linux"
         assert format_hotkey_display("ctrl+alt") == "Ctrl + Alt"
 
@@ -1076,7 +1076,7 @@ class TestClipboardWindowsCtypes:
         """Write to clipboard and read back to verify ctypes bindings."""
         import ctypes
         from ctypes import wintypes
-        from src.jarvis.dictation.dictation_engine import _clipboard_windows
+        from jarvis.dictation.dictation_engine import _clipboard_windows
 
         test_text = "dictation test 🎙️"
         _clipboard_windows(test_text)
@@ -1114,7 +1114,7 @@ class TestLlmCleanDictation:
     are never silently truncated."""
 
     def test_cap_scales_with_text_length(self):
-        from src.jarvis.dictation.dictation_engine import _llm_clean_dictation
+        from jarvis.dictation.dictation_engine import _llm_clean_dictation
 
         caps = {}
 
@@ -1125,7 +1125,7 @@ class TestLlmCleanDictation:
         fake_backend = MagicMock()
         fake_backend.direct.side_effect = fake_direct
 
-        with patch("src.jarvis.llm.get_llm_backend", return_value=fake_backend):
+        with patch("jarvis.llm.get_llm_backend", return_value=fake_backend):
             _llm_clean_dictation("short", MagicMock())
             short_cap = caps["max_tokens"]
 
@@ -1142,13 +1142,13 @@ class TestLlmCleanDictation:
 @pytest.mark.unit
 def test_unavailable_default_ends_dictation_without_recording(capsys):
     ended = threading.Event()
-    with patch('src.jarvis.dictation.dictation_engine.parse_hotkey',
+    with patch('jarvis.dictation.dictation_engine.parse_hotkey',
                return_value=(frozenset(), None)):
         engine = _make_engine(on_dictation_end=ended.set)
     engine._recording = True
     engine._session = 1
-    with patch('src.jarvis.dictation.dictation_engine.sd') as audio, \
-         patch('src.jarvis.dictation.dictation_engine._play_beep'):
+    with patch('jarvis.dictation.dictation_engine.sd') as audio, \
+         patch('jarvis.dictation.dictation_engine._play_beep'):
         audio.query_devices.side_effect = RuntimeError('Error querying device -1')
         engine._begin_recording(1)
         audio.InputStream.assert_not_called()
@@ -1159,7 +1159,7 @@ def test_unavailable_default_ends_dictation_without_recording(capsys):
 
 @pytest.mark.unit
 def test_dictation_keeps_default_input_during_native_rate_query():
-    with patch('src.jarvis.dictation.dictation_engine.parse_hotkey',
+    with patch('jarvis.dictation.dictation_engine.parse_hotkey',
                return_value=(frozenset(), None)):
         engine = _make_engine()
     engine._recording = True
@@ -1167,8 +1167,8 @@ def test_dictation_keeps_default_input_during_native_rate_query():
     selected = {'index': 3, 'name': 'Selected microphone', 'max_input_channels': 1,
                 'default_samplerate': 48000}
     opened = []
-    with patch('src.jarvis.dictation.dictation_engine.sd') as audio, \
-         patch('src.jarvis.dictation.dictation_engine._play_beep'):
+    with patch('jarvis.dictation.dictation_engine.sd') as audio, \
+         patch('jarvis.dictation.dictation_engine._play_beep'):
         def query(device=None, *, kind=None):
             if kind == 'input':
                 return selected.copy()

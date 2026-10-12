@@ -19,7 +19,7 @@ class TestDictationHistory:
     """Tests for the file-backed dictation history store."""
 
     def _make_history(self, tmp_path):
-        from src.jarvis.dictation.history import DictationHistory
+        from jarvis.dictation.history import DictationHistory
         return DictationHistory(path=tmp_path / "history.json")
 
     def test_add_and_get_all(self, tmp_path):
@@ -68,7 +68,7 @@ class TestDictationHistory:
 
     def test_persistence_across_instances(self, tmp_path):
         path = tmp_path / "history.json"
-        from src.jarvis.dictation.history import DictationHistory
+        from jarvis.dictation.history import DictationHistory
 
         h1 = DictationHistory(path=path)
         h1.add("persisted text", duration=1.0)
@@ -79,7 +79,7 @@ class TestDictationHistory:
         assert entries[0]["text"] == "persisted text"
 
     def test_max_entries_trimming(self, tmp_path):
-        from src.jarvis.dictation.history import DictationHistory
+        from jarvis.dictation.history import DictationHistory
         h = DictationHistory(path=tmp_path / "history.json", max_entries=3)
         h.add("a")
         h.add("b")
@@ -94,14 +94,14 @@ class TestDictationHistory:
     def test_empty_file_loads_gracefully(self, tmp_path):
         path = tmp_path / "history.json"
         path.write_text("")
-        from src.jarvis.dictation.history import DictationHistory
+        from jarvis.dictation.history import DictationHistory
         h = DictationHistory(path=path)
         assert h.count == 0
 
     def test_corrupt_file_loads_gracefully(self, tmp_path):
         path = tmp_path / "history.json"
         path.write_text("not valid json{{{")
-        from src.jarvis.dictation.history import DictationHistory
+        from jarvis.dictation.history import DictationHistory
         h = DictationHistory(path=path)
         assert h.count == 0
 
@@ -130,7 +130,7 @@ class TestDictationHistory:
     def test_reload_from_disk_picks_up_external_writes(self, tmp_path):
         """reload_from_disk should refresh entries written by another process."""
         path = tmp_path / "history.json"
-        from src.jarvis.dictation.history import DictationHistory
+        from jarvis.dictation.history import DictationHistory
 
         h = DictationHistory(path=path)
         assert h.count == 0
@@ -151,7 +151,7 @@ class TestDictationHistory:
     def test_reload_from_disk_is_thread_safe(self, tmp_path):
         """reload_from_disk should acquire the lock (no crash under contention)."""
         import threading
-        from src.jarvis.dictation.history import DictationHistory
+        from jarvis.dictation.history import DictationHistory
 
         path = tmp_path / "history.json"
         h = DictationHistory(path=path)
@@ -205,7 +205,7 @@ class TestDictationHistoryWindow:
     def test_set_history_stores_reference(self, tmp_path):
         """set_history should accept a DictationHistory instance."""
         from src.desktop_app.dictation_history import DictationHistoryWindow
-        from src.jarvis.dictation.history import DictationHistory
+        from jarvis.dictation.history import DictationHistory
         h = DictationHistory(path=tmp_path / "h.json")
         # Instantiate without QApplication — just test the attribute
         win = DictationHistoryWindow.__new__(DictationHistoryWindow)
@@ -221,7 +221,7 @@ class TestDictationHistoryWindow:
         whatever container is now in the scroll area, not the old one.
         """
         from src.desktop_app.dictation_history import DictationHistoryWindow
-        from src.jarvis.dictation.history import DictationHistory
+        from jarvis.dictation.history import DictationHistory
 
         history = DictationHistory(path=tmp_path / "h.json")
         history.add("first")
@@ -250,7 +250,7 @@ class TestDictationHistoryWindow:
             DictationHistoryWindow,
             _DictationCard,
         )
-        from src.jarvis.dictation.history import DictationHistory
+        from jarvis.dictation.history import DictationHistory
 
         history = DictationHistory(path=tmp_path / "h.json")
         window = DictationHistoryWindow(history=history)
@@ -289,7 +289,7 @@ class TestDictationHistoryWindow:
         fresh entries from history and rebuilds from scratch.
         """
         from src.desktop_app.dictation_history import DictationHistoryWindow
-        from src.jarvis.dictation.history import DictationHistory
+        from jarvis.dictation.history import DictationHistory
 
         history = DictationHistory(path=tmp_path / "h.json")
         window = DictationHistoryWindow(history=history)
@@ -336,7 +336,7 @@ class TestDictationHistoryWindow:
         session need to keep the list layout healthy.
         """
         from src.desktop_app.dictation_history import DictationHistoryWindow
-        from src.jarvis.dictation.history import DictationHistory
+        from jarvis.dictation.history import DictationHistory
 
         history = DictationHistory(path=tmp_path / "h.json")
         for i in range(5):
@@ -369,7 +369,7 @@ class TestDictationHistoryWindow:
             DictationHistoryWindow,
             _DictationCard,
         )
-        from src.jarvis.dictation.history import DictationHistory
+        from jarvis.dictation.history import DictationHistory
 
         history = DictationHistory(path=tmp_path / "h.json")
         history.add("pre-existing")
@@ -408,7 +408,7 @@ class TestDictationHistoryWindow:
         container's direct children are exactly the layout contents.
         """
         from src.desktop_app.dictation_history import DictationHistoryWindow
-        from src.jarvis.dictation.history import DictationHistory
+        from jarvis.dictation.history import DictationHistory
         from PyQt6.QtCore import Qt
         from PyQt6.QtWidgets import QWidget
 
@@ -487,7 +487,7 @@ class TestDictationHistoryWindow:
         current session.
         """
         from src.desktop_app.dictation_history import DictationHistoryWindow
-        from src.jarvis.dictation.history import DictationHistory
+        from jarvis.dictation.history import DictationHistory
 
         path = tmp_path / "h.json"
 
@@ -557,7 +557,7 @@ class TestEngineHistoryIntegration:
             pytest.skip("required dependencies not installed")
 
     def test_engine_has_history_attribute(self):
-        from src.jarvis.dictation.dictation_engine import DictationEngine
+        from jarvis.dictation.dictation_engine import DictationEngine
         import threading
         engine = DictationEngine(
             whisper_model_ref=lambda: MagicMock(),
@@ -569,12 +569,12 @@ class TestEngineHistoryIntegration:
         assert hasattr(engine, "history")
         assert engine.history is not None
 
-    @patch("src.jarvis.dictation.dictation_engine._clipboard_paste")
+    @patch("jarvis.dictation.dictation_engine._clipboard_paste")
     def test_successful_dictation_saves_to_history(self, mock_paste, tmp_path):
         import numpy as np
         import threading
-        from src.jarvis.dictation.dictation_engine import DictationEngine
-        from src.jarvis.dictation.history import DictationHistory
+        from jarvis.dictation.dictation_engine import DictationEngine
+        from jarvis.dictation.history import DictationHistory
 
         mock_model = MagicMock()
         mock_seg = MagicMock()
@@ -598,12 +598,12 @@ class TestEngineHistoryIntegration:
         entry = engine.history.get_all()[0]
         assert entry["text"] == "dictated text"
 
-    @patch("src.jarvis.dictation.dictation_engine._clipboard_paste")
+    @patch("jarvis.dictation.dictation_engine._clipboard_paste")
     def test_on_dictation_result_callback_called(self, mock_paste, tmp_path):
         import numpy as np
         import threading
-        from src.jarvis.dictation.dictation_engine import DictationEngine
-        from src.jarvis.dictation.history import DictationHistory
+        from jarvis.dictation.dictation_engine import DictationEngine
+        from jarvis.dictation.history import DictationHistory
 
         mock_model = MagicMock()
         mock_seg = MagicMock()
@@ -627,12 +627,12 @@ class TestEngineHistoryIntegration:
         assert len(results) == 1
         assert results[0]["text"] == "hello"
 
-    @patch("src.jarvis.dictation.dictation_engine._clipboard_paste")
+    @patch("jarvis.dictation.dictation_engine._clipboard_paste")
     def test_empty_transcription_not_saved(self, mock_paste, tmp_path):
         import numpy as np
         import threading
-        from src.jarvis.dictation.dictation_engine import DictationEngine
-        from src.jarvis.dictation.history import DictationHistory
+        from jarvis.dictation.dictation_engine import DictationEngine
+        from jarvis.dictation.history import DictationHistory
 
         mock_model = MagicMock()
         mock_model.transcribe.return_value = ([], MagicMock())

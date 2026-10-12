@@ -34,7 +34,7 @@ class TestDiaryScrubEndpoint:
     def setup_app(self, tmp_path, monkeypatch, mock_config):
         # Import via the same module paths the endpoint itself uses
         # (no ``src.`` prefix). With both repo-root and ``src/`` on
-        # ``sys.path`` (see ``tests/conftest.py``), ``src.jarvis.x`` and
+        # ``sys.path`` (see ``tests/conftest.py``), ``jarvis.x`` and
         # ``jarvis.x`` resolve to distinct module instances and a
         # monkeypatch on one does not land on the other.
         from desktop_app import memory_viewer
