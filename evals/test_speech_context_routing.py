@@ -1,6 +1,9 @@
 """Speech identifies requested subjects without supplying unknown answer facts."""
 import pytest
-from evals.query_context_comparison import comparison_settings
+from evals.helpers import isolated_voice_settings
+from evals.conftest import requires_judge_llm
+
+pytestmark = [pytest.mark.eval, requires_judge_llm]
 from evals.tool_routing import route_tools
 from jarvis.listening.speech_context import SpeechContext
 from jarvis.listening.transcript_buffer import TranscriptSegment
@@ -11,10 +14,13 @@ from jarvis.listening.transcript_buffer import TranscriptSegment
     ('The new iPhone looks cool', 'Jarvis how much does that cost', 'webSearch'),
     ('How tall is Mount Everest', 'Jarvis answer that', 'webSearch'),
     ('Los AirPods suenan muy bien', 'Jarvis cuánto cuestan', 'webSearch'),
+    ('', 'Jarvis, who is Jarvis Cocker?', 'webSearch'),
+    ('Brandon Cronenberg directed Possessor', 'What other films has he made', 'webSearch'),
+    ('How tall is Mount Everest? Charlie sands to that.', 'Jarvis answer that', 'webSearch'),
     ('The parcel reference is ZX-4821', 'Jarvis what is the parcel reference', None),
 ])
 def test_router_resolves_speech_reference_before_selecting_capabilities(earlier, current, tool):
-    cfg = comparison_settings('http://127.0.0.1:11434', 'gemma4:e2b', provider='ollama')
+    cfg = isolated_voice_settings()
     reference = SpeechContext.capture([TranscriptSegment(earlier, 1, 2),
                                        TranscriptSegment(current, 3, 4)],
                                       current_text=current, assistant_names=(cfg.wake_word, *cfg.wake_aliases)).render()

@@ -73,7 +73,7 @@ When the reply engine passes a `context_hint`, it is split into two labelled sem
 
 The split is the exact marker `"Recent dialogue (short-term memory):"` — any content before it is known facts, content after it is recent dialogue. If no dialogue marker is present, the whole hint is treated as known facts.
 
-Voice routing receives a separate `transcript_context` after the catalogue and live hint. It is redacted, fenced reference data; the current request takes priority over earlier instructions, unrelated threads and TTS echo. The reply engine includes its fingerprint in the router cache key. Keyword and embedding strategies use the current request.
+Voice routing receives a separate `transcript_context` after the catalogue and live hint. It is redacted, fenced reference data; the current request takes priority over earlier instructions, unrelated threads and TTS echo. The reply engine includes its fingerprint in the router cache key. A topic, named subject or prior question is not treated as an answer. Routing first resolves the subject, then chooses tools for the requested information or action still needed. Keyword and embedding strategies use the current request.
 
 ### Interface
 

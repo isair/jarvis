@@ -53,7 +53,7 @@ def test_speech_context_is_an_immutable_redacted_data_snapshot():
     assert 'Different entity' not in rendered
     assert 'bob@example.com' not in rendered
     assert rendered.count('<<<END TRANSCRIPT>>>') == 1
-    assert 'What is its price?' in rendered
+    assert 'What is its price?' not in rendered
 
 
 def test_configured_wake_names_are_reference_metadata():
@@ -353,7 +353,7 @@ def test_reference_snapshot_excludes_current_segment_and_unused_aliases():
                                     TranscriptSegment(request, 3, 4, processed=True)],
                                     current_text=request, assistant_names=('Jarvis', 'Jairus', 'Unused'))
     data = json.loads(context.render().split('<<<BEGIN TRANSCRIPT>>>\n')[1].split('\n<<<END TRANSCRIPT>>>')[0])
-    assert data['current_request'] == request
+    assert request not in context.render()
     assert [item['text'] for item in data['transcript']] == ['Copper lantern']
     assert data['assistant_names'] == ['Jarvis', 'Jairus']
 
@@ -396,3 +396,53 @@ def test_followup_fragments_accumulate_the_original_request():
         assert _accepted_query(listener) == first+' '+second
     finally:
         listener.stop()
+
+
+@pytest.mark.parametrize('resolver', [False, True])
+def test_planner_catalogue_prefix_is_shared_across_voice_requests(mock_config, resolver):
+    from jarvis.reply import planner
+    calls = []
+    def infer(**kwargs):
+        calls.append(kwargs)
+        return 'null' if resolver else 'Reply to the user.'
+    tools = [{'type': 'function', 'function': {'name': 'findItem',
+             'parameters': {'type': 'object', 'properties': {'name': {'type': 'string'}}}}}]
+    with patch.object(planner, 'call_llm_direct', side_effect=infer):
+        for reference in ('Copper lantern', 'Silver vase'):
+            if resolver:
+                planner.resolve_next_tool_call(mock_config, 'findItem name=<item>', [], tools,
+                    original_query='Find it', transcript_context=reference)
+            else:
+                planner.plan_query(mock_config, 'Find it', '', [('findItem', 'Find an item')],
+                                   transcript_context=reference)
+    assert calls[0]['system_prompt'] == calls[1]['system_prompt']
+    prefixes = [call['user_content'].split(reference)[0]
+                for call, reference in zip(calls, ('Copper lantern', 'Silver vase'))]
+    assert prefixes[0] == prefixes[1]
+    assert 'findItem' in prefixes[0]
+    assert all(reference in call['user_content'] for call, reference in
+               zip(calls, ('Copper lantern', 'Silver vase')))
+
+
+def test_collected_current_fragments_are_not_ambient_references():
+    import json
+    from jarvis.listening.speech_context import SpeechContext
+    first, second = 'Pick three office days this week.', 'Which days would you choose?'
+    prior = 'The forecast is dry.'
+    snapshot = SpeechContext.capture([TranscriptSegment(prior, 1, 2),
+                                     TranscriptSegment(first, 3, 4),
+                                     TranscriptSegment(second, 5, 6)],
+                                    current_text=first+' '+second)
+    data = json.loads(snapshot.render().split('<<<BEGIN TRANSCRIPT>>>\n')[1].split('\n<<<END TRANSCRIPT>>>')[0])
+    assert [item['text'] for item in data['transcript']] == [prior]
+    assert first not in snapshot.render()
+    assert second not in snapshot.render()
+
+
+def test_reference_data_does_not_repeat_the_separately_supplied_request():
+    from jarvis.listening.speech_context import SpeechContext
+    current = 'Pick exactly three office days this week'
+    snapshot = SpeechContext.capture([TranscriptSegment('Unrelated television conversation', 1, 2),
+                                     TranscriptSegment(current, 3, 4)], current_text=current)
+    assert current not in snapshot.render()
+    assert 'Unrelated television conversation' in snapshot.render()

@@ -47,7 +47,8 @@ def comparison_settings(base_url: str, model: str, *, fast_model: str = "", api_
         with patch.dict(os.environ, {"JARVIS_CONFIG_PATH": str(path)}):
             cfg = load_settings()
     # Credentials are held in memory and excluded from benchmark files.
-    return replace(cfg, llm_api_key=api_key, sqlite_vss_path=None)
+    return replace(cfg, llm_api_key=api_key, sqlite_vss_path=None,
+                   llm_chat_model=model, ollama_chat_model=model, fast_model=fast_model or model)
 
 
 @dataclass(frozen=True)

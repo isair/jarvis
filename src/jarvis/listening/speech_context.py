@@ -27,8 +27,15 @@ class SpeechContext:
 
     def render(self) -> str:
         references = list(self.segments)
-        if references and references[-1][0].strip() == self.current_text.strip():
-            references.pop()
+        current = self.current_text.strip()
+        suffix = ""
+        for index in range(len(references) - 1, -1, -1):
+            suffix = (references[index][0].strip() + " " + suffix).strip()
+            if suffix == current:
+                references = references[:index]
+                break
+            if len(suffix) >= len(current):
+                break
         text_parts = [self.current_text, self.last_tts, *(item[0] for item in references)]
         names = self.assistant_names[:1] + tuple(
             name for name in self.assistant_names[1:]
@@ -38,7 +45,6 @@ class SpeechContext:
         if not references and not self.last_tts and not addressed:
             return ""
         state = {
-            "current_request": scrub_secrets(self.current_text),
             "last_assistant_speech": scrub_secrets(self.last_tts),
             "assistant_names": [scrub_secrets(name) for name in names],
             "transcript": [

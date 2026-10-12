@@ -306,6 +306,10 @@ def _select_llm(
         '"tools": ["exact_tool_name"]}. Every tool entry is a string, '
         'never an object. When known facts answer the query, return '
         '{"requested_operation": "answer from known facts", "tools": []}. '
+        "A transcript or dialogue can identify the subject without supplying the answer. "
+        "A mentioned name, an unanswered question, or an answer to a different question "
+        "does not answer the current request. Resolve the subject first, then choose "
+        "tools for the information or action still needed. "
         "Output only the JSON object, without code fences."
     )
     hint_section = ""
