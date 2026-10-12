@@ -867,7 +867,8 @@ def _previous_turn_failed_tool_names(recent_messages: list) -> list[str]:
 
     Walks ``recent_messages`` from the end backwards, stopping at the
     first genuine user message (a ``role=user`` entry without a
-    ``tool_name`` field). Returns deduplicated names in chronological
+    ``tool_name`` field). The latest recorded outcome for each tool decides
+    whether it remains failed. Returns deduplicated names in chronological
     order.
 
     The ``tool_failed`` flag is the truth source: a tool may return
@@ -880,9 +881,7 @@ def _previous_turn_failed_tool_names(recent_messages: list) -> list[str]:
         return []
     pending_call_id_to_name: dict[str, str] = {}
     seen_call_ids: set[str] = set()
-    failed_call_ids: set[str] = set()
-    failed_names_text_tool: list[str] = []
-    seen: set[str] = set()
+    result_messages: list[dict] = []
     for msg in reversed(recent_messages):
         if not isinstance(msg, dict):
             continue
@@ -907,20 +906,19 @@ def _previous_turn_failed_tool_names(recent_messages: list) -> list[str]:
             cid = msg.get("tool_call_id")
             if isinstance(cid, str) and cid:
                 seen_call_ids.add(cid)
-                if msg.get("tool_failed"):
-                    failed_call_ids.add(cid)
+                result_messages.append(msg)
         elif role == "user" and msg.get("tool_name"):
-            if msg.get("tool_failed"):
-                name = msg.get("tool_name")
-                if isinstance(name, str) and name and name not in seen:
-                    failed_names_text_tool.append(name)
-                    seen.add(name)
-    # Resolve native-mode failed call ids to names.
-    failed_names_native: list[str] = []
-    for cid, name in pending_call_id_to_name.items():
-        if cid in failed_call_ids and name not in seen:
-            failed_names_native.append(name)
-            seen.add(name)
+            result_messages.append(msg)
+
+    # Results are newest first: a corrected success supersedes an older
+    # failure, while a later failure remains eligible for continuation.
+    latest_outcomes: dict[str, bool] = {}
+    for msg in result_messages:
+        name = (pending_call_id_to_name.get(msg.get("tool_call_id"))
+                if msg.get("role") == "tool" else msg.get("tool_name"))
+        failed = msg.get("tool_failed")
+        if isinstance(name, str) and name and isinstance(failed, bool):
+            latest_outcomes.setdefault(name, failed)
     # Diagnose dropped or unmatched tool turns: an assistant tool_call
     # without ANY corresponding role=tool result (success or failure)
     # indicates upstream data loss (truncation, scrub, eviction). The
@@ -937,9 +935,7 @@ def _previous_turn_failed_tool_names(recent_messages: list) -> list[str]:
             f"(call_ids={_orphan_call_ids[:3]}{'…' if len(_orphan_call_ids) > 3 else ''})",
             "planning",
         )
-    # Text-tool walked end-to-front, native order follows assistant-message
-    # walk; both are reversed back to chronological for stable output.
-    return list(reversed(failed_names_text_tool)) + failed_names_native
+    return [name for name, failed in reversed(latest_outcomes.items()) if failed]
 
 
 def _conversation_cache_key(namespace: str, inputs: dict) -> str:

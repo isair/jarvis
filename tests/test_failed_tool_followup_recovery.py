@@ -124,3 +124,29 @@ def test_rejected_draft_is_not_reused_as_context(mock_config,db,dialogue_memory)
     assert reply=='Confirmed result: 14 units.'
     assert all('Invented result' not in str(messages) for messages in seen[1:])
     assert any('Which input should I use?' in message.get('content','') for message in seen[1])
+
+
+@pytest.mark.parametrize('native', [False, True])
+@pytest.mark.parametrize('latest_failed', [False, True])
+def test_latest_prior_outcome_controls_followup_requirement(mock_config, db, dialogue_memory, native, latest_failed):
+    dialogue_memory.add_message('user', 'Look up the requested information.')
+    results = []
+    for index, failed in enumerate([not latest_failed, latest_failed]):
+        content = 'Lookup unavailable.' if failed else 'Confirmed result: 14 units.'
+        if native:
+            results.extend([
+                {'role': 'assistant', 'content': '', 'tool_calls': [{
+                    'id': str(index), 'function': {'name': 'getWeather', 'arguments': {}},
+                }]},
+                {'role': 'tool', 'tool_call_id': str(index), 'tool_name': 'getWeather',
+                 'content': content, 'tool_failed': failed},
+            ])
+        else:
+            results.append({'role': 'user', 'tool_name': 'getWeather',
+                            'content': content, 'tool_failed': failed})
+    dialogue_memory.record_tool_turn(results)
+    dialogue_memory.add_message('assistant', 'The lookup is unavailable.' if latest_failed else 'Confirmed result: 14 units.')
+    reply = run(mock_config, db, dialogue_memory, 'getWeather',
+                [prose('The earlier result was 14 units.')]*4)
+    expected = engine._UNEXECUTED_ACTION_REPLY if latest_failed else 'The earlier result was 14 units.'
+    assert reply == expected

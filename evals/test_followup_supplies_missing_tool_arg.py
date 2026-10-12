@@ -218,3 +218,31 @@ def test_failed_search_followup_uses_current_tool_result(eval_db, eval_dialogue_
     assert any(call['name'] == 'webSearch' and 'saffron kite' in str(call['args']).casefold()
                for call in capture.calls), capture.calls
     assert '11:37' in reply, reply
+
+
+@pytest.mark.eval
+@requires_judge_llm
+def test_corrected_previous_lookup_remains_available(eval_db, eval_dialogue_memory):
+    import re
+    from jarvis.reply import engine
+
+    cfg = voice_config()
+    cfg.planner_enabled = False
+    cfg.location_enabled = False
+    eval_dialogue_memory.add_message('user', 'Check the weather for London tomorrow.')
+    eval_dialogue_memory.record_tool_turn([
+        {'role': 'user', 'content': 'Location missing.',
+         'tool_name': 'getWeather', 'tool_failed': True},
+        {'role': 'user', 'content': _LONDON_FORECAST,
+         'tool_name': 'getWeather', 'tool_failed': False},
+    ])
+    eval_dialogue_memory.add_message('assistant', 'Tomorrow in London will have light rain and a high of 16°C.')
+    capture = ToolCallCapture()
+    with patch.object(engine, 'run_tool_with_retries', side_effect=_make_get_weather_runner(capture)):
+        reply = engine.run_reply_engine(
+            eval_db, cfg, None,
+            'Based only on the result you just got, what is tomorrow\'s high in London?',
+            eval_dialogue_memory,
+        )
+    assert_forecast_reply(reply, _LONDON_FORECAST, 'corrected previous lookup')
+    assert re.search(r'(?<!\d)16(?!\d)\s*(?:°\s*C|degrees?\b)', reply, re.IGNORECASE), reply
