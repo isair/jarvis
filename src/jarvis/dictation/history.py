@@ -46,7 +46,8 @@ class DictationHistory:
         self._lock = threading.Lock()
         self._file_lock = FileLock(str(self._path) + ".lock", timeout=2, mode=0o600,
                                    fallback_to_soft=False, preserve_lock_file=True)
-        self._entries: List[Dict[str, Any]] = self._load()
+        self._entries: List[Dict[str, Any]] = []
+        self.reload_from_disk()
 
     # ------------------------------------------------------------------
     # Public API
@@ -96,7 +97,11 @@ class DictationHistory:
         pick up changes written by another process.
         """
         with self._lock:
-            self._entries = self._load()
+            try:
+                self._entries = self._read_entries()
+            except Exception as exc:
+                from jarvis.debug import debug_log
+                debug_log(f"dictation history refresh failed: {type(exc).__name__}", "dictation")
 
     @property
     def count(self) -> int:
@@ -107,16 +112,17 @@ class DictationHistory:
     # Persistence
     # ------------------------------------------------------------------
 
-    def _load(self) -> List[Dict[str, Any]]:
+    def _read_entries(self) -> List[Dict[str, Any]]:
+        """Read the current JSON list; only a missing file represents a new store."""
         try:
-            if self._path.exists():
-                with self._path.open("r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    if isinstance(data, list):
-                        return data
-        except Exception:
-            pass
-        return []
+            stream = self._path.open("r", encoding="utf-8")
+        except FileNotFoundError:
+            return []
+        with stream:
+            data = json.load(stream)
+        if not isinstance(data, list):
+            raise ValueError("Dictation history must contain a JSON list")
+        return data
 
     @contextmanager
     def _write_transaction(self, *, wait_for_writer: bool):
@@ -127,11 +133,13 @@ class DictationHistory:
                 if not self._lock.acquire(blocking=wait_for_writer):
                     raise HistoryUpdateError("Dictation history is busy")
                 try:
-                    self._entries = self._load()
-                    yield
-                except Exception:
-                    self._entries = self._load()
-                    raise
+                    current = self._read_entries()
+                    self._entries = list(current)
+                    try:
+                        yield
+                    except Exception:
+                        self._entries = current
+                        raise
                 finally:
                     self._lock.release()
         except Exception as exc:
