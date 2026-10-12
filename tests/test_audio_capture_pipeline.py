@@ -315,7 +315,8 @@ def test_utterance_finalisation_queues_transcription_without_blocking():
                                         _last_tts_finish_time=0, echo_tolerance=0.3)
     obj.tts = None
     obj._capture_generation = 0
-    obj.cfg = SimpleNamespace(voice_debug=False, whisper_min_audio_duration=0.3)
+    obj.cfg = SimpleNamespace(voice_min_energy=obj.cfg.voice_min_energy,
+                              voice_debug=False, whisper_min_audio_duration=0.3)
     obj._calculate_audio_energy = lambda frames: 0.1
 
     obj._finalize_utterance()
@@ -401,7 +402,8 @@ def test_utterance_finalisation_continues_while_whisper_is_busy():
         obj._silence_frames = 0
         obj.echo_detector = SimpleNamespace(_utterance_start_time=1.0, _tts_start_time=0,
                                             _last_tts_finish_time=0, echo_tolerance=0.3)
-        obj.cfg = SimpleNamespace(voice_debug=False, whisper_min_audio_duration=0.3)
+        obj.cfg = SimpleNamespace(voice_min_energy=obj.cfg.voice_min_energy,
+                                  voice_debug=False, whisper_min_audio_duration=0.3)
         obj.tts = None
         obj._calculate_audio_energy = lambda frames: 0.1
 
@@ -570,7 +572,8 @@ def test_queued_job_keeps_tts_context_from_audio_capture():
     obj.echo_detector = SimpleNamespace(_utterance_start_time=10.0, _tts_start_time=0,
                                         _last_tts_finish_time=0, echo_tolerance=0.3)
     obj.tts = SimpleNamespace(is_speaking=Mock(return_value=False))
-    obj.cfg = SimpleNamespace(voice_debug=False, whisper_min_audio_duration=0.3)
+    obj.cfg = SimpleNamespace(voice_min_energy=obj.cfg.voice_min_energy,
+                              voice_debug=False, whisper_min_audio_duration=0.3)
     obj._calculate_audio_energy = lambda frames: 0.1
 
     obj._finalize_utterance()

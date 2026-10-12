@@ -44,6 +44,13 @@ that failed. PortAudio guidance belongs to capture failures, not VAD or array
 processing failures. Capture cannot start without sounddevice and NumPy; these
 failures do not prevent the daemon's text-chat path from loading.
 
+Before recognition, a completed capture must contain
+at least one native-rate frame whose RMS energy meets `voice_min_energy`.
+This evidence gate applies with or without WebRTC VAD and is independent of
+language or recognised words. Accepted captures retain all assembled samples,
+including pre-roll and softer speech; the energy floor does not clip syllables.
+A zero energy floor disables this additional rejection gate.
+
 Utterance assembly enforces `max_utterance_ms` during continuous speech as
 well as at silent endpoints. While TTS is speaking, `tts_max_utterance_ms`
 applies so interruption audio reaches Whisper promptly. Limits count complete
