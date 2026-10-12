@@ -2375,7 +2375,7 @@ def index() -> str:
                 <div class="meal-card" data-id="${meal.id}">
                     <div class="meal-info">
                         <div class="meal-header">
-                            <h3>${meal.description}</h3>
+                            <h3>${escapeHtml(meal.description)}</h3>
                             <button class="action-btn delete meal-delete" title="Delete meal">🗑️</button>
                         </div>
                         <div class="meal-time">${new Date(meal.ts_utc).toLocaleString()}</div>
