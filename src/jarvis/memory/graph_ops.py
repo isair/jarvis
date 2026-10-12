@@ -178,7 +178,7 @@ def extract_graph_memories(
 
     Args:
         date_utc: Optional date string (YYYY-MM-DD) for the diary entry.
-            Included as a date prefix on each fact for temporal context.
+            Included with the source summary in extraction and fact review.
     """
     system_prompt = (
         "You extract NOVEL KNOWLEDGE from a conversation and CLASSIFY each "
@@ -293,11 +293,11 @@ def extract_graph_memories(
         ' {"branch": "WORLD", "fact": "Trenches Boxing Club in Hackney offers evening classes"}]'
     )
 
-    # Include date so each fact carries temporal context
     date_prefix = f"(Date: {date_utc}) " if date_utc else ""
+    source_summary = f"{date_prefix}{summary}"
     user_content = (
         f"Extract and classify novel knowledge from this conversation "
-        f"summary:\n{date_prefix}{summary}"
+        f"summary:\n{source_summary}"
     )
 
     debug_log(f"graph memory extraction: sending {len(summary)} chars to {chat_model}", "memory")
@@ -371,7 +371,7 @@ def extract_graph_memories(
 
     debug_log(f"graph memory extraction: got {len(facts)} candidates", "memory")
     return _review_graph_facts(
-        facts, cfg, chat_model, deadline - time.monotonic(), thinking, summary,
+        facts, cfg, chat_model, deadline - time.monotonic(), thinking, source_summary,
     )
 
 

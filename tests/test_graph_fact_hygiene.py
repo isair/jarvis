@@ -21,6 +21,26 @@ CANDIDATES = [
 ]
 
 
+@pytest.mark.parametrize('source_day', ['2027-12-31', None])
+def test_fact_retains_the_reference_source_used_to_extract_it(mock_config, source_day):
+    summary = 'The user plans to visit a museum tomorrow.'
+    source = (f'(Date: {source_day}) ' if source_day else '') + summary
+    fact = 'The user plans to visit a museum.'
+
+    def infer(**kwargs):
+        content = kwargs['user_content']
+        if content.startswith('Extract'):
+            assert content.endswith(source)
+            return json.dumps([{'branch': 'USER', 'fact': fact}])
+        review = json.loads(content)
+        return json.dumps({'0': 'DURABLE' if review['summary'] == source else 'UNSUPPORTED'})
+
+    with patch('jarvis.memory.graph_ops.call_llm_direct', side_effect=infer):
+        assert extract_graph_memories(summary, mock_config, 'local-model', date_utc=source_day) == [
+            ('user', fact),
+        ]
+
+
 @pytest.mark.parametrize('invalid_fact', [True, 42, {'text': 'Invented fact'}, ['Invented fact'], None, '', '   '])
 def test_malformed_fact_cannot_become_personal_memory(mock_config, invalid_fact):
     supported = 'The user prefers concise replies'
