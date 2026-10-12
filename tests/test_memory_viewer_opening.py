@@ -77,6 +77,21 @@ def test_embedded_viewer_loads_and_reopens_without_stopping_server(viewer, monke
     assert urls == [f"http://localhost:{viewer.MEMORY_VIEWER_PORT}"] * 2
 
 
+def test_embedded_server_failure_displays_feedback_in_the_viewer(viewer, monkeypatch):
+    from PyQt6.QtWidgets import QWidget
+
+    pages = []
+    embedded = QWidget()
+    embedded.setHtml = pages.append
+    viewer.web_view = embedded
+    viewer.setCentralWidget(embedded)
+    monkeypatch.setattr(viewer, "start_server", lambda: False)
+    open_from_tray(viewer)
+    assert viewer.isVisible()
+    assert len(pages) == 1
+    assert "server failed to start" in pages[0]
+
+
 @pytest.mark.parametrize("mode", ["macos_bundle", "webengine_failure"])
 def test_webengine_fallback_uses_only_the_browser(qapp, monkeypatch, mode):
     from desktop_app import app

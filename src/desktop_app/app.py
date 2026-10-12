@@ -1471,6 +1471,7 @@ class MemoryViewerWindow(QMainWindow):
                 layout.addWidget(self.web_view)
             except Exception as e:
                 debug_log(f"failed to create QWebEngineView: {e}", "desktop")
+                self.web_view = None
 
     def open_viewer(self) -> None:
         """Open the usable viewer surface and focus it when embedded."""
