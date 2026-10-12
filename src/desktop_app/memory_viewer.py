@@ -2219,6 +2219,13 @@ def index() -> str:
                       .replace(/"/g, '&quot;').replace(/'/g, '&#039;');
         }
 
+        function appendProgressLog(log, text) {
+            const row = document.createElement('div');
+            row.textContent = text;
+            log.appendChild(row);
+            log.scrollTop = log.scrollHeight;
+        }
+
         // API calls
         async function fetchMemories() {
             const params = new URLSearchParams();
@@ -3278,8 +3285,7 @@ def index() -> str:
                                     const log = document.getElementById('import-log');
                                     const icon = msg.error ? '❌' : '📅';
                                     const detail = msg.error ? `error: ${msg.error}` : `${msg.facts} fact${msg.facts !== 1 ? 's' : ''}`;
-                                    log.innerHTML += `<div>${icon} ${msg.date} — ${detail}</div>`;
-                                    log.scrollTop = log.scrollHeight;
+                                    appendProgressLog(log, `${icon} ${msg.date}: ${detail}`);
                                 } else if (msg.type === 'complete') {
                                     document.getElementById('import-status').textContent = msg.message;
                                     document.getElementById('import-bar').style.width = '100%';
@@ -3388,8 +3394,7 @@ def index() -> str:
                                     document.getElementById('consolidate-status').textContent = `Consolidating ${msg.node}…`;
                                     const log = document.getElementById('consolidate-log');
                                     const arrow = msg.delta < 0 ? '⬇️' : (msg.delta > 0 ? '⬆️' : '➖');
-                                    log.innerHTML += `<div>${arrow} ${msg.node} — ${msg.before} → ${msg.after} lines (Δ${msg.delta})</div>`;
-                                    log.scrollTop = log.scrollHeight;
+                                    appendProgressLog(log, `${arrow} ${msg.node}: ${msg.before} → ${msg.after} lines (Δ${msg.delta})`);
                                     // Real progress when the total is known; fall back to indeterminate pulse otherwise.
                                     const pct = totalNodes
                                         ? Math.min(100, Math.round((nodeCount / totalNodes) * 100))
