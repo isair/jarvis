@@ -228,6 +228,7 @@ follow-up as directed=true.
 Fragments, one-word replies, statements, thanks, corrections and philosophical
 opinions are all directed. A follow-up can change the topic. Neither a full
 sentence nor an explicit request is required. This applies in every language.
+One-word questions are follow-ups even when they introduce a new topic.
 Prior segments supply references only; do not judge them as new requests.
 Pure repetition of assistant TTS speech is directed=false and stop=false.
 Mixed echo and genuine user speech can be directed; judge the user engagement.

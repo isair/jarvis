@@ -17,7 +17,6 @@ from dataclasses import dataclass
 from typing import Optional, TYPE_CHECKING, Any, Callable, Literal
 from datetime import datetime
 
-from rapidfuzz import fuzz
 from contextlib import contextmanager
 
 from .echo_detection import EchoDetector
@@ -702,15 +701,7 @@ class VoiceListener(threading.Thread):
                 # intent judge which can classify user engagement.
                 last_tts_text = self.echo_detector._last_tts_text if same_tts_context else ""
                 if last_tts_text:
-                    echo_score = fuzz.partial_ratio(
-                        text_lower, last_tts_text.lower()
-                    )
-                    tts_words = len(last_tts_text.split())
-                    text_words = len(text_lower.split())
-                    is_pure_echo = (
-                        echo_score >= 70
-                        and text_words <= max(tts_words * 1.3, tts_words + 3)
-                    )
+                    is_pure_echo = self.echo_detector.is_hot_window_echo(text_lower, last_tts_text)
                     if is_pure_echo:
                         # Before rejecting, try to salvage user speech appended
                         # after the echo prefix. Whisper commonly merges the tail
@@ -748,7 +739,7 @@ class VoiceListener(threading.Thread):
                             accepted_text = salvaged
                             text_lower = accepted_text.lower()
                         else:
-                            debug_log(f"🔇 Early echo rejection (score={echo_score}): \"{text_lower}\"", "voice")
+                            debug_log(f"🔇 Early echo rejection: \"{text_lower}\"", "voice")
                             print(f"  🔇 Heard (echo): \"{text_lower[:50]}{'...' if len(text_lower) > 50 else ''}\"", flush=True)
                             return
 
@@ -938,17 +929,7 @@ class VoiceListener(threading.Thread):
                 # this text, accept it even without the judge's verdict.
                 if could_be_hot_window:
                     last_tts_text_fb = (self.echo_detector._last_tts_text or "") if same_tts_context else ""
-                    is_pure_echo = False
-                    if last_tts_text_fb:
-                        echo_score = fuzz.partial_ratio(
-                            text_lower, last_tts_text_fb.lower()
-                        )
-                        tts_words = len(last_tts_text_fb.split())
-                        text_words = len(text_lower.split())
-                        is_pure_echo = (
-                            echo_score >= 70
-                            and text_words <= max(tts_words * 1.3, tts_words + 3)
-                        )
+                    is_pure_echo = self.echo_detector.is_hot_window_echo(text_lower, last_tts_text_fb)
                     if not is_pure_echo:
                         print(f"  🧠 Intent fallback: accepting hot window speech", flush=True)
                         debug_log(f"✅ Hot window fallback (judge unavailable): \"{text_lower}\"", "voice")
@@ -975,11 +956,8 @@ class VoiceListener(threading.Thread):
                     # queued audio captured during TTS. A directed verdict
                     # must still not turn pure assistant echo into a query.
                     if could_be_hot_window and last_tts_text:
-                        echo_score = fuzz.partial_ratio(text_lower, last_tts_text.lower())
-                        tts_words = len(last_tts_text.split())
-                        if (echo_score >= 70
-                                and len(text_lower.split()) <= max(tts_words * 1.3, tts_words + 3)):
-                            debug_log(f"🔇 Directed echo rejected (score={echo_score})", "voice")
+                        if self.echo_detector.is_hot_window_echo(text_lower, last_tts_text):
+                            debug_log("🔇 Directed echo rejected", "voice")
                             self._stop_thinking_tune()
                             return
                     wake_word = getattr(self.cfg, "wake_word", "jarvis")

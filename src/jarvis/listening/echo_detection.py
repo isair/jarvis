@@ -11,9 +11,10 @@ from rapidfuzz import fuzz
 
 
 def _normalise_echo_token(token: str) -> str:
-    """Retain Unicode letters and numbers when comparing echo words."""
+    """Retain Unicode letters, marks and numbers when comparing echo words."""
     normalised = unicodedata.normalize("NFC", token).casefold()
-    return "".join(char for char in normalised if char.isalnum() or char == "'")
+    return "".join(char for char in normalised
+                   if char.isalnum() or unicodedata.category(char).startswith('M') or char == "'")
 
 
 class EchoDetector:
@@ -137,6 +138,21 @@ class EchoDetector:
             debug_log(f"text similarity match: score={best_score:.1f} (threshold={threshold}), heard='{heard_lower}', tts='{tts_lower[:100]}...'", "echo")
 
         return is_similar
+
+    def is_hot_window_echo(self, heard_text: str, tts_text: str) -> bool:
+        """Require complete token matches for short possible TTS fragments."""
+        heard_words = [token for word in heard_text.split()
+                       if (token := _normalise_echo_token(word))]
+        tts_words = [token for word in tts_text.split()
+                     if (token := _normalise_echo_token(word))]
+        if not heard_words or not tts_words:
+            return False
+        if len(heard_words) <= 4:
+            return any(tts_words[start:start+len(heard_words)] == heard_words
+                       for start in range(len(tts_words)-len(heard_words)+1))
+        heard_count, tts_count = len(heard_text.split()), len(tts_text.split())
+        return (heard_count <= max(tts_count*1.3, tts_count+3)
+                and fuzz.partial_ratio(heard_text.lower(), tts_text.lower()) >= 70)
     
     def _matches_tts_segment(self, heard_text: str, tts_rate: float, utterance_start_time: float) -> bool:
         """Checks if heard text matches the likely TTS segment playing at a given time.
