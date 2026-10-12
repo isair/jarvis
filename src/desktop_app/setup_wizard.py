@@ -23,6 +23,7 @@ from urllib.parse import urlsplit
 import requests
 
 from desktop_app.whisper_models import get_whisper_vram_mb, wizard_model_options
+from jarvis.listening import whisper_capabilities
 from jarvis.debug import debug_log
 from jarvis.config import SUPPORTED_CHAT_MODELS, DEFAULT_CHAT_MODEL, DEFAULT_FAST_MODEL, SUPPORTED_FAST_MODEL_IDS
 from jarvis.utils.vram import (
@@ -2599,16 +2600,6 @@ class ModelsPage(ScrollableWizardPage):
         return super().nextId()
 
 
-def _is_faster_whisper_turbo_supported() -> bool:
-    """Check if the installed faster-whisper supports the large-v3-turbo model."""
-    try:
-        import faster_whisper
-        from packaging.version import Version
-        return Version(faster_whisper.__version__) >= Version("1.1.0")
-    except Exception:
-        return False
-
-
 def _get_effective_whisper_backend(
     apple_silicon: bool,
     backend_preference: Optional[str] = None,
@@ -2912,7 +2903,7 @@ class WhisperSetupPage(ScrollableWizardPage):
         """
         options = wizard_model_options(self._is_english_only)
         backend = _get_effective_whisper_backend(self._is_apple_silicon)
-        if backend != "mlx" and not _is_faster_whisper_turbo_supported():
+        if backend != "mlx" and not whisper_capabilities.is_faster_whisper_turbo_supported():
             options = [opt for opt in options if opt[0] != "large-v3-turbo"]
         return options
 

@@ -1655,7 +1655,7 @@ class TestWhisperModelOptions:
         page._is_english_only = False
         page._is_apple_silicon = False
 
-        with patch("desktop_app.setup_wizard._is_faster_whisper_turbo_supported", return_value=False):
+        with patch("jarvis.listening.whisper_capabilities.is_faster_whisper_turbo_supported", return_value=False):
             options = WhisperSetupPage._get_current_model_options(page)
         model_ids = [m[0] for m in options]
         assert "large-v3-turbo" not in model_ids
@@ -1669,7 +1669,7 @@ class TestWhisperModelOptions:
         page._is_english_only = False
         page._is_apple_silicon = False
 
-        with patch("desktop_app.setup_wizard._is_faster_whisper_turbo_supported", return_value=True):
+        with patch("jarvis.listening.whisper_capabilities.is_faster_whisper_turbo_supported", return_value=True):
             options = WhisperSetupPage._get_current_model_options(page)
         model_ids = [m[0] for m in options]
         assert "large-v3-turbo" in model_ids
@@ -1682,7 +1682,7 @@ class TestWhisperModelOptions:
         page._is_english_only = False
         page._is_apple_silicon = True
 
-        with patch("desktop_app.setup_wizard._is_faster_whisper_turbo_supported", return_value=False), \
+        with patch("jarvis.listening.whisper_capabilities.is_faster_whisper_turbo_supported", return_value=False), \
              patch("desktop_app.setup_wizard.check_mlx_whisper_installed", return_value=False), \
              patch("desktop_app.setup_wizard.load_settings", return_value=SimpleNamespace(whisper_backend="auto")):
             options = WhisperSetupPage._get_current_model_options(page)
@@ -1697,7 +1697,7 @@ class TestWhisperModelOptions:
         page._is_english_only = False
         page._is_apple_silicon = True
 
-        with patch("desktop_app.setup_wizard._is_faster_whisper_turbo_supported", return_value=False), \
+        with patch("jarvis.listening.whisper_capabilities.is_faster_whisper_turbo_supported", return_value=False), \
              patch("desktop_app.setup_wizard.check_mlx_whisper_installed", return_value=True), \
              patch("desktop_app.setup_wizard.load_settings", return_value=SimpleNamespace(whisper_backend="auto")):
             options = WhisperSetupPage._get_current_model_options(page)
@@ -1712,7 +1712,7 @@ class TestWhisperModelOptions:
         page._is_english_only = False
         page._is_apple_silicon = True
 
-        with patch("desktop_app.setup_wizard._is_faster_whisper_turbo_supported", return_value=True), \
+        with patch("jarvis.listening.whisper_capabilities.is_faster_whisper_turbo_supported", return_value=True), \
              patch("desktop_app.setup_wizard.check_mlx_whisper_installed", return_value=False), \
              patch("desktop_app.setup_wizard.load_settings", return_value=SimpleNamespace(whisper_backend="auto")):
             options = WhisperSetupPage._get_current_model_options(page)
@@ -1727,7 +1727,7 @@ class TestWhisperModelOptions:
         page._is_english_only = False
         page._is_apple_silicon = True
 
-        with patch("desktop_app.setup_wizard._is_faster_whisper_turbo_supported", return_value=False), \
+        with patch("jarvis.listening.whisper_capabilities.is_faster_whisper_turbo_supported", return_value=False), \
              patch("desktop_app.setup_wizard.check_mlx_whisper_installed", return_value=True), \
              patch("desktop_app.setup_wizard.load_settings", return_value=SimpleNamespace(whisper_backend="faster-whisper")):
             options = WhisperSetupPage._get_current_model_options(page)
@@ -1738,7 +1738,7 @@ class TestWhisperModelOptions:
         """An existing turbo choice displays the runtime fallback in the wizard."""
         from desktop_app.setup_wizard import WhisperSetupPage
 
-        with patch("desktop_app.setup_wizard._is_faster_whisper_turbo_supported", return_value=False):
+        with patch("jarvis.listening.whisper_capabilities.is_faster_whisper_turbo_supported", return_value=False):
             page = WhisperSetupPage()
             page._is_apple_silicon = False
             page._is_english_only = False

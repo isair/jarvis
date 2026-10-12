@@ -141,6 +141,8 @@ Commit messages and PR descriptions are the right place for "what changed and wh
 
 ## Refactor completely or not at all
 
+Use one canonical source for shared model catalogues and capability rules. Consumers derive their choices and decisions from it instead of maintaining separate copies.
+
 If you're touching every legacy call site, finish the job. Don't leave compat shims, fallback parameters, `SimpleNamespace` defaults, or `TODO(PR X)` markers for paths you are also rewriting in the same change. The whole point of doing the refactor is that the legacy shape goes away — keeping a half-converted state means future readers have to figure out which version of the contract is canonical, and the reasoning behind the old shape sits in the codebase as dead weight.
 
 The exception is genuinely external boundaries the codebase does not own: on-disk config files written by a previous release, third-party API shapes, persisted database rows. Those need migration paths because users depend on them. Internal function signatures, helper modules, and call patterns inside `src/` are ours to change cleanly.

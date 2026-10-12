@@ -427,7 +427,7 @@ class TestLargeV3TurboFallback:
                 with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
                     with patch("jarvis.listening.listener.WhisperModel", return_value=mock_whisper_model) as mock_class:
                         with patch("jarvis.listening.listener.sd") as mock_sd:
-                            with patch("jarvis.listening.listener._is_faster_whisper_turbo_supported", return_value=False):
+                            with patch("jarvis.listening.whisper_capabilities.is_faster_whisper_turbo_supported", return_value=False):
                                 _mock_input_devices(mock_sd, [{"name": "Test Mic", "max_input_channels": 1}])
                                 mock_sd.InputStream.side_effect = Exception("Stop test here")
 
@@ -456,7 +456,7 @@ class TestLargeV3TurboFallback:
                 with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
                     with patch("jarvis.listening.listener.WhisperModel", return_value=mock_whisper_model) as mock_class:
                         with patch("jarvis.listening.listener.sd") as mock_sd:
-                            with patch("jarvis.listening.listener._is_faster_whisper_turbo_supported", return_value=True):
+                            with patch("jarvis.listening.whisper_capabilities.is_faster_whisper_turbo_supported", return_value=True):
                                 _mock_input_devices(mock_sd, [{"name": "Test Mic", "max_input_channels": 1}])
                                 mock_sd.InputStream.side_effect = Exception("Stop test here")
 

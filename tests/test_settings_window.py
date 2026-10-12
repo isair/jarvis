@@ -37,7 +37,7 @@ class TestFieldMetadata:
             page = MagicMock(spec=WhisperSetupPage)
             page._is_english_only = english_only
             page._is_apple_silicon = False
-            with patch("desktop_app.setup_wizard._is_faster_whisper_turbo_supported", return_value=True):
+            with patch("jarvis.listening.whisper_capabilities.is_faster_whisper_turbo_supported", return_value=True):
                 options = WhisperSetupPage._get_current_model_options(page)
             for model_id, *_ in options:
                 assert model_id in choices

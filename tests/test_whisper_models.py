@@ -19,7 +19,7 @@ def test_catalogue_addition_updates_both_uis_and_memory_budget(monkeypatch, engl
         "Multilingual fixture", "English fixture",
     )
     monkeypatch.setattr(whisper_models, "WHISPER_MODELS", (*whisper_models.WHISPER_MODELS, model))
-    monkeypatch.setattr("desktop_app.setup_wizard._is_faster_whisper_turbo_supported", lambda: True)
+    monkeypatch.setattr("jarvis.listening.whisper_capabilities.is_faster_whisper_turbo_supported", lambda: True)
     page = SimpleNamespace(_is_english_only=english_only, _is_apple_silicon=False)
     options = WhisperSetupPage._get_current_model_options(page)
     model_id = model.model_id + (".en" if english_only else "")

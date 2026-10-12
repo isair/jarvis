@@ -19,6 +19,7 @@ from datetime import datetime
 
 from contextlib import contextmanager
 
+from . import whisper_capabilities
 from .echo_detection import EchoDetector
 from .model_download import ModelDownloadError
 from .state_manager import StateManager, ListeningState
@@ -313,16 +314,6 @@ except Exception as _faster_whisper_error:
     # (e.g. "psutil.__spec__ is not set") in some environments.
     WhisperModel = None
     debug_log(f"faster-whisper unavailable: {type(_faster_whisper_error).__name__}", "voice")
-
-
-def _is_faster_whisper_turbo_supported() -> bool:
-    """Check if the installed faster-whisper supports the large-v3-turbo model."""
-    try:
-        import faster_whisper
-        from packaging.version import Version
-        return Version(faster_whisper.__version__) >= Version("1.1.0")
-    except Exception:
-        return False
 
 
 def _get_mlx_model_repo(model_name: str) -> str:
@@ -1928,7 +1919,7 @@ class VoiceListener(threading.Thread):
 
         # Validate large-v3-turbo support for faster-whisper backend
         if model_name == "large-v3-turbo" and self._whisper_backend != "mlx":
-            if not _is_faster_whisper_turbo_supported():
+            if not whisper_capabilities.is_faster_whisper_turbo_supported():
                 debug_log(
                     "faster-whisper does not support large-v3-turbo, "
                     "falling back to medium", "voice",
