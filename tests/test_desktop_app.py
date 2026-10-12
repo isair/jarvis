@@ -1301,61 +1301,60 @@ class TestCudaRecoveryAction:
         assert "-LogPath" in captured["params"]
 
 
-class TestMemoryViewerModulePath:
-    """Tests to verify memory viewer module references are valid.
+class TestMemoryViewerSubprocessLaunch:
+    """The development launcher supplies a runnable local viewer module."""
 
-    These tests catch issues like wrong module paths in subprocess calls
-    without requiring actual GUI/server components.
-    """
-
-    def test_memory_viewer_module_is_importable(self):
-        """The module used for subprocess mode should be importable."""
-        import importlib
+    @pytest.mark.parametrize("existing_pythonpath", [None, "unrelated-source-path"])
+    def test_launched_module_imports_from_the_selected_checkout(
+        self, qapp, monkeypatch, tmp_path, existing_pythonpath,
+    ):
+        import socket
+        from desktop_app import app as app_mod
 
         pytest.importorskip("flask")
-
-        # This is the module path used in MemoryViewerWindow.start_server()
-        # If this fails, the subprocess command will fail at runtime
-        module = importlib.import_module("desktop_app.memory_viewer")
-        assert hasattr(module, "app"), "memory_viewer should have Flask 'app' attribute"
-        assert hasattr(module, "main"), "memory_viewer should have 'main' function"
-
-    def test_memory_viewer_subprocess_module_runs(self):
-        """The module should be runnable with python -m (with correct PYTHONPATH)."""
-        pytest.importorskip("flask")
-
-        # Set PYTHONPATH the same way start_server() does
-        src_path = Path(__file__).parent.parent / "src"
-        env = os.environ.copy()
-        env["PYTHONPATH"] = str(src_path)
-
-        # Test that the module can at least be imported in subprocess
-        result = subprocess.run(
-            [sys.executable, "-c", "import desktop_app.memory_viewer"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            env=env,
-        )
-        assert result.returncode == 0, f"Module import failed: {result.stderr}"
-
-    def test_memory_viewer_module_path_matches_code(self):
-        """Verify the module path in start_server matches the actual location."""
-        import re
-        from pathlib import Path
-
-        # Read the actual code to find the module path used
-        app_py = Path(__file__).parent.parent / "src" / "desktop_app" / "app.py"
-        content = app_py.read_text(encoding="utf-8")
-
-        # Find the subprocess module path
-        match = re.search(r'"-m",\s*"([^"]+)"', content)
-        assert match, "Could not find subprocess module path in app.py"
-
-        module_path = match.group(1)
-        assert module_path == "desktop_app.memory_viewer", (
-            f"Module path should be 'desktop_app.memory_viewer', found '{module_path}'"
-        )
+        launches = []
+        connections = iter([1, 0])
+        process = MagicMock()
+        process.poll.return_value = None
+        window = None
+        with monkeypatch.context() as launch:
+            launch.setattr(app_mod, "HAS_WEBENGINE", False)
+            launch.setattr(app_mod.sys, "frozen", False, raising=False)
+            if existing_pythonpath is None:
+                launch.delenv("PYTHONPATH", raising=False)
+            else:
+                launch.setenv("PYTHONPATH", existing_pythonpath)
+            sock = MagicMock()
+            sock.connect_ex.side_effect = lambda address: next(connections)
+            launch.setattr(socket, "socket", lambda *args: sock)
+            def capture(command, **options):
+                launches.append((command, options["env"]))
+                return process
+            launch.setattr(app_mod.subprocess, "Popen", capture)
+            window = app_mod.MemoryViewerWindow()
+            assert window.start_server()
+        try:
+            command, environment = launches[0]
+            assert command[1] == "-m"
+            probe = (
+                "import importlib, sys; from flask import Flask; "
+                "viewer = importlib.import_module(sys.argv[1]); "
+                "assert isinstance(viewer.app, Flask); assert callable(viewer.main); "
+                "print(viewer.__file__)"
+            )
+            result = subprocess.run(
+                [command[0], "-c", probe, command[2]], env=environment,
+                cwd=tmp_path, capture_output=True, text=True, timeout=10,
+            )
+            assert result.returncode == 0, result.stderr
+            assert Path(result.stdout.strip()).resolve() == (
+                Path(app_mod.__file__).with_name("memory_viewer.py").resolve()
+            )
+            if existing_pythonpath is not None:
+                assert existing_pythonpath in environment["PYTHONPATH"].split(os.pathsep)
+        finally:
+            window.stop_server()
+            window.close()
 
 
 class TestDaemonSmokeTest:
