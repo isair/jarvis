@@ -580,11 +580,11 @@ class GraphMemoryStore:
                   AND NOT EXISTS (SELECT 1 FROM memory_import_node_sources source
                                   WHERE source.node_id = memory_nodes.id)''', (branch,))
                 for row in rows:
-                    for text in (row['data'], *row['data'].splitlines()):
-                        if key := normalise_fact(text):
-                            known.setdefault((branch, key), row['id'])
+                    text = row['data'] or ''
+                    if text.strip():
+                        known.setdefault((branch, text), row['id'])
             for record in records:
-                key = normalise_fact(record.reviewed_text)
+                key = record.reviewed_text
                 identity = _digest('\0'.join((record.source_id, record.source_digest,
                                    record.item_id, record.branch, key, record.source_date or '')))
                 previous = self.conn.execute('SELECT node_id FROM memory_imports WHERE id = ?', (identity,)).fetchone()
