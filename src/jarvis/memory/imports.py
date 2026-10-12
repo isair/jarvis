@@ -22,7 +22,8 @@ MAX_SOURCE_BYTES = 256 * 1024
 MAX_ENTRY_CHARS = 16_000
 MAX_ENTRIES = 128
 MAX_SCAN_ENTRIES = 256
-PROVIDERS = ('ChatGPT', 'Claude', 'Claude Code')
+MAX_METADATA_CHARS = 4096
+PROVIDERS = ('ChatGPT', 'Claude', 'Claude Code', 'Codex')
 DESTINATIONS = {'user': 'Personal memory', 'directives': 'Standing instruction', 'world': 'Reference'}
 IMPORT_CONTEXT_BEGIN = '<<<BEGIN IMPORTED MEMORY>>>'
 IMPORT_CONTEXT_END = '<<<END IMPORTED MEMORY>>>'
@@ -106,6 +107,22 @@ def _has_symlink(path: Path) -> bool:
     return any(part.is_symlink() for part in (path, *path.parents))
 
 
+def _open_source(path: Path, flags: int) -> int:
+    """Retain each directory on platforms with directory-relative opens."""
+    if os.open not in os.supports_dir_fd or not hasattr(os, 'O_DIRECTORY'):
+        return os.open(path, flags)
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    directory = os.open(path.anchor, directory_flags)
+    try:
+        for component in path.parts[1:-1]:
+            child = os.open(component, directory_flags, dir_fd=directory)
+            os.close(directory)
+            directory = child
+        return os.open(path.name, flags, dir_fd=directory)
+    finally:
+        os.close(directory)
+
+
 def _read_text(path: Path, *, limit: int = MAX_SOURCE_BYTES) -> str:
     if not path.is_absolute() or _has_symlink(path):
         raise MemoryImportError('Choose a regular file directly, rather than a symbolic link.')
@@ -114,7 +131,7 @@ def _read_text(path: Path, *, limit: int = MAX_SOURCE_BYTES) -> str:
         if not stat.S_ISREG(before.st_mode) or before.st_size > limit:
             raise MemoryImportError('Choose a text file smaller than 256 KB.')
         flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0)
-        with os.fdopen(os.open(path, flags), 'rb') as stream:
+        with os.fdopen(_open_source(path, flags), 'rb') as stream:
             opened = os.fstat(stream.fileno())
             if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
                 raise MemoryImportError('The file changed. Select it again.')
@@ -127,6 +144,18 @@ def _read_text(path: Path, *, limit: int = MAX_SOURCE_BYTES) -> str:
         return raw.decode('utf-8-sig')
     except (OSError, UnicodeError) as exc:
         raise MemoryImportError('Could not read this text file. Choose another file or paste the memories.') from exc
+
+
+def discover_codex_sources(home: Path, *, codex_home: Path | None = None) -> SourceDiscovery:
+    """Inventory documented global instructions, never sessions or credentials."""
+    root = codex_home if codex_home is not None else home / '.codex'
+    sources = []
+    for filename in ('AGENTS.override.md', 'AGENTS.md'):
+        path = root / filename
+        if not _has_symlink(path) and path.is_file():
+            sources.append(MemorySource('Codex', f'Codex user instructions: {filename}', 'instructions', path))
+    debug_log(f'📥 Codex instruction discovery: {len(sources)} local files', 'memory')
+    return SourceDiscovery(tuple(sources))
 
 
 def discover_sources(home: Path, *, claude_config_dir: Path | None = None, disable_auto_memory: bool = False) -> SourceDiscovery:
@@ -209,6 +238,8 @@ def _claude_metadata(text: str) -> tuple[str, tuple[tuple[str, str], ...]]:
     end = next((index for index, line in enumerate(lines[1:65], 1) if line.strip() == '---'), None)
     if end is None:
         return text, ()
+    if sum(len(line) for line in lines[1:end]) > MAX_METADATA_CHARS:
+        raise MemoryImportError('This file has oversized metadata. Paste the memory text without its header.')
     metadata = []
     opaque = False
     for line in lines[1:end]:
@@ -306,6 +337,9 @@ def render_memory_context(text: str, kind: str, records: Sequence[dict], *, max_
         if archive:
             state['archived_quotes'] = archive
         return prefix+json.dumps(state, ensure_ascii=False, separators=(',', ':')).replace('<', '\\u003c').replace('>', '\\u003e')+suffix
+    if len(encode(len(text))) > max_chars:
+        # Source history must not displace the current stored memory.
+        archive = []
     if len(encode(len(text))) <= max_chars:
         return encode(len(text))
     if len(encode(0)) >= max_chars:
