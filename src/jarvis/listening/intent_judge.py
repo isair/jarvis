@@ -16,6 +16,7 @@ from ..debug import debug_log
 from ..utils.redact import scrub_secrets
 from ..llm import get_llm_backend, resolve_model, Tier
 from .transcript_buffer import TranscriptSegment
+from .wake_detection import normalise_wake_aliases
 
 
 DEFAULT_OLLAMA_KEEP_ALIVE = "30m"
@@ -284,15 +285,7 @@ Examples:
         in the transcript, doesn't know it refers to {name}, and may decide
         the user is addressing a different person.
         """
-        if not text or not self.config.aliases:
-            return text
-        # Longest-first avoids a shorter alias matching inside a longer one.
-        for alias in sorted(self.config.aliases, key=len, reverse=True):
-            if not alias:
-                continue
-            pattern = r"\b" + re.escape(alias) + r"\b"
-            text = re.sub(pattern, self.config.assistant_name, text, flags=re.IGNORECASE)
-        return text
+        return normalise_wake_aliases(text, self.config.aliases, self.config.assistant_name)
 
     def _build_user_prompt(
         self,

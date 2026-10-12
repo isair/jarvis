@@ -10,11 +10,31 @@ from ..debug import debug_log
 
 def _wake_name_pattern(wake_word: str, aliases: List[str]) -> Optional[re.Pattern[str]]:
     """Match literal configured names at Unicode word boundaries."""
-    names = {name.strip() for name in [wake_word, *aliases] if name.strip()}
+    names = {unicodedata.normalize("NFC", name.strip())
+             for name in [wake_word, *aliases] if name.strip()}
     if not names:
         return None
     alternatives = "|".join(re.escape(name) for name in sorted(names, key=len, reverse=True))
     return re.compile(r"(?<!\w)(?:" + alternatives + r")(?!\w)", re.IGNORECASE)
+
+
+def _is_word_character(char: str) -> bool:
+    return char.isalnum() or char == "_" or unicodedata.category(char).startswith("M")
+
+
+def _is_whole_name_match(match: re.Match[str], text: str) -> bool:
+    return ((match.start() == 0 or not _is_word_character(text[match.start() - 1]))
+            and (match.end() == len(text) or not _is_word_character(text[match.end()])))
+
+
+def normalise_wake_aliases(text: str, aliases: List[str], assistant_name: str) -> str:
+    """Canonicalise the judge's text copy and replace complete literal aliases."""
+    pattern = _wake_name_pattern("", aliases)
+    if not text or pattern is None:
+        return text
+    text = unicodedata.normalize("NFC", text)
+    return pattern.sub(lambda match: assistant_name if _is_whole_name_match(match, text)
+                       else match.group(), text)
 
 
 def is_wake_word_detected(text_lower: str, wake_word: str, aliases: List[str], fuzzy_ratio: float = 0.78) -> bool:
@@ -22,15 +42,19 @@ def is_wake_word_detected(text_lower: str, wake_word: str, aliases: List[str], f
     if not text_lower or not text_lower.strip():
         return False
 
+    text_lower = unicodedata.normalize("NFC", text_lower)
     pattern = _wake_name_pattern(wake_word, aliases)
-    if pattern and pattern.search(text_lower):
+    if pattern and any(_is_whole_name_match(match, text_lower)
+                       for match in pattern.finditer(text_lower)):
         return True
 
     # Aliases already represent known mishearings; do not approximate them again.
-    primary = wake_word.strip().casefold()
+    primary = unicodedata.normalize("NFC", wake_word.strip()).casefold()
     if not primary or any(char.isspace() for char in primary):
         return False
-    for token in re.findall(r"\w+", text_lower.casefold(), re.UNICODE):
+    tokens = "".join(char if _is_word_character(char) else " "
+                     for char in text_lower.casefold()).split()
+    for token in tokens:
         # Longer tokens stay near the name; shorter pronunciations use the threshold.
         if len(token) > len(primary) + 1:
             continue
