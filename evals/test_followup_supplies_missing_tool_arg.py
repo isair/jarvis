@@ -83,8 +83,9 @@ def _make_get_weather_runner(capture: ToolCallCapture):
 class TestFollowupSuppliesMissingToolArg:
     """End-to-end regression for the engine-level tool carry-over guard."""
 
+    @pytest.mark.parametrize('planner_enabled', [True, False])
     def test_short_followup_continues_previous_tool_chain(
-        self, eval_db, eval_dialogue_memory,
+        self, eval_db, eval_dialogue_memory, planner_enabled,
     ):
         from jarvis.reply.engine import run_reply_engine
 
@@ -92,6 +93,7 @@ class TestFollowupSuppliesMissingToolArg:
         # Geoip disabled — the only way the model gets a location is
         # from the user supplying one on turn 2.
         cfg.location_enabled = False
+        cfg.planner_enabled = planner_enabled
 
         capture = ToolCallCapture()
 
@@ -104,6 +106,7 @@ class TestFollowupSuppliesMissingToolArg:
                 text="how's the weather tomorrow Jarvis?",
                 dialogue_memory=eval_dialogue_memory,
             )
+            first_turn_calls = len(capture.calls)
             turn2 = run_reply_engine(
                 db=eval_db, cfg=cfg, tts=None,
                 text="I'm in London",
@@ -120,7 +123,11 @@ class TestFollowupSuppliesMissingToolArg:
         assert_usable_answer(turn1, "turn-1")
         assert_forecast_reply(turn2, _LONDON_FORECAST, "turn-2")
 
-        weather_calls = [c for c in capture.calls if c["name"] == "getWeather"]
+        first_weather_calls = [c for c in capture.calls[:first_turn_calls] if c['name'] == 'getWeather']
+        assert first_weather_calls and all(not c['args'].get('location') for c in first_weather_calls), (
+            'The first lookup must actually run without inventing an unknown city.'
+        )
+        weather_calls = [c for c in capture.calls[first_turn_calls:] if c["name"] == "getWeather"]
         # Turn-2 call must carry the location the user supplied.
         london_calls = [
             c for c in weather_calls
@@ -145,3 +152,69 @@ class TestFollowupSuppliesMissingToolArg:
             "Turn-2 reply does not mention London weather. "
             f"Reply: {(turn2 or '')[:400]}"
         )
+
+
+@pytest.mark.eval
+@requires_judge_llm
+@pytest.mark.parametrize('new_request', [
+    'From now on, keep replies to one sentence.',
+    'What is 7 plus 5? Write the result as digits.',
+])
+def test_unrelated_followup_does_not_resume_failed_lookup(eval_db,eval_dialogue_memory,new_request):
+    import re
+    from jarvis.reply import engine
+    cfg=voice_config()
+    cfg.location_enabled=False
+    cfg.planner_enabled=False
+    capture=ToolCallCapture()
+    with patch('jarvis.reply.engine.run_tool_with_retries',
+               side_effect=_make_get_weather_runner(capture)):
+        first=engine.run_reply_engine(eval_db,cfg,None,"How's the weather tomorrow?",eval_dialogue_memory)
+        boundary=len(capture.calls)
+        reply=engine.run_reply_engine(eval_db,cfg,None,new_request,eval_dialogue_memory)
+    assert_usable_answer(first,'setup')
+    assert_usable_answer(reply,'new request')
+    assert reply != engine._UNEXECUTED_ACTION_REPLY
+    assert not any(call['name']=='getWeather' for call in capture.calls[boundary:]),capture.calls
+    if '7 plus 5' in new_request:
+        assert re.search(r'(?<!\d)'+str(7+5)+r'(?!\d)',reply),reply
+    else:
+        assert not any(term in reply.casefold() for term in ('which city','specify a city','your location')),reply
+
+
+@pytest.mark.eval
+@requires_judge_llm
+@pytest.mark.parametrize('query', [
+    'Retry the web search for the current opening time of the Saffron Kite exhibition.',
+    'Reintenta la búsqueda web para saber a qué hora abre la exposición Saffron Kite.',
+])
+def test_failed_search_followup_uses_current_tool_result(eval_db, eval_dialogue_memory, query):
+    from jarvis.reply import engine
+    from jarvis.tools.types import ToolExecutionResult
+
+    cfg = voice_config()
+    cfg.planner_enabled = False
+    cfg.location_enabled = False
+    eval_dialogue_memory.add_message('user', 'Find the current exhibition opening time.')
+    eval_dialogue_memory.record_tool_turn([{
+        'role': 'user', 'content': 'The search failed. Please supply the exhibition name.',
+        'tool_name': 'webSearch', 'tool_failed': True,
+    }])
+    eval_dialogue_memory.add_message('assistant', 'Which exhibition should I search for?')
+    capture = ToolCallCapture()
+
+    def lookup(db, cfg, tool_name, tool_args, **kwargs):
+        capture.record(tool_name, tool_args or {})
+        if tool_name == 'webSearch' and 'saffron kite' in str(tool_args).casefold():
+            return ToolExecutionResult(
+                success=True,
+                reply_text='The Saffron Kite exhibition opens at 11:37. Source: https://example.org/exhibition',
+            )
+        return ToolExecutionResult(success=False, reply_text='No matching result is available.')
+
+    with patch.object(engine, 'run_tool_with_retries', side_effect=lookup):
+        reply = engine.run_reply_engine(eval_db, cfg, None, query, eval_dialogue_memory)
+    assert_usable_answer(reply, 'search follow-up')
+    assert any(call['name'] == 'webSearch' and 'saffron kite' in str(call['args']).casefold()
+               for call in capture.calls), capture.calls
+    assert '11:37' in reply, reply

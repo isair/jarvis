@@ -117,6 +117,17 @@ _UNEXECUTED_ACTION_REPLY = (
     "I couldn't execute the requested action. Please try again or provide the missing details."
 )
 
+_FAILED_TOOL_FOLLOWUP_HINT = (
+    "[Execution status] This follow-up continues a request whose tool failed. "
+    "There is no successful action-tool result for this follow-up. Your previous "
+    "reply was not delivered. Use the supplied information to retry the tool "
+    "or obtain the requested result through another available tool. Do not "
+    "invent readings or claim that the earlier failed call completed the task. "
+    "Do not write a final answer yet: emit an actual tool_calls block using "
+    "the declared argument names and values grounded in the current request "
+    "and its dialogue context."
+) + _NON_COMPLETION_HINT
+
 
 def _handoff_non_completion_reply(content: str) -> Optional[str]:
     """Read an explicit clarification or blocker without accepting free prose."""
@@ -1162,9 +1173,19 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     # Engine-side per-turn overlay: the cache above stores only the raw
     # router output, so this never poisons the cache.
     routed_tools = list(routed_tools or [])
+    _previous_failed_names = (
+        _previous_turn_failed_tool_names(recent_messages) if recent_messages else []
+    )
+    # Only a narrowed routing decision establishes continuation intent.
+    # Carry-over exposure and an all-tools fallback do not make that decision.
+    _selected_failed_followup = (
+        set(routed_tools) & set(_previous_failed_names) & set(_full_catalog_names)
+    ) - {"stop", "toolSearchTool"}
+    if set(routed_tools) == set(_full_catalog_names):
+        _selected_failed_followup.clear()
     _carryover_names: list[str] = []
     if recent_messages:
-        for _name in _previous_turn_failed_tool_names(recent_messages):
+        for _name in _previous_failed_names:
             if _name in _full_catalog_names and _name not in routed_tools:
                 _carryover_names.append(_name)
         if _carryover_names:
@@ -2031,12 +2052,20 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     _plan_steps_baseline = sum(1 for m in messages if m.get("tool_name"))
     _unexecuted_reply_retried = False
 
-    def _recovery_without_action_outcome() -> bool:
-        return use_text_tools and _plan_in_recovery and not any(
+    def _completion_evidence_missing() -> bool:
+        current_results = messages[user_msg_index + 1:]
+        plan_without_outcome = use_text_tools and _plan_in_recovery and not any(
             message.get("tool_name") in _full_catalog_names
             and message.get("tool_name") not in {"stop", "toolSearchTool"}
-            for message in messages[user_msg_index + 1:]
+            for message in current_results
         )
+        followup_without_result = bool(_selected_failed_followup) and not any(
+            message.get("tool_name") in _full_catalog_names
+            and message.get("tool_name") not in {"stop", "toolSearchTool"}
+            and message.get("tool_failed") is False
+            for message in current_results
+        )
+        return plan_without_outcome or followup_without_result
 
     def _enter_plan_recovery() -> None:
         nonlocal _plan_in_recovery, _plan_recovery_record
@@ -2668,20 +2697,23 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             # Loop continues to let the agent produce the next step/final reply
             continue
 
-        # Missing resolution cannot establish completion of a planned action.
-        if _recovery_without_action_outcome():
+        # Plans and prior errors cannot establish a current completed result.
+        if _completion_evidence_missing():
             non_completion_reply = _handoff_non_completion_reply(content)
             if non_completion_reply is not None:
                 content = non_completion_reply
             elif not _unexecuted_reply_retried and turn < max_turns:
                 _unexecuted_reply_retried = True
-                messages.append({"role": "user", "content": _UNEXECUTED_ACTION_HINT
+                hint = _FAILED_TOOL_FOLLOWUP_HINT if _selected_failed_followup else _UNEXECUTED_ACTION_HINT
+                # An undelivered draft is not a conversation fact to build on.
+                messages.pop()
+                messages.append({"role": "user", "content": hint
                                  + ("\n" + _resource_context if _resource_context else "")})
-                debug_log("unexecuted planned action: requesting one grounded recovery turn", "planning")
+                debug_log("missing execution evidence: requesting one grounded recovery turn", "planning")
                 continue
             else:
                 content = _UNEXECUTED_ACTION_REPLY
-                debug_log("unexecuted planned action: delivering an honest execution blocker", "planning")
+                debug_log("missing execution evidence: delivering an honest execution blocker", "planning")
 
         # Natural-language content from the model. Normalise and deliver.
         extracted = _extract_text_from_json_response(content)
@@ -2707,7 +2739,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         last_candidate_reply = candidate_reply
         break
 
-    if not reply and _recovery_without_action_outcome():
+    if not reply and _completion_evidence_missing():
         reply = _UNEXECUTED_ACTION_REPLY
         debug_log("unexecuted planned action: turn budget exhausted without execution", "planning")
 
