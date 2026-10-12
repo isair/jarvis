@@ -2,8 +2,12 @@ name: Release Smoke Test
 
 on:
   workflow_dispatch:
-    # Manually triggered from the Actions tab.
-    # Runs on the develop branch by default.
+    inputs:
+      validate_only:
+        description: Build and test installers without publishing a release
+        type: boolean
+        required: true
+        default: true
 
 concurrency:
   group: release-smoke-${{ github.ref_name }}
@@ -33,7 +37,7 @@ jobs:
   release:
     needs: [build-desktop]
     runs-on: ubuntu-latest
-    if: success()
+    if: ${{ success() && github.ref == 'refs/heads/develop' && !inputs.validate_only }}
     timeout-minutes: 5
 
     permissions:
@@ -54,11 +58,18 @@ jobs:
           echo "Current state:"
           echo "   develop HEAD (tested): ${{ github.sha }}"
 
-          # Fetch main so we can verify the fast-forward is safe
-          git fetch origin main
+          # Promotion requires the freshly fetched develop tip tested by this run.
+          git fetch origin main develop
 
           MAIN_SHA=$(git rev-parse origin/main)
+          DEVELOP_SHA=$(git rev-parse origin/develop)
           TESTED_SHA="${{ github.sha }}"
+
+          if [ "$TESTED_SHA" != "$DEVELOP_SHA" ]; then
+            echo "❌ The tested commit is not the current develop tip."
+            echo "   🔁 Run smoke checks again for current develop before publishing."
+            exit 1
+          fi
 
           echo "   origin/main:  $MAIN_SHA"
           echo "   tested SHA:   $TESTED_SHA"
