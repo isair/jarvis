@@ -1436,7 +1436,7 @@ class LogViewerWindow(QMainWindow):
 
 
 class MemoryViewerWindow(QMainWindow):
-    """Window for viewing Jarvis memory using embedded web view."""
+    """Open local memory in an embedded view or the system browser."""
 
     MEMORY_VIEWER_PORT = 5050
 
@@ -1464,57 +1464,23 @@ class MemoryViewerWindow(QMainWindow):
         is_macos_bundle = sys.platform == 'darwin' and getattr(sys, 'frozen', False)
         use_webengine = HAS_WEBENGINE and not is_macos_bundle
 
-        web_view_created = False
+        self.web_view = None
         if use_webengine:
-            # Use embedded web view - URL will be set in showEvent when window is shown
             try:
                 self.web_view = QWebEngineView()
                 layout.addWidget(self.web_view)
-                web_view_created = True
             except Exception as e:
                 debug_log(f"failed to create QWebEngineView: {e}", "desktop")
-                self.web_view = None
 
-        if not web_view_created:
-            # Fallback: show message and open in browser
-            self.web_view = None
-
-            fallback_container = QWidget()
-            fallback_layout = QVBoxLayout(fallback_container)
-            fallback_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-            icon_label = QLabel("🧠")
-            icon_label.setStyleSheet("font-size: 64px; background: transparent;")
-            icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            fallback_layout.addWidget(icon_label)
-
-            title_label = QLabel("Memory Viewer")
-            title_label.setStyleSheet("""
-                font-size: 24px;
-                font-weight: 600;
-                color: #fbbf24;
-                background: transparent;
-                margin-top: 16px;
-            """)
-            title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            fallback_layout.addWidget(title_label)
-
-            if is_macos_bundle:
-                fallback_message = "Opening in your default browser..."
-            else:
-                fallback_message = "PyQt6-WebEngine not installed.\nOpening in your default browser..."
-
-            message_label = QLabel(fallback_message)
-            message_label.setStyleSheet("""
-                font-size: 14px;
-                color: #71717a;
-                background: transparent;
-                margin-top: 8px;
-            """)
-            message_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            fallback_layout.addWidget(message_label)
-
-            layout.addWidget(fallback_container)
+    def open_viewer(self) -> None:
+        """Open the usable viewer surface and focus it when embedded."""
+        if self.web_view is None:
+            debug_log("opening memory viewer in the system browser", "desktop")
+            self._load_viewer()
+        else:
+            self.show()
+            self.raise_()
+            self.activateWindow()
 
     def start_server(self) -> bool:
         """Start the memory viewer Flask server."""
@@ -1695,8 +1661,8 @@ class MemoryViewerWindow(QMainWindow):
             self.server_thread = None
             self.is_server_running = False
 
-    def _show_error_page(self, message: str) -> None:
-        """Show an error page in the web view."""
+    def _show_viewer_error(self, message: str) -> None:
+        """Show useful opening feedback in the selected viewer surface."""
         if self.web_view:
             error_html = f"""
             <html>
@@ -1717,31 +1683,44 @@ class MemoryViewerWindow(QMainWindow):
             </html>
             """
             self.web_view.setHtml(error_html)
+        else:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(None, "🧠 Jarvis Memory", message)
 
     def showEvent(self, event) -> None:
         """Called when window is shown."""
         super().showEvent(event)
 
+        self._load_viewer()
+
+    def _load_viewer(self) -> None:
+        """Start or reuse the local server and open its viewer."""
+        url = f"http://localhost:{self.MEMORY_VIEWER_PORT}"
         try:
             # Start server when window opens
             if self.start_server():
                 if self.web_view:
                     # Set URL and load (URL is set here, not in __init__, to avoid WebEngine crash)
-                    self.web_view.setUrl(QUrl(f"http://localhost:{self.MEMORY_VIEWER_PORT}"))
+                    self.web_view.setUrl(QUrl(url))
                 else:
                     # Open in system browser as fallback
                     import webbrowser
-                    webbrowser.open(f"http://localhost:{self.MEMORY_VIEWER_PORT}")
+                    if not webbrowser.open(url):
+                        self._show_viewer_error(
+                            f"Your browser could not be opened. Open {url} in your browser to view your memory."
+                        )
             else:
                 # Server failed to start - show error message
                 debug_log("memory viewer server failed to start", "desktop")
-                self._show_error_page(
+                self._show_viewer_error(
                     "The memory viewer server failed to start. "
                     "Check the console output for details."
                 )
         except Exception as e:
-            debug_log(f"error in memory viewer showEvent: {e}", "desktop")
-            self._show_error_page(f"Error: {e}")
+            debug_log(f"error opening memory viewer: {e}", "desktop")
+            self._show_viewer_error(
+                f"The memory viewer could not be opened. Try again, or open {url} in your browser."
+            )
 
     def closeEvent(self, event) -> None:
         """Called when window is closed."""
@@ -2283,10 +2262,8 @@ class JarvisSystemTray:
         self.log_viewer.activateWindow()
 
     def show_memory_viewer(self) -> None:
-        """Show the memory viewer window and bring it to front."""
-        self.memory_viewer.show()
-        self.memory_viewer.raise_()
-        self.memory_viewer.activateWindow()
+        """Open memory in the embedded viewer or system browser."""
+        self.memory_viewer.open_viewer()
 
     def show_dictation_history(self) -> None:
         """Show the dictation history window and bring it to front."""
