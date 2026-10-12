@@ -190,29 +190,22 @@ class TestDictationHistory:
 class TestDictationHistoryWindow:
     """Tests for the dictation history Qt window."""
 
-    def test_window_can_be_created(self):
-        """Window should instantiate without errors."""
-        from desktop_app.dictation_history import DictationHistoryWindow
-        # Just check it doesn't crash (no QApplication needed for class inspection)
-        assert DictationHistoryWindow is not None
-
-    def test_window_has_signals(self):
-        """Window should expose a signals object with new_entry."""
-        from desktop_app.dictation_history import DictationHistorySignals
-        signals = DictationHistorySignals()
-        assert hasattr(signals, "new_entry")
-
-    def test_set_history_stores_reference(self, tmp_path):
-        """set_history should accept a DictationHistory instance."""
+    @pytest.mark.unit
+    def test_attaching_history_renders_saved_dictations(self, qapp, tmp_path):
+        from PyQt6.QtWidgets import QLabel
         from desktop_app.dictation_history import DictationHistoryWindow
         from jarvis.dictation.history import DictationHistory
-        h = DictationHistory(path=tmp_path / "h.json")
-        # Instantiate without QApplication — just test the attribute
-        win = DictationHistoryWindow.__new__(DictationHistoryWindow)
-        win._history = None
-        win.set_history = DictationHistoryWindow.set_history.__get__(win)
-        # We can't call set_history fully without Qt, but verify the method exists
-        assert callable(win.set_history)
+
+        history = DictationHistory(path=tmp_path / "history.json")
+        entry = history.add("A saved dictation")
+        window = DictationHistoryWindow()
+        try:
+            window.set_history(history)
+            labels = [label.text() for label in window.centralWidget().findChildren(QLabel)]
+            assert entry["text"] in labels
+        finally:
+            window.close()
+            window.deleteLater()
 
     def test_reload_keeps_list_items_parented_to_current_container(self, qapp, tmp_path):
         """Cards/placeholders must be children of the currently-installed
@@ -242,6 +235,7 @@ class TestDictationHistoryWindow:
                     "List items must be children of the current container."
                 )
 
+    @pytest.mark.unit
     def test_on_new_entry_keeps_new_card_parented_to_container(self, qapp, tmp_path):
         """A card inserted via the new-entry signal must be parented to the
         container, not promoted to a top-level widget.
@@ -258,7 +252,7 @@ class TestDictationHistoryWindow:
         window.isVisible = lambda: True  # type: ignore[assignment]
 
         entry = history.add("hello world", duration=1.0)
-        window._on_new_entry(entry)
+        window.signals.new_entry.emit(entry)
 
         # The reload rebuilds the container from scratch; assert the new
         # card lives inside the *current* container.
