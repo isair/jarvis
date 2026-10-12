@@ -7,16 +7,38 @@ Privacy-first: all data stays on disk, never leaves the machine.
 from __future__ import annotations
 
 import json
+import math
 import os
 import tempfile
 import threading
 import time
 import uuid
 from contextlib import contextmanager
+from datetime import datetime
 
 from filelock import FileLock
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+
+def _validate_entries(entries: Any) -> None:
+    """Require records their existing consumers can read without coercion."""
+    if not isinstance(entries, list):
+        raise ValueError("Dictation history must contain a JSON list")
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise ValueError("Dictation history entries must be objects")
+        if not isinstance(entry.get("id"), str) or not entry["id"]:
+            raise ValueError("Dictation history entries require a non-empty text ID")
+        if not isinstance(entry.get("text"), str):
+            raise ValueError("Dictation history entries require text")
+        entry["id"].encode("utf-8")
+        entry["text"].encode("utf-8")
+        for field in ("timestamp", "duration"):
+            value = entry.get(field, 0)
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+                raise ValueError("Dictation history metadata must be finite numbers")
+        datetime.fromtimestamp(entry.get("timestamp", 0))
 
 
 def _default_history_path() -> Path:
@@ -120,8 +142,7 @@ class DictationHistory:
             return []
         with stream:
             data = json.load(stream)
-        if not isinstance(data, list):
-            raise ValueError("Dictation history must contain a JSON list")
+        _validate_entries(data)
         return data
 
     @contextmanager
@@ -148,6 +169,7 @@ class DictationHistory:
             raise HistoryUpdateError("Unable to save dictation history. Please try again.") from exc
 
     def _save(self) -> None:
+        _validate_entries(self._entries)
         self._path.parent.mkdir(parents=True, exist_ok=True)
         temporary = None
         try:
