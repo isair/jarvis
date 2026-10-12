@@ -591,8 +591,10 @@ class GraphMemoryStore:
                 if previous is not None:
                     node_ids.append(previous['node_id'])
                     continue
-                shared = self.conn.execute('SELECT node_id FROM memory_imports WHERE branch = ? AND content_key = ? AND source_date IS ? ORDER BY imported_at LIMIT 1',
-                                           (record.branch, key, record.source_date)).fetchone()
+                candidates = self.conn.execute('SELECT DISTINCT node_id FROM memory_imports WHERE branch = ? AND content_key = ? AND source_date IS ? ORDER BY imported_at',
+                                               (record.branch, key, record.source_date))
+                shared = next((row for row in candidates
+                               if self._resolve_branch(row['node_id']) == record.branch), None)
                 if shared is not None:
                     node_id = shared['node_id']
                 elif record.source_date is None and (record.branch, key) in known:

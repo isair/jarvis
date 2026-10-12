@@ -48,6 +48,12 @@ existing node. Case, whitespace, Unicode characters and surrounding context
 remain distinct; different branches, negations and temporal qualifiers remain
 distinct. Repeated imports do not duplicate nodes or provenance. A changed source
 can add provenance without rewriting a node edited after an earlier import.
+An exact repeat preserves a manually moved node. A new source reuses only a live
+node in the selected destination; archived destination metadata does not override
+the node's current branch.
+The current statement date binds to the complete, exact reviewed entry. An edited
+or split excerpt retains archival provenance without inheriting its date as a
+current statement date.
 
 Provenance retains provider, source identity/label/scope, source-content digest,
 original scrubbed quote, reviewed text, optional source date and the import's
