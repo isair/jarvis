@@ -643,11 +643,10 @@ class GraphMemoryStore:
         # Resolve branch BEFORE the delete so listeners get a meaningful
         # branch attribution even though the row is about to vanish.
         branch = self._resolve_branch(node_id)
-        with self._lock:
+        with self._lock, self.conn:
             cur = self.conn.execute(
                 "DELETE FROM memory_nodes WHERE id = ?", (node_id,)
             )
-            self.conn.commit()
             deleted = cur.rowcount > 0
         if deleted:
             _notify_graph_mutation("delete", node_id, branch)
@@ -693,14 +692,13 @@ class GraphMemoryStore:
     def touch_node(self, node_id: str) -> None:
         """Increment access_count and update last_accessed."""
         now = datetime.now(timezone.utc).isoformat()
-        with self._lock:
+        with self._lock, self.conn:
             self.conn.execute(
                 """UPDATE memory_nodes
                    SET access_count = access_count + 1, last_accessed = ?
                    WHERE id = ?""",
                 (now, node_id),
             )
-            self.conn.commit()
 
     # ── Entry points ────────────────────────────────────────────────────
 
