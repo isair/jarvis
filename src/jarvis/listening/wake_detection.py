@@ -41,6 +41,14 @@ def is_wake_word_detected(text_lower: str, wake_word: str, aliases: List[str], f
     return False
 
 
+def _normalise_control_text(value: str) -> str:
+    """Keep composed word content while separating Unicode punctuation."""
+    value = unicodedata.normalize("NFC", value).casefold()
+    value = "".join(" " if unicodedata.category(char).startswith("P") else char
+                    for char in value)
+    return " ".join(value.split())
+
+
 def is_stop_command(text_lower: str, stop_commands: List[str], fuzzy_ratio: float = 0.8) -> bool:
     """
     Check if text contains a stop command.
@@ -56,39 +64,33 @@ def is_stop_command(text_lower: str, stop_commands: List[str], fuzzy_ratio: floa
     if not text_lower or not text_lower.strip():
         return False
     
-    heard = unicodedata.normalize("NFC", text_lower).casefold()
-    commands = [unicodedata.normalize("NFC", command.strip()).casefold()
-                for command in stop_commands if command.strip()]
+    heard = _normalise_control_text(text_lower)
+    commands = [control for command in stop_commands
+                if (control := _normalise_control_text(command))]
+    if not heard:
+        return False
     for command in commands:
-        if command in heard:
+        if f" {command} " in f" {heard} ":
             debug_log(f"stop command detected: {command} in '{heard}'", "voice")
             return True
 
-    # Short inputs permit a close transcription of a configured phrase.
-    words = heard.split()
-    if len(words) <= 2:
-        for word in words:
-            for command in commands:
-                if difflib.SequenceMatcher(a=command, b=word).ratio() >= fuzzy_ratio:
-                    debug_log(f"stop command detected: {command}~{word} in '{heard}'", "voice")
-                    return True
+    # Approximate a complete short control, rather than a word in other speech.
+    if len(heard.split()) <= 2:
+        for command in commands:
+            if difflib.SequenceMatcher(a=command, b=heard).ratio() >= fuzzy_ratio:
+                debug_log(f"stop command detected: {command}~{heard}", "voice")
+                return True
     return False
 
 
 def is_stop_command_echo(text: str, tts_text: str, stop_commands: List[str], fuzzy_ratio: float = 0.8) -> bool:
     """Recognise literal TTS echo while preserving standalone control priority."""
-    def normalise(value: str) -> str:
-        value = unicodedata.normalize("NFC", value).casefold()
-        value = "".join(" " if unicodedata.category(char).startswith("P") else char
-                        for char in value)
-        return " ".join(value.split())
-
-    heard = normalise(text)
-    spoken = normalise(tts_text)
+    heard = _normalise_control_text(text)
+    spoken = _normalise_control_text(tts_text)
     if not heard or not spoken:
         return False
     for command in stop_commands:
-        control = normalise(command)
+        control = _normalise_control_text(command)
         if control and difflib.SequenceMatcher(a=heard, b=control).ratio() >= fuzzy_ratio:
             return False
     return heard in spoken

@@ -90,3 +90,32 @@ def test_blank_stop_entries_cannot_interrupt_unrelated_speech(commands):
 ])
 def test_normalised_configured_controls_interrupt(heard, command):
     assert not process(heard, 'The forecast is sunny today.', [command])
+
+
+@pytest.mark.parametrize('heard,command', [
+    ('The performer is unstoppable today.', 'stop'),
+    ('We should walk quietly through the museum.', 'quiet'),
+    ('quite nice', 'quiet'),
+    ('not quiet', 'quietly'),
+    ('Das ist unruhig heute.', 'ruhig'),
+    ('preκαλάpost', 'καλά'),
+    ('پیشتوقفپس', 'توقف'),
+    ('不是停止指令', '停止'),
+    ('cab\u0301 tail', 'cab'),
+])
+def test_word_fragments_do_not_interrupt(heard, command):
+    assert process(heard, 'A separate answer is playing.', [command])
+
+
+@pytest.mark.parametrize('heard,command', [
+    ('Please, STOP! Talking.', 'stop'),
+    ('shut, up!', 'shut up'),
+    ('  SHUT   UP  ', ' shut up '),
+    ('σιωπή!', 'σιωπή'),
+    ('توقف!', 'توقف'),
+    ('停止！', '停止'),
+    ('stopp!', 'stop'),
+    ('shut upp', 'shut up'),
+])
+def test_complete_controls_keep_interruption_priority(heard, command):
+    assert not process(heard, 'A separate answer is playing.', [command])
