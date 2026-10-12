@@ -11,6 +11,12 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def temporary_default_history(tmp_path, monkeypatch):
+    from jarvis.dictation import history
+    monkeypatch.setattr(history, "_default_history_path", lambda: tmp_path / "default-history.json")
+
+
 # ---------------------------------------------------------------------------
 # DictationHistory storage tests
 # ---------------------------------------------------------------------------
@@ -253,6 +259,38 @@ class TestDictationHistoryWindow:
             assert external["text"] in labels
             assert entry["text"] not in labels
             assert DictationHistory(path=path).get_all() == [external]
+        finally:
+            window.close()
+            window.deleteLater()
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize("operation", ["delete", "clear"])
+    def test_busy_history_shows_a_retry_message_and_retains_cards(self, qapp, tmp_path, monkeypatch, operation):
+        from filelock import FileLock
+        from PyQt6.QtWidgets import QLabel, QPushButton, QMessageBox
+        from desktop_app.dictation_history import DictationHistoryWindow
+        from jarvis.dictation.history import DictationHistory
+
+        path = tmp_path / "history.json"
+        history = DictationHistory(path=path)
+        entry = history.add("Keep this displayed dictation")
+        window = DictationHistoryWindow(history=history)
+        notices = []
+        monkeypatch.setattr(QMessageBox, "warning", lambda parent, title, text: notices.append(text))
+        monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.Yes)
+        try:
+            window.show()
+            qapp.processEvents()
+            with FileLock(str(path) + ".lock", mode=0o600):
+                if operation == "delete":
+                    button = next(button for button in window.findChildren(QPushButton)
+                                  if button.text() == "🗑️ Delete")
+                    button.click()
+                else:
+                    window._clear_all()
+            assert notices == ["Unable to update your saved dictations. Please try again."]
+            assert entry["text"] in [label.text() for label in window.centralWidget().findChildren(QLabel)]
+            assert DictationHistory(path=path).get_all() == [entry]
         finally:
             window.close()
             window.deleteLater()
@@ -694,3 +732,87 @@ class TestEngineHistoryIntegration:
         engine._transcribe_and_paste(frames, engine._stream_sample_rate)
 
         assert engine.history.count == 0
+
+
+@pytest.mark.unit
+def test_failed_history_save_keeps_the_paste_without_announcing_a_saved_entry(tmp_path, monkeypatch):
+    import numpy as np
+    from jarvis.dictation import history as history_module
+    from jarvis.dictation import dictation_engine as engine_module
+
+    history = history_module.DictationHistory(path=tmp_path / "history.json")
+    saved = history.add("Already saved")
+    pasted, announced = [], []
+    monkeypatch.setattr(engine_module, "_clipboard_paste", pasted.append)
+    monkeypatch.setattr(engine_module, "parse_hotkey", lambda combo: (frozenset(), None))
+    engine = engine_module.DictationEngine(
+        whisper_model_ref=lambda: None, whisper_backend_ref=lambda: None,
+        mlx_repo_ref=lambda: None, history=history,
+        on_dictation_result=announced.append,
+    )
+    monkeypatch.setattr(engine, "_transcribe", lambda audio: "New dictated text")
+    monkeypatch.setattr(history_module, "json", MagicMock(wraps=json))
+    history_module.json.dump.side_effect = OSError("Synthetic save failure")
+
+    engine._transcribe_and_paste([np.zeros(8000, dtype=np.float32)], engine._stream_sample_rate)
+
+    assert pasted == ["New dictated text"]
+    assert announced == []
+    assert history.get_all() == [saved]
+    assert history_module.DictationHistory(path=tmp_path / "history.json").get_all() == [saved]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("operation", ["delete", "clear"])
+@pytest.mark.parametrize("contention", ["native", "instance"])
+def test_busy_history_keeps_the_qt_event_loop_responsive(qapp, tmp_path, monkeypatch, operation, contention):
+    from contextlib import ExitStack
+    from threading import Event, Thread
+    from filelock import FileLock
+    from PyQt6.QtCore import QEventLoop, QTimer
+    from PyQt6.QtWidgets import QMessageBox
+    from desktop_app.dictation_history import DictationHistoryWindow
+    from jarvis.dictation.history import DictationHistory
+
+    path = tmp_path / "history.json"
+    history = DictationHistory(path=path)
+    entry = history.add("Saved before contention")
+    window = DictationHistoryWindow(history=history)
+    notices, tick_times = [], []
+    monkeypatch.setattr(QMessageBox, "warning", lambda parent, title, text: notices.append(text))
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.Yes)
+    release, ready = Event(), Event()
+    worker = None
+    try:
+        window.show()
+        qapp.processEvents()
+        with ExitStack() as resources:
+            if contention == "native":
+                resources.enter_context(FileLock(str(path) + ".lock", mode=0o600))
+            else:
+                def hold_instance():
+                    with history._lock:
+                        ready.set()
+                        release.wait(timeout=3)
+                worker = Thread(target=hold_instance)
+                worker.start()
+                assert ready.wait(timeout=1)
+            loop = QEventLoop()
+            started = time.monotonic()
+            def observe_tick():
+                tick_times.append(time.monotonic() - started)
+                release.set()
+                loop.quit()
+            QTimer.singleShot(50, observe_tick)
+            action = (lambda: window._on_delete(entry["id"])) if operation == "delete" else window._clear_all
+            QTimer.singleShot(0, action)
+            loop.exec()
+        assert tick_times and tick_times[0] < 0.5
+        assert notices == ["Unable to update your saved dictations. Please try again."]
+        assert DictationHistory(path=path).get_all() == [entry]
+    finally:
+        release.set()
+        if worker is not None:
+            worker.join(timeout=1)
+        window.close()
+        window.deleteLater()

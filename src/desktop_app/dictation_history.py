@@ -19,6 +19,8 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal, QObject, QTimer
 from PyQt6.QtGui import QFont
 
+from jarvis.dictation.history import HistoryUpdateError
+
 from desktop_app.themes import JARVIS_THEME_STYLESHEET, COLORS
 
 
@@ -391,12 +393,16 @@ class DictationHistoryWindow(QMainWindow):
     def _on_delete(self, entry_id: str) -> None:
         """Delete a single entry."""
         if self._history:
-            self._history.delete(entry_id)
+            try:
+                self._history.delete(entry_id, wait_for_writer=False)
+            except HistoryUpdateError:
+                QMessageBox.warning(self, "Dictation History", "Unable to update your saved dictations. Please try again.")
+                return
         self._reload()
 
     def _clear_all(self) -> None:
         """Delete all entries after confirmation."""
-        if self._history is None or self._history.count == 0:
+        if self._history is None or not self.findChildren(_DictationCard):
             return
         reply = QMessageBox.question(
             self,
@@ -406,5 +412,9 @@ class DictationHistoryWindow(QMainWindow):
             QMessageBox.StandardButton.No,
         )
         if reply == QMessageBox.StandardButton.Yes:
-            self._history.clear()
+            try:
+                self._history.clear(wait_for_writer=False)
+            except HistoryUpdateError:
+                QMessageBox.warning(self, "Dictation History", "Unable to update your saved dictations. Please try again.")
+                return
             self._reload()
