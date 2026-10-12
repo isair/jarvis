@@ -7,8 +7,6 @@ config files and device enumeration.
 """
 
 import json
-import tempfile
-from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 import pytest
@@ -301,6 +299,19 @@ class TestInputDevices:
         assert len(devices) >= 1
 
 
+@pytest.fixture
+def settings_config_path(qapp, tmp_path, monkeypatch):
+    """Isolate the settings dialogue from user configuration and audio devices."""
+    from desktop_app import settings_window as sw
+
+    path = tmp_path / "config.json"
+    path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(sw, "default_config_path", lambda: path)
+    monkeypatch.setattr(sw, "get_input_devices", lambda: [("", "Default"), ("7", "Microphone")])
+    monkeypatch.setattr(sw.QMessageBox, "information", lambda *args: None)
+    return path
+
+
 class TestConfigSaveLogic:
     """Tests for save/load round-trip behaviour."""
 
@@ -312,15 +323,12 @@ class TestConfigSaveLogic:
         ("voice_device", "99"),
     ])
     def test_changing_input_device_preserves_other_selections(
-        self, qapp, tmp_path, monkeypatch, key, value
+        self, settings_config_path, key, value
     ):
         from desktop_app import settings_window as sw
 
-        path = tmp_path / "config.json"
+        path = settings_config_path
         path.write_text(json.dumps({key: value}), encoding="utf-8")
-        monkeypatch.setattr(sw, "default_config_path", lambda: path)
-        monkeypatch.setattr(sw, "get_input_devices", lambda: [("", "Default"), ("7", "Microphone")])
-        monkeypatch.setattr(sw.QMessageBox, "information", lambda *args: None)
         window = sw.SettingsWindow()
         assert window._widgets[key].currentData() == value
 
@@ -338,14 +346,11 @@ class TestConfigSaveLogic:
         assert reopened._widgets[key].currentData() == value
 
     @pytest.mark.unit
-    def test_reset_custom_selection_then_save_omits_defaults(self, qapp, tmp_path, monkeypatch):
+    def test_reset_custom_selection_then_save_omits_defaults(self, settings_config_path, monkeypatch):
         from desktop_app import settings_window as sw
 
-        path = tmp_path / "config.json"
+        path = settings_config_path
         path.write_text(json.dumps({"whisper_model": "local/custom-whisper"}), encoding="utf-8")
-        monkeypatch.setattr(sw, "default_config_path", lambda: path)
-        monkeypatch.setattr(sw, "get_input_devices", lambda: [("", "Default")])
-        monkeypatch.setattr(sw.QMessageBox, "information", lambda *args: None)
         monkeypatch.setattr(sw.QMessageBox, "question", lambda *args: sw.QMessageBox.StandardButton.Yes)
         window = sw.SettingsWindow()
         window._on_reset()
@@ -354,74 +359,53 @@ class TestConfigSaveLogic:
         window._on_save()
         assert "whisper_model" not in json.loads(path.read_text(encoding="utf-8"))
 
-    def test_only_non_defaults_are_saved(self):
-        """Saving default values should produce an empty config file."""
+    @pytest.mark.unit
+    def test_actual_save_omits_all_managed_defaults(self, settings_config_path):
+        from desktop_app import settings_window as sw
+
+        path = settings_config_path
         defaults = get_default_config()
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-            f.write('{}')
-            cfg_path = Path(f.name)
+        initial = {fm.key: defaults[fm.key] for fm in FIELD_METADATA}
+        path.write_text(json.dumps(initial), encoding="utf-8")
+        window = sw.SettingsWindow()
+        window._on_save()
+        assert json.loads(path.read_text(encoding="utf-8")) == {}
 
-        try:
-            from jarvis.config import _save_json, _load_json
+    @pytest.mark.unit
+    def test_actual_save_keeps_changes_and_unmanaged_keys(self, settings_config_path):
+        from desktop_app import settings_window as sw
 
-            # Simulate: all values match defaults, so nothing should be written
-            config = {}
-            for fm in FIELD_METADATA:
-                val = defaults.get(fm.key)
-                default_val = defaults.get(fm.key)
-                if val != default_val:
-                    config[fm.key] = val
+        path = settings_config_path
+        initial = {"future_setting": {"notes": "保留"}, "_config_version": 1,
+                   "mcps": {"local-test": {"command": "test-local-server"}}}
+        path.write_text(json.dumps(initial), encoding="utf-8")
+        window = sw.SettingsWindow()
+        enabled = not get_default_config()["tts_enabled"]
+        window._widgets["tts_enabled"].setChecked(enabled)
+        chat = window._widgets["ollama_chat_model"]
+        model = next(chat.itemData(i) for i in range(chat.count())
+                     if chat.itemData(i) != get_default_config()["ollama_chat_model"])
+        chat.setCurrentIndex(chat.findData(model))
+        window._on_save()
+        assert json.loads(path.read_text(encoding="utf-8")) == {
+            **initial, "tts_enabled": enabled, "ollama_chat_model": model,
+        }
 
-            _save_json(cfg_path, config)
-            saved = _load_json(cfg_path)
-            assert saved == {}
-        finally:
-            cfg_path.unlink(missing_ok=True)
+    @pytest.mark.unit
+    def test_removing_last_mcp_is_staged_until_save(self, settings_config_path, monkeypatch):
+        from desktop_app import settings_window as sw
 
-    def test_changed_values_are_preserved(self):
-        """Non-default values should survive a save/load round-trip."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-            f.write('{}')
-            cfg_path = Path(f.name)
-
-        try:
-            from jarvis.config import _save_json, _load_json
-
-            config = {
-                "ollama_chat_model": "gemma4:e4b",
-                "tts_enabled": False,
-                "hot_window_seconds": 5.0,
-            }
-            _save_json(cfg_path, config)
-            saved = _load_json(cfg_path)
-            assert saved["ollama_chat_model"] == "gemma4:e4b"
-            assert saved["tts_enabled"] is False
-            assert saved["hot_window_seconds"] == 5.0
-        finally:
-            cfg_path.unlink(missing_ok=True)
-
-    def test_unknown_keys_preserved_on_save(self):
-        """Keys not in FIELD_METADATA (e.g. mcps) should survive save."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-            json.dump({"mcps": {"test": {"url": "http://example.com"}},
-                        "_config_version": 1}, f)
-            cfg_path = Path(f.name)
-
-        try:
-            from jarvis.config import _save_json, _load_json
-
-            existing = _load_json(cfg_path)
-            # Simulate settings save: add a changed value, keep existing keys
-            existing["tts_enabled"] = False
-            _save_json(cfg_path, existing)
-
-            saved = _load_json(cfg_path)
-            assert "mcps" in saved
-            assert saved["mcps"]["test"]["url"] == "http://example.com"
-            assert saved["_config_version"] == 1
-            assert saved["tts_enabled"] is False
-        finally:
-            cfg_path.unlink(missing_ok=True)
+        path = settings_config_path
+        initial = {"future_setting": "preserved",
+                   "mcps": {"local-test": {"command": "test-local-server"}}}
+        path.write_text(json.dumps(initial), encoding="utf-8")
+        monkeypatch.setattr(sw.QMessageBox, "question", lambda *args: sw.QMessageBox.StandardButton.Yes)
+        window = sw.SettingsWindow()
+        window._mcp_list.setCurrentRow(0)
+        window._on_mcp_remove()
+        assert json.loads(path.read_text(encoding="utf-8")) == initial
+        window._on_save()
+        assert json.loads(path.read_text(encoding="utf-8")) == {"future_setting": initial["future_setting"]}
 
 
 class TestDefaultValueTypes:
@@ -534,50 +518,3 @@ class TestMCPCatalogueDialogLogic:
         """_is_node_available returns False when _resolve_command raises."""
         with patch("jarvis.tools.external.mcp_client._resolve_command", side_effect=FileNotFoundError("not found")):
             assert _MCPCatalogueDialog._is_node_available() is False
-
-
-class TestMCPConfigSaveLogic:
-    """Tests for MCP config preservation during save."""
-
-    def test_mcps_saved_when_present(self):
-        """MCP configs should be written to the config file."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-            json.dump({}, f)
-            cfg_path = Path(f.name)
-
-        try:
-            from jarvis.config import _save_json, _load_json
-
-            config = {
-                "mcps": {
-                    "filesystem": {
-                        "transport": "stdio",
-                        "command": "npx",
-                        "args": ["-y", "@modelcontextprotocol/server-filesystem", "~"],
-                    }
-                }
-            }
-            _save_json(cfg_path, config)
-            saved = _load_json(cfg_path)
-            assert "mcps" in saved
-            assert "filesystem" in saved["mcps"]
-            assert saved["mcps"]["filesystem"]["command"] == "npx"
-        finally:
-            cfg_path.unlink(missing_ok=True)
-
-    def test_empty_mcps_not_saved(self):
-        """When mcps is empty, it should not be written to config."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-            json.dump({}, f)
-            cfg_path = Path(f.name)
-
-        try:
-            from jarvis.config import _save_json, _load_json
-
-            # Simulate: mcps is empty so should not be written
-            config = {"tts_enabled": False}
-            _save_json(cfg_path, config)
-            saved = _load_json(cfg_path)
-            assert "mcps" not in saved
-        finally:
-            cfg_path.unlink(missing_ok=True)
