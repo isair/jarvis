@@ -31,8 +31,8 @@ These branches are created idempotently by inserting only missing stable IDs. Th
 
 Opening an initialised graph reads the existing revision and branch seeds without
 issuing seed writes. Under SQLite WAL, this permits opening and reading committed
-nodes while another owner holds a write transaction. Missing schema or seeds
-require writable bootstrap. Actual mutations and access-score updates retain
+nodes while another owner holds a write transaction. Missing node schema or branch
+seeds require writable bootstrap. Actual mutations and access-score updates retain
 their normal SQLite write-lock requirements.
 
 No Other branch: the extractor defaults unknown classifications to `user`. A fact that genuinely belongs nowhere should not be stored.
@@ -148,7 +148,10 @@ any open transaction before propagating the original error.
 
 The reply cache includes the database path and revision with its profile block.
 Each turn checks that signature before reuse, so committed external edits reach
-the next turn without requiring an in-process callback. Changed profiles are
+the next turn without requiring an in-process callback. An absent revision table
+or counter leaves existing node data readable: profiles are rebuilt without
+caching, and any prior cached profile is discarded. Readers do not create the
+revision metadata; writable bootstrap supplies it. Changed profiles are
 rebuilt; an unavailable rebuild supplies no stale block. Temporary read stores
 are closed after use. Profile reads open the existing database with SQLite's
 read-only mode, without schema or branch seed writes. A read transaction keeps

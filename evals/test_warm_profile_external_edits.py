@@ -11,14 +11,35 @@ from jarvis.reply import engine
 pytestmark = [pytest.mark.eval, requires_judge_llm]
 
 
+@pytest.fixture(autouse=True)
+def factual_reply_sampling(monkeypatch):
+    chat = engine.chat_with_messages
+    def factual_chat(*args, **kwargs):
+        options = dict(kwargs.get('extra_options') or {})
+        options['temperature'] = 0.0
+        return chat(*args, **(kwargs | {'extra_options': options}))
+    monkeypatch.setattr(engine, 'chat_with_messages', factual_chat)
+
+
+@pytest.mark.parametrize('metadata', ['present', 'table', 'counter'])
 @pytest.mark.parametrize('query', ['Where do I live?', 'Nerede yaşıyorum?'])
-def test_external_home_edit_reaches_the_next_reply(tmp_path, eval_db, eval_dialogue_memory, query):
+def test_external_home_edit_reaches_the_next_reply(tmp_path, eval_db, eval_dialogue_memory, query, metadata):
     cfg = voice_config()
     cfg.db_path = str(tmp_path / 'graph.db')
+    cfg.location_enabled = False
     cfg.llm_chat_timeout_sec = 60
     store = GraphMemoryStore(cfg.db_path)
     try:
         node = store.create_node('Home', 'Current residence', data='The user lives in Manchester.', parent_id='user')
+        if metadata == 'table':
+            names = [row[0] for row in store.conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'warm_profile_%'")]
+            for name in names:
+                store.conn.execute(f'DROP TRIGGER "{name}"')
+            store.conn.execute('DROP TABLE memory_graph_revisions')
+        elif metadata == 'counter':
+            store.conn.execute("DELETE FROM memory_graph_revisions WHERE name = 'warm_profile'")
+        store.conn.commit()
         with patch.object(engine, 'plan_query', return_value=['Reply to the user.']), \
                 patch.object(engine, 'select_tools', return_value=[]):
             first = engine.run_reply_engine(eval_db, cfg, None, query, eval_dialogue_memory)

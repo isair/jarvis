@@ -416,13 +416,22 @@ class GraphMemoryStore:
 
     # ── CRUD ────────────────────────────────────────────────────────────
 
-    def get_warm_profile_revision(self) -> int:
-        """Read the persisted revision of User/Directives profile inputs."""
+    def get_warm_profile_revision(self) -> Optional[int]:
+        """Read the profile revision, or None when its metadata is absent."""
         with self._lock:
-            row = self.conn.execute(
-                "SELECT revision FROM memory_graph_revisions WHERE name = 'warm_profile'"
-            ).fetchone()
-        return row["revision"]
+            try:
+                row = self.conn.execute(
+                    "SELECT revision FROM memory_graph_revisions WHERE name = 'warm_profile'"
+                ).fetchone()
+            except sqlite3.OperationalError:
+                table = self.conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+                    "AND name = 'memory_graph_revisions' COLLATE NOCASE"
+                ).fetchone()
+                if table is not None:
+                    raise
+                return None
+        return row["revision"] if row is not None else None
 
     def get_node(self, node_id: str) -> Optional[MemoryNode]:
         """Fetch a single node by ID."""

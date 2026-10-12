@@ -1310,10 +1310,14 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         from ..memory.graph_ops import build_warm_profile, format_warm_profile_block
         with closing(GraphMemoryStore(cfg.db_path, read_only=True)) as _graph_store_warm:
             _graph_store_warm.conn.execute('BEGIN')
-            signature = (cfg.db_path, _graph_store_warm.get_warm_profile_revision())
+            revision = _graph_store_warm.get_warm_profile_revision()
+            signature = (cfg.db_path, revision) if revision is not None else None
+            if signature is None and dialogue_memory:
+                dialogue_memory.invalidate_warm_profile()
+                debug_log("warm profile revision unavailable: rebuilding without cache", "memory")
             cached_profile = (
                 dialogue_memory.hot_cache_get(DialogueMemory.WARM_PROFILE_CACHE_KEY)
-                if dialogue_memory else None
+                if dialogue_memory and signature is not None else None
             )
             if cached_profile is not None and cached_profile[0] == signature:
                 warm_profile_block = cached_profile[1]
@@ -1333,7 +1337,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                         f"warm profile loaded: user={user_len} directives={directives_len}",
                         "memory",
                     )
-                if dialogue_memory:
+                if dialogue_memory and signature is not None:
                     dialogue_memory.hot_cache_put(
                         DialogueMemory.WARM_PROFILE_CACHE_KEY, (signature, warm_profile_block),
                     )
