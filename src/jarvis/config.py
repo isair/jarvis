@@ -160,7 +160,6 @@ class Settings:
     whisper_backend: str  # "auto", "mlx", or "faster-whisper"
     whisper_device: str  # "cuda", "auto", or "cpu" (only for faster-whisper)
     whisper_compute_type: str
-    whisper_vad: bool
     whisper_min_confidence: float
     whisper_no_speech_threshold: float
     whisper_min_audio_duration: float
@@ -564,7 +563,6 @@ def get_default_config() -> Dict[str, Any]:
         "whisper_backend": "auto",  # "auto" (MLX on Apple Silicon, else faster-whisper), "mlx", or "faster-whisper"
         "whisper_device": "auto",  # "cuda" (recommended if available), "auto", or "cpu" (only for faster-whisper)
         "whisper_compute_type": "int8",
-        "whisper_vad": True,
         "whisper_min_confidence": 0.3,  # Filter low-confidence segments (hallucinations)
         "whisper_no_speech_threshold": 0.5,  # Hard cutoff: reject segments where no_speech_prob >= this
         "whisper_min_audio_duration": 0.15,
@@ -785,7 +783,6 @@ def load_settings() -> Settings:
     if whisper_device not in ("cuda", "auto", "cpu"):
         whisper_device = "auto"
     whisper_compute_type = str(merged.get("whisper_compute_type", "int8"))
-    whisper_vad = bool(merged.get("whisper_vad", True))
     voice_min_energy = float(merged.get("voice_min_energy", 0.02))
     vad_enabled = bool(merged.get("vad_enabled", True))
     vad_aggressiveness = int(merged.get("vad_aggressiveness", 2))
@@ -948,7 +945,6 @@ def load_settings() -> Settings:
         whisper_backend=whisper_backend,
         whisper_device=whisper_device,
         whisper_compute_type=whisper_compute_type,
-        whisper_vad=whisper_vad,
         whisper_min_confidence=whisper_min_confidence,
         whisper_no_speech_threshold=whisper_no_speech_threshold,
         whisper_min_audio_duration=whisper_min_audio_duration,
