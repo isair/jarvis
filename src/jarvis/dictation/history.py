@@ -70,6 +70,11 @@ class DictationHistory:
     # Public API
     # ------------------------------------------------------------------
 
+    @property
+    def path(self) -> Path:
+        """The selected storage file, shared with history observers."""
+        return self._path
+
     def add(self, text: str, duration: float = 0.0) -> Dict[str, Any]:
         """Append a new dictation entry and persist. Returns the new entry."""
         entry: Dict[str, Any] = {

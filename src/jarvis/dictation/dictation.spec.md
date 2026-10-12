@@ -7,8 +7,10 @@ transcription into the focused application. Completely independent from the
 assistant pipeline (no wake words, intent judge, profiles, or TTS).
 
 Dictation results persist in `~/.local/share/jarvis/dictation_history.json`.
-The store and desktop file watcher resolve this default through the lightweight
-`paths.py` boundary. An explicit history path overrides the default.
+The default is resolved through the lightweight `paths.py` boundary. An explicit
+history path overrides the default. The desktop watcher observes the store's
+selected `path`, including explicit overrides. While visible, it refreshes on
+file addition, removal or replacement, including changes with older timestamps.
 
 ## Configuration
 
