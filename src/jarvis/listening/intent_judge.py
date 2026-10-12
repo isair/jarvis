@@ -217,7 +217,14 @@ Return only JSON: {{"directed": true/false, "stop": true/false,
 "confidence": "high"/"medium"/"low", "reasoning": "brief explanation"}}.
 Classify only the CURRENT utterance. Never rewrite or generate a replacement query.
 
-Every non-echo follow-up is directed=true. An assistant name is not required.
+A genuine user follow-up is directed=true. An assistant name is not required.
+The hot window permits follow-ups; it does not make every nearby conversation
+addressed to the assistant. Speech clearly addressed to another person, including
+an explanation to that person about speaking to the assistant, is directed=false
+and stop=false. A current statement that the user is talking to someone else is
+also directed=false. Use the current addressee, not mere proximity or a mentioned
+assistant name. When there is no evidence of another addressee, treat a non-echo
+follow-up as directed=true.
 Fragments, one-word replies, statements, thanks, corrections and philosophical
 opinions are all directed. A follow-up can change the topic. Neither a full
 sentence nor an explicit request is required. This applies in every language.
@@ -233,6 +240,8 @@ Examples:
 - 'What about Germany' -> {{"directed":true,"stop":false,"confidence":"high","reasoning":"non-echo follow-up"}}
 - 'I think absurdism is better' -> {{"directed":true,"stop":false,"confidence":"high","reasoning":"replying to the assistant"}}
 - 'And tomorrow' -> {{"directed":true,"stop":false,"confidence":"high","reasoning":"fragment in active follow-up window"}}
+- 'Thanks' -> {{"directed":true,"stop":false,"confidence":"high","reasoning":"acknowledgement to the assistant, no action required"}}
+- 'Do you already know where I live?' -> {{"directed":true,"stop":false,"confidence":"high","reasoning":"follow-up about the assistant's knowledge"}}
 - 'stop' -> {{"directed":true,"stop":true,"confidence":"high","reasoning":"direct cancellation"}}
 """
 
