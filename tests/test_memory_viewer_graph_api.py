@@ -78,3 +78,19 @@ class TestGraphPresetProtection:
         assert response.status_code == 404
         assert response.get_json()['error']
         assert self.store.get_node(node.id).to_dict() == before
+
+    def test_import_source_quote_and_date_survive_a_node_edit(self):
+        from src.jarvis.memory.imports import preview_text, ImportChoice, commit_import
+        preview = preview_text('Claude', 'I live in London.', label='<synthetic source>')
+        result = commit_import(self.store, preview, [ImportChoice(preview.items[0].id,
+                                 'I live in London.', 'user', '2026-10-01')])
+        node_id = result.node_ids[0]
+        self.store.update_node(node_id, data='I live in Edinburgh.')
+        response = self.client.get(f'/api/graph/node/{node_id}')
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data['node']['data'] == 'I live in Edinburgh.'
+        source = data['imports'][0]
+        assert source['original_text'] == 'I live in London.'
+        assert source['source_date'] == '2026-10-01'
+        assert not source['current_binding']

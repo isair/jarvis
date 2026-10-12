@@ -359,6 +359,7 @@ def graph_get_node(node_id: str) -> Response:
             "node": node.to_dict(),
             "children": [c.to_dict() for c in children],
             "ancestors": [a.to_dict() for a in ancestors],
+            "imports": store.get_import_provenance(node_id),
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -3002,7 +3003,7 @@ def index() -> str:
         }
 
         function renderNodeDetail(data) {
-            const { node, children, ancestors } = data;
+            const { node, children, ancestors, imports } = data;
             const sidebar = document.getElementById('detail-sidebar');
 
             const breadcrumb = ancestors.map((a, i) => {
@@ -3024,6 +3025,17 @@ def index() -> str:
             const dataHtml = node.data
                 ? `<div class="detail-data">${escapeHtml(node.data)}</div>`
                 : '<div style="color: var(--text-muted); font-size: 0.85rem; font-style: italic;">No data stored</div>';
+
+            const sourcesHtml = imports.length ? `
+                <div class="detail-section"><div class="detail-section-title">📥 Import sources</div>
+                ${imports.map(source => `<details>
+                    <summary>${escapeHtml(source.provider)}: ${escapeHtml(source.source_label)}</summary>
+                    <p>Scope: ${escapeHtml(source.source_scope)}</p>
+                    <p>Original statement date: ${escapeHtml(source.source_date || 'Unknown')}</p>
+                    <p>Imported: ${escapeHtml(source.imported_at)}</p>
+                    <p>${source.current_binding ? 'Original text retained' : 'Memory text has been edited'}</p>
+                    <div class="detail-data">${escapeHtml(source.original_text)}</div>
+                </details>`).join('')}</div>` : '';
 
             const lastAccessed = new Date(node.last_accessed).toLocaleDateString('en-GB', {
                 day: 'numeric', month: 'short', year: 'numeric'
@@ -3057,6 +3069,8 @@ def index() -> str:
                     <div class="detail-section-title">💾 Data</div>
                     ${dataHtml}
                 </div>
+
+                ${sourcesHtml}
 
                 <div class="detail-section">
                     <div class="detail-section-title">📂 Children</div>
@@ -3814,4 +3828,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

@@ -83,6 +83,12 @@ The warm profile is injected into every reply's initial system message (see `rep
 
 SQLite table `memory_nodes` in the same database as the diary system. Schema is initialised automatically on first access. The root node is created if absent.
 
+### Imported memory provenance
+
+Reviewed imports use `memory_imports` and `memory_import_node_sources`. Nodes and source records commit atomically. Original scrubbed quotations, reviewed text, provider/scope, optional original statement date and the import timestamp are distinct. Literal duplicates are date-qualified; repeated imports preserve subsequent human edits. Source associations survive splits; deleted nodes leave archival records without a live association. Data writes invalidate source-date bindings, while metadata-only edits preserve them. User/Directives provenance changes invalidate the warm profile revision.
+
+`get_context_data` provides bounded, fenced imported text and source-date metadata for warm profiles and graph enrichment. Current data takes precedence over archived quotes. Imported standing instructions require a complete excerpt. Original statement dates never come from file or import timestamps. See `imports.spec.md` for local discovery and review.
+
 ### Entry Points
 
 | Entry Point | Query | Purpose |

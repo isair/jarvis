@@ -1477,7 +1477,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                         for node in graph_nodes:
                             ancestors = graph_store.get_ancestors(node.id)
                             path = " > ".join(a.name for a in ancestors)
-                            data_preview = node.data[:300] if node.data else ""
+                            data_preview = graph_store.get_context_data(node, max_chars=300) if node.data else ""
                             if data_preview:
                                 graph_parts.append(f"[{path}] {data_preview}")
                                 matched_q = _match_question(data_preview, questions)
@@ -1485,6 +1485,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                                 debug_log(f"graph hit: [{path}] ({node.data_token_count} tokens)", "memory")
 
                     if graph_parts:
+                        from ..memory.imports import IMPORT_CONTEXT_BEGIN, IMPORT_CONTEXT_GUIDANCE
+                        if any(IMPORT_CONTEXT_BEGIN in part for part in graph_parts):
+                            graph_parts.insert(0, IMPORT_CONTEXT_GUIDANCE)
                         raw_graph_parts = list(graph_parts)
                         graph_context = (
                             "Information the user has shared with you in prior conversations "
