@@ -299,60 +299,79 @@ class TestGetRequiredModels:
         assert models == ["gpt-oss:20b", "gemma4:e2b"]
 
 
+@pytest.fixture
+def real_child_process_probe():
+    """Run an independent Python child without site hooks or user imports."""
+    command = [sys.executable, '-I', '-S', '-c', "print('independent child')"]
+    with ThreadPoolExecutor(max_workers=1) as worker:
+        yield lambda: worker.submit(subprocess.run, command, capture_output=True, text=True, timeout=5).result(timeout=10)
+
+
+@pytest.mark.unit
+@pytest.mark.usefixtures('no_network')
 class TestCheckInstalledModels:
     """Tests for checking installed Ollama models."""
 
-    def test_parses_ollama_list_output(self):
+    @pytest.fixture(autouse=True)
+    def detection_processes(self, monkeypatch):
+        """Keep process and executable lookup stubs local to the wizard."""
+        monkeypatch.setattr(setup_wizard, 'subprocess', SimpleNamespace(**vars(subprocess)))
+        monkeypatch.setattr(setup_wizard, 'shutil', SimpleNamespace(**vars(shutil)))
+
+    def test_parses_ollama_list_output(self, real_child_process_probe):
         """Correctly parses 'ollama list' output."""
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = """NAME                       ID              SIZE      MODIFIED
+        mock_result = subprocess.CompletedProcess(['/usr/bin/ollama', 'list'], 0, stdout="""NAME                       ID              SIZE      MODIFIED
 llama2:7b                  abc123          3.8 GB    2 days ago
 nomic-embed-text:latest    def456          274 MB    1 week ago
-"""
+""")
 
-        with patch("subprocess.run", return_value=mock_result):
+        with patch.object(setup_wizard.subprocess, 'run', return_value=mock_result):
             models = check_installed_models("/usr/bin/ollama")
 
             assert "llama2:7b" in models
             assert "nomic-embed-text:latest" in models
+            child = real_child_process_probe()
+            assert (child.returncode, child.stdout) == (0, 'independent child\n')
 
-    def test_returns_empty_on_error(self):
+    def test_returns_empty_on_error(self, real_child_process_probe):
         """Returns empty list if ollama list fails."""
-        mock_result = MagicMock()
-        mock_result.returncode = 1
+        mock_result = subprocess.CompletedProcess(['/wizard/test/ollama', 'list'], 1, stdout='')
 
-        with patch("subprocess.run", return_value=mock_result):
-            models = check_installed_models()
+        with patch.object(setup_wizard.subprocess, 'run', return_value=mock_result):
+            models = check_installed_models('/wizard/test/ollama')
 
             assert models == []
+            child = real_child_process_probe()
+            assert (child.returncode, child.stdout) == (0, 'independent child\n')
 
-    def test_handles_subprocess_exception(self):
+    def test_handles_subprocess_exception(self, real_child_process_probe):
         """Returns empty list if subprocess raises exception."""
-        with patch("subprocess.run", side_effect=Exception("Command not found")):
-            models = check_installed_models()
+        with patch.object(setup_wizard.subprocess, 'run', side_effect=FileNotFoundError('Command not found')):
+            models = check_installed_models('/wizard/test/ollama')
 
             assert models == []
+            child = real_child_process_probe()
+            assert (child.returncode, child.stdout) == (0, 'independent child\n')
 
-    def test_falls_back_to_check_ollama_cli_when_path_unset(self):
+    def test_falls_back_to_check_ollama_cli_when_path_unset(self, real_child_process_probe, real_executable_probe):
         """When PATH does not contain ollama (e.g. frozen macOS .app launch),
         falls back to check_ollama_cli() so the resolved binary is invoked
         instead of plain "ollama" which would fail with FileNotFoundError."""
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = "NAME    ID    SIZE    MODIFIED\nllama2:7b    abc    3.8 GB    1d\n"
+        mock_result = subprocess.CompletedProcess(['/usr/local/bin/ollama', 'list'], 0,
+            stdout='NAME    ID    SIZE    MODIFIED\nllama2:7b    abc    3.8 GB    1d\n')
 
-        with patch("desktop_app.setup_wizard.shutil.which", return_value=None):
-            with patch(
-                "desktop_app.setup_wizard.check_ollama_cli",
-                return_value=(True, "/usr/local/bin/ollama"),
-            ):
-                with patch("subprocess.run", return_value=mock_result) as run:
-                    models = check_installed_models()
+        with patch.object(setup_wizard.shutil, 'which', return_value=None), \
+                patch.object(setup_wizard, 'check_ollama_cli', return_value=(True, '/usr/local/bin/ollama')), \
+                patch.object(setup_wizard.subprocess, 'run', return_value=mock_result) as run:
+            models = check_installed_models()
 
-                    assert "llama2:7b" in models
-                    args, _ = run.call_args
-                    assert args[0][0] == "/usr/local/bin/ollama"
+            assert "llama2:7b" in models
+            args, _ = run.call_args
+            assert args[0][0] == "/usr/local/bin/ollama"
+            actual, expected = real_executable_probe()
+            assert actual == expected
+            child = real_child_process_probe()
+            assert (child.returncode, child.stdout) == (0, 'independent child\n')
 
 
 class TestResolveOllamaPath:
