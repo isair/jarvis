@@ -148,3 +148,7 @@ The wizard is deliberately limited to prerequisites. These are configured via th
 - Dictation hotkey
 - Full MCP catalogue and custom MCP servers (wizard only shows featured entries)
 - All advanced parameters
+
+## Local Provider Validation
+
+Model-list and first-run discovery integration checks use loopback HTTP servers owned by each test. Unreachable-server cases reserve a port without listening. The tests disable ambient proxies and credentials, reject connections outside their owned endpoints, wait for discovery workers and close the server threads.
