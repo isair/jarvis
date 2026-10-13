@@ -158,10 +158,110 @@ class TestDictationHistory:
 # DictationHistoryWindow tests
 # ---------------------------------------------------------------------------
 
+@pytest.mark.unit
 class TestDictationHistoryWindow:
-    """Tests for the dictation history Qt window."""
+    """Native signal delivery and viewport refresh retain visible saved records."""
 
-    @pytest.mark.unit
+    @staticmethod
+    def _notify(window, entry, delivery, qapp):
+        if delivery == "main":
+            window.signals.new_entry.emit(entry)
+        else:
+            import threading
+            errors = []
+
+            def emit():
+                try:
+                    window.signals.new_entry.emit(entry)
+                except Exception as exc:
+                    errors.append(exc)
+
+            sender = threading.Thread(target=emit)
+            sender.start()
+            sender.join(timeout=3)
+            assert not sender.is_alive() and errors == []
+        qapp.processEvents()
+
+    @staticmethod
+    def _assert_displayed_records(window, entries, qapp):
+        from PyQt6.QtWidgets import QLabel, QScrollArea
+
+        container = window.findChild(QScrollArea).widget()
+        layout = container.layout()
+        cards = []
+        for index in range(layout.count()):
+            widget = layout.itemAt(index).widget()
+            if widget is not None and widget.objectName() == "dictation_card":
+                cards.append(widget)
+        assert len(cards) == len(entries)
+        for card, entry in zip(cards, entries):
+            assert entry["text"] in [label.text() for label in card.findChildren(QLabel)]
+            assert card.isVisible() and container.isAncestorOf(card)
+        assert not any(widget.isVisible() and widget.objectName() == "dictation_card"
+                       for widget in qapp.topLevelWidgets())
+
+    @pytest.mark.parametrize("delivery", ["main", "worker"])
+    def test_hidden_notifications_are_inert_and_surface_on_open(self, qapp, tmp_path, delivery):
+        from PyQt6.QtWidgets import QScrollArea
+        from desktop_app.dictation_history import DictationHistoryWindow
+        from jarvis.dictation.history import DictationHistory
+
+        history = DictationHistory(path=tmp_path / "history.json")
+        window = DictationHistoryWindow(history=history)
+        scroll = window.findChild(QScrollArea)
+        before = scroll.widget()
+        entry = history.add("A late dictation, İstanbul")
+        self._notify(window, entry, delivery, qapp)
+        assert not window.isVisible()
+        assert scroll.widget() is before
+        window.show()
+        qapp.processEvents()
+        self._assert_displayed_records(window, [entry], qapp)
+
+    @pytest.mark.parametrize("delivery", ["main", "worker"])
+    def test_visible_notifications_render_saved_text(self, qapp, tmp_path, delivery):
+        from desktop_app.dictation_history import DictationHistoryWindow
+        from jarvis.dictation.history import DictationHistory
+
+        history = DictationHistory(path=tmp_path / "history.json")
+        window = DictationHistoryWindow(history=history)
+        window.show()
+        qapp.processEvents()
+        # Observe the notification independently of periodic disk polling.
+        window._file_watch_timer.stop()
+        entry = history.add("A newly saved dictation, 東京")
+        self._notify(window, entry, delivery, qapp)
+        self._assert_displayed_records(window, [entry], qapp)
+
+    @pytest.mark.parametrize("change", ["unchanged", "addition", "deletion", "replacement"])
+    def test_reopening_defers_refresh_and_displays_current_disk_records(self, qapp, tmp_path, change):
+        from PyQt6.QtWidgets import QScrollArea
+        from desktop_app.dictation_history import DictationHistoryWindow
+        from jarvis.dictation.history import DictationHistory
+
+        path = tmp_path / "history.json"
+        desktop = DictationHistory(path=path)
+        older = desktop.add("An older dictation")
+        desktop.add("The most recent dictation")
+        external = DictationHistory(path=path)
+        window = DictationHistoryWindow(history=desktop)
+        scroll = window.findChild(QScrollArea)
+        for cycle in range(3):
+            before = scroll.widget()
+            window.show()
+            assert scroll.widget() is before
+            qapp.processEvents()
+            self._assert_displayed_records(window, external.get_all(), qapp)
+            window.hide()
+            if change == "addition":
+                external.add(f"External dictation {cycle}")
+            elif change == "deletion":
+                external.delete(older["id"])
+            elif change == "replacement":
+                external.clear()
+                external.add(f"Replacement dictation {cycle}")
+
+
     def test_attaching_history_renders_saved_dictations(self, qapp, tmp_path):
         from PyQt6.QtWidgets import QLabel
         from desktop_app.dictation_history import DictationHistoryWindow
@@ -178,7 +278,6 @@ class TestDictationHistoryWindow:
             window.close()
             window.deleteLater()
 
-    @pytest.mark.unit
     def test_delete_button_preserves_an_unseen_external_dictation(self, qapp, tmp_path):
         from PyQt6.QtWidgets import QLabel, QPushButton
         from desktop_app.dictation_history import DictationHistoryWindow, _DictationCard
@@ -206,7 +305,6 @@ class TestDictationHistoryWindow:
             window.close()
             window.deleteLater()
 
-    @pytest.mark.unit
     @pytest.mark.parametrize("operation", ["delete", "clear"])
     def test_busy_history_shows_a_retry_message_and_retains_cards(self, qapp, tmp_path, monkeypatch, operation):
         from filelock import FileLock
@@ -238,229 +336,7 @@ class TestDictationHistoryWindow:
             window.close()
             window.deleteLater()
 
-    def test_reload_keeps_list_items_parented_to_current_container(self, qapp, tmp_path):
-        """Cards/placeholders must be children of the currently-installed
-        list container after a rebuild. The container is swapped atomically
-        on each _reload() — what matters is that the cards live inside
-        whatever container is now in the scroll area, not the old one.
-        """
-        from desktop_app.dictation_history import DictationHistoryWindow
-        from jarvis.dictation.history import DictationHistory
 
-        history = DictationHistory(path=tmp_path / "h.json")
-        history.add("first")
-        history.add("second")
-        history.add("third")
-
-        window = DictationHistoryWindow(history=history)
-
-        for _ in range(3):
-            window._reload()
-
-        container = window._list_widget
-        for i in range(window._list_layout.count()):
-            item = window._list_layout.itemAt(i)
-            widget = item.widget()
-            if widget is not None:
-                assert widget.parent() is container, (
-                    "List items must be children of the current container."
-                )
-
-    @pytest.mark.unit
-    def test_on_new_entry_keeps_new_card_parented_to_container(self, qapp, tmp_path):
-        """A card inserted via the new-entry signal must be parented to the
-        container, not promoted to a top-level widget.
-        """
-        from desktop_app.dictation_history import (
-            DictationHistoryWindow,
-            _DictationCard,
-        )
-        from jarvis.dictation.history import DictationHistory
-
-        history = DictationHistory(path=tmp_path / "h.json")
-        window = DictationHistoryWindow(history=history)
-
-        window.isVisible = lambda: True  # type: ignore[assignment]
-
-        entry = history.add("hello world", duration=1.0)
-        window.signals.new_entry.emit(entry)
-
-        # The reload rebuilds the container from scratch; assert the new
-        # card lives inside the *current* container.
-        container = window._list_widget
-        cards = [
-            window._list_layout.itemAt(i).widget()
-            for i in range(window._list_layout.count())
-            if isinstance(window._list_layout.itemAt(i).widget(), _DictationCard)
-        ]
-        assert len(cards) == 1, (
-            "Expected exactly one _DictationCard in the visible window's layout."
-        )
-        for i in range(window._list_layout.count()):
-            item = window._list_layout.itemAt(i)
-            widget = item.widget()
-            if widget is not None:
-                assert widget.parent() is container
-
-    def test_on_new_entry_is_safe_when_window_hidden(self, qapp, tmp_path):
-        """A dictation can complete before the user ever opens the history
-        window.  In bundled mode the daemon runs in-process, so the engine's
-        on_dictation_result callback fires while the window is still hidden.
-        That path must not manipulate the widget tree — on Windows Qt 6 the
-        combination of creating cards and triggering queued event delivery
-        while the window has never been shown fast-fails inside Qt6Core.dll
-        (0xc0000409) (installer-mode-only crash reported after a successful
-        paste).  When the user later opens the window, showEvent pulls the
-        fresh entries from history and rebuilds from scratch.
-        """
-        from desktop_app.dictation_history import DictationHistoryWindow
-        from jarvis.dictation.history import DictationHistory
-
-        history = DictationHistory(path=tmp_path / "h.json")
-        window = DictationHistoryWindow(history=history)
-        assert not window.isVisible()
-
-        # Snapshot the layout contents before the signal.
-        before = [
-            window._list_layout.itemAt(i).widget()
-            for i in range(window._list_layout.count())
-        ]
-
-        entry = history.add("late-arriving dictation", duration=1.0)
-        window._on_new_entry(entry)
-
-        # No new cards should be added while the window is hidden.
-        after = [
-            window._list_layout.itemAt(i).widget()
-            for i in range(window._list_layout.count())
-        ]
-        assert before == after, (
-            "_on_new_entry must be a no-op while the window is hidden; "
-            "widget manipulation during hidden state caused a Qt6Core.dll "
-            "fast-fail on Windows."
-        )
-
-        # Later, when the user opens the window, the new entry must appear.
-        # Exercise the same code path showEvent runs (reload + rebuild) without
-        # actually showing a window — avoids platform-specific headless issues.
-        history.reload_from_disk()
-        window._reload()
-        rendered_texts = []
-        for i in range(window._list_layout.count()):
-            item = window._list_layout.itemAt(i)
-            widget = item.widget() if item else None
-            e = getattr(widget, "_entry", None)
-            if e is not None:
-                rendered_texts.append(e["text"])
-        assert "late-arriving dictation" in rendered_texts
-
-    def test_show_event_is_safely_re_callable(self, qapp, tmp_path):
-        """showEvent must be callable repeatedly without orphaning widgets.
-
-        The tray menu opens the window every time, so show/hide cycles over a
-        session need to keep the list layout healthy.
-        """
-        from desktop_app.dictation_history import DictationHistoryWindow
-        from jarvis.dictation.history import DictationHistory
-
-        history = DictationHistory(path=tmp_path / "h.json")
-        for i in range(5):
-            history.add(f"entry {i}")
-
-        window = DictationHistoryWindow(history=history)
-
-        for _ in range(3):
-            window.show()
-            qapp.processEvents()  # let the deferred reload run
-            window.hide()
-
-        container = window._list_widget
-        for i in range(window._list_layout.count()):
-            item = window._list_layout.itemAt(i)
-            widget = item.widget()
-            if widget is not None:
-                assert widget.parent() is container
-
-    def test_show_event_defers_reload_off_paint_path(self, qapp, tmp_path):
-        """showEvent must defer _reload() so it runs after the first paint.
-
-        Mutating the widget tree inside showEvent is re-entrant with Qt's
-        first paint pass and has triggered a Qt6Core fast-fail
-        (0xc0000409) on Qt 6.11 Windows. The window schedules the reload
-        via QTimer.singleShot(0, ...) so it lands on the next event-loop
-        tick, after the initial show paint has completed.
-        """
-        from desktop_app.dictation_history import (
-            DictationHistoryWindow,
-            _DictationCard,
-        )
-        from jarvis.dictation.history import DictationHistory
-
-        history = DictationHistory(path=tmp_path / "h.json")
-        history.add("pre-existing")
-
-        window = DictationHistoryWindow(history=history)
-
-        # Track the container before show. If show triggered a synchronous
-        # rebuild, _list_widget would already be swapped.
-        before_container = window._list_widget
-
-        window.show()
-        # Before the event loop runs, the container should still be the
-        # original empty one — the reload is deferred.
-        assert window._list_widget is before_container
-
-        # After the event loop processes the deferred reload, the container
-        # is swapped and cards are present.
-        qapp.processEvents()
-        assert window._list_widget is not before_container
-        cards = [
-            window._list_layout.itemAt(i).widget()
-            for i in range(window._list_layout.count())
-            if isinstance(window._list_layout.itemAt(i).widget(), _DictationCard)
-        ]
-        assert len(cards) == 1
-
-    def test_first_show_with_existing_entries_leaves_no_orphan_widgets(
-        self, qapp, tmp_path
-    ):
-        """After the first show with pre-existing on-disk entries, the
-        current container has no orphaned (non-layout) direct children.
-
-        Reproduces the open-after-dictate crash scenario: the user records
-        a dictation (entries land on disk), then opens the window. The
-        atomic-swap rebuild replaces the container wholesale, so the new
-        container's direct children are exactly the layout contents.
-        """
-        from desktop_app.dictation_history import DictationHistoryWindow
-        from jarvis.dictation.history import DictationHistory
-        from PyQt6.QtCore import Qt
-        from PyQt6.QtWidgets import QWidget
-
-        history = DictationHistory(path=tmp_path / "h.json")
-        history.add("pre-existing entry")
-
-        window = DictationHistoryWindow(history=history)
-        window.show()
-        qapp.processEvents()  # let the deferred reload run
-
-        layout_widgets = set()
-        for i in range(window._list_layout.count()):
-            item = window._list_layout.itemAt(i)
-            w = item.widget() if item else None
-            if w is not None:
-                layout_widgets.add(id(w))
-
-        container = window._list_widget
-        for child in container.findChildren(QWidget, "", Qt.FindChildOption.FindDirectChildrenOnly):
-            if id(child) in layout_widgets:
-                continue
-            assert not child.isVisible(), (
-                f"Orphaned widget {type(child).__name__!r} left visible in "
-                "the current container."
-            )
-
-    @pytest.mark.unit
     def test_card_timestamp_renders_under_a_restricted_locale(self, qapp, monkeypatch):
         from datetime import datetime
         from PyQt6.QtWidgets import QLabel
@@ -480,51 +356,6 @@ class TestDictationHistoryWindow:
             assert expected in [label.text() for label in card.findChildren(QLabel)]
         finally:
             card.deleteLater()
-
-    def test_show_event_reloads_entries_written_by_another_process(
-        self, qapp, tmp_path
-    ):
-        """Opening the window via the tray must surface entries that a sibling
-        process (the daemon subprocess) wrote after the desktop app started.
-
-        The desktop app owns one DictationHistory instance and the daemon owns
-        another; they only share the JSON file on disk.  If showEvent() didn't
-        reload from disk, the window would render the desktop app's stale
-        in-memory cache and the user would see no new dictations from the
-        current session.
-        """
-        from desktop_app.dictation_history import DictationHistoryWindow
-        from jarvis.dictation.history import DictationHistory
-
-        path = tmp_path / "h.json"
-
-        # Desktop-app-side history: loads what exists on disk at startup.
-        desktop_history = DictationHistory(path=path)
-        desktop_history.add("older entry from a previous session")
-
-        window = DictationHistoryWindow(history=desktop_history)
-
-        # Simulate the daemon subprocess adding entries through its own
-        # DictationHistory instance — same file, separate in-memory state.
-        daemon_history = DictationHistory(path=path)
-        daemon_history.add("first new dictation")
-        daemon_history.add("second new dictation")
-
-        # User opens the window via the tray menu.
-        window.show()
-        qapp.processEvents()  # let the deferred reload run
-
-        rendered_texts = []
-        for i in range(window._list_layout.count()):
-            item = window._list_layout.itemAt(i)
-            widget = item.widget() if item else None
-            # Only cards expose `_entry`; placeholders are plain QLabels.
-            entry = getattr(widget, "_entry", None)
-            if entry is not None:
-                rendered_texts.append(entry["text"])
-
-        assert "first new dictation" in rendered_texts
-        assert "second new dictation" in rendered_texts
 
 
 @pytest.mark.unit
