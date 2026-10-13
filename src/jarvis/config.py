@@ -93,6 +93,7 @@ class Settings:
     llm_base_url: str
     llm_api_key: str
     llm_chat_model: str
+    llm_thinking_enabled: bool
     embedding_provider: str  # "" (= same as llm_provider) | "ollama" | "openai_compatible"
     embedding_base_url: str
     embedding_api_key: str
@@ -148,6 +149,8 @@ class Settings:
     wake_word: str
     wake_aliases: list[str]
     wake_fuzzy_ratio: float
+    stop_commands: list[str]
+    stop_command_fuzzy_ratio: float
 
     # Whisper Speech Recognition
     whisper_model: str
@@ -186,6 +189,7 @@ class Settings:
     # ``jarvis.llm.resolve_model(cfg, Tier.FAST)``.
     fast_model: str
     intent_judge_timeout_sec: float
+    intent_judge_thinking_enabled: bool
 
     # Transcript Buffer - ambient speech context for intent judge
     transcript_buffer_duration_sec: float
@@ -257,6 +261,7 @@ class Settings:
     dictation_enabled: bool
     dictation_hotkey: str
     dictation_filler_removal: bool
+    dictation_thinking_enabled: bool
     dictation_custom_dictionary: list
 
     # MCP Integration
@@ -869,6 +874,7 @@ def load_settings() -> Settings:
         llm_base_url=llm_base_url,
         llm_api_key=llm_api_key,
         llm_chat_model=llm_chat_model,
+        llm_thinking_enabled=bool(merged["llm_thinking_enabled"]),
         embedding_provider=embedding_provider,
         embedding_base_url=embedding_base_url,
         embedding_api_key=embedding_api_key,
@@ -916,6 +922,8 @@ def load_settings() -> Settings:
         wake_word=wake_word,
         wake_aliases=wake_aliases,
         wake_fuzzy_ratio=wake_fuzzy_ratio,
+        stop_commands=_ensure_list(merged["stop_commands"]),
+        stop_command_fuzzy_ratio=float(merged["stop_command_fuzzy_ratio"]),
 
         # Whisper Speech Recognition
         whisper_model=whisper_model,
@@ -945,6 +953,7 @@ def load_settings() -> Settings:
         # Fast tier (voice intent, tool routing, quick classifications)
         fast_model=fast_model,
         intent_judge_timeout_sec=intent_judge_timeout_sec,
+        intent_judge_thinking_enabled=bool(merged["intent_judge_thinking_enabled"]),
 
         # Transcript Buffer
         transcript_buffer_duration_sec=transcript_buffer_duration_sec,
@@ -979,6 +988,7 @@ def load_settings() -> Settings:
         dictation_enabled=dictation_enabled,
         dictation_hotkey=dictation_hotkey,
         dictation_filler_removal=dictation_filler_removal,
+        dictation_thinking_enabled=bool(merged["dictation_thinking_enabled"]),
         dictation_custom_dictionary=dictation_custom_dictionary,
 
         # MCP Integration

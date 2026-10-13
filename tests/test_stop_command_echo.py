@@ -4,6 +4,7 @@ import unicodedata
 from unittest.mock import MagicMock
 import pytest
 from jarvis.listening.listener import VoiceListener
+from jarvis.config import get_default_config
 
 pytestmark=pytest.mark.unit
 
@@ -22,6 +23,7 @@ def process(text, spoken, commands):
     cfg=SimpleNamespace(sample_rate=16000,vad_enabled=False,echo_tolerance=0.3,
                         echo_energy_threshold=2,hot_window_seconds=3,tune_enabled=False,
                         whisper_model='small',stop_commands=commands,tts_rate=200,
+                        stop_command_fuzzy_ratio=get_default_config()['stop_command_fuzzy_ratio'],
                         voice_debug=False,hot_window_enabled=False)
     tts=SpeakingTTS()
     listener=VoiceListener(MagicMock(),cfg,tts,MagicMock())

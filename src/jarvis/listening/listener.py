@@ -751,9 +751,10 @@ class VoiceListener(threading.Thread):
         # hot window follow-ups, etc.) using full transcript context + last TTS text.
         if self.tts and self.tts.enabled and active_tts_overlapped:
             # Stop command detection (fast, text-based)
-            stop_commands = getattr(self.cfg, "stop_commands", ["stop", "quiet", "shush", "silence", "enough", "shut up"])
-            if is_stop_command(text_lower, stop_commands):
-                if is_stop_command_echo(text_lower, self.echo_detector._last_tts_text, stop_commands):
+            stop_commands = self.cfg.stop_commands
+            stop_ratio = self.cfg.stop_command_fuzzy_ratio
+            if is_stop_command(text_lower, stop_commands, stop_ratio):
+                if is_stop_command_echo(text_lower, self.echo_detector._last_tts_text, stop_commands, stop_ratio):
                     debug_log("ignored stop command contained in literal TTS echo", "echo")
                     print(f'  🔇 Heard (echo): "{text_lower[:50]}"', flush=True)
                     return
