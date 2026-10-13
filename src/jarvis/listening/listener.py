@@ -590,10 +590,6 @@ class VoiceListener(threading.Thread):
             except Exception:
                 pass
 
-    def _is_thinking_tune_active(self) -> bool:
-        """Check if thinking tune is currently active."""
-        return self._tune_player is not None and self._tune_player.is_playing()
-
     def _set_face_state_listening(self) -> None:
         """Set the desktop face widget to LISTENING state."""
         try:
@@ -682,7 +678,7 @@ class VoiceListener(threading.Thread):
         # Check for echo BEFORE starting beep and BEFORE intent judge.
         # This prevents: false beeps on echo, intent judge blocking the audio
         # loop for seconds on echo, and hot window extending from echo resets.
-        if not received_during_tts and not self._is_thinking_tune_active():
+        if not active_tts_overlapped:
             in_hot_window = self.state_manager.was_speech_during_hot_window(
                 utterance_start_time, utterance_end_time
             )
@@ -944,9 +940,7 @@ class VoiceListener(threading.Thread):
                     return
 
                 if intent_judgment.directed and not intent_judgment.stop:
-                    # The early guard can be skipped while thinking or for
-                    # queued audio captured during TTS. A directed verdict
-                    # must still not turn pure assistant echo into a query.
+                    # A directed verdict cannot turn assistant echo into a query.
                     if could_be_hot_window and last_tts_text:
                         if self.echo_detector.is_hot_window_echo(text_lower, last_tts_text):
                             debug_log("🔇 Directed echo rejected", "voice")
