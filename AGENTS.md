@@ -49,6 +49,8 @@ The default branch is `develop`. All PRs and feature branches must target `devel
 
 Use [Conventional Commits](https://www.conventionalcommits.org/) for all commit messages and PR titles (e.g. `fix:`, `feat:`, `refactor:`, `docs:`, `test:`, `chore:`).
 
+Reserve `feat:` and `fix:` for the Jarvis CLI and desktop product. Website-only changes use `docs:` for content or `chore:` for build and deployment work. GitHub Pages deploys only from `main`, including manual dispatch; website PRs still target `develop`.
+
 When pushing commits to a PR, always update the PR title and body to cover the entire changeset.
 
 After creating a PR, run the `/review-pr` skill on it before considering the task complete.
