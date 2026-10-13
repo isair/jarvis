@@ -80,6 +80,12 @@ flowchart TD
 |------|---------|
 | `--smoke-test` | CI smoke-test mode. Creates a minimal offscreen QApplication, runs the daemon initialisation (`daemon.main(smoke_test=True)`), prints `SMOKE_TEST_PASSED` on success (or the error + traceback on failure), and exits with code 0 or 1. Forces UTF-8 stdout/stderr on every OS (emoji-safe even when the console is an ANSI code page or absent) and Qt's offscreen platform on Linux so the gate never depends on xvfb/xcb. Bypasses the single-instance lock, crash detection, splash screen, setup wizard, Ollama checks, model verification, tray icon, and event loop. Used by the `release-smoke.yml` workflow to verify the bundled binary starts without missing DLLs or broken imports before fast-forwarding `main` to `develop`. |
 
+The Release Smoke Test workflow defaults to validation only. It builds and
+smoke-tests the selected ref without publishing a stable release. Promotion
+requires an explicit release run on `develop` with `validate_only=false`. The
+tested commit must match the freshly fetched `origin/develop` tip, and `main`
+must be its ancestor. A changed develop tip requires another smoke-test run.
+
 ## Main Components
 
 ### JarvisSystemTray

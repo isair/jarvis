@@ -2,8 +2,12 @@ name: Release Smoke Test
 
 on:
   workflow_dispatch:
-    # Manually triggered from the Actions tab.
-    # Runs on the develop branch by default.
+    inputs:
+      validate_only:
+        description: Build and test installers without publishing a release
+        type: boolean
+        required: true
+        default: true
 
 concurrency:
   group: release-smoke-${{ github.ref_name }}
@@ -48,17 +52,33 @@ jobs:
           ref: develop
 
       - name: 🔀 Fast-forward main to develop
+        id: promote
         run: |
           set -euo pipefail
+          echo "promoted=false" >> "$GITHUB_OUTPUT"
+
+          if [ "$JARVIS_VALIDATE_ONLY" != "false" ] ||
+             [ "$JARVIS_SMOKE_REF" != "refs/heads/develop" ] ||
+             [ "$JARVIS_SMOKE_BUILD_RESULT" != "success" ]; then
+            echo "🧪 No release promotion for this run."
+            exit 0
+          fi
 
           echo "Current state:"
-          echo "   develop HEAD (tested): ${{ github.sha }}"
+          echo "   develop HEAD (tested): $JARVIS_TESTED_SHA"
 
-          # Fetch main so we can verify the fast-forward is safe
-          git fetch origin main
+          # Promotion requires the freshly fetched develop tip tested by this run.
+          git fetch origin main develop
 
           MAIN_SHA=$(git rev-parse origin/main)
-          TESTED_SHA="${{ github.sha }}"
+          DEVELOP_SHA=$(git rev-parse origin/develop)
+          TESTED_SHA="$JARVIS_TESTED_SHA"
+
+          if [ "$TESTED_SHA" != "$DEVELOP_SHA" ]; then
+            echo "❌ The tested commit is not the current develop tip."
+            echo "   🔁 Run smoke checks again for current develop before publishing."
+            exit 1
+          fi
 
           echo "   origin/main:  $MAIN_SHA"
           echo "   tested SHA:   $TESTED_SHA"
@@ -87,8 +107,13 @@ jobs:
           echo ""
           echo "Release complete!"
           echo "   main is now at: $NEW_MAIN_SHA"
+          echo "promoted=true" >> "$GITHUB_OUTPUT"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          JARVIS_VALIDATE_ONLY: ${{ inputs.validate_only }}
+          JARVIS_SMOKE_REF: ${{ github.ref }}
+          JARVIS_SMOKE_BUILD_RESULT: ${{ needs.build-desktop.result }}
+          JARVIS_TESTED_SHA: ${{ github.sha }}
 
       # GitHub does NOT fire on:push workflows for pushes made with
       # GITHUB_TOKEN, so release.yml would never run after the fast-forward
@@ -99,7 +124,12 @@ jobs:
       # run simply finishes without publishing.
       - name: 🚀 Trigger release workflow
         run: |
-          gh workflow run release.yml --ref main --repo "${{ github.repository }}"
-          echo "Dispatched release.yml on main — see https://github.com/${{ github.repository }}/actions/workflows/release.yml"
+          if [ "$JARVIS_RELEASE_PROMOTED" != "true" ]; then
+            exit 0
+          fi
+          gh workflow run release.yml --ref main --repo "$JARVIS_RELEASE_REPOSITORY"
+          echo "🚀 Dispatched release.yml on main. See https://github.com/$JARVIS_RELEASE_REPOSITORY/actions/workflows/release.yml"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          JARVIS_RELEASE_PROMOTED: ${{ steps.promote.outputs.promoted }}
+          JARVIS_RELEASE_REPOSITORY: ${{ github.repository }}
