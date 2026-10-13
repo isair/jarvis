@@ -1109,35 +1109,81 @@ class TestClipboardWindowsCtypes:
             user32.CloseClipboard()
 
 
+@pytest.mark.unit
+@pytest.mark.usefixtures('no_network')
 class TestLlmCleanDictation:
-    """``_llm_clean_dictation`` is a rewrite task (not a classification):
-    its generation cap must scale with the dictated text so long dictations
-    are never silently truncated."""
+    """Cleanup preserves full output through each configured local transport."""
 
-    def test_cap_scales_with_text_length(self):
+    @pytest.fixture(params=['ollama', 'openai_compatible'])
+    def cfg(self, request):
+        from dataclasses import replace
+        from jarvis.config import load_settings
+
+        return replace(load_settings(), llm_provider=request.param,
+                       llm_base_url='http://127.0.0.1:1/v1', ollama_base_url='http://127.0.0.1:1',
+                       llm_chat_model='synthetic-cleanup-model')
+
+    @pytest.mark.parametrize('thinking', [False, True])
+    @pytest.mark.parametrize('word_count', [2, 300])
+    def test_complete_cleanup_uses_configured_transport_and_budget(self, monkeypatch, cfg, thinking, word_count):
+        from contextlib import nullcontext
         from jarvis.dictation.dictation_engine import _llm_clean_dictation
+        from jarvis.llm import http
 
-        caps = {}
+        provider = cfg.llm_provider
+        words = ['alpha'] * word_count
+        cleaned = ' '.join(words)
+        original = 'um ' + cleaned
 
-        def fake_direct(model, system, user, timeout_sec=5.0, thinking=False, **kwargs):
-            caps["max_tokens"] = kwargs.get("max_tokens")
-            return "cleaned text"
+        def post(url, **kwargs):
+            payload = kwargs['json']
+            assert payload['model'] == cfg.llm_chat_model
+            assert payload['messages'][-1]['content'] == original
+            if provider == 'ollama':
+                assert url == cfg.ollama_base_url + '/api/chat'
+                assert payload['think'] is thinking
+                budget = payload['options']['num_predict']
+            else:
+                assert url == cfg.llm_base_url + '/chat/completions'
+                assert 'think' not in payload
+                budget = payload['max_tokens']
+            # This synthetic model has a one-word vocabulary and a bounded budget.
+            answer = ' '.join(words[:budget])
+            reason = 'stop' if budget >= len(words) else 'length'
+            message = {'content': answer}
+            response = MagicMock()
+            response.json.return_value = (
+                {'message': message, 'done': True, 'done_reason': reason}
+                if provider == 'ollama' else
+                {'choices': [{'message': message, 'finish_reason': reason}]}
+            )
+            return nullcontext(response)
 
-        fake_backend = MagicMock()
-        fake_backend.direct.side_effect = fake_direct
+        monkeypatch.setattr(http, 'post', post)
+        assert _llm_clean_dictation(original, cfg, model=cfg.llm_chat_model,
+                                    thinking=thinking) == cleaned
 
-        with patch("jarvis.llm.get_llm_backend", return_value=fake_backend):
-            _llm_clean_dictation("short", MagicMock())
-            short_cap = caps["max_tokens"]
+    @pytest.mark.parametrize('failure', ['empty', 'unavailable'])
+    def test_failed_cleanup_preserves_the_full_transcription(self, monkeypatch, cfg, failure):
+        from contextlib import nullcontext
+        import requests
+        from jarvis.dictation.dictation_engine import _llm_clean_dictation
+        from jarvis.llm import http
 
-            long_text = "word " * 1000  # ~5000 chars — long dictation
-            _llm_clean_dictation(long_text, MagicMock())
-            long_cap = caps["max_tokens"]
+        original = 'Keep every word and the ending of this transcription.'
 
-        # Short utterances hit the floor; long dictations get a proportional cap
-        assert short_cap == 64
-        assert long_cap > short_cap
-        assert long_cap >= len(long_text) // 2
+        def post(*args, **kwargs):
+            if failure == 'unavailable':
+                raise requests.ConnectionError('Synthetic unavailable model')
+            response = MagicMock()
+            response.json.return_value = (
+                {'message': {'content': ''}} if cfg.llm_provider == 'ollama' else
+                {'choices': [{'message': {'content': ''}}]}
+            )
+            return nullcontext(response)
+
+        monkeypatch.setattr(http, 'post', post)
+        assert _llm_clean_dictation(original, cfg) == original
 
 
 @pytest.mark.unit
