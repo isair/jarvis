@@ -672,6 +672,7 @@ class DictationEngine:
         self._audio_frames: list = []
         self._stream: Optional[Any] = None
         self._listener: Optional[Any] = None
+        self._listener_generation = 0
         self._pressed_modifiers: set = set()
         self._record_start_time: float = 0.0
         self._lock = threading.RLock()
@@ -730,11 +731,15 @@ class DictationEngine:
                 return
 
         with self._lock:
+            self._listener_generation += 1
+            generation = self._listener_generation
+            self._pressed_modifiers.clear()
+            self._last_hotkey_release_time = None
             self._stopped = False
 
         self._listener = _create_keyboard_listener(
-            on_press=self._on_key_press,
-            on_release=self._on_key_release,
+            on_press=partial(self._handle_listener_key, generation, True),
+            on_release=partial(self._handle_listener_key, generation, False),
         )
         self._listener.start()
         self._started = True
@@ -746,6 +751,9 @@ class DictationEngine:
             if not self._stopped:
                 self._stopped = True
                 self._session += 1
+                self._listener_generation += 1
+            self._pressed_modifiers.clear()
+            self._last_hotkey_release_time = None
             token = self._session
         self._stop_recording(discard=True)
         with self._lock:
@@ -768,6 +776,15 @@ class DictationEngine:
     # ------------------------------------------------------------------
     # Key event handlers
     # ------------------------------------------------------------------
+
+    def _handle_listener_key(self, generation: int, pressed: bool, key) -> None:
+        with self._lock:
+            if self._stopped or generation != self._listener_generation:
+                return
+            if pressed:
+                self._on_key_press(key)
+            else:
+                self._on_key_release(key)
 
     def _normalise_key(self, key) -> Any:
         """Normalise a key event to compare against our parsed trigger/modifiers."""
