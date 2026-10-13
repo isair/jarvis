@@ -1,30 +1,39 @@
-"""
-Regression tests for the desktop-app "Fatal Python error: Aborted" crash
-family (#584, #575, #576; previously #509, #407, #239).
+"""Desktop worker churn preserves running threads and retires completed workers.
 
-Signature: SIGABRT lands on the MAIN thread while it sits in
-``app.exec()``. Qt's ``QThread`` destructor aborts the whole process when
-the last Python reference to a QThread is dropped while its OS thread is
-still alive ("QThread: Destroyed while thread is still running"). The
-desktop app's ``DaemonThread`` and the startup check workers ran as plain
-QThreads and could hit exactly that teardown race; ``_LLMReachWorker``
-also shadowed the built-in ``finished`` signal, which breaks the
-keep-alive contract (custom completion signals must use other names).
-
-The abort kills the interpreter, so the race scenarios run in a
-subprocess: they churn rapid worker replacements exactly like the
-startup/daemon teardown paths. Pre-fix these reliably die with SIGABRT
-within the iteration budget; post-fix they complete and print CHAIN_OK.
+Real Qt threads and completion signals run against synthetic startup probes.
+The subprocess confines settings and home paths to temporary storage.
 """
 
+import json
+import os
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
+
+pytestmark = pytest.mark.unit
 
 ROOT = Path(__file__).resolve().parent.parent
 
 CHURN_SCENARIO = r"""
 import os, sys, time
+from pathlib import Path
+import socket
+import subprocess
+
+Path.home = classmethod(lambda cls: Path(os.environ["WORKER_PRIVATE_ROOT"]))
+network_attempts = []
+def forbidden_connection(self, address):
+    network_attempts.append(str(address))
+    raise OSError("Synthetic lifecycle network boundary")
+socket.socket.connect = forbidden_connection
+socket.socket.connect_ex = forbidden_connection
+program_attempts = []
+def forbidden_program(*args, **kwargs):
+    program_attempts.append(args)
+    raise OSError("Synthetic lifecycle program boundary")
+subprocess.Popen = forbidden_program
 
 sys.path.insert(0, r"{src}")
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -35,6 +44,11 @@ from desktop_app.app import DaemonThread
 from desktop_app.app import SetupCheckWorker, ServerCheckWorker
 from desktop_app.app import _LLMReachWorker
 from desktop_app.qt_worker import KeepAliveWorker
+from desktop_app import app as desktop_module, setup_wizard
+
+setup_wizard.should_show_setup_wizard = lambda: False
+setup_wizard.check_ollama_server = lambda: (True, "fixture-version")
+desktop_module._check_openai_compat_reachable = lambda cfg: True
 
 app = QApplication([])
 
@@ -96,40 +110,46 @@ assert issubclass(DaemonThread, KeepAliveWorker)
 assert issubclass(SetupCheckWorker, KeepAliveWorker)
 assert issubclass(ServerCheckWorker, KeepAliveWorker)
 assert issubclass(_LLMReachWorker, KeepAliveWorker)
+assert not network_attempts, "Lifecycle churn attempted real server probes"
+assert not program_attempts, "Lifecycle churn attempted external programs"
 print("CHAIN_OK")
 """
 
 
-def _run_scenario() -> str:
+def _run_scenario(tmp_path) -> str:
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps({"_config_version": 3, "voice_debug": False,
+                                       "db_path": str(tmp_path / "synthetic.sqlite")}))
+    env = dict(os.environ, QT_QPA_PLATFORM="offscreen", JARVIS_CONFIG_PATH=str(config_path),
+               WORKER_PRIVATE_ROOT=str(tmp_path), TMPDIR=str(tmp_path),
+               TEMP=str(tmp_path), TMP=str(tmp_path))
     proc = subprocess.run(
         [sys.executable, "-c", CHURN_SCENARIO.format(src=ROOT / "src")],
         capture_output=True,
         text=True,
-        timeout=180,
+        timeout=45,
+        env=env,
     )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
     return proc.stdout + proc.stderr
 
 
-def test_startup_and_daemon_worker_churn_survives():
+def test_startup_and_daemon_worker_churn_survives(tmp_path):
     """Rapidly replacing DaemonThread / startup workers from completion
     slots must never destroy a running QThread (SIGABRT)."""
-    output = _run_scenario()
+    output = _run_scenario(tmp_path)
     assert "CHAIN_OK" in output, (
         "worker churn did not complete. Expected CHAIN_OK.\n" + output
     )
     assert "Aborted" not in output.splitlines()[-3:]
 
 
-def test_keepalive_worker_registry_holds_until_finished():
+def test_keepalive_worker_registry_holds_until_finished(qapp):
     """KeepAliveWorker must stay referenced in the class-level registry
     while its OS thread is running and retire once `finished` fires."""
-    import os
-
-    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-    from PyQt6.QtWidgets import QApplication
     from desktop_app.qt_worker import KeepAliveWorker
 
-    app = QApplication.instance() or QApplication([])
+    app = qapp
 
     class QuickWorker(KeepAliveWorker):
         def run(self):
