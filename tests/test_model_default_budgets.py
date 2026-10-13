@@ -76,7 +76,7 @@ def test_failed_unified_memory_detection_is_unknown(monkeypatch, output, status)
 def test_explicit_default_chat_choice_survives_higher_memory(qapp, monkeypatch, tmp_path):
     path = tmp_path / 'config.json'
     path.write_text('{"ollama_chat_model":"gemma4:e4b","fast_model":"gemma4:e2b"}')
-    monkeypatch.setattr(config, 'default_config_path', lambda: path)
+    monkeypatch.setattr(config, 'get_config_path', lambda: path)
     cfg = SimpleNamespace(ollama_chat_model=DEFAULT_CHAT_MODEL,
                           fast_model=DEFAULT_FAST_MODEL, whisper_model='small')
     monkeypatch.setattr(setup_wizard, 'load_settings', lambda: cfg)

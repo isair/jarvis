@@ -1,5 +1,7 @@
 # Settings Window Specification
 
+[Configuration file selection](../jarvis/config.spec.md) is shared with the daemon. Desktop configuration reads, writes and directory navigation use the selected file.
+
 Auto-generated settings UI that dynamically builds its interface from config field metadata.
 
 ## Overview

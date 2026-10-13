@@ -64,7 +64,7 @@ except ImportError:
     QWebEngineView = None
 
 from jarvis.debug import debug_log
-from jarvis.config import default_config_path, _default_db_path, SUPPORTED_CHAT_MODELS, get_supported_model_ids
+from jarvis.config import get_config_path, _default_db_path, SUPPORTED_CHAT_MODELS, get_supported_model_ids
 from desktop_app.diary_dialog import DiaryUpdateDialog
 from desktop_app.themes import JARVIS_THEME_STYLESHEET, COLORS, apply_theme
 from desktop_app.log_output import LogStream, clean_log, parse_progress
@@ -2366,7 +2366,7 @@ class JarvisSystemTray:
 
     def open_config_directory(self) -> None:
         """Open the configuration directory in the system file manager."""
-        config_path = default_config_path()
+        config_path = get_config_path()
         config_dir = config_path.parent
         self.open_directory(config_dir, "Config")
 

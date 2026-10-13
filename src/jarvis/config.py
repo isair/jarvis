@@ -264,7 +264,11 @@ class Settings:
 
 
 
-def default_config_path() -> Path:
+def get_config_path() -> Path:
+    """Select the explicit override or normal per-user configuration file."""
+    override = os.environ.get("JARVIS_CONFIG_PATH")
+    if override:
+        return Path(override).expanduser()
     xdg = os.environ.get("XDG_CONFIG_HOME")
     if xdg:
         return Path(xdg) / "jarvis" / "config.json"
@@ -398,8 +402,7 @@ def load_config() -> Dict[str, Any]:
     Returns defaults merged with any values from the config file.
     Unlike load_settings(), this returns the raw dict instead of a Settings object.
     """
-    cfg_path_env = os.environ.get("JARVIS_CONFIG_PATH")
-    cfg_path = Path(cfg_path_env).expanduser() if cfg_path_env else default_config_path()
+    cfg_path = get_config_path()
     cfg_json = _load_json(cfg_path)
 
     # Apply config migrations for version upgrades
@@ -655,8 +658,7 @@ def load_settings() -> Settings:
     load_dotenv(override=False)
 
     # Resolve config path
-    cfg_path_env = os.environ.get("JARVIS_CONFIG_PATH")
-    cfg_path = Path(cfg_path_env).expanduser() if cfg_path_env else default_config_path()
+    cfg_path = get_config_path()
     cfg_dir = cfg_path.parent
     try:
         cfg_dir.mkdir(parents=True, exist_ok=True)

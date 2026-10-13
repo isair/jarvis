@@ -1,5 +1,7 @@
 # Desktop App Specification
 
+[Configuration file selection](../jarvis/config.spec.md) is shared with the daemon. Desktop configuration reads, writes and directory navigation use the selected file.
+
 This document outlines the architecture and behavior of the Jarvis Desktop App - a cross-platform PyQt6 system tray application that provides a graphical interface for the Jarvis voice assistant.
 
 ## Overview

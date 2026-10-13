@@ -12,6 +12,7 @@ Any code change must either adhere to our spec files perfectly or you should ask
 
 | Spec file | Covers | Key principles |
 |-----------|--------|----------------|
+| `src/jarvis/config.spec.md` | Shared configuration file selection | One resolver for runtime and desktop reads, writes and navigation |
 | `src/desktop_app/desktop_app.spec.md` | System tray app, startup flow, daemon integration, windows, theme, updates | Desktop is separate from core; jarvis has no knowledge of desktop_app |
 | `src/desktop_app/settings_window.spec.md` | Auto-generated settings UI from config metadata | Metadata-driven; only non-default values written; preserves unknown keys |
 | `src/desktop_app/setup_wizard.spec.md` | First-run wizard (Ollama, models, Whisper, location) | Minimal friction; only shown when user action required; doesn't configure everything |
