@@ -25,7 +25,7 @@ import requests
 from desktop_app.whisper_models import get_whisper_vram_mb, wizard_model_options
 from jarvis.listening import whisper_capabilities
 from jarvis.debug import debug_log
-from jarvis.config import SUPPORTED_CHAT_MODELS, DEFAULT_CHAT_MODEL, DEFAULT_FAST_MODEL, SUPPORTED_FAST_MODEL_IDS
+from jarvis.config import SUPPORTED_CHAT_MODELS, DEFAULT_CHAT_MODEL, DEFAULT_FAST_MODEL, SUPPORTED_FAST_MODEL_IDS, DEFAULT_EMBEDDING_MODEL
 from jarvis.utils.vram import (
     detect_total_vram_mb,
     get_recommended_model_id,
@@ -223,7 +223,7 @@ def get_required_models() -> List[str]:
         return models
     except Exception:
         # Default models if config can't be loaded
-        defaults = [DEFAULT_CHAT_MODEL, "nomic-embed-text"]
+        defaults = [DEFAULT_CHAT_MODEL, DEFAULT_EMBEDDING_MODEL]
         if DEFAULT_FAST_MODEL not in defaults:
             defaults.append(DEFAULT_FAST_MODEL)
         return defaults
@@ -1374,7 +1374,7 @@ class OpenAICompatiblePage(ScrollableWizardPage):
     @staticmethod
     def _known_memory_mb(model_id: str) -> Optional[int]:
         """Known local model estimates; unknown server ids stay editable."""
-        if model_id == "nomic-embed-text":
+        if model_id == DEFAULT_EMBEDDING_MODEL:
             return 1024
         return required_vram_mb(model_id)
 
@@ -1387,8 +1387,8 @@ class OpenAICompatiblePage(ScrollableWizardPage):
         whisper_id = getattr(settings, "whisper_model", "small") or "small"
         self._whisper_memory_mb = get_whisper_vram_mb(whisper_id)
         self._ollama_embed_model_id = (
-            getattr(settings, "ollama_embed_model", "nomic-embed-text")
-            or "nomic-embed-text"
+            getattr(settings, "ollama_embed_model", DEFAULT_EMBEDDING_MODEL)
+            or DEFAULT_EMBEDDING_MODEL
         )
         self._ollama_embed_base_url = (
             getattr(settings, "ollama_base_url", "http://localhost:11434")
@@ -2450,7 +2450,7 @@ class ModelsPage(ScrollableWizardPage):
 
     def _update_models_display(self):
         wiz = self.wizard()
-        em = "nomic-embed-text"
+        em = DEFAULT_EMBEDDING_MODEL
         try:
             em = load_settings().ollama_embed_model
         except Exception:
