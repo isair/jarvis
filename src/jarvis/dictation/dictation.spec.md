@@ -32,6 +32,7 @@ key required).
 Character-key shortcut activation and hold-to-record release match the configured
 trigger or modifiers. Unrelated character or virtual-key events cannot activate
 or release that shortcut.
+Configured modifier names accept the generic, left-hand and right-hand SDK keys.
 
 The hotkey is configurable as a dropdown in both the setup wizard and settings
 window, with four preset options: `ctrl+alt`, `ctrl+cmd`, `ctrl+shift+d`,

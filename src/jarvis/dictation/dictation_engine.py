@@ -783,8 +783,11 @@ class DictationEngine:
         if nkey == target or key == target:
             return True
         target_name = getattr(target, "name", None)
-        if target_name is not None and getattr(key, "name", None) == target_name:
-            return True
+        key_name = getattr(key, "name", None)
+        if target_name is not None and key_name is not None:
+            if (key_name.removesuffix('_l').removesuffix('_r')
+                    == target_name.removesuffix('_l').removesuffix('_r')):
+                return True
         if hasattr(key, "char") and key.char:
             if pynput_keyboard.KeyCode.from_char(key.char.lower()) == target:
                 return True
@@ -793,8 +796,8 @@ class DictationEngine:
     def _all_modifiers_held(self) -> bool:
         """Return True when every required modifier is currently pressed."""
         return all(
-            m in self._pressed_modifiers or any(
-                getattr(p, "name", None) == getattr(m, "name", None)
+            any(
+                self._key_matches(p, self._normalise_key(p), m)
                 for p in self._pressed_modifiers
             )
             for m in self._modifiers
