@@ -300,3 +300,16 @@ def owned_loopback_http(monkeypatch):
     for stream in bound_sockets:
         stream.close()
     assert not denied, "A local provider test attempted an unowned network operation"
+
+
+@pytest.fixture
+def settings_config_path(qapp, tmp_path, monkeypatch):
+    """Isolate the settings dialogue from user configuration and audio devices."""
+    from desktop_app import settings_window as sw
+
+    path = tmp_path / "config.json"
+    path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(sw, "default_config_path", lambda: path)
+    monkeypatch.setattr(sw, "get_input_devices", lambda: [("", "Default"), ("7", "Microphone")])
+    monkeypatch.setattr(sw.QMessageBox, "information", lambda *args: None)
+    return path
