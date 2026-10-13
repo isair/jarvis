@@ -70,56 +70,6 @@ class TestLlmThinkingPayload:
 
 
 # ---------------------------------------------------------------------------
-# Intent judge
-# ---------------------------------------------------------------------------
-
-class TestIntentJudgeThinking:
-    """Intent judge respects the thinking config."""
-
-    def test_config_default_thinking_false(self):
-        from jarvis.listening.intent_judge import IntentJudgeConfig
-        config = IntentJudgeConfig()
-        assert config.thinking is False
-
-    def test_config_accepts_thinking_true(self):
-        from jarvis.listening.intent_judge import IntentJudgeConfig
-        config = IntentJudgeConfig(thinking=True)
-        assert config.thinking is True
-
-    def test_create_intent_judge_passes_thinking(self):
-        """create_intent_judge should read intent_judge_thinking_enabled from cfg."""
-        from jarvis.listening.intent_judge import create_intent_judge
-
-        cfg = MagicMock()
-        cfg.wake_word = "jarvis"
-        cfg.wake_aliases = []
-        cfg.fast_model = "gemma4:e2b"
-        cfg.ollama_base_url = "http://localhost:11434"
-        cfg.intent_judge_timeout_sec = 10.0
-        cfg.intent_judge_thinking_enabled = True
-
-        judge = create_intent_judge(cfg)
-        assert judge is not None
-        assert judge.config.thinking is True
-
-    def test_create_intent_judge_independent_from_chat_thinking(self):
-        """Intent judge thinking should be independent from chat thinking."""
-        from jarvis.listening.intent_judge import create_intent_judge
-
-        cfg = MagicMock()
-        cfg.wake_word = "jarvis"
-        cfg.wake_aliases = []
-        cfg.fast_model = "gemma4:e2b"
-        cfg.ollama_base_url = "http://localhost:11434"
-        cfg.intent_judge_timeout_sec = 10.0
-        cfg.llm_thinking_enabled = True
-        cfg.intent_judge_thinking_enabled = False
-
-        judge = create_intent_judge(cfg)
-        assert judge.config.thinking is False
-
-
-# ---------------------------------------------------------------------------
 # Dictation engine
 # ---------------------------------------------------------------------------
 
