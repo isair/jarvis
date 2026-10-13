@@ -145,3 +145,45 @@ def test_capture_continues_while_the_other_modifier_side_is_held(
     assert engine.is_recording
     engine._on_key_release(getattr(keyboard.Key, last))
     assert not engine.is_recording
+
+
+@pytest.mark.parametrize('origin', [0.0, 100.0])
+@pytest.mark.parametrize('gap,clock_adjustment,continues', [
+    (0.1, 0, True),
+    (3.0, 0, False),
+    (0.1, 3600, True),
+    (3.0, -3600, False),
+])
+def test_double_tap_uses_elapsed_time_despite_system_clock_adjustment(
+        shortcut_factory, monkeypatch, origin, gap, clock_adjustment, continues):
+    from unittest.mock import Mock
+    from jarvis.dictation import dictation_engine
+
+    clock = {'wall': 1700000000.0, 'steady': origin}
+    monkeypatch.setattr(dictation_engine.time, 'time', lambda: clock['wall'])
+    monkeypatch.setattr(dictation_engine.time, 'monotonic', lambda: clock['steady'])
+    engine, keyboard = shortcut_factory('ctrl+shift+d')
+    engine._whisper_model_ref = lambda: object()
+    backend = Mock()
+    backend.query_devices.return_value = {'default_samplerate': engine._target_sample_rate}
+    monkeypatch.setattr(dictation_engine, 'sd', backend)
+    monkeypatch.setattr(dictation_engine, '_play_beep', lambda *args: None)
+    monkeypatch.setattr(dictation_engine, 'resolve_input_device', lambda *args: {'device': 0})
+    monkeypatch.setattr(dictation_engine, 'open_input_stream',
+                        lambda *args, **kwargs: (Mock(), engine._target_sample_rate, 1))
+
+    def tap():
+        engine._on_key_press(keyboard.KeyCode(char='d'))
+        engine._begin_recording(engine._session)
+        clock['wall'] += 0.1
+        clock['steady'] += 0.1
+        engine._on_key_release(keyboard.KeyCode(char='d'))
+
+    engine._on_key_press(keyboard.Key.ctrl_l)
+    engine._on_key_press(keyboard.Key.shift_l)
+    tap()
+    assert not engine.is_recording
+    clock['wall'] += gap + clock_adjustment
+    clock['steady'] += gap
+    tap()
+    assert engine.is_recording is continues

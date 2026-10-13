@@ -395,9 +395,9 @@ class TestRecordingStateMachine:
         engine._audio_frames = [np.zeros(1600, dtype=np.float32)]
 
         with patch("jarvis.dictation.dictation_engine._play_beep"):
-            t0 = time.time()
+            t0 = time.monotonic()
             engine._stop_recording()
-            elapsed = time.time() - t0
+            elapsed = time.monotonic() - t0
 
         # The caller (simulating the pynput hook) must return quickly.
         # 200 ms is generous headroom vs. the ~5 s Windows LowLevelHooksTimeout
@@ -409,8 +409,8 @@ class TestRecordingStateMachine:
         )
 
         # The stream must still be closed eventually, off-thread.
-        deadline = time.time() + 5.0
-        while time.time() < deadline and not slow_stream.close.called:
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline and not slow_stream.close.called:
             time.sleep(0.05)
         assert slow_stream.close.called, "stream.close() never ran"
 
@@ -438,8 +438,8 @@ class TestRecordingStateMachine:
             t2.join()
 
         # Wait for the spawned teardown thread to run close().
-        deadline = time.time() + 5.0
-        while time.time() < deadline and not stream_mock.close.called:
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline and not stream_mock.close.called:
             time.sleep(0.05)
         # Only one of the two calls should have reached the stream.
         assert stream_mock.close.call_count == 1
@@ -490,7 +490,7 @@ class TestRecordingStateMachine:
             engine._finalise_and_transcribe(
                 stream=None,
                 audio_frames=[np.zeros(1600, dtype=np.float32)],
-                start_time=time.time(), stream_sample_rate=engine._stream_sample_rate, token=engine._session,
+                start_time=time.monotonic(), stream_sample_rate=engine._stream_sample_rate, token=engine._session,
             )
 
         assert end_called.is_set(), (
@@ -680,7 +680,7 @@ class TestTranscribeAndPaste:
             on_dictation_end=lambda: phases.append('idle'),
         )
         frames = [np.zeros(int(engine._target_sample_rate * duration), dtype=np.float32)] if duration else []
-        engine._finalise_and_transcribe(None, frames, time.time() - duration,
+        engine._finalise_and_transcribe(None, frames, time.monotonic() - duration,
                                        engine._target_sample_rate, engine._session)
 
         expected_texts = [] if expected is None else [expected]
@@ -852,7 +852,7 @@ class TestDictationProcessingCallback:
         # reports processing and completion for the released session.
         with patch.object(de, "_close_stream"), patch.object(de, "_play_beep"):
             engine._finalise_and_transcribe(
-                stream=MagicMock(), audio_frames=[], start_time=time.time(), stream_sample_rate=engine._stream_sample_rate, token=engine._session
+                stream=MagicMock(), audio_frames=[], start_time=time.monotonic(), stream_sample_rate=engine._stream_sample_rate, token=engine._session
             )
 
         assert events == ["processing", "end"]
@@ -867,7 +867,7 @@ class TestDictationProcessingCallback:
              patch.object(de, "_play_beep"), \
              patch.object(engine, "_transcribe_and_paste"):
             # Should not raise
-            engine._finalise_and_transcribe(stream=MagicMock(), audio_frames=[], start_time=time.time(), stream_sample_rate=engine._stream_sample_rate, token=engine._session)
+            engine._finalise_and_transcribe(stream=MagicMock(), audio_frames=[], start_time=time.monotonic(), stream_sample_rate=engine._stream_sample_rate, token=engine._session)
 
 
 # ---------------------------------------------------------------------------

@@ -51,7 +51,7 @@ def test_clipboard_failure_is_safe_and_preserves_saved_result(
         on_dictation_end=lambda: phases.append('idle'),
     )
     frames = [np.zeros(int(engine._target_sample_rate * 0.5), dtype=np.float32)]
-    engine._finalise_and_transcribe(None, frames, time.time() - 0.5,
+    engine._finalise_and_transcribe(None, frames, time.monotonic() - 0.5,
                                    engine._target_sample_rate, engine._session)
     output = capsys.readouterr()
     assert '⚠️ Dictation could not be copied to the clipboard.' in output.out

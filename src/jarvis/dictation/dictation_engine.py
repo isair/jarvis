@@ -685,7 +685,7 @@ class DictationEngine:
         self._session = 0
 
         # Double-tap detection for hands-free mode
-        self._last_hotkey_release_time: float = 0.0
+        self._last_hotkey_release_time: Optional[float] = None
         self._double_tap_window: float = 0.4  # seconds
 
         # Suppress recording activation during clipboard paste (the pynput
@@ -864,20 +864,20 @@ class DictationEngine:
             )
             if trigger_released or (modifier_released and not self._all_modifiers_held()):
                 # Check for double-tap: if released quickly, transition to hands-free
-                now = time.time()
+                now = time.monotonic()
                 hold_duration = now - self._record_start_time
                 if hold_duration < self._double_tap_window:
-                    time_since_last = now - self._last_hotkey_release_time
-                    if time_since_last < self._double_tap_window:
+                    last_release = self._last_hotkey_release_time
+                    if last_release is not None and now - last_release < self._double_tap_window:
                         # Double-tap detected → switch to hands-free
                         self._hands_free = True
                         debug_log("hands-free mode activated (double-tap)", "dictation")
-                        self._last_hotkey_release_time = 0.0
+                        self._last_hotkey_release_time = None
                         return
                     # First quick tap — stop recording but remember the time
                     self._last_hotkey_release_time = now
                 else:
-                    self._last_hotkey_release_time = 0.0
+                    self._last_hotkey_release_time = None
                 self._stop_recording()
 
     # ------------------------------------------------------------------
@@ -949,7 +949,7 @@ class DictationEngine:
             if self._session != token or not self._recording:
                 return
             self._audio_frames = []
-            self._record_start_time = time.time()
+            self._record_start_time = time.monotonic()
 
         debug_log("dictation recording started", "dictation")
 
@@ -1087,7 +1087,7 @@ class DictationEngine:
         try:
             _close_stream(stream)
             _play_beep(_get_stop_beep())
-            duration = time.time() - start_time
+            duration = time.monotonic() - start_time
             debug_log(f"dictation recording stopped ({duration:.1f}s)", "dictation")
             self._notify_session(token, 'processing')
             self._transcribe_and_paste(audio_frames, stream_sample_rate)

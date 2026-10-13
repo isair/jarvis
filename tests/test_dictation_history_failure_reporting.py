@@ -43,7 +43,7 @@ def test_history_failure_reports_safely_and_can_recover(monkeypatch, tmp_path, c
                 raise OSError('private-storage-error-marker')
             fault.setattr(history, '_read_entries' if failure == 'read' else '_save', unavailable)
         protected = path.read_bytes()
-        engine._finalise_and_transcribe(None, frames, time.time() - 0.5,
+        engine._finalise_and_transcribe(None, frames, time.monotonic() - 0.5,
                                        engine._target_sample_rate, engine._session)
         output = capsys.readouterr()
         assert 'Dictation could not be saved to history' in output.out
@@ -56,7 +56,7 @@ def test_history_failure_reports_safely_and_can_recover(monkeypatch, tmp_path, c
 
     if failure == 'corrupt':
         path.write_bytes(valid)
-    engine._finalise_and_transcribe(None, frames, time.time() - 0.5,
+    engine._finalise_and_transcribe(None, frames, time.monotonic() - 0.5,
                                    engine._target_sample_rate, engine._session)
     assert pasted == [text, text]
     assert [entry['text'] for entry in delivered] == [text]
