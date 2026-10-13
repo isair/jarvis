@@ -82,21 +82,34 @@ def test_saved_fuzzy_threshold_preserves_echo_control_priority(ratio, keeps_play
                               'stopp', 'The command sounds like stopp.') is keeps_playing
 
 
+@pytest.mark.parametrize('provider', ['ollama', 'openai_compatible'])
 @pytest.mark.parametrize('enabled', [False, True])
-def test_saved_intent_thinking_switch_reaches_the_local_request(monkeypatch, enabled):
+def test_saved_intent_thinking_switch_reaches_the_local_request(monkeypatch, enabled, provider):
     from contextlib import nullcontext
     from jarvis.llm import http
     from jarvis.listening.intent_judge import create_intent_judge
     from jarvis.listening.transcript_buffer import TranscriptSegment
 
-    cfg = settings(intent_judge_thinking_enabled=enabled, llm_thinking_enabled=not enabled)
+    cfg = settings(llm_provider=provider, llm_base_url='http://127.0.0.1:1',
+                   ollama_base_url='http://127.0.0.1:1', intent_judge_thinking_enabled=enabled,
+                   llm_thinking_enabled=not enabled)
 
     def post(url, **kwargs):
-        assert kwargs['json']['think'] is enabled
+        payload = kwargs['json']
+        if provider == 'ollama':
+            assert url == cfg.ollama_base_url + '/api/chat'
+            assert payload['think'] is enabled
+        else:
+            assert url == cfg.llm_base_url + '/chat/completions'
+            assert 'think' not in payload
+        assert 'What is the weather, Jarvis?' in payload['messages'][-1]['content']
         response = MagicMock()
-        response.json.return_value = {'message': {'content': json.dumps({
-            'directed': True, 'stop': False, 'confidence': 'high', 'reasoning': 'A question.',
-        })}}
+        content = json.dumps({'directed': True, 'stop': False, 'confidence': 'high',
+                              'reasoning': 'A question.'})
+        response.json.return_value = (
+            {'message': {'content': content}} if provider == 'ollama' else
+            {'choices': [{'message': {'content': content}, 'finish_reason': 'stop'}]}
+        )
         return nullcontext(response)
 
     monkeypatch.setattr(http, 'post', post)
