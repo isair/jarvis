@@ -6,7 +6,10 @@ Bounds with Z, an offset or a space separator are converted to the stored UTC
 format. Naive bounds are interpreted as UTC, as named by the public fields.
 Model-facing bounds declare the standard `date-time` format so relative
 calendar requests can use clock-grounded step resolution. Direct boundary
-normalisation retains the documented ISO variants.
+normalisation retains the documented ISO variants. The model-facing descriptions
+state that both bounds are inclusive. A full calendar day ends at its final
+instant in the requested calendar time zone, converted to UTC, so a record
+at the following day’s midnight remains excluded.
 
 Absent or empty upper bounds resolve to the current UTC instant. Absent or
 empty lower bounds resolve to one day before the resolved upper bound.

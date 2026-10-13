@@ -1,5 +1,6 @@
 """Relative date resolution follows the supplied clock in every language."""
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -15,7 +16,7 @@ pytestmark = [pytest.mark.eval, requires_judge_llm]
     "fetchMeals time_range='today'",
     'fetchMeals bugün kaydedilen öğünleri getir',
 ])
-def test_relative_calendar_day_uses_current_clock(monkeypatch, step):
+def test_relative_calendar_day_uses_current_clock(monkeypatch, eval_db, step):
     instant = datetime(2029, 2, 6, 16, 30, tzinfo=timezone.utc)
 
     class Clock:
@@ -34,5 +35,11 @@ def test_relative_calendar_day_uses_current_clock(monkeypatch, step):
     since, until = _normalise_time_range(result[1])
     local_start = instant.astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
     expected_start = local_start.astimezone(timezone.utc)
+    eval_db.insert_meal((expected_start + (instant - expected_start) / 2).isoformat(), 'fixture', 'Within requested day')
+    eval_db.insert_meal((expected_start + timedelta(days=1)).isoformat(), 'fixture', 'Following day boundary')
+    retrieved = tool.run(result[1], SimpleNamespace(db=eval_db, user_print=lambda _: None))
+    assert retrieved.success, retrieved
+    assert 'Within requested day' in retrieved.reply_text, (result, retrieved.reply_text)
+    assert 'Following day boundary' not in retrieved.reply_text, (result, retrieved.reply_text)
     assert datetime.fromisoformat(since) == expected_start, result
     assert instant <= datetime.fromisoformat(until) < expected_start + timedelta(days=1), result
