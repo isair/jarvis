@@ -112,15 +112,10 @@ class Settings:
     # long-running tool — a 5-minute ceiling there would stall replies.
     llm_digest_timeout_sec: float
     llm_embedding_timeout_sec: float
-    llm_profile_select_timeout_sec: float
 
-    # Profiles & Behavior
-    active_profiles: list[str]
+    # Runtime flags
     use_stdin: bool
     voice_debug: bool
-
-    # Screen Capture
-    allowlist_bundles: list[str]
 
     # Text-to-Speech
     tts_enabled: bool
@@ -146,7 +141,6 @@ class Settings:
     voice_min_energy: float
 
     # Voice Collection & Timing
-    voice_block_seconds: float
     voice_collect_seconds: float
     voice_max_collect_seconds: float
 
@@ -163,7 +157,6 @@ class Settings:
     whisper_min_confidence: float
     whisper_no_speech_threshold: float
     whisper_min_audio_duration: float
-    whisper_min_word_length: int
 
     # Voice Activity Detection (VAD)
     vad_enabled: bool
@@ -510,19 +503,9 @@ def get_default_config() -> Dict[str, Any]:
         # block the reply loop per tool call, amplified by agentic turns.
         "llm_digest_timeout_sec": 8.0,
         "llm_embedding_timeout_sec": 60.0,
-        "llm_profile_select_timeout_sec": 30.0,
 
-        # Profiles & Behavior
-        "active_profiles": ["developer", "business", "life"],
+        # Runtime flags
         "use_stdin": False,
-
-        # Screen Capture
-        "allowlist_bundles": [
-            "com.apple.Terminal",
-            "com.googlecode.iterm2",
-            "com.microsoft.VSCode",
-            "com.jetbrains.intellij",
-        ],
 
 
         # Text-to-Speech
@@ -549,7 +532,6 @@ def get_default_config() -> Dict[str, Any]:
         "voice_min_energy": 0.02,
 
         # Voice Collection & Timing
-        "voice_block_seconds": 4.0,
         "voice_collect_seconds": 4.5,
         "voice_max_collect_seconds": 180.0,
 
@@ -566,7 +548,6 @@ def get_default_config() -> Dict[str, Any]:
         "whisper_min_confidence": 0.3,  # Filter low-confidence segments (hallucinations)
         "whisper_no_speech_threshold": 0.5,  # Hard cutoff: reject segments where no_speech_prob >= this
         "whisper_min_audio_duration": 0.15,
-        "whisper_min_word_length": 1,
 
         # Voice Activity Detection (VAD)
         "vad_enabled": True,
@@ -700,7 +681,6 @@ def load_settings() -> Settings:
     # Normalize/convert fields
     db_path = _expand_path(merged.get("db_path")) or _default_db_path()
     sqlite_vss_path = _expand_path(merged.get("sqlite_vss_path"))
-    allowlist_bundles = _ensure_list(merged.get("allowlist_bundles"))
 
     ollama_base_url = str(merged.get("ollama_base_url"))
     ollama_embed_model = str(merged.get("ollama_embed_model"))
@@ -736,7 +716,6 @@ def load_settings() -> Settings:
     else:
         embedding_model = ollama_embed_model
     use_stdin = bool(merged.get("use_stdin", False))
-    active_profiles = _ensure_list(merged.get("active_profiles"))
     tts_enabled = bool(merged.get("tts_enabled", True))
     tts_engine = str(merged.get("tts_engine", "piper")).lower()
     if tts_engine not in ("piper", "chatterbox"):
@@ -769,7 +748,6 @@ def load_settings() -> Settings:
 
     voice_device_val = merged.get("voice_device")
     voice_device = None if voice_device_val in (None, "", "default", "system") else str(voice_device_val)
-    voice_block_seconds = float(merged.get("voice_block_seconds", 4.0))
     voice_collect_seconds = float(merged.get("voice_collect_seconds", 2.5))
     voice_max_collect_seconds = float(merged.get("voice_max_collect_seconds", 60.0))
     wake_word = str(merged.get("wake_word", "jarvis")).strip().lower()
@@ -869,12 +847,10 @@ def load_settings() -> Settings:
     whisper_min_confidence = float(merged.get("whisper_min_confidence", 0.4))
     whisper_no_speech_threshold = float(merged.get("whisper_no_speech_threshold", 0.5))
     whisper_min_audio_duration = float(merged.get("whisper_min_audio_duration", 0.3))
-    whisper_min_word_length = int(merged.get("whisper_min_word_length", 2))
     llm_chat_timeout_sec = float(merged.get("llm_chat_timeout_sec", 180.0))
     llm_tools_timeout_sec = float(merged.get("llm_tools_timeout_sec", 300.0))
     llm_digest_timeout_sec = float(merged.get("llm_digest_timeout_sec", 8.0))
     llm_embedding_timeout_sec = float(merged.get("llm_embedding_timeout_sec", 60.0))
-    llm_profile_select_timeout_sec = float(merged.get("llm_profile_select_timeout_sec", 30.0))
 
     return Settings(
         # Database & Storage
@@ -897,15 +873,10 @@ def load_settings() -> Settings:
         llm_tools_timeout_sec=llm_tools_timeout_sec,
         llm_digest_timeout_sec=llm_digest_timeout_sec,
         llm_embedding_timeout_sec=llm_embedding_timeout_sec,
-        llm_profile_select_timeout_sec=llm_profile_select_timeout_sec,
 
-        # Profiles & Behavior
-        active_profiles=active_profiles,
+        # Runtime flags
         use_stdin=use_stdin,
         voice_debug=voice_debug,
-
-        # Screen Capture
-        allowlist_bundles=allowlist_bundles,
 
         # Text-to-Speech
         tts_enabled=tts_enabled,
@@ -931,7 +902,6 @@ def load_settings() -> Settings:
         voice_min_energy=voice_min_energy,
 
         # Voice Collection & Timing
-        voice_block_seconds=voice_block_seconds,
         voice_collect_seconds=voice_collect_seconds,
         voice_max_collect_seconds=voice_max_collect_seconds,
 
@@ -948,7 +918,6 @@ def load_settings() -> Settings:
         whisper_min_confidence=whisper_min_confidence,
         whisper_no_speech_threshold=whisper_no_speech_threshold,
         whisper_min_audio_duration=whisper_min_audio_duration,
-        whisper_min_word_length=whisper_min_word_length,
 
         # Voice Activity Detection (VAD)
         vad_enabled=vad_enabled,

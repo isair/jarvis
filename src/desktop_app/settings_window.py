@@ -126,9 +126,6 @@ def _build_field_metadata() -> List[FieldMeta]:
       "llm", "float", min_val=10, max_val=600, step=10, suffix="s")
     f("llm_embedding_timeout_sec", "Embedding Timeout", "Max seconds for embeddings",
       "llm", "float", min_val=5, max_val=300, step=5, suffix="s")
-    f("llm_profile_select_timeout_sec", "Profile Select Timeout",
-      "Max seconds for profile selection",
-      "llm", "float", min_val=5, max_val=120, step=5, suffix="s")
     f("fast_model", "Fast Model",
       "Small, quick model for real-time work: voice intent, tool routing, "
       "quick classifications. Automatic picks the right default for your provider",
@@ -285,9 +282,6 @@ def _build_field_metadata() -> List[FieldMeta]:
       "vad", "int", min_val=500, max_val=10000, step=500, suffix="ms")
 
     # --- Timing & Windows ---
-    f("voice_block_seconds", "Block Duration",
-      "Audio block size for processing",
-      "timing", "float", min_val=0.5, max_val=10.0, step=0.5, suffix="s")
     f("voice_collect_seconds", "Collect Window",
       "Time to collect speech after wake word",
       "timing", "float", min_val=1.0, max_val=30.0, step=0.5, suffix="s")

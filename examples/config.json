@@ -8,19 +8,7 @@
   "llm_tools_timeout_sec": 300.0,
   "llm_multi_step_timeout_sec": 600.0,
   "llm_embedding_timeout_sec": 60.0,
-  "llm_profile_select_timeout_sec": 30.0,
-  "active_profiles": [
-    "developer",
-    "business",
-    "life"
-  ],
   "use_stdin": false,
-  "allowlist_bundles": [
-    "com.apple.Terminal",
-    "com.googlecode.iterm2",
-    "com.microsoft.VSCode",
-    "com.jetbrains.intellij"
-  ],
   "tts_enabled": true,
   "tts_engine": "piper",
   "tts_voice": null,
@@ -38,7 +26,6 @@
   "voice_device": null,
   "sample_rate": 16000,
   "voice_min_energy": 0.02,
-  "voice_block_seconds": 4.0,
   "voice_collect_seconds": 4.5,
   "voice_max_collect_seconds": 180.0,
   "wake_word": "jarvis",
@@ -63,7 +50,6 @@
   "whisper_vad": true,
   "whisper_min_confidence": 0.3,
   "whisper_min_audio_duration": 0.15,
-  "whisper_min_word_length": 1,
   "vad_enabled": true,
   "vad_aggressiveness": 2,
   "vad_frame_ms": 20,
