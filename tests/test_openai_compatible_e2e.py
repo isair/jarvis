@@ -202,11 +202,18 @@ class TestOpenAICompatibleEndToEnd:
         assert full == "Hello"
         assert toks == ["Hel", "lo"]
 
-    def test_embeddings_via_inherited_provider(self, stub):
+    @pytest.mark.parametrize('keys,expected_authorisation', [
+        ({'llm_api_key': 'synthetic-shared'}, 'Bearer synthetic-shared'),
+        ({'llm_api_key': 'synthetic-shared', 'embedding_api_key': 'synthetic-embed'}, 'Bearer synthetic-embed'),
+        ({'llm_api_key': '', 'embedding_api_key': ''}, None),
+    ])
+    def test_embeddings_use_inherited_provider_and_resolved_credentials(self, stub, keys, expected_authorisation):
         from jarvis.llm import get_embedding_backend, OpenAICompatibleBackend
-        eb = get_embedding_backend(_cfg(stub))  # embedding_provider="" inherits chat
+        eb = get_embedding_backend(_cfg(stub, **keys))
         assert isinstance(eb, OpenAICompatibleBackend)
         assert eb.embed("hello", "stub-embed", timeout_sec=5) == [0.1, 0.2, 0.3]
+        requests = [headers for path, headers, _ in stub.calls if path.endswith('/embeddings')]
+        assert requests and all(headers.get('Authorization') == expected_authorisation for headers in requests)
 
     def test_list_models(self, stub):
         from jarvis.llm import get_llm_backend
