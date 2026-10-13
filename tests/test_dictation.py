@@ -688,70 +688,49 @@ class TestAudioCallback:
 # Transcribe-and-paste pipeline
 # ---------------------------------------------------------------------------
 
+@pytest.mark.unit
+@pytest.mark.usefixtures('no_network')
 class TestTranscribeAndPaste:
-    """Tests for the full transcribe → paste pipeline."""
+    """Released dictation completes without losing or inventing output."""
 
-    @pytest.fixture(autouse=True)
-    def _skip_if_no_numpy(self):
-        try:
-            import numpy  # noqa: F401
-        except ImportError:
-            pytest.skip("numpy not installed")
-
-    def test_short_audio_skipped(self):
-        """Audio shorter than 0.3s should be skipped."""
+    @pytest.mark.parametrize('duration,text,expected', [
+        (0, 'Synthetic dictated sentence.', None),
+        (0.1, 'Synthetic dictated sentence.', None),
+        (0.5, '', None),
+        (0.5, None, None),
+        (0.5, 'Synthetic dictated sentence.', 'Synthetic dictated sentence.'),
+    ], ids=['empty-audio', 'short-audio', 'empty-transcription', 'failed-transcription', 'valid'])
+    def test_finalisation_delivery_and_persisted_history(self, monkeypatch, tmp_path, duration, text, expected):
+        from types import SimpleNamespace
         import numpy as np
-        engine = _make_engine()
-        end_called = threading.Event()
-        engine._on_dictation_end = lambda: end_called.set()
+        from jarvis.dictation import dictation_engine
+        from jarvis.dictation.history import DictationHistory
 
-        # 0.1s of audio at 16kHz = 1600 samples (< 4800 needed for 0.3s)
-        short_frames = [np.zeros(1600, dtype=np.float32)]
-        with patch("jarvis.dictation.dictation_engine._play_beep"):
-            engine._finalise_and_transcribe(None, short_frames, time.time(), engine._stream_sample_rate, engine._session)
-        assert end_called.is_set()
-
-    def test_empty_frames_handled(self):
-        engine = _make_engine()
-        end_called = threading.Event()
-        engine._on_dictation_end = lambda: end_called.set()
-
-        with patch("jarvis.dictation.dictation_engine._play_beep"):
-            engine._finalise_and_transcribe(None, [], time.time(), engine._stream_sample_rate, engine._session)
-        assert end_called.is_set()
-
-    @patch("jarvis.dictation.dictation_engine._clipboard_paste")
-    @patch("jarvis.dictation.dictation_engine.parse_hotkey", new=lambda _: (frozenset(), None))
-    def test_successful_transcription_pastes(self, mock_paste):
-        import numpy as np
-        mock_model = MagicMock()
-        mock_seg = MagicMock()
-        mock_seg.text = "hello world"
-        mock_model.transcribe.return_value = ([mock_seg], MagicMock())
-
+        model = MagicMock()
+        if text is None:
+            model.transcribe.side_effect = RuntimeError('Synthetic transcription failure')
+        else:
+            model.transcribe.return_value = ([SimpleNamespace(text=text)], SimpleNamespace())
+        path = tmp_path / 'history.json'
+        pasted, delivered, phases = [], [], []
+        monkeypatch.setattr(dictation_engine, '_clipboard_paste', pasted.append)
+        monkeypatch.setattr(dictation_engine, '_play_beep', lambda *args: None)
         engine = _make_engine(
-            whisper_model_ref=lambda: mock_model,
-            whisper_backend_ref=lambda: "faster-whisper",
+            whisper_model_ref=lambda: model, history=DictationHistory(path=path),
+            on_dictation_result=delivered.append,
+            on_dictation_processing_start=lambda: phases.append('processing'),
+            on_dictation_end=lambda: phases.append('idle'),
         )
+        frames = [np.zeros(int(engine._target_sample_rate * duration), dtype=np.float32)] if duration else []
+        engine._finalise_and_transcribe(None, frames, time.time() - duration,
+                                       engine._target_sample_rate, engine._session)
 
-        frames = [np.zeros(8000, dtype=np.float32)]  # 0.5s
-        engine._transcribe_and_paste(frames, engine._stream_sample_rate)
-        mock_paste.assert_called_once_with("hello world")
-
-    @patch("jarvis.dictation.dictation_engine._clipboard_paste")
-    def test_empty_transcription_does_not_paste(self, mock_paste):
-        import numpy as np
-        mock_model = MagicMock()
-        mock_model.transcribe.return_value = ([], MagicMock())
-
-        engine = _make_engine(
-            whisper_model_ref=lambda: mock_model,
-            whisper_backend_ref=lambda: "faster-whisper",
-        )
-
-        frames = [np.zeros(8000, dtype=np.float32)]
-        engine._transcribe_and_paste(frames, engine._stream_sample_rate)
-        mock_paste.assert_not_called()
+        expected_texts = [] if expected is None else [expected]
+        assert phases == ['processing', 'idle']
+        assert pasted == expected_texts
+        assert [entry['text'] for entry in delivered] == expected_texts
+        assert [entry['duration'] for entry in delivered] == ([] if expected is None else [duration])
+        assert DictationHistory(path=path).get_all() == delivered
 
 
 # ---------------------------------------------------------------------------
