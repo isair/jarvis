@@ -439,3 +439,17 @@ Recorded resource metadata also supplies a bounded reply data block independent
 of result prose truncation. When resources are carried over, reply guidance requires the current
 follow-up action to run using the referenced ID before claiming completion.
 Earlier results provide identity rather than proof of the latest action.
+
+
+## Private prompt diagnostics
+
+`JARVIS_DUMP_PROMPTS` enables per-turn JSON snapshots of the complete messages,
+tool schema and model response for local reproduction. Diagnostics are off by
+default. Each snapshot is written to a private temporary file in the diagnostic
+directory and atomically replaces its target after successful serialisation.
+New diagnostic directories use mode `0700` and files use mode `0600` on POSIX.
+Existing targets remain intact when serialisation or publication fails;
+cleanup attempts to remove unpublished temporary files. Failure logs contain the exception
+class only, keeping private payload text out of error messages. Diagnostic
+failures never interrupt the reply loop. Windows uses the directory's inherited
+access controls; POSIX mode assertions do not describe Windows ACLs.

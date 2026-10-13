@@ -1,19 +1,9 @@
-"""
-Opt-in per-turn prompt dump for the reply engine.
+"""Opt-in private per-turn diagnostics for local reply reproduction.
 
-Motivation: PR #232's harness evals cannot reproduce the live confab where
-`gemma4:e2b` answers "Tell me about the movie Possessor" with "The movie is
-Under the Skin" despite a successful webSearch fetch. To bridge the
-harness-vs-field gap, this module writes the exact `messages` array, the
-selected tool schema, and the raw LLM response to disk for each turn, so a
-user-side reproduction can be replayed verbatim in an eval.
-
-Gated on the env var `JARVIS_DUMP_PROMPTS=1` — off by default because the
-dumps contain the full system prompt, memory digest and tool output (likely
-PII). Users opt in only when hunting a bug.
-
-Files are written to `~/.local/share/jarvis/prompts/` as per-turn JSON so
-each dump is self-contained and easy to `cat` or paste into a test.
+JARVIS_DUMP_PROMPTS enables full prompt, memory, tool and response snapshots.
+Each JSON snapshot is published atomically from a private temporary file.
+New diagnostic directories and files use owner-only permissions on POSIX.
+Diagnostics are disabled by default and failures cannot interrupt replies.
 """
 
 from __future__ import annotations
@@ -21,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import time
+import tempfile
 import uuid
 from pathlib import Path
 from typing import Any, Optional
@@ -43,7 +34,7 @@ def new_session_id() -> str:
 
 def _dump_dir() -> Path:
     base = Path.home() / ".local" / "share" / "jarvis" / "prompts"
-    base.mkdir(parents=True, exist_ok=True)
+    base.mkdir(mode=0o700, parents=True, exist_ok=True)
     return base
 
 
@@ -83,13 +74,24 @@ def dump_reply_turn(
         }
         # default=str keeps us safe if something non-serialisable slips in
         # (e.g. a bytes field from an upstream response body).
-        path.write_text(
-            json.dumps(payload, indent=2, default=str, ensure_ascii=False),
-            encoding="utf-8",
-        )
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=path.parent,
+                prefix=f".{path.name}.", suffix=".tmp", delete=False,
+            ) as stream:
+                temporary = Path(stream.name)
+                json.dump(payload, stream, indent=2, default=str, ensure_ascii=False)
+            os.replace(temporary, path)
+        finally:
+            if temporary is not None:
+                try:
+                    temporary.unlink(missing_ok=True)
+                except OSError:
+                    pass
         print(f"  📝 Prompt dump: {path}", flush=True)
         debug_log(f"Wrote prompt dump to {path}", "planning")
         return path
     except Exception as exc:  # pragma: no cover — diagnostics must not crash the reply loop
-        debug_log(f"prompt dump failed: {exc}", "planning")
+        debug_log(f"prompt dump failed: {type(exc).__name__}", "planning")
         return None
