@@ -195,41 +195,45 @@ def _clipboard_paste(text: str) -> None:
               "clipboard; paste it manually with Cmd+V.", flush=True)
         return
 
-    if pynput_keyboard is None:
-        debug_log("pynput unavailable — cannot simulate paste", "dictation")
-        return
+    if pynput_keyboard is not None:
+        try:
+            ctrl = pynput_keyboard.Controller()
+            mod = pynput_keyboard.Key.ctrl
 
-    ctrl = pynput_keyboard.Controller()
-    mod = pynput_keyboard.Key.cmd if system == "darwin" else pynput_keyboard.Key.ctrl
-
-    # Explicitly release common modifiers so the OS doesn't see e.g.
-    # Ctrl+Alt+Cmd+V instead of just Cmd+V.
-    try:
-        for release_key in (
-            pynput_keyboard.Key.ctrl_l,
-            pynput_keyboard.Key.ctrl_r,
-            pynput_keyboard.Key.alt_l,
-            pynput_keyboard.Key.alt_r,
-            pynput_keyboard.Key.shift_l,
-            pynput_keyboard.Key.shift_r,
-            pynput_keyboard.Key.cmd,
-            pynput_keyboard.Key.cmd_r,
-        ):
+            # Release held hotkey modifiers before sending the paste shortcut.
             try:
-                ctrl.release(release_key)
+                for release_key in (
+                    pynput_keyboard.Key.ctrl_l,
+                    pynput_keyboard.Key.ctrl_r,
+                    pynput_keyboard.Key.alt_l,
+                    pynput_keyboard.Key.alt_r,
+                    pynput_keyboard.Key.shift_l,
+                    pynput_keyboard.Key.shift_r,
+                    pynput_keyboard.Key.cmd,
+                    pynput_keyboard.Key.cmd_r,
+                ):
+                    try:
+                        ctrl.release(release_key)
+                    except Exception:
+                        pass
             except Exception:
                 pass
-    except Exception:
-        pass
 
-    time.sleep(0.05)
-    try:
-        ctrl.press(mod)
-        ctrl.tap("v")
-        ctrl.release(mod)
-        debug_log("paste keystroke sent via pynput", "dictation")
-    except Exception as exc:
-        debug_log(f"paste keystroke failed: {exc}", "dictation")
+            time.sleep(0.05)
+            try:
+                ctrl.press(mod)
+                ctrl.tap("v")
+            finally:
+                ctrl.release(mod)
+            debug_log("paste keystroke sent via pynput", "dictation")
+            return
+        except Exception as exc:
+            debug_log(f"automatic paste failed: {type(exc).__name__}", "dictation")
+    else:
+        debug_log("pynput unavailable, cannot simulate paste", "dictation")
+
+    print("  ⚠️ Dictation could not complete automatic paste. The text is on your "
+          "clipboard; use Ctrl+V if needed.", flush=True)
 
 
 def _clipboard_windows(text: str) -> None:
