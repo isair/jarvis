@@ -75,68 +75,65 @@ class TestBeepGeneration:
 # Hotkey parsing
 # ---------------------------------------------------------------------------
 
+@pytest.mark.unit
+@pytest.mark.usefixtures('no_network')
 class TestHotkeyParsing:
-    """Tests for hotkey string → pynput key object parsing."""
+    """Configured shortcuts retain the requested modifiers and trigger key."""
 
-    @pytest.fixture(autouse=True)
-    def _skip_if_no_pynput(self):
-        try:
-            import pynput  # noqa: F401
-        except ImportError:
-            pytest.skip("pynput not installed")
+    @pytest.fixture
+    def keyboard(self, monkeypatch):
+        from enum import Enum
+        from jarvis.dictation import dictation_engine
 
-    def test_parse_ctrl_shift_d(self):
+        class Key(Enum):
+            ctrl_l = 'control'
+            shift_l = 'shift'
+            alt_l = 'alt'
+            cmd = 'command'
+            f5 = 'function-five'
+
+        class KeyCode:
+            @staticmethod
+            def from_char(character):
+                return ('character', character)
+
+        class Keyboard:
+            pass
+
+        Keyboard.Key, Keyboard.KeyCode = Key, KeyCode
+        monkeypatch.setattr(dictation_engine, 'pynput_keyboard', Keyboard)
+        return Keyboard
+
+    @pytest.mark.parametrize('combo,modifiers,trigger', [
+        ('ctrl+shift+d', ('ctrl_l', 'shift_l'), ('character', 'd')),
+        ('ctrl+cmd', ('ctrl_l', 'cmd'), None),
+        ('ctrl+alt', ('ctrl_l', 'alt_l'), None),
+        ('ctrl+win', ('ctrl_l', 'cmd'), None),
+        ('ctrl+super', ('ctrl_l', 'cmd'), None),
+        ('alt+x', ('alt_l',), ('character', 'x')),
+        ('f', (), ('character', 'f')),
+        (' Ctrl + ALT ', ('ctrl_l', 'alt_l'), None),
+        ('ctrl+ctrl+d', ('ctrl_l',), ('character', 'd')),
+        ('ctrl+f5', ('ctrl_l',), 'f5'),
+    ])
+    def test_shortcut_preserves_requested_keys(self, keyboard, combo, modifiers, trigger):
         from jarvis.dictation.dictation_engine import parse_hotkey
-        mods, trigger = parse_hotkey("ctrl+shift+d")
-        assert len(mods) == 2
-        assert trigger is not None
 
-    def test_parse_modifier_only_combo(self):
-        """A modifier-only hotkey like 'ctrl+cmd' should be valid."""
-        from jarvis.dictation.dictation_engine import parse_hotkey
-        mods, trigger = parse_hotkey("ctrl+cmd")
-        assert len(mods) == 2
-        assert trigger is None
+        expected_modifiers = frozenset(getattr(keyboard.Key, key) for key in modifiers)
+        expected_trigger = getattr(keyboard.Key, trigger) if isinstance(trigger, str) else trigger
+        assert parse_hotkey(combo) == (expected_modifiers, expected_trigger)
 
-    def test_parse_ctrl_alt(self):
-        """macOS/Linux default: ctrl+alt should parse as two modifiers."""
-        from jarvis.dictation.dictation_engine import parse_hotkey
-        mods, trigger = parse_hotkey("ctrl+alt")
-        assert len(mods) == 2
-        assert trigger is None
-
-    def test_parse_ctrl_win(self):
-        """'win' modifier alias should map to the same key as 'cmd'."""
-        from jarvis.dictation.dictation_engine import parse_hotkey
-        mods_win, trigger_win = parse_hotkey("ctrl+win")
-        mods_cmd, trigger_cmd = parse_hotkey("ctrl+cmd")
-        assert mods_win == mods_cmd
-        assert trigger_win is None
-        assert trigger_cmd is None
-
-    def test_parse_empty_string_raises(self):
+    @pytest.mark.parametrize('combo', ['', 'ctrl+nonexistentkey'])
+    def test_invalid_shortcut_is_rejected(self, keyboard, combo):
         from jarvis.dictation.dictation_engine import parse_hotkey
         with pytest.raises(ValueError):
-            parse_hotkey("")
+            parse_hotkey(combo)
 
-    def test_parse_unknown_key_raises(self):
-        from jarvis.dictation.dictation_engine import parse_hotkey
-        with pytest.raises(ValueError):
-            parse_hotkey("ctrl+nonexistentkey")
-
-    def test_parse_alt_modifier(self):
-        from jarvis.dictation.dictation_engine import parse_hotkey
-        mods, trigger = parse_hotkey("alt+x")
-        assert len(mods) == 1
-        assert trigger is not None
-
-    def test_parse_single_letter(self):
-        """A single letter without modifiers should work as trigger."""
-        from jarvis.dictation.dictation_engine import parse_hotkey
-        # Technically no modifiers, just a trigger
-        mods, trigger = parse_hotkey("f")
-        assert len(mods) == 0
-        assert trigger is not None
+    def test_missing_keyboard_backend_is_reported(self, monkeypatch):
+        from jarvis.dictation import dictation_engine
+        monkeypatch.setattr(dictation_engine, 'pynput_keyboard', None)
+        with pytest.raises(RuntimeError):
+            dictation_engine.parse_hotkey('ctrl+alt')
 
 
 # ---------------------------------------------------------------------------
