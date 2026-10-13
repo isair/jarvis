@@ -15,32 +15,6 @@ from jarvis.config import get_default_config
 
 
 # ---------------------------------------------------------------------------
-# Config defaults
-# ---------------------------------------------------------------------------
-
-class TestThinkingConfig:
-    """Config layer tests for thinking settings."""
-
-    def test_default_config_has_chat_thinking_disabled(self):
-        """llm_thinking_enabled should default to False."""
-        config = get_default_config()
-        assert "llm_thinking_enabled" in config
-        assert config["llm_thinking_enabled"] is False
-
-    def test_default_config_has_intent_judge_thinking_disabled(self):
-        """intent_judge_thinking_enabled should default to False."""
-        config = get_default_config()
-        assert "intent_judge_thinking_enabled" in config
-        assert config["intent_judge_thinking_enabled"] is False
-
-    def test_default_config_has_dictation_thinking_disabled(self):
-        """dictation_thinking_enabled should default to False."""
-        config = get_default_config()
-        assert "dictation_thinking_enabled" in config
-        assert config["dictation_thinking_enabled"] is False
-
-
-# ---------------------------------------------------------------------------
 # llm.py — payload construction
 # ---------------------------------------------------------------------------
 
@@ -171,41 +145,45 @@ class TestDictationThinking:
 # Settings window metadata
 # ---------------------------------------------------------------------------
 
+@pytest.mark.unit
+@pytest.mark.usefixtures('no_network')
 class TestSettingsWindowThinking:
-    """Settings window includes all three thinking fields."""
+    """Thinking switches remain visible, independent and persistent."""
 
-    def test_field_metadata_includes_chat_thinking(self):
-        from desktop_app.settings_window import FIELD_METADATA
-        keys = [fm.key for fm in FIELD_METADATA]
-        assert "llm_thinking_enabled" in keys
+    @pytest.mark.parametrize('key,category', [
+        ('llm_thinking_enabled', 'llm'),
+        ('intent_judge_thinking_enabled', 'llm'),
+        ('dictation_thinking_enabled', 'features'),
+    ], ids=['chat', 'intent', 'dictation'])
+    @pytest.mark.parametrize('enabled', [False, True])
+    def test_toggling_and_saving_preserves_other_values(
+        self, settings_config_path, qapp, key, category, enabled,
+    ):
+        from desktop_app import settings_window as sw
+        from jarvis.config import load_settings
 
-    def test_chat_thinking_field_is_bool_in_llm_category(self):
-        from desktop_app.settings_window import FIELD_METADATA
-        field = next(fm for fm in FIELD_METADATA if fm.key == "llm_thinking_enabled")
-        assert field.field_type == "bool"
-        assert field.category == "llm"
+        keys = ['llm_thinking_enabled', 'intent_judge_thinking_enabled', 'dictation_thinking_enabled']
+        original = {name: not enabled for name in keys}
+        original['opaque'] = {'text': 'İstanbul, 東京'}
+        path = settings_config_path
+        path.write_text(json.dumps(original), encoding='utf-8')
+        window = sw.SettingsWindow()
+        control = window._widgets[key]
+        assert control.isChecked() is not enabled
+        index = next(i for i, (name, _) in enumerate(sw.CATEGORIES) if name == category)
+        window._sidebar.setCurrentRow(index)
+        window.show()
+        qapp.processEvents()
+        assert control.isVisible()
+        control.setChecked(enabled)
+        window._on_save()
 
-    def test_field_metadata_includes_intent_judge_thinking(self):
-        from desktop_app.settings_window import FIELD_METADATA
-        keys = [fm.key for fm in FIELD_METADATA]
-        assert "intent_judge_thinking_enabled" in keys
-
-    def test_intent_judge_thinking_field_is_bool_in_llm_category(self):
-        from desktop_app.settings_window import FIELD_METADATA
-        field = next(fm for fm in FIELD_METADATA if fm.key == "intent_judge_thinking_enabled")
-        assert field.field_type == "bool"
-        assert field.category == "llm"
-
-    def test_field_metadata_includes_dictation_thinking(self):
-        from desktop_app.settings_window import FIELD_METADATA
-        keys = [fm.key for fm in FIELD_METADATA]
-        assert "dictation_thinking_enabled" in keys
-
-    def test_dictation_thinking_field_is_bool_in_features_category(self):
-        from desktop_app.settings_window import FIELD_METADATA
-        field = next(fm for fm in FIELD_METADATA if fm.key == "dictation_thinking_enabled")
-        assert field.field_type == "bool"
-        assert field.category == "features"
+        saved = json.loads(path.read_text(encoding='utf-8'))
+        cfg = load_settings()
+        assert getattr(cfg, key) is enabled
+        assert (key in saved) is (enabled != get_default_config()[key])
+        assert all(getattr(cfg, name) is original[name] for name in keys if name != key)
+        assert saved['opaque'] == original['opaque']
 
 
 # ---------------------------------------------------------------------------
