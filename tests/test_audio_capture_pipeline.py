@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 from jarvis.listening.listener import VoiceListener
+from jarvis.config import get_default_config
 import jarvis.listening.listener as capture
 import jarvis.utils.audio_capture as audio_capture
 
@@ -16,7 +17,10 @@ pytestmark = pytest.mark.unit
 
 def listener(rate=48000):
     obj = VoiceListener.__new__(VoiceListener)
-    obj.cfg = SimpleNamespace(voice_min_energy=0.0045, voice_debug=False)
+    defaults = get_default_config()
+    obj.cfg = SimpleNamespace(voice_min_energy=0.0045, voice_debug=False,
+                              stop_commands=defaults["stop_commands"],
+                              stop_command_fuzzy_ratio=defaults["stop_command_fuzzy_ratio"])
     obj._samplerate = 16000
     obj._stream_samplerate = rate
     obj._frame_samples = rate * 20 // 1000

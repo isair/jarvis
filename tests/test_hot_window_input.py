@@ -51,6 +51,8 @@ def _create_listener(**kwargs):
     mock_cfg.wake_aliases = []
     mock_cfg.wake_fuzzy_ratio = 0.78
     mock_cfg.stop_commands = ["stop", "quiet"]
+    from jarvis.config import get_default_config
+    mock_cfg.stop_command_fuzzy_ratio = get_default_config()["stop_command_fuzzy_ratio"]
     mock_cfg.tts_rate = 200
     mock_cfg.transcript_buffer_duration_sec = 120.0
     mock_cfg.fast_model = "gemma4:e2b"

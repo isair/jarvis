@@ -67,6 +67,7 @@ After transcription, text passes through these stages in order:
    assistant) with a prompt to remove filler words (um, uh, like, you know,
    etc.) while preserving meaning. Uses a 5-second timeout; falls back to the
    unprocessed text on failure, empty output or explicitly incomplete generation.
+   `dictation_thinking_enabled` independently controls reasoning for this request and defaults to disabled.
 
 ## Architecture
 

@@ -25,6 +25,9 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 
+from jarvis.config import get_default_config
+
+
 @dataclass
 class MockConfig:
     """Minimal config object for unit tests that need a config."""
@@ -85,6 +88,8 @@ class MockConfig:
     llm_thinking_enabled: bool = False
     intent_judge_thinking_enabled: bool = False
     dictation_thinking_enabled: bool = False
+    stop_commands: list = field(default_factory=lambda: get_default_config()["stop_commands"])
+    stop_command_fuzzy_ratio: float = field(default_factory=lambda: get_default_config()["stop_command_fuzzy_ratio"])
     dictation_hotkey: str = "ctrl+alt+space"
     mcps: Dict[str, Any] = field(default_factory=dict)
     use_stdin: bool = True
