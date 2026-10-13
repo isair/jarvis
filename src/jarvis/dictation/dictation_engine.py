@@ -856,13 +856,13 @@ class DictationEngine:
         if self._hands_free:
             return
 
-        # Normal hold-to-dictate: any required key released → stop
+        # Hold-to-dictate ends when the trigger or a required modifier is released.
         if self._recording:
             trigger_released = self._key_matches(key, nkey, self._trigger)
             modifier_released = any(
                 self._key_matches(key, nkey, m) for m in self._modifiers
             )
-            if trigger_released or modifier_released:
+            if trigger_released or (modifier_released and not self._all_modifiers_held()):
                 # Check for double-tap: if released quickly, transition to hands-free
                 now = time.time()
                 hold_duration = now - self._record_start_time

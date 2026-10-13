@@ -127,3 +127,21 @@ def test_modifier_only_shortcut_accepts_right_hand_keys(shortcut_factory, hotkey
     assert engine.is_recording
     engine._on_key_release(keys[1])
     assert not engine.is_recording
+
+
+@pytest.mark.parametrize('hotkey,other_modifier', [
+    ('ctrl+alt', 'alt_l'),
+    ('ctrl+shift+d', 'shift_l'),
+])
+@pytest.mark.parametrize('first,last', [('ctrl_l', 'ctrl_r'), ('ctrl_r', 'ctrl_l')])
+def test_capture_continues_while_the_other_modifier_side_is_held(
+        shortcut_factory, hotkey, other_modifier, first, last):
+    engine, keyboard = shortcut_factory(hotkey)
+    for name in (other_modifier, 'ctrl_l', 'ctrl_r'):
+        engine._on_key_press(getattr(keyboard.Key, name))
+    engine._on_key_press(keyboard.KeyCode(char='d'))
+    assert engine.is_recording
+    engine._on_key_release(getattr(keyboard.Key, first))
+    assert engine.is_recording
+    engine._on_key_release(getattr(keyboard.Key, last))
+    assert not engine.is_recording
