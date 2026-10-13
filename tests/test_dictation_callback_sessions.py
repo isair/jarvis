@@ -48,19 +48,29 @@ def capture(monkeypatch):
 
 
 @pytest.mark.parametrize('channels', [1, 2])
-def test_old_stream_does_not_enter_the_new_recording(capture, channels):
+@pytest.mark.parametrize('release_before_reuse', [False, True])
+def test_capture_keeps_owned_audio_and_ignores_inactive_streams(capture, channels, release_before_reuse):
     engine, begin, finish, transcribed = capture
     old_callback = begin()
     engine._stop_recording(discard=True)
     active_callback = begin()
-    current = np.full((engine._target_sample_rate // 2, channels), 0.75, dtype=np.float32)
+    count = engine._target_sample_rate // 2
+    current = np.linspace(-0.4, 0.4, count, dtype=np.float32)[:, None] * np.arange(1, channels + 1)
+    expected = [current.mean(axis=1).copy()]
     active_callback(current, len(current), None, None)
-    old_callback(np.zeros_like(current), len(current), None, None)
-
-    finish()
+    if release_before_reuse:
+        finish()
+    # Audio backends reuse their capture buffers after each callback returns.
+    current[:] = -0.25
+    old_callback(current, len(current), None, None)
+    active_callback(current, len(current), None, None)
+    if not release_before_reuse:
+        expected.append(current.mean(axis=1).copy())
+    current[:] = 0
+    if not release_before_reuse:
+        finish()
     assert len(transcribed) == 1
-    assert len(transcribed[0]) == len(current)
-    np.testing.assert_allclose(transcribed[0], 0.75)
+    np.testing.assert_allclose(transcribed[0], np.concatenate(expected))
 
 
 @pytest.mark.parametrize('next_action', ['release', 'replacement'])
