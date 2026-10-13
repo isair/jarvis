@@ -134,8 +134,7 @@ def test_planner_failure_widens_the_followup_allowlist(reply_harness):
 
 
 def test_orphan_call_does_not_widen_the_allowlist_and_logs_the_gap(reply_harness, monkeypatch, capsys):
-    from jarvis import debug
-    monkeypatch.setattr(debug, '_is_debug_enabled', lambda: True)
+    monkeypatch.setenv('JARVIS_VOICE_DEBUG', '1')
     _, _, memory, _ = reply_harness
     previous_turn(memory, tool_turn('getWeather', failed=True, native=True)[:1])
     assert reply(reply_harness, "I'm in London", ['webSearch']) == {
