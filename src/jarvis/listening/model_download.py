@@ -103,8 +103,17 @@ def _download_worker(connection, model_name: str) -> None:
     """Prepare Hub files in a spawn child without starting audio or the daemon."""
     try:
         from faster_whisper.utils import download_model
+        from huggingface_hub.utils import HfHubHTTPError
+        from requests.exceptions import ConnectionError
 
-        path = download_model(model_name)
+        try:
+            path = download_model(model_name)
+        except (HfHubHTTPError, ConnectionError) as error:
+            debug_log(f"Whisper download {type(error).__name__}, checking local cache", "voice")
+            try:
+                path = download_model(model_name, local_files_only=True)
+            except Exception as cache_error:
+                raise error from cache_error
         if not _complete_faster_whisper_model(path):
             raise ModelDownloadError('incomplete_download', 'required model files are missing')
         connection.send(('ready', path, ''))
