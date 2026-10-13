@@ -497,6 +497,10 @@ replacement or a tokeniser.
 Network preparation runs in a multiprocessing spawn child, compatible with the
 desktop's frozen-process bootstrap. It has a five-minute timeout, is terminated
 and reaped on failure, and returns a validated local path or a classified error.
+HTTP and connection failures try the local cache without another network
+request. Complete cached files remain usable; incomplete files receive the
+incomplete-download category. If the cache cannot resolve the model, the original
+download failure remains available for classification.
 Child exit and timeout stop model loading without falling back to in-process
 network work. Visible rate-limit status is preserved through nested errors for bounded
 startup retries. Remote preparation that returns incomplete files also receives

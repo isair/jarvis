@@ -257,6 +257,34 @@ def test_partial_cache_fallback_remains_retryable(tmp_path, monkeypatch):
     assert connection.value[0:2] == ('error', 'incomplete_download')
 
 
+@pytest.mark.parametrize('cached', [True, False])
+@pytest.mark.parametrize('failure', ['rate_limit', 'network'])
+def test_download_failure_uses_complete_cache_or_preserves_cause(tmp_path, monkeypatch, cached, failure):
+    import requests
+    import huggingface_hub
+    from huggingface_hub.utils import HfHubHTTPError, LocalEntryNotFoundError
+
+    ready = complete_model(tmp_path / 'cached')
+    response = requests.Response()
+    response.status_code = 429
+    error = (HfHubHTTPError('remote request rejected', response=response)
+             if failure == 'rate_limit' else requests.ConnectionError('offline'))
+
+    def snapshot(repo_id, **kwargs):
+        if not kwargs.get('local_files_only'):
+            raise error
+        if cached:
+            return str(ready)
+        raise LocalEntryNotFoundError('no cached model')
+
+    monkeypatch.setattr(huggingface_hub, 'snapshot_download', snapshot)
+    connection = MagicMock()
+    model_download._download_worker(connection, 'small')
+    outcome = connection.send.call_args.args[0]
+    assert outcome == (('ready', str(ready), '') if cached else
+                       ('error', failure, 'HTTP 429' if failure == 'rate_limit' else 'ConnectionError'))
+
+
 def test_hub_metadata_fallback_to_partial_cache_remains_retryable(tmp_path, monkeypatch):
     import requests
     import huggingface_hub
