@@ -84,6 +84,12 @@ After transcription, text passes through these stages in order:
   input. A denied permission opens Settings at most once per process. Failed
   native paste retains the copied text, reports manual Cmd+V as recovery and
   never enters a pynput Controller or Carbon keyboard-layout context.
+  On Windows and Linux, automatic paste attempts release the shortcut modifier
+  even when pressing or pasting fails. An unavailable keyboard backend or failed
+  controller/paste operation reports manual Ctrl+V recovery after a successful
+  clipboard copy. Partial operations use conditional recovery guidance rather
+  than claiming that no text was inserted. Error diagnostics omit raw exception
+  messages.
 - **Shared Whisper model** via lazy reference (`lambda: voice_thread.model`)
   and backend info — no double memory usage.
 - **Separate `sounddevice.InputStream`** for dictation audio — avoids
