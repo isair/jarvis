@@ -44,100 +44,55 @@ class TestThinkingConfig:
 # llm.py — payload construction
 # ---------------------------------------------------------------------------
 
+@pytest.mark.unit
+@pytest.mark.usefixtures('no_network')
 class TestLlmThinkingPayload:
-    """Verify the ``think`` key appears in Ollama request payloads."""
+    """Public local-model helpers forward reasoning and deliver usable content."""
 
-    def _capture_payload(self, mock_post, *, expect_stream=False):
-        """Extract the JSON payload from the first call to jarvis.llm.http.post."""
-        assert mock_post.called, "jarvis.llm.http.post was never called"
-        _, kwargs = mock_post.call_args
-        payload = kwargs.get("json") or {}
-        return payload
+    @pytest.mark.parametrize('operation', ['direct', 'streaming', 'chat'])
+    @pytest.mark.parametrize('thinking', [None, False, True], ids=['default', 'disabled', 'enabled'])
+    def test_reasoning_and_answer_delivery(self, monkeypatch, operation, thinking):
+        from contextlib import nullcontext
+        from inspect import signature
+        from jarvis import llm
+        from jarvis.llm import http
 
-    @patch("jarvis.llm.http.post")
-    def test_call_llm_direct_thinking_false(self, mock_post):
-        from jarvis.llm import call_llm_direct
-
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {"message": {"content": "ok"}}
-        mock_post.return_value = mock_resp
-
-        call_llm_direct("http://localhost:11434", "gemma4:e2b", "sys", "hi", thinking=False)
-        payload = self._capture_payload(mock_post)
-        assert payload["think"] is False
-
-    @patch("jarvis.llm.http.post")
-    def test_call_llm_direct_thinking_true(self, mock_post):
-        from jarvis.llm import call_llm_direct
-
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {"message": {"content": "ok"}}
-        mock_post.return_value = mock_resp
-
-        call_llm_direct("http://localhost:11434", "gemma4:e2b", "sys", "hi", thinking=True)
-        payload = self._capture_payload(mock_post)
-        assert payload["think"] is True
-
-    @patch("jarvis.llm.http.post")
-    def test_call_llm_direct_thinking_defaults_false(self, mock_post):
-        from jarvis.llm import call_llm_direct
-
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {"message": {"content": "ok"}}
-        mock_post.return_value = mock_resp
-
-        call_llm_direct("http://localhost:11434", "gemma4:e2b", "sys", "hi")
-        payload = self._capture_payload(mock_post)
-        assert payload["think"] is False
-
-    @patch("jarvis.llm.http.post")
-    def test_call_llm_streaming_thinking(self, mock_post):
-        from jarvis.llm import call_llm_streaming
-
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.iter_lines.return_value = [
-            json.dumps({"message": {"content": "hi"}}).encode()
+        helpers = {'direct': llm.call_llm_direct, 'streaming': llm.call_llm_streaming,
+                   'chat': llm.chat_with_messages}
+        helper = helpers[operation]
+        kwargs = {} if thinking is None else {'thinking': thinking}
+        expected = signature(helper).parameters['thinking'].default if thinking is None else thinking
+        answer = 'Synthetic answer'
+        response = MagicMock()
+        response.status_code = 200
+        response.json.return_value = {'message': {'content': answer}, 'done': True}
+        response.iter_lines.return_value = [
+            json.dumps({'message': {'thinking': 'Synthetic reasoning'}}).encode(),
+            json.dumps({'message': {'content': answer}, 'done': True}).encode(),
         ]
-        mock_resp.raise_for_status = MagicMock()
-        mock_post.return_value = mock_resp
 
-        call_llm_streaming("http://localhost:11434", "gemma4:e2b", "sys", "hi", thinking=True)
-        payload = self._capture_payload(mock_post)
-        assert payload["think"] is True
+        def post(url, **options):
+            payload = options['json']
+            assert url == 'http://127.0.0.1:1/api/chat'
+            assert payload['model'] == 'synthetic-model'
+            assert payload['messages'][-1]['content'] == 'Synthetic question'
+            assert payload['think'] is expected
+            return nullcontext(response)
 
-    @patch("jarvis.llm.http.post")
-    def test_chat_with_messages_thinking(self, mock_post):
-        from jarvis.llm import chat_with_messages
-
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {"message": {"content": "ok"}}
-        mock_resp.raise_for_status = MagicMock()
-        mock_post.return_value = mock_resp
-
-        msgs = [{"role": "user", "content": "hi"}]
-        chat_with_messages("http://localhost:11434", "gemma4:e2b", msgs, thinking=True)
-        payload = self._capture_payload(mock_post)
-        assert payload["think"] is True
-
-    @patch("jarvis.llm.http.post")
-    def test_chat_with_messages_thinking_defaults_false(self, mock_post):
-        from jarvis.llm import chat_with_messages
-
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {"message": {"content": "ok"}}
-        mock_resp.raise_for_status = MagicMock()
-        mock_post.return_value = mock_resp
-
-        msgs = [{"role": "user", "content": "hi"}]
-        chat_with_messages("http://localhost:11434", "gemma4:e2b", msgs)
-        payload = self._capture_payload(mock_post)
-        assert payload["think"] is False
+        monkeypatch.setattr(http, 'post', post)
+        seen = []
+        if operation == 'chat':
+            result = helper('http://127.0.0.1:1', 'synthetic-model',
+                            [{'role': 'user', 'content': 'Synthetic question'}], **kwargs)
+            assert result and result['message']['content'] == answer
+        else:
+            if operation == 'streaming':
+                kwargs['on_token'] = seen.append
+            result = helper('http://127.0.0.1:1', 'synthetic-model',
+                            'Synthetic instructions', 'Synthetic question', **kwargs)
+            assert result == answer
+            if operation == 'streaming':
+                assert seen == [answer]
 
 
 # ---------------------------------------------------------------------------
