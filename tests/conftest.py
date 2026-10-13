@@ -233,3 +233,70 @@ def no_network(monkeypatch):
     monkeypatch.setattr(socket.socket, "connect_ex", blocked)
     yield
     assert not attempts, f"Unmocked network attempts: {attempts}"
+
+
+@pytest.fixture
+def owned_loopback_http(monkeypatch):
+    """Permit HTTP only to sockets bound by this test, without ambient credentials."""
+    import ipaddress
+    import socket
+    from urllib.parse import urlsplit
+    import requests
+
+    bound_sockets = []
+    denied = []
+    real_bind = socket.socket.bind
+    real_connect = socket.socket.connect
+    real_connect_ex = socket.socket.connect_ex
+    real_init = requests.Session.__init__
+    real_send = requests.Session.send
+
+    def is_loopback(host):
+        try:
+            return ipaddress.ip_address(host).is_loopback
+        except ValueError:
+            return False
+
+    def reject():
+        denied.append("unowned network operation")
+        raise AssertionError("Local provider tests require an owned loopback endpoint")
+
+    def owns(host, port):
+        return is_loopback(host) and any(
+            stream.fileno() >= 0 and stream.getsockname()[1] == port
+            and ipaddress.ip_address(stream.getsockname()[0]) == ipaddress.ip_address(host)
+            for stream in bound_sockets
+        )
+
+    def bind(stream, address):
+        if not isinstance(address, tuple) or not is_loopback(address[0]):
+            reject()
+        result = real_bind(stream, address)
+        bound_sockets.append(stream)
+        return result
+
+    def connect(stream, address, *, operation):
+        if not isinstance(address, tuple) or not owns(address[0], address[1]):
+            reject()
+        return operation(stream, address)
+
+    def initialise(session, *args, **kwargs):
+        real_init(session, *args, **kwargs)
+        session.trust_env = False
+
+    def send(session, request, **kwargs):
+        target = urlsplit(request.url)
+        if not owns(target.hostname, target.port):
+            reject()
+        return real_send(session, request, **kwargs)
+
+    monkeypatch.setattr(socket.socket, "bind", bind)
+    monkeypatch.setattr(socket.socket, "connect", lambda stream, address: connect(stream, address, operation=real_connect))
+    monkeypatch.setattr(socket.socket, "connect_ex", lambda stream, address: connect(stream, address, operation=real_connect_ex))
+    monkeypatch.setattr(socket, "getfqdn", lambda name="": "localhost")
+    monkeypatch.setattr(requests.Session, "__init__", initialise)
+    monkeypatch.setattr(requests.Session, "send", send)
+    yield
+    for stream in bound_sockets:
+        stream.close()
+    assert not denied, "A local provider test attempted an unowned network operation"

@@ -28,6 +28,9 @@ jobs:
       - name: Run unit tests
         run: |
           python -m pytest -q -m unit
+      - name: 🧪 Verify local provider transport
+        run: |
+          python -m pytest -q -m integration tests/test_openai_compatible_e2e.py tests/test_provider_model_resolution.py
 
 
   daemon-lock:

@@ -147,6 +147,8 @@ Each migrated module exposes a single intercept point so tests can patch one sym
 
 Unit-selected factory contracts in `tests/test_llm_factory.py` cover provider selection, endpoint inheritance, embedding overrides and persisted configuration migrations. `tests/test_factory_dispatch_wiring.py` parametrises module-local wrappers across both supported providers and checks the returned direct, chat and weather-extraction results.
 
+Local provider integration contracts in `tests/test_openai_compatible_e2e.py` and `tests/test_provider_model_resolution.py` run in CI against test-owned loopback servers. They cover actual HTTP, streaming, authentication, capability reporting, model dispatch and preservation of decoded tool-call history. Their network boundary rejects unowned endpoints and disables ambient proxy and credential inheritance.
+
 `import requests` is re-exported from the package `__init__.py` so tests that patch `jarvis.llm.requests.post` keep working without reaching into the per-backend modules.
 
 ## File layout
