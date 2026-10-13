@@ -17,6 +17,7 @@ import struct
 import sys
 import threading
 import time
+import wave
 from typing import Any, Callable, Optional
 
 from ..debug import debug_log
@@ -82,27 +83,11 @@ def _generate_beep_wav(freq: float = 520, duration: float = 0.10) -> bytes:
         samples.append(max(-32768, min(32767, sample_int)))
 
     buf = io.BytesIO()
-    num_channels = 1
-    bits = 16
-    byte_rate = sample_rate * num_channels * bits // 8
-    block_align = num_channels * bits // 8
-    data_size = num_samples * block_align
-
-    buf.write(b"RIFF")
-    buf.write(struct.pack("<I", 36 + data_size))
-    buf.write(b"WAVE")
-    buf.write(b"fmt ")
-    buf.write(struct.pack("<I", 16))
-    buf.write(struct.pack("<H", 1))
-    buf.write(struct.pack("<H", num_channels))
-    buf.write(struct.pack("<I", sample_rate))
-    buf.write(struct.pack("<I", byte_rate))
-    buf.write(struct.pack("<H", block_align))
-    buf.write(struct.pack("<H", bits))
-    buf.write(b"data")
-    buf.write(struct.pack("<I", data_size))
-    for s in samples:
-        buf.write(struct.pack("<h", s))
+    with wave.open(buf, 'wb') as audio:
+        audio.setnchannels(1)
+        audio.setsampwidth(2)
+        audio.setframerate(sample_rate)
+        audio.writeframes(struct.pack(f'<{len(samples)}h', *samples))
 
     return buf.getvalue()
 
