@@ -13,6 +13,8 @@ from dataclasses import dataclass
 
 import pytest
 
+pytestmark = pytest.mark.unit
+
 
 @dataclass
 class _Cfg:

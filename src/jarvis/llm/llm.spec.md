@@ -144,7 +144,7 @@ Each migrated module exposes a single intercept point so tests can patch one sym
 - `jarvis.tools.builtin.nutrition.log_meal.call_llm_direct(*, cfg, chat_model, ...)` — meal recording eligibility + nutrition extractor + follow-up generator.
 - `jarvis.tools.builtin.weather.get_llm_backend` — hoisted to module scope so the place extractor's backend lookup is patchable.
 
-A factory-dispatch wiring guard at `tests/test_factory_dispatch_wiring.py` parametrises across each migrated module and asserts the wrapper actually constructs `OpenAICompatibleBackend` for `llm_provider: openai_compatible` and `OllamaBackend` for `ollama`. A regression that drops `get_llm_backend(cfg)` from a wrapper would bypass every unit test but trip this guard.
+Unit-selected factory contracts in `tests/test_llm_factory.py` cover provider selection, endpoint inheritance, embedding overrides and persisted configuration migrations. `tests/test_factory_dispatch_wiring.py` parametrises module-local wrappers across both supported providers and checks the returned direct, chat and weather-extraction results.
 
 `import requests` is re-exported from the package `__init__.py` so tests that patch `jarvis.llm.requests.post` keep working without reaching into the per-backend modules.
 
