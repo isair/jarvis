@@ -67,6 +67,10 @@ input has been accepted and is being processed.
 2. **Stop triggers** — re-press the hotkey *or* press Escape.
 3. Same post-processing pipeline as standard mode.
 
+Tap windows and recording elapsed times use a monotonic clock. System-clock
+adjustments do not enter or cancel hands-free mode. Saved history timestamps
+remain wall-clock dates.
+
 ## Post-Processing Pipeline
 
 After transcription, text passes through these stages in order:
