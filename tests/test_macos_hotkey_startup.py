@@ -79,3 +79,12 @@ def test_macos_26_guard_remains(monkeypatch, capsys):
     engine.start()
     assert events == []
     assert "not available" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('backend', ['pynput_keyboard', 'sd'])
+def test_unavailable_backend_leaves_dictation_inactive(monkeypatch, backend):
+    engine, events = _engine(monkeypatch, 'linux')
+    monkeypatch.setattr(module, backend, None)
+    engine.start()
+    assert events == []
+    assert not engine.is_recording
