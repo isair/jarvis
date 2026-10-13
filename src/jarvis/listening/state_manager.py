@@ -5,6 +5,7 @@ import threading
 from typing import Optional
 from enum import Enum
 from datetime import datetime
+from dataclasses import dataclass
 
 from ..debug import debug_log
 
@@ -16,13 +17,21 @@ class ListeningState(Enum):
     HOT_WINDOW = "hot_window"    # Listening without wake word after TTS
 
 
+@dataclass(frozen=True)
+class CollectedQuery:
+    """Accepted request text and the language of its latest accepted segment."""
+
+    text: str
+    language: Optional[str]
+
+
 class StateManager:
     """Manages listening state transitions and timing."""
 
     def __init__(self, hot_window_seconds: float = 3.0, echo_tolerance: float = 0.3,
                  voice_collect_seconds: float = 2.0, max_collect_seconds: float = 60.0):
         """
-        Initialize state manager.
+        Initialise state manager.
 
         Args:
             hot_window_seconds: Duration of hot window listening
@@ -40,7 +49,7 @@ class StateManager:
         self._state_lock = threading.RLock()
 
         # Collection state
-        self._pending_query: str = ""
+        self._pending_query = CollectedQuery("", None)
         self._last_voice_time: float = 0.0
         self._collect_start_time: float = 0.0
 
@@ -71,21 +80,22 @@ class StateManager:
         """Check if hot window is currently active."""
         return self.get_state() == ListeningState.HOT_WINDOW
 
-    def start_collection(self, initial_text: str = "") -> None:
+    def start_collection(self, initial_text: str = "", *, language: Optional[str]) -> None:
         """
         Start query collection mode.
 
         Args:
             initial_text: Optional initial text to seed the collection
+            language: Detected language of this accepted segment, or None
         """
         with self._state_lock:
             self._state = ListeningState.COLLECTING
-            self._pending_query = initial_text.strip()
+            self._pending_query = CollectedQuery(initial_text.strip(), language)
             self._last_voice_time = time.time()
             self._collect_start_time = self._last_voice_time
 
         start_time_str = datetime.fromtimestamp(self._collect_start_time).strftime('%H:%M:%S.%f')[:-3]
-        debug_log(f"collection started at {start_time_str}: '{initial_text}'", "state")
+        debug_log(f"collection started at {start_time_str} (language: {language}): '{initial_text}'", "state")
 
         # Set face state to LISTENING
         try:
@@ -98,49 +108,52 @@ class StateManager:
         except Exception as e:
             debug_log(f"failed to set face state to LISTENING: {e}", "state")
 
-    def add_to_collection(self, text: str) -> None:
+    def add_to_collection(self, text: str, *, language: Optional[str]) -> None:
         """
         Add text to current collection.
 
         Args:
             text: Text to append to pending query
+            language: Detected language of this accepted segment, or None
         """
         if not self.is_collecting():
             return
 
         with self._state_lock:
-            self._pending_query = (self._pending_query + " " + text).strip()
+            self._pending_query = CollectedQuery(
+                (self._pending_query.text + " " + text).strip(), language,
+            )
             self._last_voice_time = time.time()
 
-        debug_log(f"added to collection: '{text}' -> '{self._pending_query}'", "state")
+        debug_log(f"added to collection: '{text}' -> '{self._pending_query.text}'", "state")
 
     def get_pending_query(self) -> str:
         """Get the current pending query text."""
         with self._state_lock:
-            return self._pending_query
+            return self._pending_query.text
 
-    def clear_collection(self) -> str:
+    def clear_collection(self) -> CollectedQuery:
         """
         Clear and return the current pending query.
 
         Returns:
-            The query that was being collected
+            An immutable snapshot of the accepted text and language
         """
         with self._state_lock:
             query = self._pending_query
             collect_start_time = self._collect_start_time
-            self._pending_query = ""
+            self._pending_query = CollectedQuery("", None)
             if self._state == ListeningState.COLLECTING:
                 self._state = ListeningState.WAKE_WORD
 
-        if query and collect_start_time > 0:
+        if query.text and collect_start_time > 0:
             end_time = time.time()
             duration = end_time - collect_start_time
             start_time_str = datetime.fromtimestamp(collect_start_time).strftime('%H:%M:%S.%f')[:-3]
             end_time_str = datetime.fromtimestamp(end_time).strftime('%H:%M:%S.%f')[:-3]
-            debug_log(f"collection cleared: '{query}' (started: {start_time_str}, ended: {end_time_str}, duration: {duration:.2f}s)", "state")
+            debug_log(f"collection cleared: '{query.text}' (language: {query.language}, started: {start_time_str}, ended: {end_time_str}, duration: {duration:.2f}s)", "state")
         else:
-            debug_log(f"collection cleared: '{query}'", "state")
+            debug_log(f"collection cleared: '{query.text}'", "state")
 
         # Note: Don't set face state here - it will be set to THINKING or ASLEEP by caller
 
@@ -168,7 +181,7 @@ class StateManager:
             start_time_str = datetime.fromtimestamp(self._collect_start_time).strftime('%H:%M:%S.%f')[:-3]
             end_time_str = datetime.fromtimestamp(end_time).strftime('%H:%M:%S.%f')[:-3]
 
-            debug_log(f"collection timeout ({timeout_type}): '{self._pending_query}' (started: {start_time_str}, ended: {end_time_str}, duration: {duration:.2f}s)", "state")
+            debug_log(f"collection timeout ({timeout_type}): '{self._pending_query.text}' (started: {start_time_str}, ended: {end_time_str}, duration: {duration:.2f}s)", "state")
             return True
 
         return False

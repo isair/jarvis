@@ -167,7 +167,7 @@ def test_voice_snapshot_precedes_waiting_for_the_shared_lock():
         return None
 
     with patch('jarvis.daemon.query_lock', lock), patch('jarvis.reply.engine.run_reply_engine', side_effect=reply):
-        listener._dispatch_query('What is its price?', generation=listener._capture_generation)
+        listener._dispatch_query('What is its price?', generation=listener._capture_generation, language=None)
     assert 'Copper lantern' in contexts[0]
     assert 'Different entity' not in contexts[0]
 
@@ -297,7 +297,7 @@ def test_salvaged_speech_is_dispatched_and_recorded_without_echo(mock_config, db
         with patch.object(engine, 'select_tools', return_value=['stop']), \
              patch.object(engine, 'plan_query', return_value=['Reply to the user.']), \
              patch.object(engine, 'chat_with_messages', side_effect=chat):
-            listener._dispatch_query(user, generation=listener._capture_generation)
+            listener._dispatch_query(user, generation=listener._capture_generation, language=None)
         messages = dialogue_memory.get_recent_messages()
         assert any(message['role']=='user' and message['content']==user for message in messages)
         assert any(message['role']=='user' and user in message['content'] for message in messages)

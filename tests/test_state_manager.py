@@ -24,13 +24,13 @@ class TestStateTransitions:
     def test_start_collection_changes_state(self):
         """Starting collection changes state to COLLECTING."""
         sm = StateManager()
-        sm.start_collection("hello")
+        sm.start_collection("hello", language=None)
         assert sm.get_state() == ListeningState.COLLECTING
 
     def test_clear_collection_returns_to_wake_word(self):
         """Clearing collection returns to WAKE_WORD state."""
         sm = StateManager()
-        sm.start_collection("hello")
+        sm.start_collection("hello", language=None)
         sm.clear_collection()
         assert sm.get_state() == ListeningState.WAKE_WORD
 
@@ -38,7 +38,7 @@ class TestStateTransitions:
         """is_collecting() accurately reflects state."""
         sm = StateManager()
         assert sm.is_collecting() is False
-        sm.start_collection("test")
+        sm.start_collection("test", language=None)
         assert sm.is_collecting() is True
         sm.clear_collection()
         assert sm.is_collecting() is False
@@ -58,35 +58,36 @@ class TestQueryCollection:
     def test_start_collection_stores_initial_text(self):
         """Starting collection stores initial text."""
         sm = StateManager()
-        sm.start_collection("hello world")
+        sm.start_collection("hello world", language=None)
         assert sm.get_pending_query() == "hello world"
 
     def test_add_to_collection_appends_text(self):
         """Adding to collection appends text."""
         sm = StateManager()
-        sm.start_collection("hello")
-        sm.add_to_collection("world")
+        sm.start_collection("hello", language=None)
+        sm.add_to_collection("world", language=None)
         assert sm.get_pending_query() == "hello world"
 
     def test_add_to_collection_only_works_when_collecting(self):
         """Adding to collection only works in COLLECTING state."""
         sm = StateManager()
-        sm.add_to_collection("ignored")
+        sm.add_to_collection("ignored", language=None)
         assert sm.get_pending_query() == ""
 
     def test_clear_collection_returns_query(self):
         """Clearing collection returns the accumulated query."""
         sm = StateManager()
-        sm.start_collection("hello")
-        sm.add_to_collection("world")
+        sm.start_collection("hello", language=None)
+        sm.add_to_collection("world", language=None)
         query = sm.clear_collection()
-        assert query == "hello world"
+        assert query.text == "hello world"
+        assert query.language is None
         assert sm.get_pending_query() == ""
 
     def test_silence_timeout_triggers_collection_complete(self):
         """Collection times out after silence period."""
         sm = StateManager(voice_collect_seconds=0.05)  # 50ms timeout
-        sm.start_collection("test")
+        sm.start_collection("test", language=None)
 
         # Initially no timeout
         assert sm.check_collection_timeout() is False
@@ -98,12 +99,12 @@ class TestQueryCollection:
     def test_max_duration_timeout(self):
         """Collection times out after max duration."""
         sm = StateManager(max_collect_seconds=0.05)  # 50ms max
-        sm.start_collection("test")
+        sm.start_collection("test", language=None)
 
         # Keep adding to prevent silence timeout
         for _ in range(3):
             time.sleep(0.02)
-            sm.add_to_collection("more")
+            sm.add_to_collection("more", language=None)
 
         assert sm.check_collection_timeout() is True
 
@@ -154,7 +155,7 @@ class TestHotWindowActivation:
 
             # Start collection before activation
             time.sleep(0.02)
-            sm.start_collection("new query")
+            sm.start_collection("new query", language=None)
 
             # Wait past activation time
             time.sleep(0.1)
@@ -256,7 +257,7 @@ class TestHotWindowExpiry:
     def test_reset_hot_window_expiry_noop_when_collecting(self):
         """reset_hot_window_expiry does not interfere with COLLECTING state."""
         sm = StateManager()
-        sm.start_collection("test query")
+        sm.start_collection("test query", language=None)
         assert sm.get_state() == ListeningState.COLLECTING
 
         sm.reset_hot_window_expiry()
@@ -474,7 +475,7 @@ class TestThreadSafety:
             for i in range(100):
                 try:
                     if i % 2 == 0:
-                        sm.start_collection(f"test {i}")
+                        sm.start_collection(f"test {i}", language=None)
                     else:
                         sm.clear_collection()
                 except Exception as e:

@@ -135,7 +135,7 @@ def test_current_activation_preserves_collection(window):
     manager, timers = window
     manager.schedule_hot_window_activation()
     activation = timers[-1]
-    manager.start_collection('follow-up question')
+    manager.start_collection('follow-up question', language=None)
     activation.deliver_started_callback()
     assert manager.is_collecting()
     assert manager.get_pending_query() == 'follow-up question'

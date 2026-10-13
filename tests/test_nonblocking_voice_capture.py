@@ -141,7 +141,7 @@ def test_invalidated_intent_result_does_not_start_query(synthetic_listener, inva
                               confidence='high', reasoning='Addressed to Jarvis')
     obj._intent_judge = SimpleNamespace(available=True, judge=judge)
     obj._process_transcript('Jarvis weather', captured_during_tts=False,
-                            captured_tts_start_time=0., generation=obj._capture_generation)
+                            captured_tts_start_time=0., generation=obj._capture_generation, language=None)
     assert not obj.state_manager.get_pending_query(), 'Invalidated intent was accepted as a new query'
 
 
@@ -162,7 +162,7 @@ def test_invalidated_reply_does_not_speak(synthetic_listener, monkeypatch, inval
             raise RuntimeError('Synthetic reply failure')
         return 'Synthetic reply'
     monkeypatch.setattr('jarvis.reply.engine.run_reply_engine', reply)
-    obj._dispatch_query('weather', generation=obj._capture_generation)
+    obj._dispatch_query('weather', generation=obj._capture_generation, language=None)
     assert spoken == [], 'Invalidated voice reply reached speech output'
 
 
@@ -319,7 +319,7 @@ def test_discarded_reply_stops_thinking_audio(synthetic_listener, monkeypatch):
         obj.set_capture_paused('dictation', False)
         return 'Stale reply'
     monkeypatch.setattr('jarvis.reply.engine.run_reply_engine', reply)
-    obj._dispatch_query('weather', generation=obj._capture_generation)
+    obj._dispatch_query('weather', generation=obj._capture_generation, language=None)
     assert not playing[0], 'Suppressed reply left thinking audio playing'
 
 
@@ -340,7 +340,7 @@ def test_pause_during_thinking_tune_teardown_cancels_tts(synthetic_listener, mon
         # Simulate shutdown during the blocking player join without recursive teardown.
         obj._tune_player.stop_tune = lambda: setattr(obj, '_should_stop', True)
     monkeypatch.setattr('jarvis.reply.engine.run_reply_engine', lambda *a, **kw: 'Stale reply')
-    obj._dispatch_query('weather', generation=obj._capture_generation)
+    obj._dispatch_query('weather', generation=obj._capture_generation, language=None)
     assert spoken == [], 'Invalidation during tune teardown still queued speech'
 
 
@@ -398,7 +398,7 @@ def test_confident_mention_rejection_does_not_start_query(synthetic_listener, te
         IntentJudgment(directed=False,  stop=False, confidence='high',
                        reasoning='Assistant mentioned while addressing another person'))
     obj._process_transcript(text, captured_during_tts=False,
-                            captured_tts_start_time=0., generation=obj._capture_generation)
+                            captured_tts_start_time=0., generation=obj._capture_generation, language=None)
     assert not obj.state_manager.get_pending_query(), 'Mention reached reply collection'
 
 
@@ -410,7 +410,7 @@ def test_direct_address_and_inconclusive_fallback_remain_usable(synthetic_listen
         IntentJudgment(directed=directed,
                        stop=False, confidence=confidence, reasoning='Address or uncertainty'))
     obj._process_transcript('Jarvis I am tired', captured_during_tts=False,
-                            captured_tts_start_time=0., generation=obj._capture_generation)
+                            captured_tts_start_time=0., generation=obj._capture_generation, language=None)
     assert obj.state_manager.get_pending_query(), 'Direct address or fail-open fallback was lost'
 
 
@@ -427,5 +427,5 @@ def test_whole_alias_gate_keeps_ambient_words_out_of_reply_collection(synthetic_
         IntentJudgment(directed=True,  stop=False,
                        confidence='high', reasoning='Synthetic directed decision'))
     obj._process_transcript(text, captured_during_tts=False,
-                            captured_tts_start_time=0., generation=obj._capture_generation)
+                            captured_tts_start_time=0., generation=obj._capture_generation, language=None)
     assert bool(obj.state_manager.get_pending_query()) is accepted

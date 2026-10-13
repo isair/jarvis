@@ -1195,13 +1195,12 @@ class TestLanguagePlumbingEndToEnd:
         listener._capture_pause_reasons = frozenset()
         listener._capture_pause_reset_pending = False
         listener._should_stop = False
-        listener._last_detected_language = "tr"
         listener._clear_audio_buffers = Mock()
         listener._stop_thinking_tune = Mock()
 
         with patch("desktop_app.face_widget.get_jarvis_state", return_value=Mock()), \
                 patch("jarvis.reply.engine.run_reply_engine", return_value="") as run_reply:
             with patch("jarvis.daemon.query_lock", return_value=nullcontext()):
-                listener._dispatch_query("istanbul", generation=listener._capture_generation)
+                listener._dispatch_query("istanbul", language="tr", generation=listener._capture_generation)
 
         assert run_reply.call_args.kwargs["language"] == "tr"

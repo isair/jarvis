@@ -428,7 +428,6 @@ def test_transcription_result_keeps_language_and_utterance_context():
     from unittest.mock import Mock
 
     obj = listener()
-    obj._last_detected_language = None
     obj._first_utterance = True
     obj.tts = None
     obj.echo_detector = SimpleNamespace(_tts_start_time=0, _last_tts_finish_time=0, echo_tolerance=0.3)
@@ -449,7 +448,6 @@ def test_transcription_result_keeps_language_and_utterance_context():
 
     obj._handle_transcription_result(result)
 
-    assert obj._last_detected_language == "en"
     obj._transcript_buffer.add.assert_called_once_with(
         text="hello there",
         start_time=10.0,
@@ -459,7 +457,7 @@ def test_transcription_result_keeps_language_and_utterance_context():
     )
     obj._process_transcript.assert_called_once_with(
         "hello there", 0.2, 10.0, 11.0,
-        generation=result.capture_generation,
+        language=result.language, generation=result.capture_generation,
         captured_during_tts=False, captured_tts_start_time=0,
     )
 
@@ -509,7 +507,6 @@ def test_transcription_result_during_dictation_is_not_dispatched():
 
     obj = listener()
     obj.set_capture_paused('dictation', True)
-    obj._last_detected_language = "fr"
     obj._first_utterance = True
     obj.tts = None
     obj.echo_detector = SimpleNamespace(_tts_start_time=0, _last_tts_finish_time=0, echo_tolerance=0.3)
@@ -520,16 +517,14 @@ def test_transcription_result_during_dictation_is_not_dispatched():
 
     obj._handle_transcription_result(result)
 
-    assert obj._last_detected_language == "fr"
     obj._transcript_buffer.add.assert_not_called()
     obj._process_transcript.assert_not_called()
 
 
-def test_transcription_result_without_detected_language_clears_previous_locale():
+def test_transcription_result_without_detected_language_passes_unknown_locale():
     from unittest.mock import Mock
 
     obj = listener()
-    obj._last_detected_language = "fr"
     obj._first_utterance = True
     obj.tts = None
     obj.echo_detector = SimpleNamespace(_tts_start_time=0, _last_tts_finish_time=0, echo_tolerance=0.3)
@@ -539,14 +534,14 @@ def test_transcription_result_without_detected_language_clears_previous_locale()
 
     obj._handle_transcription_result(SimpleNamespace(text="hello", language=None, low_confidence_events=(), start_time=10.0, end_time=11.0, energy=0.2, capture_generation=0, captured_during_tts=False, captured_tts_start_time=0))
 
-    assert obj._last_detected_language is None
+    assert obj._process_transcript.call_args.kwargs["language"] is None
+
 
 
 def test_echo_flag_uses_capture_interval_when_tts_starts_during_whisper():
     from unittest.mock import Mock
 
     obj = listener()
-    obj._last_detected_language = None
     obj._first_utterance = True
     obj.tts = SimpleNamespace(is_speaking=lambda: True)
     obj.echo_detector = SimpleNamespace(_tts_start_time=12.0, _last_tts_finish_time=0, echo_tolerance=0.3)
@@ -674,7 +669,7 @@ def test_delayed_stop_only_interrupts_tts_that_overlapped_capture(
                             else (10.0, 11.0))
     obj._process_transcript("stop", 0.2, start_time, end_time,
                             captured_during_tts=captured_during_tts,
-                            captured_tts_start_time=captured_tts_start_time, generation=obj._capture_generation)
+                            captured_tts_start_time=captured_tts_start_time, generation=obj._capture_generation, language=None)
 
     assert obj.tts.interrupt.called is should_interrupt
 
@@ -705,7 +700,7 @@ def test_delayed_utterance_does_not_inherit_later_tts_text_for_intent():
     obj._wake_timestamp = None
 
     obj._process_transcript("jarvis weather", 0.2, 10.0, 11.0,
-                            captured_during_tts=False, captured_tts_start_time=0, generation=obj._capture_generation)
+                            captured_during_tts=False, captured_tts_start_time=0, generation=obj._capture_generation, language=None)
 
     assert obj._intent_judge.judge.call_args.kwargs["last_tts_text"] == ""
 
