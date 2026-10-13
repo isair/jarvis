@@ -1127,6 +1127,8 @@ class TestLlmCleanDictation:
         history_path = tmp_path / 'history.json'
         history = DictationHistory(path=history_path)
         pasted, delivered = [], []
+        monkeypatch.setattr(dictation_engine, 'pynput_keyboard', None)
+        monkeypatch.setattr(dictation_engine, 'parse_hotkey', lambda _: (frozenset(), None))
         monkeypatch.setattr(dictation_engine, '_clipboard_paste', pasted.append)
         engine = _make_engine(
             whisper_model_ref=lambda: model, history=history, cfg=cfg,
