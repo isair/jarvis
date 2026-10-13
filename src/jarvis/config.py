@@ -16,24 +16,28 @@ from dotenv import load_dotenv
 
 SUPPORTED_CHAT_MODELS: Dict[str, Dict[str, str]] = {
     "gemma4:e2b": {
+        "openai_id": "google/gemma-4-E2B-it",
         "name": "Gemma 4 E2B (Low memory)",
         "description": "Fast, multimodal, effective 2B — a little dumb, occasionally fumbles tool calls; ~7.2GB download",
         "size": "~7.2GB",
         "vram": "8GB+",
     },
     "gemma4:e4b": {
+        "openai_id": "google/gemma-4-E4B-it",
         "name": "Gemma 4 E4B (Default)",
         "description": "Smarter tool use and reasoning, multimodal, effective 4B — ~9.6GB download",
         "size": "~9.6GB",
         "vram": "16GB+",
     },
     "qwen3.8:27b": {
+        "openai_id": "Qwen/Qwen3.8-27B",
         "name": "Qwen 3.8 27B (High-end)",
         "description": "Best performance, ~18GB download",
         "size": "~18GB",
         "vram": "24GB+",
     },
     "qwen3.5:0.8b": {
+        "openai_id": "Qwen/Qwen3.5-0.8B",
         "name": "Qwen 3.5 0.8B (Low-VRAM)",
         "description": "Tiny agentic model, strong reasoning for its size, built for tool-use flows; ~1.0GB download",
         "size": "~1.0GB",
@@ -45,12 +49,27 @@ SUPPORTED_CHAT_MODELS: Dict[str, Dict[str, str]] = {
 DEFAULT_CHAT_MODEL = "gemma4:e4b"
 DEFAULT_EMBEDDING_MODEL = "nomic-embed-text"
 SUPPORTED_EMBEDDING_MODEL_IDS = (DEFAULT_EMBEDDING_MODEL,)
+SUPPORTED_OPENAI_EMBEDDING_MODEL_IDS = ("nomic-ai/nomic-embed-text-v1.5",)
 # Ollama-path default for the fast tier (voice intent, tool routing, and the
 # other real-time classification passes). On an OpenAI-compatible chat
 # provider an unset fast model resolves to the active chat model instead —
 # this pull-name only exists on Ollama.
 DEFAULT_FAST_MODEL = "gemma4:e2b"
 SUPPORTED_FAST_MODEL_IDS = ("qwen3.5:0.8b", "gemma4:e2b", "gemma4:e4b")
+
+
+def get_model_recommendations(provider: str) -> dict[str, tuple[str, ...]]:
+    """Model-family names for each role; names do not certify a server runtime."""
+    if provider == "ollama":
+        return {"Chat": tuple(SUPPORTED_CHAT_MODELS), "Fast": SUPPORTED_FAST_MODEL_IDS,
+                "Embedding": SUPPORTED_EMBEDDING_MODEL_IDS}
+    if provider == "openai_compatible":
+        return {
+            "Chat": tuple(info["openai_id"] for info in SUPPORTED_CHAT_MODELS.values()),
+            "Fast": tuple(SUPPORTED_CHAT_MODELS[model]["openai_id"] for model in SUPPORTED_FAST_MODEL_IDS),
+            "Embedding": SUPPORTED_OPENAI_EMBEDDING_MODEL_IDS,
+        }
+    return {"Chat": (), "Fast": (), "Embedding": ()}
 
 
 def get_supported_model_ids() -> set[str]:

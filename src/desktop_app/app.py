@@ -41,7 +41,7 @@ from typing import Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from desktop_app.cuda_recovery import CudaRecoveryAction
-from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QMainWindow, QTextEdit, QVBoxLayout, QHBoxLayout, QWidget, QLabel, QDialog, QPushButton, QProgressBar
+from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QMainWindow, QTextEdit, QVBoxLayout, QHBoxLayout, QWidget, QLabel, QDialog, QPushButton, QProgressBar, QScrollArea, QFrame
 from PyQt6.QtGui import QIcon, QAction, QFont, QTextCursor, QTextCharFormat, QColor
 from PyQt6.QtCore import QTimer, Qt, pyqtSignal, QObject, QThread, QUrl
 from desktop_app.qt_worker import KeepAliveWorker
@@ -64,7 +64,7 @@ except ImportError:
     QWebEngineView = None
 
 from jarvis.debug import debug_log
-from jarvis.config import get_config_path, _default_db_path, SUPPORTED_CHAT_MODELS, SUPPORTED_FAST_MODEL_IDS, SUPPORTED_EMBEDDING_MODEL_IDS, Settings
+from jarvis.config import get_config_path, _default_db_path, get_model_recommendations, Settings
 from desktop_app.diary_dialog import DiaryUpdateDialog
 from desktop_app.themes import JARVIS_THEME_STYLESHEET, COLORS, apply_theme
 from desktop_app.log_output import LogStream, clean_log, parse_progress
@@ -888,35 +888,31 @@ def show_crash_report_dialog(crash_content: str) -> None:
         debug_log(f"failed to show crash report dialog: {e}", "desktop")
 
 
-MODEL_RECOMMENDATIONS = {
-    "Chat": SUPPORTED_CHAT_MODELS,
-    "Fast": SUPPORTED_FAST_MODEL_IDS,
-    "Embedding": SUPPORTED_EMBEDDING_MODEL_IDS,
-}
-
-
-def check_model_support(settings: Settings) -> dict[str, str]:
-    """Return unlisted selections for roles served by Ollama."""
-    def identity(model: str) -> str:
-        return model.removesuffix(":latest")
-
-    roles = (
+def _model_role_selections(settings: Settings) -> tuple[tuple[str, str, str], ...]:
+    """Resolved role, provider and model triples used by both advice and display."""
+    return (
         ("Chat", settings.llm_provider, settings.llm_chat_model),
         ("Fast", settings.llm_provider, settings.fast_model),
         ("Embedding", settings.embedding_provider or settings.llm_provider,
          settings.embedding_model),
     )
-    return {
-        role: model for role, provider, model in roles
-        if provider == "ollama"
-        and identity(model) not in {identity(item) for item in MODEL_RECOMMENDATIONS[role]}
-    }
+
+
+def check_model_support(settings: Settings) -> dict[str, str]:
+    """Return selections outside their provider's role recommendation names."""
+    unlisted = {}
+    for role, provider, model in _model_role_selections(settings):
+        recommended = get_model_recommendations(provider)[role]
+        identity = model.removesuffix(":latest") if provider == "ollama" else model
+        if identity not in recommended:
+            unlisted[role] = model
+    return unlisted
 
 
 class UnsupportedModelDialog(QDialog):
     """Optional recommendation advice with an explicit setup action."""
 
-    def __init__(self, models: dict[str, str]):
+    def __init__(self, models: dict[str, str], settings: Settings):
         super().__init__()
         self.open_wizard = False
         self.setWindowTitle("Model recommendations")
@@ -932,13 +928,27 @@ class UnsupportedModelDialog(QDialog):
             "You can keep using these models, or open setup to choose recommended models.",
             "",
         ]
+        providers = {role: provider for role, provider, _ in _model_role_selections(settings)}
         for role, model in models.items():
+            recommended = get_model_recommendations(providers[role])[role]
             lines.extend((f"{role}: {model}",
-                          f"Recommended: {', '.join(MODEL_RECOMMENDATIONS[role])}", ""))
+                          f"Recommended: {', '.join(recommended)}", ""))
+        if any(providers[role] == "openai_compatible" for role in models):
+            lines.append("External servers can use custom model names. A matching name does not "
+                         "verify the model or its runtime. Use Connect & load models in setup "
+                         "to check your server's models and capabilities.")
         description = QLabel("\n".join(lines))
         description.setTextFormat(Qt.TextFormat.PlainText)
         description.setWordWrap(True)
-        layout.addWidget(description)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        margins = layout.contentsMargins()
+        usable_width = (self.minimumWidth() - margins.left() - margins.right()
+                        - scroll.verticalScrollBar().sizeHint().width())
+        description.setMinimumSize(usable_width, description.heightForWidth(usable_width))
+        scroll.setWidget(description)
+        layout.addWidget(scroll)
         buttons = QHBoxLayout()
         buttons.addStretch()
         keep = QPushButton("Continue Anyway")
@@ -954,10 +964,10 @@ class UnsupportedModelDialog(QDialog):
         self.accept()
 
 
-def show_unsupported_model_dialog(models: dict[str, str]) -> bool:
+def show_unsupported_model_dialog(models: dict[str, str], settings: Settings) -> bool:
     """Return whether the user chose setup; advice never changes settings."""
     try:
-        dialog = UnsupportedModelDialog(models)
+        dialog = UnsupportedModelDialog(models, settings)
         dialog.exec()
         return dialog.open_wizard
     except Exception as exc:
@@ -3733,7 +3743,7 @@ def main() -> int:
                 roles = ", ".join(unlisted_models)
                 print(f"⚠️ Models outside the recommended list: {roles}", flush=True)
                 debug_log(f"Model recommendation advice shown for {roles}", "desktop")
-                if show_unsupported_model_dialog(unlisted_models):
+                if show_unsupported_model_dialog(unlisted_models, _provider_cfg):
                     print("🔧 Opening setup wizard to change models...", flush=True)
                     if not _run_setup_wizard():
                         print("⚠️ Setup wizard cancelled, exiting", flush=True)
