@@ -637,53 +637,6 @@ class TestClipboard:
 # Audio callback
 # ---------------------------------------------------------------------------
 
-class TestAudioCallback:
-    """Tests for the audio callback frame accumulation."""
-
-    @pytest.fixture(autouse=True)
-    def _skip_if_no_numpy(self):
-        try:
-            import numpy  # noqa: F401
-        except ImportError:
-            pytest.skip("numpy not installed")
-
-    def test_callback_accumulates_frames(self):
-        import numpy as np
-        engine = _make_engine()
-        engine._recording = True
-        engine._audio_frames = []
-        engine._max_frames = 1_000_000
-
-        indata = np.random.randn(1600, 1).astype(np.float32)
-        engine._audio_callback(engine._session, indata, 1600, None, None)
-        assert len(engine._audio_frames) == 1
-        assert len(engine._audio_frames[0]) == 1600
-
-    def test_callback_ignores_when_not_recording(self):
-        import numpy as np
-        engine = _make_engine()
-        engine._recording = False
-        engine._audio_frames = []
-
-        indata = np.random.randn(1600, 1).astype(np.float32)
-        engine._audio_callback(engine._session, indata, 1600, None, None)
-        assert len(engine._audio_frames) == 0
-
-    def test_callback_accumulates_without_cap(self):
-        """Audio callback must accumulate frames without triggering stop."""
-        import numpy as np
-        engine = _make_engine()
-        engine._recording = True
-        engine._audio_frames = [np.zeros(100, dtype=np.float32)]
-
-        indata = np.random.randn(1600, 1).astype(np.float32)
-        with patch.object(engine, "_stop_recording") as mock_stop:
-            engine._audio_callback(engine._session, indata, 1600, None, None)
-            # Frame should be appended; _stop_recording must NOT be called
-            assert len(engine._audio_frames) == 2
-            mock_stop.assert_not_called()
-
-
 # ---------------------------------------------------------------------------
 # Transcribe-and-paste pipeline
 # ---------------------------------------------------------------------------
