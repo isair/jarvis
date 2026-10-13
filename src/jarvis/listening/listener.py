@@ -453,9 +453,6 @@ class VoiceListener(threading.Thread):
         self._capture_pause_reset_pending = False
         self._capture_generation = 0
         self._first_utterance = True  # Suppress turn separator before the very first transcription
-        # Only non-empty, non-repetitive recognised speech supplies a reply
-        # language. Rejected results cannot replace that locale.
-        self._last_detected_language: Optional[str] = None
 
         # Audio processing components
         self._whisper_backend: Optional[str] = None  # "mlx" or "faster-whisper"
@@ -632,7 +629,12 @@ class VoiceListener(threading.Thread):
         debug_log(f"scheduling hot window activation (echo_tolerance={self.state_manager.echo_tolerance}s, hot_window={self.state_manager.hot_window_seconds}s)", "voice")
         self.state_manager.schedule_hot_window_activation(self.cfg.voice_debug)
 
-    def _process_transcript(self, text: str, utterance_energy: float = 0.0, utterance_start_time: float = 0.0, utterance_end_time: float = 0.0, *, generation: int, captured_during_tts: bool, captured_tts_start_time: float) -> None:
+    def _process_transcript(
+        self, text: str, utterance_energy: float = 0.0,
+        utterance_start_time: float = 0.0, utterance_end_time: float = 0.0,
+        *, language: Optional[str], generation: int,
+        captured_during_tts: bool, captured_tts_start_time: float,
+    ) -> None:
         """
         Process a transcript from speech recognition.
 
@@ -646,8 +648,8 @@ class VoiceListener(threading.Thread):
             # Check for timeouts
             if self.state_manager.check_collection_timeout():
                 query = self.state_manager.clear_collection()
-                if query.strip():
-                    self._dispatch_query(query, generation=generation)
+                if query.text.strip():
+                    self._dispatch_query(query.text, language=query.language, generation=generation)
 
             # Check hot window expiry
             self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
@@ -926,7 +928,7 @@ class VoiceListener(threading.Thread):
                         self.state_manager.cancel_hot_window_activation()
                         self._transcript_buffer.mark_segment_processed(text_lower)
                         self._clear_audio_buffers()
-                        self.state_manager.start_collection(accepted_text)
+                        self.state_manager.start_collection(accepted_text, language=language)
                         self._start_thinking_tune()
                         try:
                             print(f"\n✨ Working on it: {self.state_manager.get_pending_query()}")
@@ -958,7 +960,7 @@ class VoiceListener(threading.Thread):
                         self.state_manager.cancel_hot_window_activation()
                         self._transcript_buffer.mark_segment_processed(text_lower)
                         self._clear_audio_buffers()
-                        self.state_manager.start_collection(accepted_text)
+                        self.state_manager.start_collection(accepted_text, language=language)
                         self._start_thinking_tune()
                         print(f"\n✨ Working on it: {self.state_manager.get_pending_query()}")
                         return
@@ -991,7 +993,7 @@ class VoiceListener(threading.Thread):
             # Clear audio buffers to prevent concatenation issues
             self._clear_audio_buffers()
 
-            self.state_manager.start_collection(accepted_text)
+            self.state_manager.start_collection(accepted_text, language=language)
 
             # Start thinking tune and show processing message
             self._start_thinking_tune()
@@ -1003,7 +1005,7 @@ class VoiceListener(threading.Thread):
 
         # Priority 5: Collection mode handling
         if self.state_manager.is_collecting():
-            self.state_manager.add_to_collection(accepted_text)
+            self.state_manager.add_to_collection(accepted_text, language=language)
             return
 
         # Priority 6: Non-wake input (ignore)
@@ -1026,16 +1028,17 @@ class VoiceListener(threading.Thread):
         else:
             debug_log(f"input ignored (no wake word{intent_info}): {text_lower}", "voice")
 
-    def _dispatch_query(self, query: str, *, generation: int) -> None:
+    def _dispatch_query(self, query: str, *, language: Optional[str], generation: int) -> None:
         """
         Dispatch a complete query to the reply engine.
 
         Args:
             query: Complete user query to process
+            language: Detected language captured with this accepted query
         """
         if not self._transcription_is_current(generation):
             return
-        debug_log(f"dispatching query: '{query}'", "voice")
+        debug_log(f"dispatching query (language: {language}): '{query}'", "voice")
         from .speech_context import SpeechContext
         speech_context = SpeechContext.capture(
             self._transcript_buffer.get_last_seconds(self._buffer_duration),
@@ -1074,7 +1077,7 @@ class VoiceListener(threading.Thread):
                     return
                 reply = run_reply_engine(
                     self.db, self.cfg, None, query, self.dialogue_memory,
-                    language=self._last_detected_language,
+                    language=language,
                     speech_context=speech_context,
                 )
         except Exception as e:
@@ -1335,8 +1338,8 @@ class VoiceListener(threading.Thread):
         self.apply_capture_pause_reset()
         if self.state_manager.check_collection_timeout():
             query = self.state_manager.clear_collection()
-            if query.strip():
-                self._dispatch_query(query, generation=generation)
+            if query.text.strip():
+                self._dispatch_query(query.text, language=query.language, generation=generation)
 
         # Also check hot window expiry - this ensures the timeout is enforced
         # even when there's no audio being processed
@@ -1521,8 +1524,6 @@ class VoiceListener(threading.Thread):
             self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
             return
 
-        self._last_detected_language = result.language
-        debug_log(f"recognised speech language: {result.language}", "voice")
         self._transcript_buffer.add(
             text=text,
             start_time=result.start_time,
@@ -1532,7 +1533,7 @@ class VoiceListener(threading.Thread):
         )
         self._process_transcript(
             text, result.energy, result.start_time, result.end_time,
-            generation=result.capture_generation,
+            language=result.language, generation=result.capture_generation,
             captured_during_tts=result.captured_during_tts,
             captured_tts_start_time=result.captured_tts_start_time,
         )

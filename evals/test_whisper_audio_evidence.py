@@ -14,6 +14,16 @@ import pytest
 pytestmark = pytest.mark.eval
 
 
+@pytest.fixture(autouse=True)
+def private_audio_runtime(tmp_path, monkeypatch):
+    """Qualification uses private settings and face state with local model caches."""
+    from desktop_app import face_widget
+
+    monkeypatch.setenv("JARVIS_CONFIG_PATH", str(tmp_path / "config.json"))
+    monkeypatch.setattr(face_widget, "_get_jarvis_state_file", lambda: str(tmp_path / "face-state"))
+    monkeypatch.setattr(face_widget, "_jarvis_state_instance", None)
+
+
 @pytest.fixture(scope="module")
 def local_audio_assets():
     if os.environ.get("JARVIS_RUN_WHISPER_AUDIO_EVAL") != "1":
@@ -105,7 +115,25 @@ def test_native_recognition_preserves_quiet_requests(local_audio_assets, monkeyp
     assert re.findall(r"\w+", result["text"].casefold()) == words
 
 
-def test_native_request_language_survives_rejected_recognition(local_audio_assets, monkeypatch):
+@pytest.fixture
+def local_french_audio(local_audio_assets, tmp_path):
+    import subprocess
+    import numpy as np
+    from scipy.io import wavfile
+
+    voices = subprocess.run(["/usr/bin/say", "-v", "?"], check=True, capture_output=True, text=True)
+    assert any(line.startswith("Thomas ") and "fr_FR" in line for line in voices.stdout.splitlines())
+    path = tmp_path / "french-echo.wav"
+    subprocess.run(["/usr/bin/say", "-v", "Thomas", "-o", str(path),
+                    "--file-format=WAVE", "--data-format=LEI16@16000",
+                    "Quel temps fera-t-il demain à Londres ?"], check=True, capture_output=True, timeout=20)
+    rate, audio = wavfile.read(path)
+    assert rate == 16000
+    return audio.astype(np.float32) / 32768
+
+
+@pytest.mark.parametrize("rejection", ["empty", "echo"])
+def test_native_request_language_survives_rejected_recognition(local_audio_assets, monkeypatch, request, rejection):
     from jarvis.config import load_settings
     from jarvis.listening import listener as capture
     from jarvis.reply import engine
@@ -125,13 +153,30 @@ def test_native_request_language_survives_rejected_recognition(local_audio_asset
         "how", "is", "the", "weather", "tomorrow", "jarvis",
     ]
     assert accepted.language == "en"
-    obj._process_transcript = lambda *args, **kwargs: None
+    obj._start_thinking_tune = lambda: None
+    obj._stop_thinking_tune = lambda: None
     obj._handle_transcription_result(accepted)
-    obj._handle_transcription_result(replace(accepted, text="", language="ko"))
+    assert obj.state_manager.get_pending_query() == accepted.text
+    if rejection == "empty":
+        obj._handle_transcription_result(replace(accepted, text="", language="ko"))
+    else:
+        from types import SimpleNamespace
+        foreign_audio = request.getfixturevalue("local_french_audio")
+        obj._transcription_jobs_q.put(replace(jobs[0], audio=foreign_audio, captured_during_tts=True))
+        obj._transcription_jobs_q.put(None)
+        obj._run_transcription_worker()
+        echo = obj._transcription_results_q.get_nowait()
+        assert echo.text.strip() and echo.language == "fr"
+        obj.tts = SimpleNamespace(enabled=True, is_speaking=lambda: True)
+        obj.echo_detector._last_tts_text = echo.text
+        monkeypatch.setattr(obj.echo_detector, "should_reject_as_echo", lambda *args, **kwargs: True)
+        obj._handle_transcription_result(echo)
+    collected = obj.state_manager.clear_collection()
+    assert collected.text == accepted.text
     observed = []
     def reply(*args, language, **kwargs):
         observed.append((args[3], language))
         return None
     monkeypatch.setattr(engine, "run_reply_engine", reply)
-    obj._dispatch_query(accepted.text, generation=obj._capture_generation)
+    obj._dispatch_query(collected.text, language=collected.language, generation=obj._capture_generation)
     assert observed == [(accepted.text, accepted.language)]

@@ -120,6 +120,7 @@ def _process_transcript(listener, text, **kwargs):
         captured_tts_start_time=listener.echo_detector._tts_start_time,
         generation=listener._capture_generation,
         **kwargs,
+        language=None,
     )
 
 
