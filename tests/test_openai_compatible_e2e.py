@@ -13,19 +13,25 @@ that drifts from it fails here.
 
 from __future__ import annotations
 
+import copy
 import json
+import socket
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from types import SimpleNamespace
 
 import pytest
 
+pytestmark = [pytest.mark.integration, pytest.mark.usefixtures("owned_loopback_http")]
+
 
 class _StubServer:
     """A threaded OpenAI-compatible stub. Records inbound requests so tests
     can assert on what the backend actually sent."""
 
-    def __init__(self):
+    def __init__(self, *, tools=True, embeddings=True):
+        self.tools = tools
+        self.embeddings = embeddings
         self.calls: list[tuple[str, dict, dict]] = []  # (path, headers, body)
         server = self  # close over for the handler
 
@@ -33,9 +39,9 @@ class _StubServer:
             def log_message(self, *_a):  # silence
                 pass
 
-            def _send(self, obj):
+            def _send(self, obj, status=200):
                 body = json.dumps(obj).encode()
-                self.send_response(200)
+                self.send_response(status)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
@@ -54,6 +60,9 @@ class _StubServer:
                 server.calls.append((self.path, dict(self.headers), req))
 
                 if self.path.endswith("/chat/completions"):
+                    if req.get("tools") and not server.tools:
+                        self._send({"error": "tools not supported"}, status=400)
+                        return
                     if req.get("stream"):
                         self.send_response(200)
                         self.send_header("Content-Type", "text/event-stream")
@@ -80,6 +89,9 @@ class _StubServer:
                         msg = {"role": "assistant", "content": "Hello from stub"}
                     self._send({"choices": [{"message": msg, "finish_reason": "stop"}]})
                 elif self.path.endswith("/embeddings"):
+                    if not server.embeddings:
+                        self._send({"error": "embeddings not supported"}, status=404)
+                        return
                     self._send({"data": [{"embedding": [0.1, 0.2, 0.3]}]})
                 else:
                     self.send_response(404)
@@ -167,6 +179,21 @@ class TestOpenAICompatibleEndToEnd:
         args = tc["function"]["arguments"]
         assert isinstance(args, dict) and args["location"] == "London"
 
+    def test_decoded_response_can_be_sent_as_history_without_mutation(self, stub):
+        from jarvis.llm import get_llm_backend
+        backend = get_llm_backend(_cfg(stub))
+        response = backend.chat("stub-chat", [{"role": "user", "content": "weather?"}],
+                                tools=[{"type": "function", "function": {"name": "getWeather"}}],
+                                timeout_sec=5)
+        history = [response["message"], {"role": "tool", "tool_call_id": "c1", "content": "Synthetic forecast"}]
+        saved_response = copy.deepcopy(response)
+        saved_history = copy.deepcopy(history)
+        backend.chat("stub-chat", history, timeout_sec=5)
+        assert response == saved_response
+        assert history == saved_history
+        wire_arguments = stub.calls[-1][2]["messages"][0]["tool_calls"][0]["function"]["arguments"]
+        assert json.loads(wire_arguments) == saved_response["message"]["tool_calls"][0]["function"]["arguments"]
+
     def test_streaming_reassembles_sse_and_fires_on_token(self, stub):
         from jarvis.llm import get_llm_backend
         toks: list[str] = []
@@ -187,65 +214,6 @@ class TestOpenAICompatibleEndToEnd:
         assert "stub-chat" in models and "stub-embed" in models
 
 
-class _ConfigurableServer:
-    """An OpenAI-compatible stub whose feature support can be toggled, for
-    exercising capability probing against degraded servers."""
-
-    def __init__(self, *, tools=True, embeddings=True):
-        srv = self
-
-        class Handler(BaseHTTPRequestHandler):
-            def log_message(self, *_a):
-                pass
-
-            def _send(self, code, obj=None):
-                body = json.dumps(obj).encode() if obj is not None else b""
-                self.send_response(code)
-                if obj is not None:
-                    self.send_header("Content-Type", "application/json")
-                    self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                if body:
-                    self.wfile.write(body)
-
-            def do_GET(self):
-                if self.path.endswith("/models"):
-                    self._send(200, {"data": [{"id": "m-chat"}, {"id": "m-embed"}]})
-                else:
-                    self._send(404)
-
-            def do_POST(self):
-                n = int(self.headers.get("Content-Length", 0))
-                req = json.loads(self.rfile.read(n) or b"{}")
-                if self.path.endswith("/chat/completions"):
-                    if req.get("tools") and not srv.tools:
-                        self._send(400, {"error": "tools not supported"})
-                        return
-                    self._send(200, {"choices": [{"message": {
-                        "role": "assistant", "content": "ok"}, "finish_reason": "stop"}]})
-                elif self.path.endswith("/embeddings"):
-                    if not srv.embeddings:
-                        self._send(404)
-                        return
-                    self._send(200, {"data": [{"embedding": [0.1, 0.2]}]})
-                else:
-                    self._send(404)
-
-        self.tools = tools
-        self.embeddings = embeddings
-        self._httpd = HTTPServer(("127.0.0.1", 0), Handler)
-        self.base_url = f"http://127.0.0.1:{self._httpd.server_address[1]}/v1"
-        self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
-
-    def start(self):
-        self._thread.start()
-        return self
-
-    def stop(self):
-        self._httpd.shutdown()
-        self._httpd.server_close()
-
-
 class TestCheckCapabilities:
     """``check_capabilities`` probes the real endpoints and reports honestly."""
 
@@ -258,10 +226,10 @@ class TestCheckCapabilities:
 
     def test_server_without_tools(self):
         from jarvis.llm import OpenAICompatibleBackend
-        srv = _ConfigurableServer(tools=False).start()
+        srv = _StubServer(tools=False).start()
         try:
             caps = OpenAICompatibleBackend(srv.base_url).check_capabilities(
-                "m-chat", "m-embed", timeout_sec=3)
+                "stub-chat", "stub-embed", timeout_sec=3)
             assert caps.reachable and caps.chat and caps.embeddings
             assert caps.tools is False
         finally:
@@ -269,10 +237,10 @@ class TestCheckCapabilities:
 
     def test_server_without_embeddings(self):
         from jarvis.llm import OpenAICompatibleBackend
-        srv = _ConfigurableServer(embeddings=False).start()
+        srv = _StubServer(embeddings=False).start()
         try:
             caps = OpenAICompatibleBackend(srv.base_url).check_capabilities(
-                "m-chat", "m-embed", timeout_sec=3)
+                "stub-chat", "stub-embed", timeout_sec=3)
             assert caps.reachable and caps.chat and caps.tools
             assert caps.embeddings is False
         finally:
@@ -280,8 +248,11 @@ class TestCheckCapabilities:
 
     def test_unreachable_server_is_not_reachable(self):
         from jarvis.llm import OpenAICompatibleBackend
-        caps = OpenAICompatibleBackend("http://127.0.0.1:1/v1").check_capabilities(
-            "x", timeout_sec=1)
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as endpoint:
+            endpoint.bind(("127.0.0.1", 0))
+            port = endpoint.getsockname()[1]
+            caps = OpenAICompatibleBackend(f"http://127.0.0.1:{port}/v1").check_capabilities(
+                "x", timeout_sec=1)
         assert caps.reachable is False
         assert not (caps.chat or caps.tools or caps.embeddings)
 
