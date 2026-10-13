@@ -4,7 +4,7 @@
 
 ### Your intelligence. Your hardware.
 
-A private, local-first voice assistant that lives on your computer.<br>
+A private, local-first AI assistant with voice and text chat.<br>
 Talk naturally, as if Jarvis were a third person in the room.
 
 **Voice-first · Local AI · Personal memory · No subscription**
