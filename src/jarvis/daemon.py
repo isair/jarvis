@@ -945,17 +945,16 @@ def _run_daemon(smoke_test: bool = False) -> None:
             "memory",
         )
 
-    # Knowledge graph: wipe + re-seed if the on-disk shape predates the
-    # User/Directives/World taxonomy. Non-destructive to the diary —
-    # users can re-import via the memory viewer.
+    # Bootstrap missing graph branches and preserve all saved content.
     try:
         from .memory.graph import GraphMemoryStore
         with contextlib.closing(GraphMemoryStore(cfg.db_path)) as graph_store:
-            if graph_store.migrate_legacy_shape():
-                print("🧹 Wiped legacy knowledge graph; re-seeded User / Directives / World branches", flush=True)
-                print("   📥 Open the memory viewer and use 'Import from Diary' to repopulate.", flush=True)
+            if graph_store.has_unclassified_root_content():
+                debug_log("knowledge graph contains unclassified root content; preserving saved memory", "memory")
+                print("🧠 Saved memory includes unclassified notes. All saved knowledge is preserved.", flush=True)
+                print("   📂 Review root-level notes in the Memory Viewer.", flush=True)
     except Exception as e:
-        debug_log(f"graph legacy-shape migration failed (non-fatal): {e}", "memory")
+        debug_log(f"graph startup inspection failed (non-fatal): {e}", "memory")
 
     # Check location detection status
     if cfg.location_enabled and not is_location_available():

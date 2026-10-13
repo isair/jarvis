@@ -1378,7 +1378,7 @@ class TestDaemonSmokeTest:
         memory = MagicMock()
         memory.get_pending_chunks.return_value = []
         graph_store = MagicMock()
-        graph_store.migrate_legacy_shape.return_value = False
+        graph_store.has_unclassified_root_content.return_value = False
         threads = MagicMock(wraps=threading)
         threads.Thread = MagicMock()
         monkeypatch.setenv("JARVIS_STDIN_IPC", "1")

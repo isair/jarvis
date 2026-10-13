@@ -42,15 +42,26 @@ are discarded before semantic review, without discarding valid sibling entries.
 Numbers, booleans and structured JSON values cannot become memory text through
 implicit conversion.
 
-### Legacy-Shape Migration (destructive)
+### Startup Preservation
 
-`GraphMemoryStore.migrate_legacy_shape()` checks the on-disk graph against the expected shape at daemon start-up. The graph is considered non-conforming if root has any direct child that isn't one of the fixed branches, or if root's own `data` column is non-empty (cold-start writes that landed on root before the taxonomy existed). In either case the entire `memory_nodes` table is wiped and root + the three fixed branches are re-seeded.
+Opening the graph seeds only missing root and fixed branch records. Startup does
+not delete, clear, reclassify or move saved nodes because of their shape. Root
+facts and direct children outside the fixed branches can be manually created or
+imported; their placement does not establish their age or ownership.
 
-Why destructive: pre-taxonomy nodes sitting under root would remain invisible to the warm profile forever. Carrying them as dead weight is worse than a clean slate. The diary is untouched, so users can re-populate via "Import from Diary" in the memory viewer once the wipe completes. Knowledge nodes are in beta — the structure and classification are now stable but the extractor quality is still being tuned.
+`GraphMemoryStore.has_unclassified_root_content()` reports non-empty root data or
+root children outside the fixed branches without writing to the database. The
+daemon advises users to review such notes in the Memory Viewer. All existing
+node IDs, contents, relationships and metadata remain intact, as does the diary.
 
-Called **only** from the daemon start-up path in `daemon.main()`. The memory viewer and reply engine instantiate `GraphMemoryStore` without triggering the migration, so a mid-session open never wipes anything.
+The warm profile includes User and Directives only. Unclassified root notes stay
+available in the viewer and explicit graph traversal; users choose their branch
+when organising them. Startup does not infer their classification or rely on a
+diary import to recover independently saved knowledge.
 
-The daemon owns its temporary migration store and closes it on success or failure. Migration failure remains non-fatal to startup, releases any open SQLite transaction and preserves the diary.
+The daemon owns its temporary inspection store and closes it on success or
+failure. Inspection failure remains non-fatal to startup and releases any open
+SQLite transaction.
 
 ### Branch-Pinned Traversal
 
