@@ -45,6 +45,7 @@ control is evaluation-only; raw-context data flow matches the reply path.
 - **Empty-response recovery**: a valid blank assistant message without a tool call or thinking receives `_EMPTY_REPLY_RECOVERY_HINT` and one corrective model turn per reply, inside `agentic_max_turns`. Unavailable/malformed provider envelopes and a second blank output do not gain further attempts. Existing model resolution, deadlines, tool permissions and limits apply.
 - **Repeated tools**: distinct arguments can invoke the same tool within the configured turn budget. Recent exact name/argument signatures suppress repeated execution for success and error-only outcomes; prior-turn results do not impose a name-based cap. The independent `toolSearchTool` limit remains.
 - **Unfinished-plan recovery**: unresolved/rejected/failed step resolution or a current-reply structured tool failure suspends direct plan execution. This context receives the original user request, accumulated outcomes, a hand-off snapshot of successful tool-result names from the current request, and task-reassessment guidance (`_PLAN_RECOVERY_HINT` in `engine.py`). The system-message execution plan is removed during recovery; later result guidance replaces count-based progress. Recorded resource references accompany recovery feedback. If text-tool recovery has no current-request action-tool outcome, recovery guidance declares the non-completion `question`/`blocker` envelope; a valid envelope is accepted; unsupported prose receives one corrective turn (`_UNEXECUTED_ACTION_HINT`) before an honest fallback. Discovery alone is not execution evidence. Budget exhaustion in this no-action state returns the blocker without a loop-digest call. Recovery uses the existing allow-list, duplicate suppression, tool-search limits, model deadlines and turn budget; earlier-turn failures do not trigger this state.
+- **Direct-response completeness**: Both provider backends reject explicit generation-limit and unfinished completion metadata with `None`. Classification, planning, memory and rewrite callers apply their existing fallback instead of consuming a partial answer. Missing completion metadata remains supported. Raw chat and streaming delivery are unchanged.
 - **Local transport privacy**: Both provider backends bypass ambient proxies and `.netrc` for loopback endpoints through response-scoped HTTP sessions. Explicit authentication and HTTPS certificate trust remain available. Remote endpoints retain Requests environment settings.
 - **Transport boundary**: OpenAI-compatible requests encode arguments in copied outbound tool-call rows. Caller-owned history and decoded responses retain their canonical values, including on transport failures.
 - **Output**: OpenAI-style `{content, tool_calls, thinking}`. Consumed by the tool orchestrator and TTS pipeline. Natural-language content is delivered immediately.
@@ -406,3 +407,13 @@ This graph is the reference for LLM-latency optimisation. Treat it as authoritat
 - **Output**: complete boolean support verdicts. Missing, malformed, duplicate
   or unknown IDs preserve clarification. Supported candidates feed the existing
   deterministic source/age/precedence/conflict policy and grounded tool retry.
+
+
+## Dictation filler removal
+
+- **Source**: `src/jarvis/dictation/dictation_engine.py`, `_llm_clean_dictation`.
+- **Trigger**: `dictation_filler_removal` is enabled for an accepted dictation, after custom dictionary replacements.
+- **Model**: the engine's configured chat model (`cfg.llm_chat_model`) through `get_llm_backend(cfg)`, with the configured thinking flag.
+- **Input and prompt**: dictated text and the static inline cleanup prompt. Meaning and language must remain intact; output contains only the cleaned text.
+- **Limits**: five-second timeout; generation cap `max(64, len(text) // 2)` including reasoning. No assistant tools or conversation memory are involved.
+- **Output**: cleaned text for the clipboard/history path. Errors, empty answers and explicit generation-limit or unfinished completion metadata preserve the full original transcription through the caller's fallback.

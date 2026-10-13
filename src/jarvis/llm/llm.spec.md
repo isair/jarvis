@@ -35,7 +35,7 @@ Two interchangeable styles dispatch to the same backend:
 
 | Method | Returns | Contract |
 |--------|---------|----------|
-| `direct(model, system, user, *, timeout_sec, thinking, num_ctx, temperature, max_tokens)` | `Optional[str]` | Single-shot system+user. Returns assistant text, or `None` on timeout / error / empty content. `max_tokens` caps generation length — essential for small reasoning models on classification tasks. |
+| `direct(model, system, user, *, timeout_sec, thinking, num_ctx, temperature, max_tokens)` | `Optional[str]` | Single-shot system+user. Returns assistant text, or `None` on timeout / error / empty content / explicitly incomplete generation. `max_tokens` caps generation length — essential for small reasoning models on classification tasks. |
 | `streaming(model, system, user, *, on_token, timeout_sec, thinking)` | `Optional[str]` | Streams tokens via `on_token`; returns the concatenated full text or `None` if no content was produced. |
 | `chat(model, messages, *, timeout_sec, extra_options, tools, thinking)` | `Optional[Dict]` | Arbitrary messages array. Returns the raw response dict so callers (today: the reply engine) can inspect `content` and `tool_calls`. Raises `ToolsNotSupportedError` when the model rejects native tools. Re-raises `requests.ConnectionError` so callers can distinguish "server unreachable" from a transient HTTP failure. |
 | `embed(text, model, *, timeout_sec)` | `Optional[List[float]]` | Vector embedding. Returns `None` on error or when the runtime does not expose embeddings. |
@@ -43,6 +43,8 @@ Two interchangeable styles dispatch to the same backend:
 | `warm_up(model, *, timeout_sec, keep_alive)` | `bool` | Pre-load probe before the first real request. The `LLMBackend` default returns `True` (no-op for runtimes without a useful probe). `OllamaBackend` verifies the server is Ollama via `GET /api/version`, then issues a minimal `/api/chat` completion with the caller-provided `keep_alive` duration (default `"30m"`, `"1m"` in low-power mode) to page the model into resident memory **and** trigger full inference-pipeline initialisation (JIT compilation, KV-cache allocation) — the chat-endpoint warmup prevents the timeout that an empty `/api/generate` ping would mask on the first real call. `OpenAICompatibleBackend` first runs a fast reachability check (`GET /models`, 25 % of budget, max 5 s), then sends a single-token chat completion (`max_tokens=1`) to force the runtime to load the model into memory. |
 
 `direct()` and `streaming()` are convenience methods over `chat()`: they construct the `[system, user]` messages array internally so callers running classification-shaped passes (planner, intent judge, enrichment extractor) do not have to. `chat()` is the low-level primitive for arbitrary message arrays — multi-turn dialogue, native tool calls, and anything that needs custom roles.
+
+A direct answer is unusable when the server explicitly reports a generation limit (`done_reason: length` or the selected choice's `finish_reason: length`) or an unfinished result (`done: false`). Both backends return `None` so callers apply their existing fallback without accepting a partial rewrite, plan or classification. Complete answers and responses without completion metadata retain their normal handling. Raw `chat()` responses and streaming tokens retain their provider metadata and delivery contracts.
 
 ### Tool calling
 

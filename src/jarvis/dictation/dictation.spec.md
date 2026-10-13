@@ -18,7 +18,7 @@ file addition, removal or replacement, including changes with older timestamps.
 |--------------------------------|--------|------------------------------------------------|-------------------------------------------------|
 | `dictation_enabled`           | bool   | `true`                                         | Master switch for the feature                   |
 | `dictation_hotkey`            | string | Win: `"ctrl+cmd"`, macOS/Linux: `"ctrl+alt"`   | Hold-to-record hotkey combination               |
-| `dictation_filler_removal`    | bool   | `false`                                        | LLM-based filler word removal via Ollama        |
+| `dictation_filler_removal`    | bool   | `false`                                        | LLM-based filler word removal via the configured chat backend        |
 | `dictation_custom_dictionary` | list   | `[]`                                           | Custom replacements in `"wrong -> right"` format|
 
 Defaults are aligned with WisprFlow. Modifier-only combos are supported
@@ -63,10 +63,10 @@ After transcription, text passes through these stages in order:
 1. **Custom dictionary** — case-insensitive whole-word regex replacements
    from `dictation_custom_dictionary`. Each entry is `"wrong -> right"`.
 2. **LLM filler removal** (optional) — when `dictation_filler_removal` is
-   enabled, sends the text to the local Ollama instance (same model as the
+   enabled, sends the text to the configured local chat backend (same model as the
    assistant) with a prompt to remove filler words (um, uh, like, you know,
    etc.) while preserving meaning. Uses a 5-second timeout; falls back to the
-   unprocessed text on failure.
+   unprocessed text on failure, empty output or explicitly incomplete generation.
 
 ## Architecture
 
