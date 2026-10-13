@@ -1112,7 +1112,7 @@ class TestClipboardWindowsCtypes:
 @pytest.mark.unit
 @pytest.mark.usefixtures('no_network')
 class TestLlmCleanDictation:
-    """Cleanup preserves full output through each configured local transport."""
+    """Dictation delivers and stores complete cleanup or raw fallback text."""
 
     def assert_pipeline_result(self, monkeypatch, tmp_path, cfg, original, expected, thinking):
         from dataclasses import replace

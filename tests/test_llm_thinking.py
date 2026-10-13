@@ -6,7 +6,7 @@ the ``think`` parameter sent to Ollama across all call sites.
 """
 
 import json
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
