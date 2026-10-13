@@ -34,7 +34,10 @@ from ..debug import debug_log
 from . import http
 from .errors import is_timeout_error
 from .streaming import check_stream_deadline, iter_stream_lines
-from .backend import LLMBackend, ToolsNotSupportedError, strip_nonstandard_message_fields
+from .backend import (
+    LLMBackend, ToolsNotSupportedError, response_is_incomplete,
+    strip_nonstandard_message_fields,
+)
 
 
 @dataclass
@@ -158,6 +161,9 @@ class OpenAICompatibleBackend(LLMBackend):
 
             normalised = _normalise_response(data) if isinstance(data, dict) else None
             if normalised:
+                if response_is_incomplete(normalised):
+                    debug_log("OpenAICompatibleBackend.direct: incomplete generation", "llm")
+                    return None
                 msg = normalised.get("message")
                 if isinstance(msg, dict):
                     content = msg.get("content")

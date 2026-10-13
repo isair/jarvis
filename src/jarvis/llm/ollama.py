@@ -17,7 +17,10 @@ from ..debug import debug_log
 from . import http
 from .errors import is_timeout_error
 from .streaming import check_stream_deadline, iter_stream_lines
-from .backend import LLMBackend, ToolsNotSupportedError, strip_nonstandard_message_fields
+from .backend import (
+    LLMBackend, ToolsNotSupportedError, response_is_incomplete,
+    strip_nonstandard_message_fields,
+)
 
 
 def check_version(base_url: str, timeout: float = 5.0) -> tuple[bool, str | None]:
@@ -153,6 +156,9 @@ class OllamaBackend(LLMBackend):
                 data = resp.json()
 
             if isinstance(data, dict):
+                if response_is_incomplete(data):
+                    debug_log("OllamaBackend.direct: incomplete generation", "llm")
+                    return None
                 content = extract_text_from_response(data)
                 if isinstance(content, str) and content.strip():
                     return content

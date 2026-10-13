@@ -61,6 +61,18 @@ def strip_nonstandard_message_fields(
     return cleaned
 
 
+def response_is_incomplete(data: Dict[str, Any]) -> bool:
+    """Recognise explicit generation limits and unfinished server responses."""
+    if data.get("done") is False or data.get("done_reason") == "length":
+        return True
+    choices = data.get("choices")
+    return bool(
+        isinstance(choices, list) and choices
+        and isinstance(choices[0], dict)
+        and choices[0].get("finish_reason") == "length"
+    )
+
+
 class ToolsNotSupportedError(Exception):
     """Raised when a backend rejects the ``tools`` parameter.
 
