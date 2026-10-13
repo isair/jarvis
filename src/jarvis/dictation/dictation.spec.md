@@ -11,6 +11,10 @@ The default is resolved through the lightweight `paths.py` boundary. An explicit
 history path overrides the default. The desktop watcher observes the store's
 selected `path`, including explicit overrides. While visible, it refreshes on
 file addition, removal or replacement, including changes with older timestamps.
+History save failures preserve existing records and report an activity-log warning
+even when debug logging is disabled. An unsaved result is not published through
+the history result callback. Text delivery and session completion remain separate
+from persistence; subsequent successful saves publish their recorded results.
 
 ## Configuration
 

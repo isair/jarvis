@@ -22,7 +22,7 @@ from typing import Any, Callable, Optional
 from ..debug import debug_log
 from ..utils.audio_lock import portaudio_lock
 from ..utils.audio_capture import mono_capture, open_input_stream, resolve_input_device
-from .history import DictationHistory
+from .history import DictationHistory, HistoryUpdateError
 
 # Optional imports — graceful degradation when dependencies are missing.
 # sounddevice raises OSError (not ImportError) when the PortAudio shared
@@ -1142,7 +1142,12 @@ class DictationEngine:
                 finally:
                     self._paste_in_progress = False
                 # Persist to history
-                entry = self.history.add(text, duration=duration)
+                try:
+                    entry = self.history.add(text, duration=duration)
+                except HistoryUpdateError:
+                    debug_log("dictation history save failed; result not recorded", "dictation")
+                    print("  ⚠️ Dictation could not be saved to history.", flush=True)
+                    return
                 if self._on_dictation_result:
                     try:
                         self._on_dictation_result(entry)
