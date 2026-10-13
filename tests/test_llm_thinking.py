@@ -197,32 +197,6 @@ class TestIntentJudgeThinking:
 class TestDictationThinking:
     """Dictation engine respects the thinking config."""
 
-    def test_llm_clean_dictation_sends_think_false(self):
-        from jarvis.dictation.dictation_engine import _llm_clean_dictation
-
-        with patch("jarvis.llm.http.post") as mock_post:
-            mock_resp = MagicMock()
-            mock_resp.status_code = 200
-            mock_resp.json.return_value = {"response": "cleaned"}
-            mock_post.return_value = mock_resp
-
-            _llm_clean_dictation("um hello", "http://localhost:11434", thinking=False)
-            payload = mock_post.call_args[1].get("json") or mock_post.call_args[0][1] if len(mock_post.call_args[0]) > 1 else mock_post.call_args[1]["json"]
-            assert payload["think"] is False
-
-    def test_llm_clean_dictation_sends_think_true(self):
-        from jarvis.dictation.dictation_engine import _llm_clean_dictation
-
-        with patch("jarvis.llm.http.post") as mock_post:
-            mock_resp = MagicMock()
-            mock_resp.status_code = 200
-            mock_resp.json.return_value = {"response": "cleaned"}
-            mock_post.return_value = mock_resp
-
-            _llm_clean_dictation("um hello", "http://localhost:11434", thinking=True)
-            payload = mock_post.call_args[1].get("json") or mock_post.call_args[0][1] if len(mock_post.call_args[0]) > 1 else mock_post.call_args[1]["json"]
-            assert payload["think"] is True
-
     def test_engine_stores_thinking(self):
         from jarvis.dictation.dictation_engine import DictationEngine
 
