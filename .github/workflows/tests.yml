@@ -30,7 +30,7 @@ jobs:
           python -m pytest -q -m unit
       - name: 🧪 Verify local provider transport
         run: |
-          python -m pytest -q -m integration tests/test_openai_compatible_e2e.py tests/test_provider_model_resolution.py tests/test_setup_wizard.py
+          python -m pytest -q -m integration tests/test_openai_compatible_e2e.py tests/test_provider_model_resolution.py tests/test_setup_wizard.py tests/test_local_llm_privacy.py
 
 
   daemon-lock:

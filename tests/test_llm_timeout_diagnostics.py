@@ -18,7 +18,7 @@ def test_read_timeout_is_not_reported_as_connection_failure(backend_type, wrappe
     error = requests.ReadTimeout('secret-host?token=secret')
     if wrapped:
         error = requests.ConnectionError(ReadTimeoutError(None, '/?token=secret', 'read timed out'))
-    with patch('requests.post', side_effect=error):
+    with patch('jarvis.llm.http.post', side_effect=error):
         result = backend_type('http://unused').chat('test', [], timeout_sec=6)
     assert result is None
     output = capsys.readouterr().out
@@ -30,7 +30,7 @@ def test_read_timeout_is_not_reported_as_connection_failure(backend_type, wrappe
 
 @pytest.mark.parametrize('backend_type', [OpenAICompatibleBackend, OllamaBackend])
 def test_real_connection_failure_still_reaches_caller(backend_type, capsys):
-    with patch('requests.post', side_effect=requests.ConnectionError('token=secret')):
+    with patch('jarvis.llm.http.post', side_effect=requests.ConnectionError('token=secret')):
         with pytest.raises(requests.ConnectionError):
             backend_type('http://unused').chat('test', [])
     assert 'connection error' in capsys.readouterr().out
@@ -96,7 +96,7 @@ def test_wrapped_timeout_keeps_intent_judge_available():
     error = requests.ConnectionError(ReadTimeoutError(None, '/', 'slow body'))
     backend = OpenAICompatibleBackend('http://unused')
     with patch('jarvis.listening.intent_judge.get_llm_backend', return_value=backend), patch(
-        'requests.post', side_effect=error,
+        'jarvis.llm.http.post', side_effect=error,
     ):
         assert judge.judge([TranscriptSegment('Jarvis, hello', 1000.0, 1001.0)]) is None
     assert judge.available is True

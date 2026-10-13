@@ -31,6 +31,7 @@ import time
 import requests
 
 from ..debug import debug_log
+from . import http
 from .errors import is_timeout_error
 from .streaming import check_stream_deadline, iter_stream_lines
 from .backend import LLMBackend, ToolsNotSupportedError, strip_nonstandard_message_fields
@@ -150,7 +151,7 @@ class OpenAICompatibleBackend(LLMBackend):
             payload["max_tokens"] = max_tokens
 
         try:
-            with requests.post(
+            with http.post(
                 f"{self._base_url}/chat/completions",
                 json=payload,
                 headers=self._headers(),
@@ -202,7 +203,7 @@ class OpenAICompatibleBackend(LLMBackend):
 
         deadline = time.monotonic() + timeout_sec
         try:
-            with requests.post(
+            with http.post(
                 f"{self._base_url}/chat/completions",
                 json=payload,
                 headers=self._headers(),
@@ -322,7 +323,7 @@ class OpenAICompatibleBackend(LLMBackend):
             payload["tools"] = tools
 
         try:
-            with requests.post(
+            with http.post(
                 f"{self._base_url}/chat/completions",
                 json=payload,
                 headers=self._headers(),
@@ -375,40 +376,40 @@ class OpenAICompatibleBackend(LLMBackend):
         timeout_sec: float = 15.0,
     ) -> Optional[List[float]]:
         try:
-            resp = requests.post(
+            with http.post(
                 f"{self._base_url}/embeddings",
                 json={"model": model, "input": text},
                 headers=self._headers(),
                 timeout=timeout_sec,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            arr = data.get("data") if isinstance(data, dict) else None
-            if isinstance(arr, list) and arr and isinstance(arr[0], dict):
-                vec = arr[0].get("embedding")
-                if isinstance(vec, list):
-                    return [float(x) for x in vec]
+            ) as resp:
+                resp.raise_for_status()
+                data = resp.json()
+                arr = data.get("data") if isinstance(data, dict) else None
+                if isinstance(arr, list) and arr and isinstance(arr[0], dict):
+                    vec = arr[0].get("embedding")
+                    if isinstance(vec, list):
+                        return [float(x) for x in vec]
         except Exception:
             return None
         return None
 
     def list_models(self, timeout_sec: float = 5.0) -> List[str]:
         try:
-            resp = requests.get(
+            with http.get(
                 f"{self._base_url}/models",
                 headers=self._headers(),
                 timeout=timeout_sec,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            arr = data.get("data", []) if isinstance(data, dict) else []
-            names: List[str] = []
-            for m in arr:
-                if isinstance(m, dict):
-                    name = m.get("id")
-                    if isinstance(name, str) and name:
-                        names.append(name)
-            return names
+            ) as resp:
+                resp.raise_for_status()
+                data = resp.json()
+                arr = data.get("data", []) if isinstance(data, dict) else []
+                names: List[str] = []
+                for m in arr:
+                    if isinstance(m, dict):
+                        name = m.get("id")
+                        if isinstance(name, str) and name:
+                            names.append(name)
+                return names
         except Exception:
             return []
 
@@ -456,7 +457,7 @@ class OpenAICompatibleBackend(LLMBackend):
             "stream": False,
         }
         try:
-            with requests.post(
+            with http.post(
                 f"{self._base_url}/chat/completions",
                 json=payload,
                 headers=self._headers(),
