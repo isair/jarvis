@@ -95,7 +95,7 @@ def check_mlx_whisper_status() -> MLXWhisperStatus:
 
 
 # Import config early (no PyQt6 dependency) - needed for detection functions
-from jarvis.config import load_settings, get_default_config, default_config_path
+from jarvis.config import load_settings, get_default_config, get_config_path
 
 
 class SetupStatus(Enum):
@@ -1002,8 +1002,8 @@ class ProviderChoicePage(ScrollableWizardPage):
 
     def _preselect_from_config(self):
         try:
-            from jarvis.config import default_config_path, _load_json
-            config = _load_json(default_config_path()) or {}
+            from jarvis.config import get_config_path, _load_json
+            config = _load_json(get_config_path()) or {}
             provider = str(config.get("llm_provider", "ollama") or "ollama")
         except Exception:
             provider = "ollama"
@@ -1025,8 +1025,8 @@ class ProviderChoicePage(ScrollableWizardPage):
         authoritative again — no stale base URL / key / model is left
         pointing at a former remote server."""
         try:
-            from jarvis.config import default_config_path, _load_json, _save_json
-            config_path = default_config_path()
+            from jarvis.config import get_config_path, _load_json, _save_json
+            config_path = get_config_path()
             config = _load_json(config_path) or {}
 
             if self._selected == "openai_compatible":
@@ -1675,8 +1675,8 @@ class OpenAICompatiblePage(ScrollableWizardPage):
         user's values. With no saved URL, default to the common LM Studio
         address and kick off auto-discovery of running local servers."""
         try:
-            from jarvis.config import default_config_path, _load_json
-            config = _load_json(default_config_path()) or {}
+            from jarvis.config import get_config_path, _load_json
+            config = _load_json(get_config_path()) or {}
         except Exception:
             config = {}
         saved_url = str(config.get("llm_base_url", "") or "")
@@ -1747,8 +1747,8 @@ class OpenAICompatiblePage(ScrollableWizardPage):
         if not self._is_ready(base_url, chat_model):
             return False
         try:
-            from jarvis.config import default_config_path, _load_json, _save_json
-            config_path = default_config_path()
+            from jarvis.config import get_config_path, _load_json, _save_json
+            config_path = get_config_path()
             config = _load_json(config_path) or {}
 
             config["llm_provider"] = "openai_compatible"
@@ -2486,7 +2486,7 @@ class ModelsPage(ScrollableWizardPage):
     def _save_model_to_config(self):
         try:
             from jarvis.config import _load_json, _save_json
-            cp = default_config_path()
+            cp = get_config_path()
             cp.parent.mkdir(parents=True, exist_ok=True)
             cfg = _load_json(cp) or {}
             cfg["ollama_chat_model"] = self._chat_model
@@ -2506,8 +2506,8 @@ class ModelsPage(ScrollableWizardPage):
             pass
         self._chat_model = cc if cc in self._ALL_MODELS else DEFAULT_CHAT_MODEL
         self._fast_model = fc if fc in self._ALL_MODELS else DEFAULT_FAST_MODEL
-        from jarvis.config import _load_json, default_config_path
-        saved = _load_json(default_config_path())
+        from jarvis.config import _load_json, get_config_path
+        saved = _load_json(get_config_path())
         if self._detected_vram_mb is not None and cc == DEFAULT_CHAT_MODEL and "ollama_chat_model" not in saved:
             usable_mb = self._detected_vram_mb - self._EMBED_VRAM_MB - self._whisper_vram_mb()
             self._chat_model, recommended_fast = get_recommended_model_pair(max(usable_mb, 0))
@@ -3073,7 +3073,7 @@ class WhisperSetupPage(ScrollableWizardPage):
         """Save the selected whisper model to config file."""
         try:
             from jarvis.config import _load_json, _save_json
-            config_path = default_config_path()
+            config_path = get_config_path()
             config_path.parent.mkdir(parents=True, exist_ok=True)
 
             config = _load_json(config_path) or {}
@@ -3517,7 +3517,7 @@ class LocationPage(ScrollableWizardPage):
         try:
             from jarvis.config import _load_json, _save_json
 
-            config_path = default_config_path()
+            config_path = get_config_path()
             config_path.parent.mkdir(parents=True, exist_ok=True)
 
             config = _load_json(config_path) or {}
@@ -3676,8 +3676,8 @@ class DictationPage(ScrollableWizardPage):
     def _load_current_filler_removal(self) -> bool:
         """Load the current filler removal setting from config, defaulting to False."""
         try:
-            from jarvis.config import default_config_path, _load_json
-            config = _load_json(default_config_path())
+            from jarvis.config import get_config_path, _load_json
+            config = _load_json(get_config_path())
             if config and "dictation_filler_removal" in config:
                 return bool(config["dictation_filler_removal"])
             return False
@@ -3687,8 +3687,8 @@ class DictationPage(ScrollableWizardPage):
     def _load_current_hotkey(self) -> str:
         """Load the current hotkey from config, or platform default."""
         try:
-            from jarvis.config import default_config_path, _load_json, _default_dictation_hotkey
-            config = _load_json(default_config_path())
+            from jarvis.config import get_config_path, _load_json, _default_dictation_hotkey
+            config = _load_json(get_config_path())
             if config and "dictation_hotkey" in config:
                 return config["dictation_hotkey"]
             return _default_dictation_hotkey()
@@ -3700,8 +3700,8 @@ class DictationPage(ScrollableWizardPage):
     def validatePage(self) -> bool:
         """Save dictation settings to config before leaving page."""
         try:
-            from jarvis.config import default_config_path, _load_json, _save_json
-            config_path = default_config_path()
+            from jarvis.config import get_config_path, _load_json, _save_json
+            config_path = get_config_path()
             config = _load_json(config_path) or {}
 
             enabled = self._enabled_check.isChecked()
@@ -3841,8 +3841,8 @@ class MCPPage(ScrollableWizardPage):
     def _is_already_configured(name: str) -> bool:
         """Check if an MCP server is already in the user's config."""
         try:
-            from jarvis.config import default_config_path, _load_json
-            config = _load_json(default_config_path())
+            from jarvis.config import get_config_path, _load_json
+            config = _load_json(get_config_path())
             return name in (config.get("mcps") or {})
         except Exception:
             return False
@@ -3850,8 +3850,8 @@ class MCPPage(ScrollableWizardPage):
     def validatePage(self) -> bool:
         """Save selected MCPs to config before leaving page."""
         try:
-            from jarvis.config import default_config_path, _load_json, _save_json
-            config_path = default_config_path()
+            from jarvis.config import get_config_path, _load_json, _save_json
+            config_path = get_config_path()
             config = _load_json(config_path) or {}
 
             mcps = config.get("mcps", {})
@@ -3996,8 +3996,8 @@ class SearchProvidersPage(ScrollableWizardPage):
     @staticmethod
     def _load_current_brave_key() -> str:
         try:
-            from jarvis.config import default_config_path, _load_json
-            config = _load_json(default_config_path())
+            from jarvis.config import get_config_path, _load_json
+            config = _load_json(get_config_path())
             return str(config.get("brave_search_api_key", "") or "")
         except Exception:
             return ""
@@ -4005,8 +4005,8 @@ class SearchProvidersPage(ScrollableWizardPage):
     @staticmethod
     def _load_current_wikipedia_enabled() -> bool:
         try:
-            from jarvis.config import default_config_path, _load_json
-            config = _load_json(default_config_path())
+            from jarvis.config import get_config_path, _load_json
+            config = _load_json(get_config_path())
             # Default True to match config.py's default.
             val = config.get("wikipedia_fallback_enabled", True)
             return bool(val)
@@ -4018,8 +4018,8 @@ class SearchProvidersPage(ScrollableWizardPage):
         values to keep config.json minimal (consistent with the settings
         window's "only non-default values written" invariant)."""
         try:
-            from jarvis.config import default_config_path, _load_json, _save_json
-            config_path = default_config_path()
+            from jarvis.config import get_config_path, _load_json, _save_json
+            config_path = get_config_path()
             config = _load_json(config_path) or {}
 
             brave_key = (self._brave_input.text() or "").strip()

@@ -285,8 +285,8 @@ class DictationHistoryWindow(QMainWindow):
     def _is_dictation_enabled(self) -> bool:
         """Check whether dictation is enabled in config."""
         try:
-            from jarvis.config import default_config_path, _load_json, get_default_config
-            config = _load_json(default_config_path()) or {}
+            from jarvis.config import get_config_path, _load_json, get_default_config
+            config = _load_json(get_config_path()) or {}
             defaults = get_default_config()
             return bool(config.get("dictation_enabled", defaults.get("dictation_enabled", True)))
         except Exception:

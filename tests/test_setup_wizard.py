@@ -575,7 +575,7 @@ class TestProviderChoicePage:
             f.write("{}")
             cfg_path = Path(f.name)
         try:
-            with patch("jarvis.config.default_config_path", return_value=cfg_path):
+            with patch("jarvis.config.get_config_path", return_value=cfg_path):
                 page._selected = "openai_compatible"
                 assert page.validatePage() is True
             saved = json.loads(cfg_path.read_text())
@@ -601,7 +601,7 @@ class TestProviderChoicePage:
             }, f)
             cfg_path = Path(f.name)
         try:
-            with patch("jarvis.config.default_config_path", return_value=cfg_path):
+            with patch("jarvis.config.get_config_path", return_value=cfg_path):
                 page._selected = "ollama"
                 assert page.validatePage() is True
             saved = json.loads(cfg_path.read_text())
@@ -631,7 +631,7 @@ class TestProviderChoicePage:
             json.dump({"llm_provider": "openai_compatible"}, f)
             cfg_path = Path(f.name)
         try:
-            with patch("jarvis.config.default_config_path", return_value=cfg_path):
+            with patch("jarvis.config.get_config_path", return_value=cfg_path):
                 page = ProviderChoicePage()  # __init__ calls _preselect_from_config
             assert page._selected == "openai_compatible"
             assert page._openai_radio.isChecked() is True
@@ -646,7 +646,7 @@ class TestProviderChoicePage:
             f.write("{}")
             cfg_path = Path(f.name)
         try:
-            with patch("jarvis.config.default_config_path", return_value=cfg_path):
+            with patch("jarvis.config.get_config_path", return_value=cfg_path):
                 page = ProviderChoicePage()
             assert page._selected == "ollama"
             assert page._ollama_radio.isChecked() is True
@@ -663,7 +663,7 @@ class TestProviderChoicePage:
             f.write("{}")
             cfg_path = Path(f.name)
         try:
-            with patch("jarvis.config.default_config_path", return_value=cfg_path):
+            with patch("jarvis.config.get_config_path", return_value=cfg_path):
                 page = ProviderChoicePage()
             # Default: Ollama selected, OpenAI not.
             assert page._ollama_radio.isChecked() and not page._openai_radio.isChecked()
@@ -687,7 +687,7 @@ class TestProviderChoicePage:
             f.write("{}")
             cfg_path = Path(f.name)
         try:
-            with patch("jarvis.config.default_config_path", return_value=cfg_path):
+            with patch("jarvis.config.get_config_path", return_value=cfg_path):
                 page = ProviderChoicePage()
             blob = " ".join(lbl.text().lower() for lbl in page.findChildren(QLabel))
             assert "local" in blob and "network" in blob, (
@@ -717,7 +717,7 @@ class TestProviderChoicePage:
             f.write("{}")
             cfg_path = Path(f.name)
         try:
-            with patch("jarvis.config.default_config_path", return_value=cfg_path):
+            with patch("jarvis.config.get_config_path", return_value=cfg_path):
                 wiz = SetupWizard()
             assert wiz.startId() == wiz.mlx_whisper_page_id
         finally:
@@ -759,7 +759,7 @@ class TestOpenAICompatiblePage:
             json.dump({"llm_provider": "openai_compatible"}, f)
             cfg_path = Path(f.name)
         try:
-            with patch("jarvis.config.default_config_path", return_value=cfg_path):
+            with patch("jarvis.config.get_config_path", return_value=cfg_path):
                 page._read_inputs = MagicMock(return_value=(
                     "http://localhost:1234/v1", "sk-secret", "lmstudio/gemma", "text-embed-3", "",
                 ))
@@ -785,7 +785,7 @@ class TestOpenAICompatiblePage:
             f.write("{}")
             cfg_path = Path(f.name)
         try:
-            with patch("jarvis.config.default_config_path", return_value=cfg_path):
+            with patch("jarvis.config.get_config_path", return_value=cfg_path):
                 page._read_inputs = MagicMock(return_value=(
                     "http://localhost:1234/v1", "", "lmstudio/gemma", "", "",
                 ))
@@ -823,7 +823,7 @@ class TestOpenAICompatiblePage:
             cfg_path = Path(f.name)
         try:
             page = OpenAICompatiblePage()
-            with patch("jarvis.config.default_config_path", return_value=cfg_path):
+            with patch("jarvis.config.get_config_path", return_value=cfg_path):
                 page.initializePage()
             assert page._base_url_input.text() == "http://lmstudio:1234/v1"
             assert page._api_key_input.text() == "sk-saved"
@@ -845,7 +845,7 @@ class TestOpenAICompatiblePage:
             cfg_path = Path(f.name)
         try:
             page = OpenAICompatiblePage()
-            with patch("jarvis.config.default_config_path", return_value=cfg_path):
+            with patch("jarvis.config.get_config_path", return_value=cfg_path):
                 page.initializePage()
             assert page._base_url_input.text() == OpenAICompatiblePage._DEFAULT_BASE_URL
             assert page._chat_model_combo.currentText() == ""
@@ -986,7 +986,7 @@ class TestOpenAICompatiblePage:
             f.write("{}")
             cfg_path = Path(f.name)
         try:
-            with patch("jarvis.config.default_config_path", return_value=cfg_path):
+            with patch("jarvis.config.get_config_path", return_value=cfg_path):
                 page._read_inputs = MagicMock(return_value=(
                     "http://localhost:9876/v1", "", "qwen-27b", "some-embed", "",
                 ))
@@ -1026,12 +1026,12 @@ class TestOpenAICompatiblePage:
             saved_cfg = Path(f.name)
         try:
             page._start_discovery = MagicMock()
-            with patch("jarvis.config.default_config_path", return_value=empty_cfg):
+            with patch("jarvis.config.get_config_path", return_value=empty_cfg):
                 page.initializePage()
             assert page._start_discovery.call_count == 1
 
             page._start_discovery.reset_mock()
-            with patch("jarvis.config.default_config_path", return_value=saved_cfg):
+            with patch("jarvis.config.get_config_path", return_value=saved_cfg):
                 page.initializePage()
             assert page._start_discovery.call_count == 0
             assert page._base_url_input.text() == "http://saved:9/v1"
@@ -1944,7 +1944,7 @@ class TestMCPPage:
                 cb.isChecked.return_value = (i == 0)
                 page._checkboxes[entry.name] = cb
 
-            with patch("jarvis.config.default_config_path", return_value=cfg_path):
+            with patch("jarvis.config.get_config_path", return_value=cfg_path):
                 result = page.validatePage()
 
             assert result is True
@@ -1985,7 +1985,7 @@ class TestMCPPage:
                 cb.isChecked.return_value = False
                 page._checkboxes[entry.name] = cb
 
-            with patch("jarvis.config.default_config_path", return_value=cfg_path):
+            with patch("jarvis.config.get_config_path", return_value=cfg_path):
                 page.validatePage()
 
             saved = _load_json(cfg_path)
@@ -2022,7 +2022,7 @@ class TestSearchProvidersPage:
             cfg_path = Path(f.name)
         try:
             page = self._make_page(brave_key="BSA-abc123", wiki_enabled=True)
-            with patch("jarvis.config.default_config_path", return_value=cfg_path):
+            with patch("jarvis.config.get_config_path", return_value=cfg_path):
                 assert page.validatePage() is True
             saved = _load_json(cfg_path)
             # Default non-default-only write: Brave present, Wikipedia omitted.
@@ -2044,7 +2044,7 @@ class TestSearchProvidersPage:
             cfg_path = Path(f.name)
         try:
             page = self._make_page(brave_key="   ", wiki_enabled=True)
-            with patch("jarvis.config.default_config_path", return_value=cfg_path):
+            with patch("jarvis.config.get_config_path", return_value=cfg_path):
                 page.validatePage()
             saved = _load_json(cfg_path)
             assert "brave_search_api_key" not in saved
@@ -2064,7 +2064,7 @@ class TestSearchProvidersPage:
             cfg_path = Path(f.name)
         try:
             page = self._make_page(brave_key="", wiki_enabled=False)
-            with patch("jarvis.config.default_config_path", return_value=cfg_path):
+            with patch("jarvis.config.get_config_path", return_value=cfg_path):
                 page.validatePage()
             saved = _load_json(cfg_path)
             assert saved.get("wikipedia_fallback_enabled") is False
@@ -2083,7 +2083,7 @@ class TestSearchProvidersPage:
             cfg_path = Path(f.name)
         try:
             page = self._make_page(brave_key="", wiki_enabled=True)
-            with patch("jarvis.config.default_config_path", return_value=cfg_path):
+            with patch("jarvis.config.get_config_path", return_value=cfg_path):
                 page.validatePage()
             saved = _load_json(cfg_path)
             assert "brave_search_api_key" not in saved
@@ -2102,7 +2102,7 @@ class TestSearchProvidersPage:
             cfg_path = Path(f.name)
         try:
             page = self._make_page(brave_key="BSA-key", wiki_enabled=False)
-            with patch("jarvis.config.default_config_path", return_value=cfg_path):
+            with patch("jarvis.config.get_config_path", return_value=cfg_path):
                 page.validatePage()
             saved = _load_json(cfg_path)
             assert saved["ollama_chat_model"] == "gpt-oss:20b"

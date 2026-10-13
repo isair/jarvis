@@ -24,7 +24,7 @@ from PyQt6.QtGui import QFont
 
 from jarvis.config import (
     get_default_config, load_config,
-    default_config_path, _save_json, _load_json,
+    get_config_path, _save_json, _load_json,
     SUPPORTED_CHAT_MODELS,
 )
 from jarvis.debug import debug_log
@@ -421,7 +421,7 @@ class SettingsWindow(QDialog):
         self.setMinimumSize(780, 560)
         self.resize(840, 620)
         self._widgets: Dict[str, Any] = {}  # key -> widget
-        self._config_path = default_config_path()
+        self._config_path = get_config_path()
         self._current_config = _load_json(self._config_path)
         self._defaults = get_default_config()
         self._merged = {**self._defaults, **self._current_config}
@@ -930,7 +930,7 @@ class SettingsWindow(QDialog):
             config.pop("mcps", None)
 
         if _save_json(self._config_path, config):
-            debug_log("settings saved to config.json", "settings")
+            debug_log(f"settings saved to {self._config_path}", "settings")
             QMessageBox.information(
                 self, "✅ Saved",
                 "Settings saved. Restart Jarvis for changes to take effect."

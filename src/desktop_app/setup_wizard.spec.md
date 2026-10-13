@@ -1,5 +1,7 @@
 # Setup Wizard Specification
 
+[Configuration file selection](../jarvis/config.spec.md) is shared with the daemon. Desktop configuration reads, writes and directory navigation use the selected file.
+
 First-run wizard that sets up Whisper and a local model provider before Jarvis starts.
 
 ## Overview

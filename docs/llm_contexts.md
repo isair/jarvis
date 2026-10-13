@@ -2,6 +2,8 @@
 
 Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it is gated. This is the reference for optimising the app's main bottleneck (LLM latency). Keep it in sync with the code — see the note at the bottom.
 
+**Configuration source.** Runtime settings and desktop configuration share [one file selection](../src/jarvis/config.spec.md). An explicit `JARVIS_CONFIG_PATH` applies to settings and wizard writes as well as runtime loading. Model tiers, prompts, deadlines and context gates resolve from that selected configuration.
+
 **Evaluation replay.** [Query/context comparison](query_context_comparison.md)
 runs synthetic directed speech through the intent judge, router, planner and
 reply contexts. Its `raw_context` arm uses production `SpeechContext` transport;

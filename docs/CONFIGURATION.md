@@ -6,7 +6,7 @@ Detailed settings, dictation, integrations and troubleshooting. Start with the d
 
 ## Configuration
 
-Most users won't need to change anything. Open **⚙️ Settings** from the tray menu to configure Jarvis through a graphical interface: no JSON editing required. Settings are saved to `~/.config/jarvis/config.json`.
+Most users won't need to change anything. Open **⚙️ Settings** from the tray menu to configure Jarvis through a graphical interface: no JSON editing required. Settings are saved to `~/.config/jarvis/config.json` by default. `XDG_CONFIG_HOME` changes the configuration directory; `JARVIS_CONFIG_PATH` selects a specific file for both the desktop and daemon.
 
 [Example configuration](../examples/config.json) lists the canonical defaults. Copy only the settings you want to override; the Setup Wizard adapts model choices to your hardware.
 

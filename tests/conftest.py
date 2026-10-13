@@ -103,19 +103,8 @@ class MockConfig:
 
 @pytest.fixture(autouse=True)
 def _isolate_user_config_path(tmp_path_factory, monkeypatch):
-    """Redirect ``default_config_path`` to a per-session tempfile so a test
-    that calls ``load_settings`` (or any other code path that resolves the
-    user's config) cannot read or overwrite ``~/.config/jarvis/config.json``.
-
-    Tests that need to exercise the loader against specific JSON should
-    monkey-patch ``_load_json`` (and ``_save_json`` if the migration would
-    trigger a write) directly. This fixture is a belt-and-braces guard so
-    a half-mocked test cannot reach the real config file.
-    """
+    """Select a temporary configuration for every runtime and desktop reader."""
     sandbox = tmp_path_factory.mktemp("jarvis_config_sandbox")
-    monkeypatch.setattr(
-        "jarvis.config.default_config_path", lambda: sandbox / "config.json"
-    )
     monkeypatch.setenv("JARVIS_CONFIG_PATH", str(sandbox / "config.json"))
 
 
@@ -309,7 +298,7 @@ def settings_config_path(qapp, tmp_path, monkeypatch):
 
     path = tmp_path / "config.json"
     path.write_text("{}", encoding="utf-8")
-    monkeypatch.setattr(sw, "default_config_path", lambda: path)
+    monkeypatch.setenv("JARVIS_CONFIG_PATH", str(path))
     monkeypatch.setattr(sw, "get_input_devices", lambda: [("", "Default"), ("7", "Microphone")])
     monkeypatch.setattr(sw.QMessageBox, "information", lambda *args: None)
     return path
