@@ -43,7 +43,7 @@ from jarvis.utils.location import (
 
 
 @pytest.fixture
-def stub_openai_server():
+def stub_openai_server(owned_loopback_http):
     """A minimal in-process server answering GET /v1/models, for exercising
     the wizard's model-fetch against a real HTTP endpoint."""
     import json
@@ -75,6 +75,18 @@ def stub_openai_server():
     finally:
         httpd.shutdown()
         httpd.server_close()
+        thread.join(timeout=3)
+        assert not thread.is_alive()
+
+
+@pytest.fixture
+def unavailable_openai_endpoint(owned_loopback_http):
+    """Reserve an owned port without listening so failure cannot hit another service."""
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as stream:
+        stream.bind(("127.0.0.1", 0))
+        yield f"http://127.0.0.1:{stream.getsockname()[1]}/v1"
 
 
 @pytest.fixture
@@ -835,22 +847,23 @@ class TestOpenAICompatiblePage:
         finally:
             cfg_path.unlink(missing_ok=True)
 
-    def test_initialize_page_defaults_base_url_for_first_run(self, qapp):
-        """A first-time user (empty config) gets the common LM Studio base
-        URL prefilled so they can just click Connect."""
-        import tempfile
-        from pathlib import Path
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-            f.write("{}")
-            cfg_path = Path(f.name)
-        try:
-            page = OpenAICompatiblePage()
-            with patch("jarvis.config.get_config_path", return_value=cfg_path):
-                page.initializePage()
-            assert page._base_url_input.text() == OpenAICompatiblePage._DEFAULT_BASE_URL
-            assert page._chat_model_combo.currentText() == ""
-        finally:
-            cfg_path.unlink(missing_ok=True)
+    @pytest.mark.integration
+    def test_initialize_page_defaults_base_url_for_first_run(self, qapp, tmp_path, monkeypatch, stub_openai_server):
+        """First-run defaults and discovery use the owned local server."""
+        base, _ = stub_openai_server
+        cfg_path = tmp_path / "config.json"
+        cfg_path.write_text("{}", encoding="utf-8")
+        monkeypatch.setenv("JARVIS_CONFIG_PATH", str(cfg_path))
+        monkeypatch.setattr(OpenAICompatiblePage, "_DEFAULT_BASE_URL", base)
+        monkeypatch.setattr(OpenAICompatiblePage, "_KNOWN_SERVERS", [("Owned", base)])
+        page = OpenAICompatiblePage()
+        page.initializePage()
+        assert page._base_url_input.text() == OpenAICompatiblePage._DEFAULT_BASE_URL
+        assert page._chat_model_combo.currentText() == ""
+        assert page._discovery_worker.wait(3000)
+        qapp.processEvents()
+        assert "Found Owned" in page._connect_status.text()
+        assert base in page._connect_status.text()
 
     def test_model_fields_are_editable_dropdowns(self, qapp):
         """Chat + embedding models are editable combo boxes: a guided list to
@@ -862,16 +875,18 @@ class TestOpenAICompatiblePage:
         assert page._chat_model_combo.isEditable()
         assert page._embed_model_combo.isEditable()
 
+    @pytest.mark.integration
     def test_fetch_models_returns_server_model_ids(self, stub_openai_server):
         """_fetch_models hits /v1/models on the configured server."""
         base, _ = stub_openai_server
         models = OpenAICompatiblePage._fetch_models(base, "", timeout=3)
         assert "stub-chat" in models and "stub-embed" in models
 
-    def test_fetch_models_failsoft_on_unreachable_server(self):
+    @pytest.mark.integration
+    def test_fetch_models_failsoft_on_unreachable_server(self, unavailable_openai_endpoint):
         """An unreachable server yields an empty list (never raises), so the
         user can still type a model id by hand."""
-        models = OpenAICompatiblePage._fetch_models("http://127.0.0.1:1/v1", "", timeout=1)
+        models = OpenAICompatiblePage._fetch_models(unavailable_openai_endpoint, "", timeout=1)
         assert models == []
 
     def test_populate_models_fills_dropdowns_preserving_current(self, qapp):
@@ -941,11 +956,12 @@ class TestOpenAICompatiblePage:
         page._preset_combo.setCurrentIndex(1)
         assert page._base_url_input.text() == url
 
-    def test_discover_servers_finds_running_server(self, stub_openai_server):
+    @pytest.mark.integration
+    def test_discover_servers_finds_running_server(self, stub_openai_server, unavailable_openai_endpoint):
         """Discovery returns reachable loopback servers and skips dead ports."""
         base, _ = stub_openai_server
         found = OpenAICompatiblePage._discover_servers(
-            [("Stub", base), ("Dead", "http://127.0.0.1:1/v1")], timeout=2)
+            [("Stub", base), ("Dead", unavailable_openai_endpoint)], timeout=2)
         assert found == [("Stub", base)]
 
     def test_capability_summary_reports_each_feature(self):
