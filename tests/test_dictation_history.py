@@ -14,50 +14,67 @@ import pytest
 # DictationHistory storage tests
 # ---------------------------------------------------------------------------
 
+@pytest.mark.unit
+@pytest.mark.usefixtures("no_network")
 class TestDictationHistory:
-    """Tests for the file-backed dictation history store."""
+    """Saved records retain metadata, bounded order and external changes."""
 
-    def _make_history(self, tmp_path):
+    @pytest.mark.parametrize("limit", [1, 3, 7])
+    def test_records_persist_with_metadata_and_bounded_newest_order(self, tmp_path, limit):
+        from uuid import UUID
         from jarvis.dictation.history import DictationHistory
-        return DictationHistory(path=tmp_path / "history.json")
 
-    def test_add_and_get_all(self, tmp_path):
-        h = self._make_history(tmp_path)
-        entry = h.add("hello world", duration=2.5)
-        assert entry["text"] == "hello world"
-        assert entry["duration"] == 2.5
-        assert "id" in entry
-        assert "timestamp" in entry
+        path = tmp_path / "history.json"
+        history = DictationHistory(path=path, max_entries=limit)
+        assert history.get_all() == [] and history.count == 0
+        submitted = []
+        for index in range(limit + 2):
+            text = ("Hello world", "İstanbul, 東京", "Same repeated dictation")[index % 3]
+            duration = index + 0.125
+            before = time.time()
+            entry = history.add(text, duration=duration)
+            after = time.time()
+            assert entry["text"] == text
+            assert entry["duration"] == round(duration, 1)
+            assert before <= entry["timestamp"] <= after
+            assert UUID(entry["id"]).version == 4
+            submitted.append(entry)
+        assert len({entry["id"] for entry in submitted}) == len(submitted)
+        retained = submitted[-limit:]
+        assert history.count == len(retained)
+        assert history.get_all() == retained[::-1]
+        assert json.loads(path.read_text(encoding="utf-8")) == retained
+        assert DictationHistory(path=path, max_entries=limit).get_all() == retained[::-1]
 
-        entries = h.get_all()
-        assert len(entries) == 1
-        assert entries[0]["text"] == "hello world"
+    @pytest.mark.parametrize("operation", ["delete", "clear"])
+    def test_mutations_persist_by_identity(self, tmp_path, operation):
+        from jarvis.dictation.history import DictationHistory
 
-    def test_get_all_returns_newest_first(self, tmp_path):
-        h = self._make_history(tmp_path)
-        h.add("first")
-        h.add("second")
-        h.add("third")
+        path = tmp_path / "history.json"
+        history = DictationHistory(path=path)
+        removed = history.add("Same dictation")
+        survivor = history.add("Same dictation")
+        if operation == "delete":
+            assert history.delete(removed["id"]) is True
+            expected = [survivor]
+        else:
+            history.clear()
+            expected = []
+        assert history.get_all() == expected
+        assert history.count == len(expected)
+        assert DictationHistory(path=path).get_all() == expected
 
-        entries = h.get_all()
-        assert [e["text"] for e in entries] == ["third", "second", "first"]
+    def test_missing_deletion_preserves_saved_bytes(self, tmp_path):
+        from jarvis.dictation.history import DictationHistory
 
-    def test_delete_entry(self, tmp_path):
-        h = self._make_history(tmp_path)
-        e1 = h.add("keep me")
-        e2 = h.add("delete me")
+        path = tmp_path / "history.json"
+        history = DictationHistory(path=path)
+        entry = history.add("Keep this dictation")
+        before = path.read_bytes()
+        assert history.delete("Missing record") is False
+        assert path.read_bytes() == before
+        assert history.get_all() == [entry]
 
-        assert h.delete(e2["id"]) is True
-        assert h.count == 1
-        assert h.get_all()[0]["text"] == "keep me"
-
-    def test_delete_nonexistent_returns_false(self, tmp_path):
-        h = self._make_history(tmp_path)
-        h.add("something")
-        assert h.delete("nonexistent-id") is False
-        assert h.count == 1
-
-    @pytest.mark.unit
     @pytest.mark.parametrize("change", ["addition", "deletion", "replacement"])
     def test_delete_uses_current_disk_entries(self, tmp_path, change):
         from jarvis.dictation.history import DictationHistory
@@ -79,129 +96,62 @@ class TestDictationHistory:
         assert DictationHistory(path=path).get_all() == expected
         assert added in expected
 
-    def test_clear(self, tmp_path):
-        h = self._make_history(tmp_path)
-        h.add("one")
-        h.add("two")
-        h.clear()
-        assert h.count == 0
-        assert h.get_all() == []
 
-    def test_persistence_across_instances(self, tmp_path):
+    @pytest.mark.parametrize("content", ["", "not valid json{{{"])
+    def test_initial_unavailable_store_is_empty_without_rewriting(self, tmp_path, content):
+        from jarvis.dictation.history import DictationHistory
+
         path = tmp_path / "history.json"
+        path.write_text(content, encoding="utf-8")
+        history = DictationHistory(path=path)
+        assert history.get_all() == [] and history.count == 0
+        assert path.read_text(encoding="utf-8") == content
+
+    def test_reload_picks_up_external_records(self, tmp_path):
         from jarvis.dictation.history import DictationHistory
 
-        h1 = DictationHistory(path=path)
-        h1.add("persisted text", duration=1.0)
-
-        h2 = DictationHistory(path=path)
-        entries = h2.get_all()
-        assert len(entries) == 1
-        assert entries[0]["text"] == "persisted text"
-
-    def test_max_entries_trimming(self, tmp_path):
-        from jarvis.dictation.history import DictationHistory
-        h = DictationHistory(path=tmp_path / "history.json", max_entries=3)
-        h.add("a")
-        h.add("b")
-        h.add("c")
-        h.add("d")  # Should trim oldest
-
-        assert h.count == 3
-        texts = [e["text"] for e in h.get_all()]
-        assert "a" not in texts
-        assert texts == ["d", "c", "b"]
-
-    def test_empty_file_loads_gracefully(self, tmp_path):
         path = tmp_path / "history.json"
-        path.write_text("")
-        from jarvis.dictation.history import DictationHistory
-        h = DictationHistory(path=path)
-        assert h.count == 0
+        history = DictationHistory(path=path)
+        external = [{"id": "external", "text": "İstanbul, 東京", "timestamp": 1.0, "duration": 0.5}]
+        path.write_text(json.dumps(external), encoding="utf-8")
+        assert history.count == 0
+        history.reload_from_disk()
+        assert history.get_all() == external and history.count == len(external)
 
-    def test_corrupt_file_loads_gracefully(self, tmp_path):
-        path = tmp_path / "history.json"
-        path.write_text("not valid json{{{")
-        from jarvis.dictation.history import DictationHistory
-        h = DictationHistory(path=path)
-        assert h.count == 0
-
-    def test_count_property(self, tmp_path):
-        h = self._make_history(tmp_path)
-        assert h.count == 0
-        h.add("x")
-        assert h.count == 1
-        h.add("y")
-        assert h.count == 2
-
-    def test_entry_has_uuid_id(self, tmp_path):
-        h = self._make_history(tmp_path)
-        e = h.add("test")
-        # UUID4 hex is 32 chars
-        assert len(e["id"]) == 32
-        assert e["id"].isalnum()
-
-    def test_entry_timestamp_is_recent(self, tmp_path):
-        h = self._make_history(tmp_path)
-        before = time.time()
-        e = h.add("test")
-        after = time.time()
-        assert before <= e["timestamp"] <= after
-
-    def test_reload_from_disk_picks_up_external_writes(self, tmp_path):
-        """reload_from_disk should refresh entries written by another process."""
-        path = tmp_path / "history.json"
-        from jarvis.dictation.history import DictationHistory
-
-        h = DictationHistory(path=path)
-        assert h.count == 0
-
-        # Simulate another process writing entries directly to the file
-        external_entries = [
-            {"id": "aaa", "text": "from daemon", "timestamp": 1.0, "duration": 0.5},
-        ]
-        path.write_text(json.dumps(external_entries))
-
-        # Before reload, in-memory state is stale
-        assert h.count == 0
-
-        h.reload_from_disk()
-        assert h.count == 1
-        assert h.get_all()[0]["text"] == "from daemon"
-
-    def test_reload_from_disk_is_thread_safe(self, tmp_path):
-        """reload_from_disk should acquire the lock (no crash under contention)."""
+    def test_concurrent_reload_retains_every_written_record(self, tmp_path):
         import threading
         from jarvis.dictation.history import DictationHistory
 
         path = tmp_path / "history.json"
-        h = DictationHistory(path=path)
-        h.add("initial")
-
-        errors = []
+        record_count = 20
+        history = DictationHistory(path=path, max_entries=record_count + 1)
+        initial = history.add("Initial record")
+        written, errors = [], []
 
         def writer():
             try:
-                for i in range(20):
-                    h.add(f"entry-{i}")
-            except Exception as e:
-                errors.append(e)
+                for index in range(record_count):
+                    written.append(history.add(f"Entry {index}"))
+            except Exception as exc:
+                errors.append(exc)
 
         def reloader():
             try:
-                for _ in range(20):
-                    h.reload_from_disk()
-            except Exception as e:
-                errors.append(e)
+                for _ in range(record_count):
+                    history.reload_from_disk()
+            except Exception as exc:
+                errors.append(exc)
 
-        t1 = threading.Thread(target=writer)
-        t2 = threading.Thread(target=reloader)
-        t1.start()
-        t2.start()
-        t1.join()
-        t2.join()
-
-        assert errors == [], f"Thread safety errors: {errors}"
+        threads = [threading.Thread(target=writer), threading.Thread(target=reloader)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=5)
+        assert all(not thread.is_alive() for thread in threads)
+        assert errors == []
+        expected = written[::-1] + [initial]
+        assert history.get_all() == expected
+        assert DictationHistory(path=path, max_entries=record_count + 1).get_all() == expected
 
 
 # ---------------------------------------------------------------------------
