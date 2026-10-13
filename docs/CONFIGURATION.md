@@ -8,6 +8,8 @@ Detailed settings, dictation, integrations and troubleshooting. Start with the d
 
 Most users won't need to change anything. Open **⚙️ Settings** from the tray menu to configure Jarvis through a graphical interface: no JSON editing required. Settings are saved to `~/.config/jarvis/config.json`.
 
+[Example configuration](../examples/config.json) lists the canonical defaults. Copy only the settings you want to override; the Setup Wizard adapts model choices to your hardware.
+
 <details>
 <summary><strong>LLM Provider (Ollama or OpenAI-compatible)</strong></summary>
 
