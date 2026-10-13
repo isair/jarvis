@@ -169,7 +169,6 @@ class TestCheckOllamaServer:
         """Use owned configuration and isolate the backend HTTP stub."""
         mock_config.ollama_base_url = 'http://wizard-test.invalid:11434'
         monkeypatch.setattr(setup_wizard, 'load_settings', lambda: mock_config)
-        monkeypatch.setattr(ollama, 'requests', SimpleNamespace(**vars(requests)))
 
     def test_detects_running_server(self, real_http_protocol_probe):
         """When server is running, returns True with version."""
@@ -177,7 +176,7 @@ class TestCheckOllamaServer:
         mock_response.status_code = 200
         mock_response._content = json.dumps({'version': '0.1.23'}).encode()
 
-        with patch.object(ollama.requests, 'get', return_value=mock_response):
+        with patch.object(ollama.http, 'get', return_value=mock_response):
             is_running, version = check_ollama_server()
 
             assert is_running is True
@@ -187,7 +186,7 @@ class TestCheckOllamaServer:
 
     def test_returns_false_when_server_not_running(self, real_http_protocol_probe):
         """When server is not responding, returns False."""
-        with patch.object(ollama.requests, 'get', side_effect=requests.exceptions.ConnectionError('Connection refused')):
+        with patch.object(ollama.http, 'get', side_effect=requests.exceptions.ConnectionError('Connection refused')):
             is_running, version = check_ollama_server()
 
             assert is_running is False
@@ -197,7 +196,7 @@ class TestCheckOllamaServer:
 
     def test_handles_timeout(self, real_http_protocol_probe):
         """When request times out, returns False."""
-        with patch.object(ollama.requests, 'get', side_effect=requests.exceptions.Timeout):
+        with patch.object(ollama.http, 'get', side_effect=requests.exceptions.Timeout):
             is_running, version = check_ollama_server()
 
             assert is_running is False

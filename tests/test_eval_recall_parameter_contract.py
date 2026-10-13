@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 """Existing memory extractor evals reach the selected local transport."""
 import importlib
 from pathlib import Path
@@ -7,7 +8,6 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
-import requests
 
 from evals.helpers import MockConfig
 
@@ -23,7 +23,7 @@ ENTRIES = [
 @pytest.mark.parametrize('entry', ENTRIES)
 @pytest.mark.parametrize('provider', ['ollama', 'openai_compatible'])
 def test_extractor_eval_uses_the_selected_backend(monkeypatch, entry, provider):
-    monkeypatch.setattr(requests, 'get', lambda *args, **kwargs: SimpleNamespace(status_code=404))
+    monkeypatch.setattr('jarvis.llm.http.get', lambda *args, **kwargs: nullcontext(SimpleNamespace(status_code=404)))
     path = Path(__file__).resolve().parents[1] / 'evals' / 'test_agent_behavior.py'
     monkeypatch.syspath_prepend(str(path.parent))
     with monkeypatch.context() as scope:
@@ -45,7 +45,7 @@ def test_extractor_eval_uses_the_selected_backend(monkeypatch, entry, provider):
                                      'choices': [{'message': {'content': answer}}]}
         return response
 
-    monkeypatch.setattr(requests, 'post', post)
+    monkeypatch.setattr('jarvis.llm.http.post', post)
     name, arguments = entry
     getattr(cases['TestMemoryEnrichment'](), name)(mock_config=MockConfig(), **arguments)
     endpoint = base + ('/api/chat' if provider == 'ollama' else '/v1/chat/completions')
