@@ -659,7 +659,6 @@ def test_delayed_stop_only_interrupts_tts_that_overlapped_capture(
     obj._intent_judge = None
     obj._transcript_buffer = Mock()
     obj._stop_thinking_tune = Mock()
-    obj._is_thinking_tune_active = lambda: False
     obj._start_thinking_tune = Mock()
     obj._set_face_state_listening = Mock()
     obj._clear_audio_buffers = Mock()
@@ -693,7 +692,6 @@ def test_delayed_utterance_does_not_inherit_later_tts_text_for_intent():
     obj._transcript_buffer = Mock()
     obj._buffer_duration = 120
     obj._stop_thinking_tune = Mock()
-    obj._is_thinking_tune_active = lambda: False
     obj._start_thinking_tune = Mock()
     obj._set_face_state_listening = Mock()
     obj._clear_audio_buffers = Mock()

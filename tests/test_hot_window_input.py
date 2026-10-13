@@ -89,6 +89,13 @@ def _install_intent_judge(listener, judgment):
     return mock_judge
 
 
+def _install_silent_thinking_tune(listener):
+    """Simulate an active cue without opening an audio output device."""
+    player = MagicMock()
+    player.is_playing.return_value = True
+    listener._tune_player = player
+
+
 def _simulate_tts_finish(listener):
     """Simulate TTS finishing: track finish time and schedule hot window activation."""
     listener.echo_detector.track_tts_finish()

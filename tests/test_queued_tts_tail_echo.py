@@ -7,6 +7,7 @@ import pytest
 from test_hot_window_input import (
     _accepted_query, _create_listener, _install_intent_judge,
     _make_judgment, _simulate_tts_finish, _wait_for_hot_window_state,
+    _install_silent_thinking_tune,
 )
 
 pytestmark = [pytest.mark.unit, pytest.mark.usefixtures('no_network')]
@@ -27,8 +28,9 @@ def test_queued_echo_does_not_consume_follow_up_window(spoken, tail, thinking, c
         _simulate_tts_finish(listener)
         _wait_for_hot_window_state(listener)
         judge = _install_intent_judge(listener, _make_judgment(directed=True))
-        with patch.object(judge, 'judge', side_effect=AssertionError('Playback echo reached model inference')), \
-             patch.object(listener, '_is_thinking_tune_active', return_value=thinking):
+        if thinking:
+            _install_silent_thinking_tune(listener)
+        with patch.object(judge, 'judge', side_effect=AssertionError('Playback echo reached model inference')):
             listener._process_transcript(
                 tail, utterance_energy=0.01,
                 utterance_start_time=captured_start,
