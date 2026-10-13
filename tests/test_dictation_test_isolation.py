@@ -41,7 +41,7 @@ def test_dictation_test_cannot_publish_to_the_protected_default_store(tmp_path):
     result = subprocess.run(
         [sys.executable, "-m", "pytest", "-q", "-p", "history_boundary",
          "--basetemp", str(tmp_path / "child-tests"),
-         "tests/test_dictation.py::TestTranscribeAndPaste::test_successful_transcription_pastes"],
+         "tests/test_dictation.py::TestTranscribeAndPaste::test_finalisation_delivery_and_persisted_history[valid]"],
         cwd=root, env=env, capture_output=True, text=True, timeout=60,
     )
     assert result.returncode == 0, result.stdout + result.stderr
