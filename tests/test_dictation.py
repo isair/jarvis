@@ -713,6 +713,8 @@ class TestTranscribeAndPaste:
             model.transcribe.return_value = ([SimpleNamespace(text=text)], SimpleNamespace())
         path = tmp_path / 'history.json'
         pasted, delivered, phases = [], [], []
+        monkeypatch.setattr(dictation_engine, 'pynput_keyboard', None)
+        monkeypatch.setattr(dictation_engine, 'parse_hotkey', lambda _: (frozenset(), None))
         monkeypatch.setattr(dictation_engine, '_clipboard_paste', pasted.append)
         monkeypatch.setattr(dictation_engine, '_play_beep', lambda *args: None)
         engine = _make_engine(
