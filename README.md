@@ -9,7 +9,7 @@ Talk naturally, as if Jarvis were a third person in the room.
 
 **Voice-first · Local AI · Personal memory · No subscription**
 
-[**Download Jarvis →**](https://github.com/isair/jarvis/releases) &nbsp; · &nbsp; [Get started](#quick-install) &nbsp; · &nbsp; [Explore the app](#inside-jarvis) &nbsp; · &nbsp; [Support the project](#support)
+[**Download Jarvis →**](https://github.com/isair/jarvis/releases) &nbsp; · &nbsp; [Website](https://barissencan.com/jarvis/) &nbsp; · &nbsp; [Get started](#quick-install) &nbsp; · &nbsp; [Explore the app](#inside-jarvis) &nbsp; · &nbsp; [Support the project](#support)
 
 </div>
 
@@ -21,7 +21,7 @@ Jarvis is built to be part of the conversation. Talk through an idea, discuss pl
 
 Address Jarvis by name anywhere in a sentence and follow up naturally. Speech recognition, language models and speech synthesis run on hardware you control.
 
-Your conversation and all data stays solely on your computer. Sensitive information is redacted before it reaches model context or the saved diary, even though both are local, to ensure the security of your private information. Web search, weather and connected tools use the network but send only what is necessary when you ask for those capabilities.
+Your diary and knowledge graph stay on your computer. Speech and chat models run locally when you use a local model server. Sensitive information is redacted before reaching model context or the saved diary. Web search, weather and connected tools use the network for those requests.
 
 <p align="center">
   <img src="docs/img/face.png" alt="Jarvis's floating amber face, with no frame or background" width="420">
