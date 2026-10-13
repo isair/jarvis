@@ -6,7 +6,6 @@ the ``think`` parameter sent to Ollama across all call sites.
 """
 
 import json
-import threading
 from unittest.mock import patch, MagicMock
 
 import pytest
@@ -67,28 +66,6 @@ class TestLlmThinkingPayload:
             assert result == answer
             if operation == 'streaming':
                 assert seen == [answer]
-
-
-# ---------------------------------------------------------------------------
-# Dictation engine
-# ---------------------------------------------------------------------------
-
-class TestDictationThinking:
-    """Dictation engine respects the thinking config."""
-
-    def test_engine_stores_thinking(self):
-        from jarvis.dictation.dictation_engine import DictationEngine
-
-        engine = DictationEngine(
-            whisper_model_ref=lambda: MagicMock(),
-            whisper_backend_ref=lambda: "faster-whisper",
-            mlx_repo_ref=lambda: None,
-            hotkey="ctrl+shift+d",
-            sample_rate=16000,
-            transcribe_lock=threading.Lock(),
-            thinking=True,
-        )
-        assert engine._thinking is True
 
 
 # ---------------------------------------------------------------------------

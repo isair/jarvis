@@ -1114,6 +1114,33 @@ class TestClipboardWindowsCtypes:
 class TestLlmCleanDictation:
     """Cleanup preserves full output through each configured local transport."""
 
+    def assert_pipeline_result(self, monkeypatch, tmp_path, cfg, original, expected, thinking):
+        from dataclasses import replace
+        from types import SimpleNamespace
+        import numpy as np
+        from jarvis.dictation import dictation_engine
+        from jarvis.dictation.history import DictationHistory
+
+        cfg = replace(cfg, dictation_thinking_enabled=thinking)
+        model = MagicMock()
+        model.transcribe.return_value = ([SimpleNamespace(text=original)], SimpleNamespace())
+        history_path = tmp_path / 'history.json'
+        history = DictationHistory(path=history_path)
+        pasted, delivered = [], []
+        monkeypatch.setattr(dictation_engine, '_clipboard_paste', pasted.append)
+        engine = _make_engine(
+            whisper_model_ref=lambda: model, history=history, cfg=cfg,
+            filler_removal=True, chat_model=cfg.llm_chat_model,
+            thinking=cfg.dictation_thinking_enabled, on_dictation_result=delivered.append,
+        )
+        frames = [np.zeros(int(engine._target_sample_rate * 0.5), dtype=np.float32)]
+        engine._transcribe_and_paste(frames, engine._target_sample_rate)
+
+        assert pasted == [expected]
+        assert [entry['text'] for entry in delivered] == [expected]
+        assert [entry['duration'] for entry in delivered] == [0.5]
+        assert DictationHistory(path=history_path).get_all() == delivered
+
     @pytest.fixture(params=['ollama', 'openai_compatible'])
     def cfg(self, request):
         from dataclasses import replace
@@ -1125,9 +1152,8 @@ class TestLlmCleanDictation:
 
     @pytest.mark.parametrize('thinking', [False, True])
     @pytest.mark.parametrize('word_count', [2, 300])
-    def test_complete_cleanup_uses_configured_transport_and_budget(self, monkeypatch, cfg, thinking, word_count):
+    def test_complete_cleanup_uses_configured_transport_and_budget(self, monkeypatch, tmp_path, cfg, thinking, word_count):
         from contextlib import nullcontext
-        from jarvis.dictation.dictation_engine import _llm_clean_dictation
         from jarvis.llm import http
 
         provider = cfg.llm_provider
@@ -1160,14 +1186,12 @@ class TestLlmCleanDictation:
             return nullcontext(response)
 
         monkeypatch.setattr(http, 'post', post)
-        assert _llm_clean_dictation(original, cfg, model=cfg.llm_chat_model,
-                                    thinking=thinking) == cleaned
+        self.assert_pipeline_result(monkeypatch, tmp_path, cfg, original, cleaned, thinking)
 
     @pytest.mark.parametrize('failure', ['empty', 'unavailable'])
-    def test_failed_cleanup_preserves_the_full_transcription(self, monkeypatch, cfg, failure):
+    def test_failed_cleanup_preserves_the_full_transcription(self, monkeypatch, tmp_path, cfg, failure):
         from contextlib import nullcontext
         import requests
-        from jarvis.dictation.dictation_engine import _llm_clean_dictation
         from jarvis.llm import http
 
         original = 'Keep every word and the ending of this transcription.'
@@ -1183,7 +1207,8 @@ class TestLlmCleanDictation:
             return nullcontext(response)
 
         monkeypatch.setattr(http, 'post', post)
-        assert _llm_clean_dictation(original, cfg) == original
+        self.assert_pipeline_result(monkeypatch, tmp_path, cfg, original, original,
+                                    cfg.dictation_thinking_enabled)
 
 
 @pytest.mark.unit
