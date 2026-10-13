@@ -2,7 +2,7 @@ name: public-site
 
 on:
   push:
-    branches: [develop]
+    branches: [main]
     paths:
       - 'website/**'
       - 'docs/img/face.png'
@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   build:
-    if: github.ref == 'refs/heads/develop'
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -44,7 +44,7 @@ jobs:
 
   deploy:
     needs: build
-    if: github.ref == 'refs/heads/develop'
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       pages: write

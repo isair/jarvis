@@ -7,10 +7,23 @@ from urllib.parse import urlsplit
 import xml.etree.ElementTree as ET
 
 import pytest
+import yaml
 
 pytestmark = [pytest.mark.unit, pytest.mark.usefixtures('no_network')]
 ROOT = Path(__file__).resolve().parents[1]
 ROUTES = tuple(page['route'] for page in json.loads((ROOT / 'website/site.json').read_text())['pages'])
+
+
+def test_publication_accepts_only_main_and_keeps_pull_requests_unprivileged():
+    workflow = yaml.load((ROOT / '.github/workflows/public-site.yml').read_text(), Loader=yaml.BaseLoader)
+    assert workflow['on']['push']['branches'] == ['main']
+    assert 'pull_request' not in workflow['on']
+    for job in workflow['jobs'].values():
+        assert job['if'] == "github.ref == 'refs/heads/main'"
+    checks = yaml.load((ROOT / '.github/workflows/website-checks.yml').read_text(), Loader=yaml.BaseLoader)
+    assert 'pull_request' in checks['on']
+    assert checks['permissions'] == {'contents': 'read'}
+    assert all('environment' not in job for job in checks['jobs'].values())
 
 
 class Page(HTMLParser):
