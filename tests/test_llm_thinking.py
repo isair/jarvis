@@ -186,40 +186,63 @@ class TestSettingsWindowThinking:
         assert saved['opaque'] == original['opaque']
 
 
-# ---------------------------------------------------------------------------
-# Timeout / error paths — regression test for missing debug_log import
-# ---------------------------------------------------------------------------
-
+@pytest.mark.unit
+@pytest.mark.usefixtures('no_network')
 class TestCallLlmDirectFailurePaths:
-    """Exercises the exception branches in call_llm_direct.
+    """Failed local requests stay private and permit a subsequent answer."""
 
-    These branches call debug_log; a missing import would surface here as a
-    NameError instead of the intended graceful None return.
-    """
-
-    def test_timeout_returns_none(self):
+    @pytest.mark.parametrize('entry', ['ollama', 'openai_compatible', 'helper'])
+    @pytest.mark.parametrize('stage,error_type', [
+        ('request', 'Timeout'), ('request', 'ConnectionError'),
+        ('status', 'HTTPError'), ('decode', 'ValueError'),
+    ])
+    def test_failure_diagnostics_and_recovery(self, monkeypatch, capsys, entry, stage, error_type):
+        from contextlib import nullcontext
         import requests
-        from jarvis.llm import call_llm_direct
+        from jarvis import llm
 
-        with patch('jarvis.llm.http.post', side_effect=requests.exceptions.Timeout):
-            result = call_llm_direct(
-                base_url="http://localhost:99999",
-                chat_model="test-model",
-                system_prompt="sys",
-                user_content="hi",
-                timeout_sec=0.1,
-            )
-        assert result is None
+        monkeypatch.setenv('JARVIS_VOICE_DEBUG', '1')
+        endpoint = 'http://127.0.0.1:1/private-endpoint?token=private-token'
+        private_text = 'Synthetic private question'
+        message = f'{endpoint}, {private_text}'
+        error_class = ValueError if error_type == 'ValueError' else getattr(requests.exceptions, error_type)
+        error = error_class(message)
+        response = MagicMock()
+        response.json.return_value = (
+            {'choices': [{'message': {'content': 'Complete synthetic answer'}, 'finish_reason': 'stop'}]}
+            if entry == 'openai_compatible' else
+            {'message': {'content': 'Complete synthetic answer'}, 'done': True}
+        )
+        if stage == 'status':
+            response.raise_for_status.side_effect = [error, None]
+        elif stage == 'decode':
+            response.json.side_effect = [error, response.json.return_value]
+        failed = False
 
-    def test_request_exception_returns_none(self):
-        from jarvis.llm import call_llm_direct
+        def post(*args, **kwargs):
+            nonlocal failed
+            if stage == 'request' and not failed:
+                failed = True
+                raise error
+            return nullcontext(response)
 
-        with patch('jarvis.llm.http.post', side_effect=ConnectionError("boom")):
-            result = call_llm_direct(
-                base_url="http://localhost:99999",
-                chat_model="test-model",
-                system_prompt="sys",
-                user_content="hi",
-                timeout_sec=0.1,
-            )
-        assert result is None
+        monkeypatch.setattr(llm.http, 'post', post)
+        if entry == 'helper':
+            call = lambda: llm.call_llm_direct(endpoint, 'synthetic-model', 'Synthetic instructions',
+                                             private_text, timeout_sec=0.25)
+        else:
+            backend_type = llm.OllamaBackend if entry == 'ollama' else llm.OpenAICompatibleBackend
+            backend = backend_type(endpoint)
+            call = lambda: backend.direct('synthetic-model', 'Synthetic instructions',
+                                          private_text, timeout_sec=0.25)
+        assert call() is None
+        captured = capsys.readouterr()
+        diagnostic = captured.out + captured.err
+        assert endpoint not in diagnostic
+        assert 'private-token' not in diagnostic
+        assert private_text not in diagnostic
+        if error_type == 'Timeout':
+            assert 'timeout' in diagnostic and '0.25' in diagnostic
+        else:
+            assert error_type in diagnostic
+        assert call() == 'Complete synthetic answer'

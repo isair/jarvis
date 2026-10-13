@@ -170,7 +170,7 @@ class OllamaBackend(LLMBackend):
             debug_log(f"OllamaBackend.direct: timeout after {timeout_sec}s", "llm")
             return None
         except Exception as e:
-            debug_log(f"OllamaBackend.direct: request failed — {e}", "llm")
+            debug_log(f"OllamaBackend.direct: request failed ({type(e).__name__})", "llm")
             return None
 
         return None
