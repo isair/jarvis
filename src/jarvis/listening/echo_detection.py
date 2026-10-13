@@ -11,10 +11,18 @@ from rapidfuzz import fuzz
 
 
 def _normalise_echo_token(token: str) -> str:
-    """Retain Unicode letters, marks and numbers when comparing echo words."""
+    """Retain Unicode word content and canonical internal apostrophes."""
     normalised = unicodedata.normalize("NFC", token).casefold()
-    return "".join(char for char in normalised
-                   if char.isalnum() or unicodedata.category(char).startswith('M') or char == "'")
+    kept = []
+    for index, char in enumerate(normalised):
+        if char in "'‘’":
+            if (0 < index < len(normalised) - 1
+                    and all(unicodedata.category(normalised[neighbour])[0] in "LM"
+                            for neighbour in (index - 1, index + 1))):
+                kept.append("'")
+        elif char.isalnum() or unicodedata.category(char).startswith('M'):
+            kept.append(char)
+    return "".join(kept)
 
 
 class EchoDetector:
