@@ -15,12 +15,13 @@ _helpers = runpy.run_path(str(Path(__file__).resolve().parents[1] / 'tests' / 't
 pytestmark = [pytest.mark.eval, requires_judge_llm]
 
 
+@pytest.mark.parametrize('processing_delay', [0, 0.06])
 @pytest.mark.parametrize('heard,is_echo', [
     ("We'll see sunny weather.", True),
     ('Well?', False),
     ("We'll see sunny weather tomorrow. Tell me more please.", False),
 ])
-def test_local_judge_receives_user_speech_and_not_literal_echo(heard, is_echo, capsys):
+def test_local_judge_receives_user_speech_and_not_literal_echo(heard, is_echo, processing_delay, capsys):
     cfg = replace(isolated_voice_settings(), hot_window_seconds=30, tune_enabled=False,
                   vad_enabled=False, echo_tolerance=0.02)
     listener, _ = _helpers['_create_listener'](hot_window_seconds=30, echo_tolerance=0.02)
@@ -40,11 +41,12 @@ def test_local_judge_receives_user_speech_and_not_literal_echo(heard, is_echo, c
     try:
         listener.echo_detector.track_tts_start('We’ll see sunny weather tomorrow.')
         _helpers['_simulate_tts_finish'](listener)
+        capture_finish = listener.echo_detector._last_tts_finish_time
         _helpers['_wait_for_hot_window_state'](listener)
-        now = time.time()
+        time.sleep(processing_delay)
         listener._handle_transcription_result(_TranscriptionResult(
             text=heard, language='en', low_confidence_events=(),
-            start_time=now - 0.01, end_time=now, energy=0.01,
+            start_time=capture_finish + 0.005, end_time=capture_finish + 0.01, energy=0.01,
             capture_generation=listener._capture_generation, captured_during_tts=False,
             captured_tts_start_time=listener.echo_detector._tts_start_time,
         ))
