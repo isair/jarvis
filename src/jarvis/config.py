@@ -43,6 +43,8 @@ SUPPORTED_CHAT_MODELS: Dict[str, Dict[str, str]] = {
 
 # The quality-first chat default; setup adapts it to the memory budget.
 DEFAULT_CHAT_MODEL = "gemma4:e4b"
+DEFAULT_EMBEDDING_MODEL = "nomic-embed-text"
+SUPPORTED_EMBEDDING_MODEL_IDS = (DEFAULT_EMBEDDING_MODEL,)
 # Ollama-path default for the fast tier (voice intent, tool routing, and the
 # other real-time classification passes). On an OpenAI-compatible chat
 # provider an unset fast model resolves to the active chat model instead —
@@ -508,7 +510,7 @@ def get_default_config() -> Dict[str, Any]:
         "embedding_api_key": "",
         "embedding_model": "",  # falls back to ollama_embed_model when empty
         "ollama_base_url": "http://127.0.0.1:11434",
-        "ollama_embed_model": "nomic-embed-text",
+        "ollama_embed_model": DEFAULT_EMBEDDING_MODEL,
         "ollama_chat_model": DEFAULT_CHAT_MODEL,
         "llm_chat_timeout_sec": 180.0,
         "llm_tools_timeout_sec": 300.0,

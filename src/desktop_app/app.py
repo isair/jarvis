@@ -64,7 +64,7 @@ except ImportError:
     QWebEngineView = None
 
 from jarvis.debug import debug_log
-from jarvis.config import get_config_path, _default_db_path, SUPPORTED_CHAT_MODELS, get_supported_model_ids
+from jarvis.config import get_config_path, _default_db_path, SUPPORTED_CHAT_MODELS, SUPPORTED_FAST_MODEL_IDS, SUPPORTED_EMBEDDING_MODEL_IDS, Settings
 from desktop_app.diary_dialog import DiaryUpdateDialog
 from desktop_app.themes import JARVIS_THEME_STYLESHEET, COLORS, apply_theme
 from desktop_app.log_output import LogStream, clean_log, parse_progress
@@ -888,129 +888,80 @@ def show_crash_report_dialog(crash_content: str) -> None:
         debug_log(f"failed to show crash report dialog: {e}", "desktop")
 
 
-def check_model_support() -> Optional[str]:
-    """
-    Check if the configured chat model is officially supported.
+MODEL_RECOMMENDATIONS = {
+    "Chat": SUPPORTED_CHAT_MODELS,
+    "Fast": SUPPORTED_FAST_MODEL_IDS,
+    "Embedding": SUPPORTED_EMBEDDING_MODEL_IDS,
+}
 
-    Returns the model name if unsupported, None if supported.
-    """
+
+def check_model_support(settings: Settings) -> dict[str, str]:
+    """Return unlisted selections for roles served by Ollama."""
+    def identity(model: str) -> str:
+        return model.removesuffix(":latest")
+
+    roles = (
+        ("Chat", settings.llm_provider, settings.llm_chat_model),
+        ("Fast", settings.llm_provider, settings.fast_model),
+        ("Embedding", settings.embedding_provider or settings.llm_provider,
+         settings.embedding_model),
+    )
+    return {
+        role: model for role, provider, model in roles
+        if provider == "ollama"
+        and identity(model) not in {identity(item) for item in MODEL_RECOMMENDATIONS[role]}
+    }
+
+
+class UnsupportedModelDialog(QDialog):
+    """Optional recommendation advice with an explicit setup action."""
+
+    def __init__(self, models: dict[str, str]):
+        super().__init__()
+        self.open_wizard = False
+        self.setWindowTitle("Model recommendations")
+        self.setMinimumWidth(500)
+        self.setStyleSheet(JARVIS_THEME_STYLESHEET)
+        layout = QVBoxLayout(self)
+        layout.setSpacing(16)
+        layout.setContentsMargins(24, 24, 24, 24)
+        header = QLabel("Your models are outside Jarvis's recommended list")
+        header.setWordWrap(True)
+        layout.addWidget(header)
+        lines = [
+            "You can keep using these models, or open setup to choose recommended models.",
+            "",
+        ]
+        for role, model in models.items():
+            lines.extend((f"{role}: {model}",
+                          f"Recommended: {', '.join(MODEL_RECOMMENDATIONS[role])}", ""))
+        description = QLabel("\n".join(lines))
+        description.setTextFormat(Qt.TextFormat.PlainText)
+        description.setWordWrap(True)
+        layout.addWidget(description)
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        keep = QPushButton("Continue Anyway")
+        keep.clicked.connect(self.accept)
+        buttons.addWidget(keep)
+        setup = QPushButton("🔧 Open Setup Wizard")
+        setup.clicked.connect(self._open_wizard)
+        buttons.addWidget(setup)
+        layout.addLayout(buttons)
+
+    def _open_wizard(self):
+        self.open_wizard = True
+        self.accept()
+
+
+def show_unsupported_model_dialog(models: dict[str, str]) -> bool:
+    """Return whether the user chose setup; advice never changes settings."""
     try:
-        from jarvis.config import load_config, DEFAULT_CHAT_MODEL
-        config = load_config()
-        model = config.get("ollama_chat_model", DEFAULT_CHAT_MODEL)
-
-        # Normalize model name (remove tag if it matches base)
-        base_model = model.split(":")[0] if ":" in model else model
-
-        # Check against supported models (also check base name)
-        supported_ids = get_supported_model_ids()
-        for supported in supported_ids:
-            supported_base = supported.split(":")[0]
-            if model == supported or base_model == supported_base:
-                return None
-
-        return model
-    except Exception:
-        return None
-
-
-def show_unsupported_model_dialog(model_name: str) -> bool:
-    """
-    Show a dialog warning about unsupported model.
-
-    Args:
-        model_name: The name of the unsupported model.
-
-    Returns:
-        True if user wants to open setup wizard, False to continue anyway.
-    """
-    try:
-        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton
-
-        class UnsupportedModelDialog(QDialog):
-            def __init__(self, model: str):
-                super().__init__()
-                self.model = model
-                self.open_wizard = False
-                self.setWindowTitle("⚠️ Unsupported Model")
-                self.setMinimumWidth(500)
-                self.setStyleSheet(JARVIS_THEME_STYLESHEET)
-                self._setup_ui()
-
-            def _setup_ui(self):
-                layout = QVBoxLayout(self)
-                layout.setSpacing(16)
-                layout.setContentsMargins(24, 24, 24, 24)
-
-                # Header
-                header = QLabel("⚠️ Using Unofficial Model")
-                header.setStyleSheet("font-size: 18px; font-weight: bold; color: #fbbf24;")
-                layout.addWidget(header)
-
-                # Description
-                supported_list = ", ".join(sorted(SUPPORTED_CHAT_MODELS))
-                desc = QLabel(
-                    f"You're using <b>{self.model}</b> which hasn't been tested with Jarvis.\n\n"
-                    f"Officially supported models: <b>{supported_list}</b>\n\n"
-                    "Other models may work but could have issues with tool calling, "
-                    "response formatting, or performance."
-                )
-                desc.setWordWrap(True)
-                desc.setStyleSheet("color: #a1a1aa; line-height: 1.5;")
-                desc.setTextFormat(desc.textFormat().RichText)
-                layout.addWidget(desc)
-
-                layout.addSpacing(8)
-
-                # Buttons
-                btn_layout = QHBoxLayout()
-                btn_layout.addStretch()
-
-                continue_btn = QPushButton("Continue Anyway")
-                continue_btn.setStyleSheet("""
-                    QPushButton {
-                        background-color: #27272a;
-                        color: #a1a1aa;
-                        border: none;
-                        padding: 10px 20px;
-                        border-radius: 4px;
-                    }
-                    QPushButton:hover {
-                        background-color: #3f3f46;
-                    }
-                """)
-                continue_btn.clicked.connect(self.accept)
-                btn_layout.addWidget(continue_btn)
-
-                wizard_btn = QPushButton("🔧 Open Setup Wizard")
-                wizard_btn.setStyleSheet("""
-                    QPushButton {
-                        background-color: #2563eb;
-                        color: white;
-                        border: none;
-                        padding: 10px 20px;
-                        border-radius: 4px;
-                        font-weight: bold;
-                    }
-                    QPushButton:hover {
-                        background-color: #3b82f6;
-                    }
-                """)
-                wizard_btn.clicked.connect(self._open_wizard)
-                btn_layout.addWidget(wizard_btn)
-
-                layout.addLayout(btn_layout)
-
-            def _open_wizard(self):
-                self.open_wizard = True
-                self.accept()
-
-        dialog = UnsupportedModelDialog(model_name)
+        dialog = UnsupportedModelDialog(models)
         dialog.exec()
         return dialog.open_wizard
-
-    except Exception as e:
-        debug_log(f"failed to show unsupported model dialog: {e}", "desktop")
+    except Exception as exc:
+        debug_log(f"failed to show model recommendation dialog: {exc}", "desktop")
         return False
 
 
@@ -3768,19 +3719,24 @@ def main() -> int:
             except Exception as exc:
                 debug_log(f"Startup VRAM check failed: {exc}", "vram")
 
-        if _chat_on_ollama:
-            # Check if the user is on an unsupported chat model. Only meaningful
-            # on the Ollama path — an OpenAI-compatible model name is not in the
-            # Ollama catalogue and must not be flagged here.
-            splash.set_status("Checking model compatibility...")
-            unsupported_model = check_model_support()
-            if unsupported_model:
+        try:
+            _provider_cfg = _load_provider_settings()
+        except Exception as exc:
+            _provider_cfg = None
+            debug_log(f"Model recommendation settings unavailable: {exc}", "desktop")
+
+        if _provider_cfg is not None:
+            splash.set_status("Checking model recommendations...")
+            unlisted_models = check_model_support(_provider_cfg)
+            if unlisted_models:
                 splash.hide()
-                print(f"⚠️ Unsupported model detected: {unsupported_model}", flush=True)
-                if show_unsupported_model_dialog(unsupported_model):
-                    print("🔧 Opening setup wizard to change model...", flush=True)
+                roles = ", ".join(unlisted_models)
+                print(f"⚠️ Models outside the recommended list: {roles}", flush=True)
+                debug_log(f"Model recommendation advice shown for {roles}", "desktop")
+                if show_unsupported_model_dialog(unlisted_models):
+                    print("🔧 Opening setup wizard to change models...", flush=True)
                     if not _run_setup_wizard():
-                        print("Setup wizard cancelled - exiting", flush=True)
+                        print("⚠️ Setup wizard cancelled, exiting", flush=True)
                         return 0
                 splash.show()
                 splash.set_status("Model check complete!")
