@@ -264,6 +264,11 @@ class Settings:
 
 
 
+def is_voice_debug_enabled() -> bool:
+    """Read the process diagnostic switch without configuration I/O."""
+    return os.environ.get("JARVIS_VOICE_DEBUG", "0") == "1"
+
+
 def get_config_path() -> Path:
     """Select the explicit override or normal per-user configuration file."""
     override = os.environ.get("JARVIS_CONFIG_PATH")
@@ -678,7 +683,7 @@ def load_settings() -> Settings:
 
     # Build Settings. Some fields support env var overrides.
     # Env overrides: JARVIS_VOICE_DEBUG, JARVIS_WHISPER_BACKEND
-    voice_debug = os.environ.get("JARVIS_VOICE_DEBUG", "0") == "1"
+    voice_debug = is_voice_debug_enabled()
 
     # Normalize/convert fields
     db_path = _expand_path(merged.get("db_path")) or _default_db_path()

@@ -179,7 +179,7 @@ Select the headset's microphone/input profile in Settings, not its playback devi
 <details>
 <summary><strong>Linux says Listening, but never hears speech</strong></summary>
 
-Check Logs for missing-callback or silent-input warnings. Verify the recording source and mute state in PipeWire/PulseAudio, and select a microphone rather than an output monitor. Enable `voice_debug` in Settings for capture-level diagnostics. See the [troubleshooting guide](docs/CONFIGURATION.md#troubleshooting).
+Check Logs for missing-callback or silent-input warnings. Verify the recording source and mute state in PipeWire/PulseAudio, and select a microphone rather than an output monitor. Set `JARVIS_VOICE_DEBUG=1` for capture-level diagnostics. See the [troubleshooting guide](docs/CONFIGURATION.md#troubleshooting).
 
 </details>
 
