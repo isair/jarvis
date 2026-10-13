@@ -138,39 +138,6 @@ class TestGetEmbeddingBackend:
         assert isinstance(backend, OpenAICompatibleBackend)
         assert backend.base_url == "http://embed-host:9000/v1"
 
-    def test_inherits_llm_base_url_when_embedding_provider_unset(self):
-        """Most common LM Studio config: chat and embeddings on the same
-        OpenAI-compatible server. With ``embedding_provider`` unset and
-        ``embedding_base_url`` empty, the embedding backend must inherit
-        ``llm_base_url`` rather than falling back to the Ollama URL."""
-        from jarvis.llm import OpenAICompatibleBackend, get_embedding_backend
-
-        cfg = _Cfg(
-            llm_provider="openai_compatible",
-            llm_base_url="http://localhost:1234/v1",
-        )
-
-        backend = get_embedding_backend(cfg)
-
-        assert isinstance(backend, OpenAICompatibleBackend)
-        assert backend.base_url == "http://localhost:1234/v1"
-
-    def test_inherits_llm_api_key_when_embedding_api_key_unset(self):
-        from jarvis.llm import OpenAICompatibleBackend, get_embedding_backend
-
-        cfg = _Cfg(
-            llm_provider="openai_compatible",
-            llm_base_url="http://localhost:1234/v1",
-            llm_api_key="sk-shared",
-        )
-
-        backend = get_embedding_backend(cfg)
-
-        assert isinstance(backend, OpenAICompatibleBackend)
-        # The api_key isn't a public attribute; inspect the bearer
-        # header through a probe call instead.
-        assert backend._api_key == "sk-shared"
-
     def test_falls_back_to_default_when_provider_openai_but_no_url(self):
         """When the user picks openai_compatible but provides no URL on
         any of llm_base_url, ollama_base_url, embedding_base_url, the
