@@ -682,7 +682,7 @@ class VoiceListener(threading.Thread):
         # Check for echo BEFORE starting beep and BEFORE intent judge.
         # This prevents: false beeps on echo, intent judge blocking the audio
         # loop for seconds on echo, and hot window extending from echo resets.
-        if not received_during_tts and not self._is_thinking_tune_active():
+        if not active_tts_overlapped:
             in_hot_window = self.state_manager.was_speech_during_hot_window(
                 utterance_start_time, utterance_end_time
             )
