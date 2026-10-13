@@ -2,6 +2,7 @@
 
 import ipaddress
 import os
+import socket
 from contextlib import contextmanager
 from urllib.parse import urlsplit
 
@@ -11,11 +12,23 @@ import requests
 def _is_loopback(url: str) -> bool:
     try:
         host = urlsplit(url).hostname or ""
-        if host.lower().rstrip(".") == "localhost":
-            return True
-        return ipaddress.ip_address(host).is_loopback
     except ValueError:
         return False
+    if host.lower().rstrip(".") == "localhost":
+        return True
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        # Numeric address spellings accepted by the socket layer, without DNS.
+        try:
+            address = ipaddress.ip_address(socket.getaddrinfo(
+                host, None, flags=socket.AI_NUMERICHOST,
+            )[0][4][0])
+        except OSError:
+            return False
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        address = address.ipv4_mapped
+    return address.is_loopback
 
 
 @contextmanager

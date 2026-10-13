@@ -149,7 +149,7 @@ Unit-selected factory contracts in `tests/test_llm_factory.py` cover provider se
 
 Local provider integration contracts in `tests/test_openai_compatible_e2e.py` and `tests/test_provider_model_resolution.py` run in CI against test-owned loopback servers. They cover actual HTTP, streaming, authentication, capability reporting, model dispatch and preservation of decoded tool-call history. Their network boundary rejects unowned endpoints and disables ambient proxy and credential inheritance.
 
-Both backends use `jarvis.llm.http` for response-scoped HTTP sessions. Loopback endpoints (localhost and literal loopback IP addresses) bypass ambient proxies and `.netrc` credentials. Explicit API keys and URL credentials remain available. Local HTTPS retains `REQUESTS_CA_BUNDLE` or `CURL_CA_BUNDLE` certificate trust, unless the caller supplies `verify`. Remote endpoints retain the normal Requests environment settings. Responses and sessions close together after consumption, including interrupted streams. Tests intercept `jarvis.llm.http.get` and `jarvis.llm.http.post`.
+Both backends use `jarvis.llm.http` for response-scoped HTTP sessions. Loopback endpoints (localhost, literal loopback IP addresses, numeric IPv4 aliases accepted by the socket layer and IPv4-mapped IPv6 loopback addresses) bypass ambient proxies and `.netrc` credentials. Explicit API keys and URL credentials remain available. Local HTTPS retains `REQUESTS_CA_BUNDLE` or `CURL_CA_BUNDLE` certificate trust, unless the caller supplies `verify`. Remote endpoints retain the normal Requests environment settings. Responses and sessions close together after consumption, including interrupted streams. Tests intercept `jarvis.llm.http.get` and `jarvis.llm.http.post`.
 
 ## File layout
 

@@ -239,11 +239,20 @@ def owned_loopback_network(monkeypatch):
     real_connect_ex = socket.socket.connect_ex
     real_send = requests.Session.send
 
-    def is_loopback(host):
+    def address(host):
         try:
-            return ipaddress.ip_address(host).is_loopback
+            return ipaddress.ip_address(host)
         except ValueError:
-            return False
+            try:
+                return ipaddress.ip_address(socket.getaddrinfo(
+                    host, None, flags=socket.AI_NUMERICHOST,
+                )[0][4][0])
+            except (OSError, TypeError):
+                return None
+
+    def is_loopback(host):
+        selected = address(host)
+        return selected is not None and selected.is_loopback
 
     def reject():
         denied.append("unowned network operation")
@@ -252,7 +261,7 @@ def owned_loopback_network(monkeypatch):
     def owns(host, port):
         return is_loopback(host) and any(
             stream.fileno() >= 0 and stream.getsockname()[1] == port
-            and ipaddress.ip_address(stream.getsockname()[0]) == ipaddress.ip_address(host)
+            and address(stream.getsockname()[0]) == address(host)
             for stream in bound_sockets
         )
 

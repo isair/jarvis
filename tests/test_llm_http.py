@@ -1,5 +1,7 @@
 """Configured transport policy preserves explicit trust and response lifetime."""
 
+import ipaddress
+import socket
 from contextlib import contextmanager
 
 import pytest
@@ -13,6 +15,13 @@ pytestmark = pytest.mark.unit
     ('http://localhost:11434/api/chat', True),
     ('http://LOCALHOST.:1234/v1', True),
     ('http://127.2.3.4:1234/v1', True),
+    ('http://127.1:1234/v1', True),
+    ('http://2130706433:1234/v1', True),
+    ('http://0x7f000001:1234/v1', True),
+    ('http://0177.0.0.1:1234/v1', ipaddress.ip_address(
+        socket.getaddrinfo('0177.0.0.1', None, flags=socket.AI_NUMERICHOST)[0][4][0]
+    ).is_loopback),
+    ('http://[::ffff:127.0.0.1]:1234/v1', True),
     ('http://[::1]:1234/v1', True),
     ('https://model.example/v1', False),
     ('http://localhost.example/v1', False),
@@ -21,6 +30,13 @@ pytestmark = pytest.mark.unit
 def test_transport_policy_and_lifetime(monkeypatch, url, local, method):
     events = []
     response = object()
+    numeric_resolution = socket.getaddrinfo
+
+    def resolve_numeric(host, port, *, flags):
+        assert flags == socket.AI_NUMERICHOST, 'Transport policy must not perform DNS'
+        return numeric_resolution(host, port, flags=flags)
+
+    monkeypatch.setattr(socket, 'getaddrinfo', resolve_numeric)
 
     class Session:
         trust_env = True

@@ -65,10 +65,11 @@ def backend(provider, base):
 
 
 @pytest.mark.parametrize("provider", ["ollama", "openai"])
-def test_local_private_text_bypasses_ambient_proxy(provider, ambient_environment, monkeypatch):
+@pytest.mark.parametrize("host", ["127.0.0.1", "127.1", "2130706433", "0x7f000001"])
+def test_local_private_text_bypasses_ambient_proxy(provider, ambient_environment, monkeypatch, host):
     with server() as (model_url, model_calls), server() as (proxy_url, proxy_calls):
         monkeypatch.setenv("HTTP_PROXY", proxy_url)
-        client = backend(provider, model_url)
+        client = backend(provider, model_url.replace("127.0.0.1", host))
         assert client.direct("synthetic-model", "Synthetic private context", "Synthetic private input", timeout_sec=2) == "Synthetic reply"
         assert proxy_calls == []
         assert len(model_calls) == 1
