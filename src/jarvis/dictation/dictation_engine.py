@@ -782,7 +782,8 @@ class DictationEngine:
             return False
         if nkey == target or key == target:
             return True
-        if getattr(key, "name", None) == getattr(target, "name", None):
+        target_name = getattr(target, "name", None)
+        if target_name is not None and getattr(key, "name", None) == target_name:
             return True
         if hasattr(key, "char") and key.char:
             if pynput_keyboard.KeyCode.from_char(key.char.lower()) == target:
