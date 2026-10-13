@@ -1,183 +1,95 @@
-"""Test that tool_calls arguments are properly encoded for the wire format.
+"""Provider requests encode tool arguments without rewriting caller history."""
 
-The OpenAI API spec requires ``tool_calls[*].function.arguments`` to be a
-JSON-encoded string. The ``normalise_openai_response`` helper decodes it to a
-dict for internal use, but when that assistant message is sent back to the
-server on the next turn, the dict must be re-encoded as a string.
-
-This test verifies the round-trip: decode -> store -> re-encode before send.
-"""
-
+from copy import deepcopy
 import json
+from unittest.mock import MagicMock
+
 import pytest
-from unittest.mock import patch, MagicMock
+import requests
+
+from jarvis.llm.openai_compatible import OpenAICompatibleBackend
+
+pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("no_network")]
 
 
-class TestToolCallArgumentsWireFormat:
-    """Verifies that tool_calls arguments are JSON-encoded strings on the wire."""
+def _response(message):
+    response = MagicMock(status_code=200)
+    response.json.return_value = {"choices": [{"message": message}]}
+    response.__enter__.return_value = response
+    return response
 
-    def _make_backend(self):
-        from jarvis.llm.openai_compatible import OpenAICompatibleBackend
 
-        return OpenAICompatibleBackend(base_url="http://localhost:11434")
+@pytest.fixture
+def post(monkeypatch):
+    transport = MagicMock(return_value=_response({"role": "assistant", "content": "Done"}))
+    monkeypatch.setattr("jarvis.llm.openai_compatible.requests.post", transport)
+    return transport
 
-    def _patch_post(self, backend, messages, model="some-model"):
-        """Call backend.chat() with a mocked POST and return the sent payload."""
-        with patch("requests.post") as mock_post:
-            mock_response = MagicMock()
-            mock_response.status_code = 200
-            mock_response.json.return_value = {
-                "choices": [{"message": {"content": "OK", "role": "assistant"}}]
-            }
-            mock_post.return_value = mock_response
-            backend.chat(model, messages)
-        return mock_post.call_args[1]["json"]
 
-    def test_dict_arguments_encoded_as_json_string(self):
-        """Empty dict arguments -> JSON string."""
-        backend = self._make_backend()
-        messages = [
-            {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": "What's the weather?"},
-            {
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [
-                    {
-                        "id": "call_abc",
-                        "type": "function",
-                        "function": {"name": "getWeather", "arguments": {}},
-                    }
-                ],
-            },
-            {"role": "tool", "tool_call_id": "call_abc", "content": "Sunny"},
-        ]
-        payload = self._patch_post(backend, messages)
+def _call(arguments, ident="fixture"):
+    return {"id": ident, "type": "function", "function": {
+        "name": "fixtureTool", "arguments": arguments,
+    }}
 
-        for msg in payload["messages"]:
-            if msg.get("role") == "assistant" and "tool_calls" in msg:
-                args = msg["tool_calls"][0]["function"]["arguments"]
-                assert isinstance(args, str), f"Expected str, got {type(args).__name__}"
-                assert json.loads(args) == {}
-                return
-        pytest.fail("No assistant message with tool_calls found")
 
-    def test_nested_dict_arguments(self):
-        """Nested dict arguments (e.g. location, units) -> valid JSON string."""
-        backend = self._make_backend()
-        messages = [
-            {"role": "system", "content": "Assistant."},
-            {"role": "user", "content": "Weather in London?"},
-            {
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [
-                    {
-                        "id": "call_xyz",
-                        "type": "function",
-                        "function": {
-                            "name": "getWeather",
-                            "arguments": {
-                                "location": "London",
-                                "units": "metric",
-                                "days": 3,
-                            },
-                        },
-                    }
-                ],
-            },
-            {"role": "tool", "tool_call_id": "call_xyz", "content": "15C rainy"},
-        ]
-        payload = self._patch_post(backend, messages)
+@pytest.mark.parametrize("argument_values", [
+    pytest.param([{}], id="empty-object"),
+    pytest.param([{"items": [{"enabled": True, "label": "été"}]}], id="nested-object"),
+    pytest.param([None], id="null"),
+    pytest.param([["fixture", 2]], id="array"),
+    pytest.param([42], id="number"),
+    pytest.param([True], id="boolean"),
+    pytest.param([{"city": "Paris"}, {"city": "Tokyo"}], id="multiple-calls"),
+])
+def test_response_roundtrip_preserves_decoded_history_and_encodes_all_calls(post, argument_values):
+    upstream = {"role": "assistant", "content": None, "tool_calls": [
+        _call(json.dumps(arguments), f"fixture-{index}")
+        for index, arguments in enumerate(argument_values)
+    ]}
+    saved_upstream = deepcopy(upstream)
+    post.side_effect = [_response(upstream), _response({"role": "assistant", "content": "Done"})]
+    backend = OpenAICompatibleBackend("http://localhost:1234/v1")
+    decoded = backend.chat("fixture-model", [{"role": "user", "content": "Fixture request"}])
+    saved_response = deepcopy(decoded)
+    history = [decoded["message"], *[
+        {"role": "tool", "tool_call_id": f"fixture-{index}", "content": "Synthetic result"}
+        for index in range(len(argument_values))
+    ]]
+    saved_history = deepcopy(history)
+    result = backend.chat("fixture-model", history)
+    sent_calls = post.call_args.kwargs["json"]["messages"][0]["tool_calls"]
+    sent_values = [json.loads(call["function"]["arguments"]) for call in sent_calls]
+    assert sent_values == argument_values
+    assert [type(value) for value in sent_values] == [type(value) for value in argument_values]
+    assert result["message"]["content"] == "Done"
+    assert decoded == saved_response
+    assert history == saved_history
+    assert upstream == saved_upstream
 
-        for msg in payload["messages"]:
-            if msg.get("role") == "assistant" and "tool_calls" in msg:
-                args = msg["tool_calls"][0]["function"]["arguments"]
-                assert isinstance(args, str), f"Expected str, got {type(args).__name__}"
-                decoded = json.loads(args)
-                assert decoded["location"] == "London"
-                assert decoded["units"] == "metric"
-                assert decoded["days"] == 3
-                return
-        pytest.fail("No assistant message with tool_calls found")
 
-    def test_string_arguments_left_as_is(self):
-        """Already-encoded string arguments must not be double-encoded."""
-        backend = self._make_backend()
-        messages = [
-            {"role": "system", "content": "Assistant."},
-            {"role": "user", "content": "Hi"},
-            {
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [
-                    {
-                        "id": "call_1",
-                        "type": "function",
-                        "function": {
-                            "name": "search",
-                            "arguments": '{"query": "test"}',  # already a string
-                        },
-                    }
-                ],
-            },
-        ]
-        payload = self._patch_post(backend, messages)
+def test_encoded_string_keeps_its_literal_wire_value(post):
+    arguments = '{"query": "été", "limit": 2}'
+    history = [{"role": "assistant", "content": "", "tool_calls": [_call(arguments)]}]
+    saved = deepcopy(history)
+    OpenAICompatibleBackend("http://localhost:1234/v1").chat("fixture-model", history)
+    sent = post.call_args.kwargs["json"]["messages"][0]["tool_calls"][0]
+    assert sent["function"]["arguments"] == arguments
+    assert history == saved
 
-        for msg in payload["messages"]:
-            if msg.get("role") == "assistant" and "tool_calls" in msg:
-                args = msg["tool_calls"][0]["function"]["arguments"]
-                assert isinstance(args, str)
-                # Should still be the exact same string, not double-encoded
-                assert args == '{"query": "test"}'
-                return
-        pytest.fail("No assistant message with tool_calls found")
 
-    def test_no_tool_calls_unchanged(self):
-        """Messages without tool_calls should be left as-is."""
-        backend = self._make_backend()
-        messages = [
-            {"role": "system", "content": "Assistant."},
-            {"role": "user", "content": "Hello"},
-            {"role": "assistant", "content": "Hi there!"},
-        ]
-        payload = self._patch_post(backend, messages)
-        assert payload["messages"] == messages
+def test_messages_without_tool_calls_keep_their_values(post):
+    history = [{"role": "user", "content": "Fixture request"}, {"role": "assistant", "content": "Fixture reply"}]
+    saved = deepcopy(history)
+    OpenAICompatibleBackend("http://localhost:1234/v1").chat("fixture-model", history)
+    assert post.call_args.kwargs["json"]["messages"] == saved
+    assert history == saved
 
-    def test_multiple_tool_calls_all_encoded(self):
-        """All tool_calls in an assistant message should have encoded arguments."""
-        backend = self._make_backend()
-        messages = [
-            {"role": "system", "content": "Assistant."},
-            {"role": "user", "content": "Compare weather in Paris and Tokyo"},
-            {
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [
-                    {
-                        "id": "call_1",
-                        "type": "function",
-                        "function": {"name": "getWeather", "arguments": {"location": "Paris"}},
-                    },
-                    {
-                        "id": "call_2",
-                        "type": "function",
-                        "function": {"name": "getWeather", "arguments": {"location": "Tokyo"}},
-                    },
-                ],
-            },
-        ]
-        payload = self._patch_post(backend, messages)
 
-        for msg in payload["messages"]:
-            if msg.get("role") == "assistant" and "tool_calls" in msg:
-                for tc in msg["tool_calls"]:
-                    args = tc["function"]["arguments"]
-                    assert isinstance(args, str), f"Expected str, got {type(args).__name__}"
-                    json.loads(args)  # must be valid JSON
-                # Verify both locations present
-                decoded = [json.loads(tc["function"]["arguments"]) for tc in msg["tool_calls"]]
-                assert {"location": "Paris"} in decoded
-                assert {"location": "Tokyo"} in decoded
-                return
-        pytest.fail("No assistant message with tool_calls found")
+@pytest.mark.parametrize("arguments", [{"items": [1, 2]}, None, ["fixture"]])
+def test_connection_failure_preserves_caller_history(post, arguments):
+    history = [{"role": "assistant", "content": "", "tool_calls": [_call(arguments)]}]
+    saved = deepcopy(history)
+    post.side_effect = requests.ConnectionError("Synthetic unavailable server")
+    with pytest.raises(requests.ConnectionError, match="Synthetic unavailable server"):
+        OpenAICompatibleBackend("http://localhost:1234/v1").chat("fixture-model", history)
+    assert history == saved

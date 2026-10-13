@@ -251,28 +251,38 @@ class OpenAICompatibleBackend(LLMBackend):
     def _encode_tool_call_arguments(
         messages: List[Dict[str, Any]],
     ) -> List[Dict[str, Any]]:
-        """JSON-encode ``tool_calls[*].function.arguments`` in assistant messages.
+        """Return copied messages with tool-call arguments encoded for the wire.
 
         The provider requires ``arguments`` to be a JSON string. Response
         normalisation decodes JSON values for the reply engine, so outbound
         history re-encodes every non-string value. Invalid object shapes
         retain their values in failed-call history rather than breaking the
-        provider's wire format.
+        provider's wire format. Caller-owned messages and decoded responses
+        retain their original tool-call values, including when a request fails.
         """
+        encoded_messages = []
         for msg in messages:
+            encoded_msg = dict(msg)
+            encoded_messages.append(encoded_msg)
             if msg.get("role") != "assistant":
                 continue
             tc_list = msg.get("tool_calls")
             if not isinstance(tc_list, list):
                 continue
+            encoded_calls = []
             for tc in tc_list:
                 func = tc.get("function")
+                encoded_call = dict(tc)
+                encoded_calls.append(encoded_call)
                 if not isinstance(func, dict):
                     continue
+                encoded_func = dict(func)
                 args = func.get("arguments", {})
                 if not isinstance(args, str):
-                    func["arguments"] = json.dumps(args)
-        return messages
+                    encoded_func["arguments"] = json.dumps(args)
+                encoded_call["function"] = encoded_func
+            encoded_msg["tool_calls"] = encoded_calls
+        return encoded_messages
 
     def chat(
         self,
