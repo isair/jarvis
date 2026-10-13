@@ -29,6 +29,9 @@ Defaults are aligned with WisprFlow. Modifier-only combos are supported
 (e.g. `"ctrl+cmd"` activates when both keys are held, with no extra trigger
 key required).
 
+Only the configured trigger and modifiers control capture. Unrelated character
+or virtual-key events cannot activate or release a character-key shortcut.
+
 The hotkey is configurable as a dropdown in both the setup wizard and settings
 window, with four preset options: `ctrl+alt`, `ctrl+cmd`, `ctrl+shift+d`,
 `ctrl+shift`.
