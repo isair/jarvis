@@ -177,7 +177,8 @@ def _clipboard_paste(text: str) -> None:
             _clipboard_linux(text)
         debug_log(f"clipboard set ({len(text)} chars)", "dictation")
     except Exception as exc:
-        debug_log(f"clipboard write failed: {exc}", "dictation")
+        debug_log(f"clipboard write failed: {type(exc).__name__}", "dictation")
+        print("  ⚠️ Dictation could not be copied to the clipboard.", flush=True)
         return
 
     # --- simulate paste keystroke ---

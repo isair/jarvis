@@ -87,7 +87,10 @@ After transcription, text passes through these stages in order:
   On Windows and Linux, automatic paste attempts release the shortcut modifier
   even when pressing or pasting fails. An unavailable keyboard backend or failed
   controller/paste operation reports manual Ctrl+V recovery after a successful
-  clipboard copy. Partial operations use conditional recovery guidance rather
+  clipboard copy. A failed clipboard write reports a visible warning without
+  exposing exception contents and prevents automatic paste. History storage and
+  the saved-result callback remain independent of clipboard delivery.
+  Partial operations use conditional recovery guidance rather
   than claiming that no text was inserted. Error diagnostics omit raw exception
   messages.
 - **Shared Whisper model** via lazy reference (`lambda: voice_thread.model`)
