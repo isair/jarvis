@@ -35,30 +35,40 @@ def _make_engine(**overrides):
 # Beep generation
 # ---------------------------------------------------------------------------
 
+@pytest.mark.unit
+@pytest.mark.usefixtures('no_network')
 class TestBeepGeneration:
-    """Tests for beep WAV generation."""
+    """Notification tones are valid, non-silent WAV data with requested timing."""
 
-    def test_start_beep_is_valid_wav(self):
-        from jarvis.dictation.dictation_engine import _get_start_beep
-        wav = _get_start_beep()
-        assert wav[:4] == b"RIFF"
-        assert wav[8:12] == b"WAVE"
-
-    def test_stop_beep_is_valid_wav(self):
-        from jarvis.dictation.dictation_engine import _get_stop_beep
-        wav = _get_stop_beep()
-        assert wav[:4] == b"RIFF"
-        assert wav[8:12] == b"WAVE"
-
-    def test_start_and_stop_beeps_differ(self):
+    def test_notification_beeps_are_distinct_and_non_silent(self):
+        import io
+        import wave
+        import numpy as np
         from jarvis.dictation.dictation_engine import _get_start_beep, _get_stop_beep
-        assert _get_start_beep() != _get_stop_beep()
 
-    def test_generate_beep_wav_custom_params(self):
+        beeps = (_get_start_beep(), _get_stop_beep())
+        assert beeps[0] != beeps[1]
+        for data in beeps:
+            with wave.open(io.BytesIO(data)) as audio:
+                assert audio.getnchannels() == 1
+                assert audio.getsampwidth() == 2
+                samples = np.frombuffer(audio.readframes(audio.getnframes()), dtype='<i2')
+            assert np.any(samples), 'Notification tones must contain a non-silent signal'
+
+    @pytest.mark.parametrize('frequency,duration', [(400, 0.04), (1000, 0.05), (1200, 0.075)])
+    def test_generated_beep_preserves_requested_timing_and_pitch(self, frequency, duration):
+        import io
+        import wave
+        import numpy as np
         from jarvis.dictation.dictation_engine import _generate_beep_wav
-        wav = _generate_beep_wav(freq=1000, duration=0.05)
-        assert wav[:4] == b"RIFF"
-        assert len(wav) > 44  # At least a header
+
+        with wave.open(io.BytesIO(_generate_beep_wav(freq=frequency, duration=duration))) as audio:
+            rate = audio.getframerate()
+            samples = np.frombuffer(audio.readframes(audio.getnframes()), dtype='<i2')
+        assert len(samples) / rate == pytest.approx(duration, abs=1 / rate)
+        bins = np.fft.rfftfreq(len(samples), d=1 / rate)
+        peak = bins[np.argmax(np.abs(np.fft.rfft(samples)))]
+        assert peak == pytest.approx(frequency, abs=rate / len(samples))
 
 
 # ---------------------------------------------------------------------------
@@ -946,50 +956,24 @@ class TestListenerPauseFlag:
 # format_hotkey_display
 # ---------------------------------------------------------------------------
 
+@pytest.mark.unit
+@pytest.mark.usefixtures('no_network')
 class TestFormatHotkeyDisplay:
-    """Tests for platform-aware hotkey display formatting."""
+    """Configured shortcuts use familiar platform-specific modifier names."""
 
-    @patch("jarvis.dictation.dictation_engine.platform")
-    def test_windows_cmd_shows_win(self, mock_platform):
-        from jarvis.dictation.dictation_engine import format_hotkey_display
-        mock_platform.system.return_value = "Windows"
-        assert format_hotkey_display("ctrl+cmd") == "Ctrl + Win"
-
-    @patch("jarvis.dictation.dictation_engine.platform")
-    def test_windows_super_shows_win(self, mock_platform):
-        from jarvis.dictation.dictation_engine import format_hotkey_display
-        mock_platform.system.return_value = "Windows"
-        assert format_hotkey_display("ctrl+super") == "Ctrl + Win"
-
-    @patch("jarvis.dictation.dictation_engine.platform")
-    def test_windows_win_shows_win(self, mock_platform):
-        from jarvis.dictation.dictation_engine import format_hotkey_display
-        mock_platform.system.return_value = "Windows"
-        assert format_hotkey_display("ctrl+win") == "Ctrl + Win"
-
-    @patch("jarvis.dictation.dictation_engine.platform")
-    def test_macos_cmd_shows_cmd(self, mock_platform):
-        from jarvis.dictation.dictation_engine import format_hotkey_display
-        mock_platform.system.return_value = "Darwin"
-        assert format_hotkey_display("ctrl+cmd") == "Ctrl + Cmd"
-
-    @patch("jarvis.dictation.dictation_engine.platform")
-    def test_macos_alt_shows_option(self, mock_platform):
-        from jarvis.dictation.dictation_engine import format_hotkey_display
-        mock_platform.system.return_value = "Darwin"
-        assert format_hotkey_display("ctrl+alt") == "Ctrl + Option"
-
-    @patch("jarvis.dictation.dictation_engine.platform")
-    def test_ctrl_shift_d(self, mock_platform):
-        from jarvis.dictation.dictation_engine import format_hotkey_display
-        mock_platform.system.return_value = "Windows"
-        assert format_hotkey_display("ctrl+shift+d") == "Ctrl + Shift + D"
-
-    @patch("jarvis.dictation.dictation_engine.platform")
-    def test_linux_alt_stays_alt(self, mock_platform):
-        from jarvis.dictation.dictation_engine import format_hotkey_display
-        mock_platform.system.return_value = "Linux"
-        assert format_hotkey_display("ctrl+alt") == "Ctrl + Alt"
+    @pytest.mark.parametrize('system,combo,expected', [
+        ('Windows', 'ctrl+cmd', 'Ctrl + Win'),
+        ('Windows', 'ctrl+super', 'Ctrl + Win'),
+        ('Windows', 'ctrl+win', 'Ctrl + Win'),
+        ('Darwin', 'ctrl+cmd', 'Ctrl + Cmd'),
+        ('Darwin', 'ctrl+alt', 'Ctrl + Option'),
+        ('Windows', 'ctrl+shift+d', 'Ctrl + Shift + D'),
+        ('Linux', 'ctrl+alt', 'Ctrl + Alt'),
+    ])
+    def test_shortcut_uses_platform_modifier_names(self, monkeypatch, system, combo, expected):
+        from jarvis.dictation import dictation_engine
+        monkeypatch.setattr(dictation_engine.platform, 'system', lambda: system)
+        assert dictation_engine.format_hotkey_display(combo) == expected
 
 
 # ---------------------------------------------------------------------------
