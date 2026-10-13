@@ -118,6 +118,9 @@ After transcription, text passes through these stages in order:
   further lifecycle notifications. Superseded workers cannot change the face or
   capture pause state. Finalisation reports completion to its owning session even
   on teardown failure.
+  Start and stop clear held modifiers and pending tap history. Keyboard callbacks
+  carry their listener generation and share the engine lock with lifecycle
+  transitions; retired callbacks cannot alter a restarted listener's gesture state.
 - **No PortAudio work on the pynput hook thread.** The hotkey callbacks only
   flip state; stream open/start runs on a worker thread (`_begin_recording`)
   and stop/transcribe already ran on one. Windows silently unhooks slow hook

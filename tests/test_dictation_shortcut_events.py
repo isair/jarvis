@@ -1,6 +1,7 @@
 """Only the configured shortcut controls dictation capture."""
 from dataclasses import dataclass
 from enum import Enum
+from threading import Event, Thread
 
 import pytest
 
@@ -67,6 +68,32 @@ def shortcut_engine(shortcut_factory):
     engine._on_key_press(keyboard.Key.ctrl_l)
     engine._on_key_press(keyboard.Key.shift_l)
     return engine, keyboard
+
+
+@pytest.fixture
+def listener_factory(monkeypatch):
+    from unittest.mock import Mock
+    from jarvis.dictation import dictation_engine
+
+    class Listener:
+        def __init__(self, on_press, on_release):
+            self.on_press, self.on_release = on_press, on_release
+
+        def start(self):
+            pass
+
+        def stop(self):
+            pass
+
+    monkeypatch.setattr(dictation_engine, '_create_keyboard_listener', Listener)
+    monkeypatch.setattr(dictation_engine, 'sd', Mock())
+    monkeypatch.setattr(dictation_engine.platform, 'mac_ver', lambda: ('15.0', ('', '', ''), ''))
+
+    def start(engine):
+        engine.start()
+        return engine._listener
+
+    return start
 
 
 @pytest.mark.parametrize('kind', ['character', 'virtual'])
@@ -147,19 +174,12 @@ def test_capture_continues_while_the_other_modifier_side_is_held(
     assert not engine.is_recording
 
 
-@pytest.mark.parametrize('origin', [0.0, 100.0])
-@pytest.mark.parametrize('gap,clock_adjustment,continues', [
-    (0.1, 0, True),
-    (3.0, 0, False),
-    (0.1, 3600, True),
-    (3.0, -3600, False),
-])
-def test_double_tap_uses_elapsed_time_despite_system_clock_adjustment(
-        shortcut_factory, monkeypatch, origin, gap, clock_adjustment, continues):
+@pytest.fixture
+def timed_shortcut(shortcut_factory, listener_factory, monkeypatch):
     from unittest.mock import Mock
     from jarvis.dictation import dictation_engine
 
-    clock = {'wall': 1700000000.0, 'steady': origin}
+    clock = {'wall': 1700000000.0, 'steady': 100.0}
     monkeypatch.setattr(dictation_engine.time, 'time', lambda: clock['wall'])
     monkeypatch.setattr(dictation_engine.time, 'monotonic', lambda: clock['steady'])
     engine, keyboard = shortcut_factory('ctrl+shift+d')
@@ -171,19 +191,136 @@ def test_double_tap_uses_elapsed_time_despite_system_clock_adjustment(
     monkeypatch.setattr(dictation_engine, 'resolve_input_device', lambda *args: {'device': 0})
     monkeypatch.setattr(dictation_engine, 'open_input_stream',
                         lambda *args, **kwargs: (Mock(), engine._target_sample_rate, 1))
+    listener_factory(engine)
 
     def tap():
-        engine._on_key_press(keyboard.KeyCode(char='d'))
+        listener = engine._listener
+        listener.on_press(keyboard.KeyCode(char='d'))
         engine._begin_recording(engine._session)
         clock['wall'] += 0.1
         clock['steady'] += 0.1
-        engine._on_key_release(keyboard.KeyCode(char='d'))
+        listener.on_release(keyboard.KeyCode(char='d'))
 
-    engine._on_key_press(keyboard.Key.ctrl_l)
-    engine._on_key_press(keyboard.Key.shift_l)
+    return engine, keyboard, clock, tap
+
+
+@pytest.mark.parametrize('origin', [0.0, 100.0])
+@pytest.mark.parametrize('gap,clock_adjustment,continues', [
+    (0.1, 0, True),
+    (3.0, 0, False),
+    (0.1, 3600, True),
+    (3.0, -3600, False),
+])
+def test_double_tap_uses_elapsed_time_despite_system_clock_adjustment(
+        timed_shortcut, origin, gap, clock_adjustment, continues):
+    engine, keyboard, clock, tap = timed_shortcut
+    clock['steady'] = origin
+    engine._listener.on_press(keyboard.Key.ctrl_l)
+    engine._listener.on_press(keyboard.Key.shift_l)
     tap()
     assert not engine.is_recording
     clock['wall'] += gap + clock_adjustment
     clock['steady'] += gap
     tap()
     assert engine.is_recording is continues
+
+
+def test_restarting_engine_does_not_retain_held_keys(shortcut_factory, listener_factory):
+    engine, keyboard = shortcut_factory('ctrl+shift+d')
+    listener = listener_factory(engine)
+    for key in (keyboard.Key.ctrl_l, keyboard.Key.shift_l, keyboard.KeyCode(char='d')):
+        listener.on_press(key)
+    assert engine.is_recording
+    engine.stop()
+    assert not engine.is_recording
+    listener = listener_factory(engine)
+    listener.on_press(keyboard.KeyCode(char='d'))
+    assert not engine.is_recording
+    for key in (keyboard.Key.ctrl_l, keyboard.Key.shift_l, keyboard.KeyCode(char='d')):
+        listener.on_press(key)
+    assert engine.is_recording
+
+
+def test_retired_listener_cannot_begin_capture_after_restart(shortcut_factory, listener_factory):
+    engine, keyboard = shortcut_factory('ctrl+shift+d')
+    retired = listener_factory(engine)
+    engine.stop()
+    listener_factory(engine)
+    for key in (keyboard.Key.ctrl_l, keyboard.Key.shift_l, keyboard.KeyCode(char='d')):
+        retired.on_press(key)
+    assert not engine.is_recording
+
+
+def test_retired_listener_cannot_end_new_capture(shortcut_factory, listener_factory):
+    engine, keyboard = shortcut_factory('ctrl+shift+d')
+    retired = listener_factory(engine)
+    engine.stop()
+    active = listener_factory(engine)
+    for key in (keyboard.Key.ctrl_l, keyboard.Key.shift_l, keyboard.KeyCode(char='d')):
+        active.on_press(key)
+    assert engine.is_recording
+    retired.on_release(keyboard.KeyCode(char='d'))
+    assert engine.is_recording
+    active.on_release(keyboard.KeyCode(char='d'))
+    assert not engine.is_recording
+
+
+def test_double_tap_cannot_span_an_engine_restart(timed_shortcut, listener_factory):
+    engine, keyboard, clock, tap = timed_shortcut
+    engine._listener.on_press(keyboard.Key.ctrl_l)
+    engine._listener.on_press(keyboard.Key.shift_l)
+    tap()
+    assert not engine.is_recording
+    engine.stop()
+    listener_factory(engine)
+    clock['wall'] += 0.1
+    clock['steady'] += 0.1
+    engine._listener.on_press(keyboard.Key.ctrl_l)
+    engine._listener.on_press(keyboard.Key.shift_l)
+    tap()
+    assert not engine.is_recording
+
+
+def test_stop_serialises_with_an_in_flight_listener_event(
+        shortcut_factory, listener_factory, monkeypatch):
+    engine, keyboard = shortcut_factory('ctrl+shift+d')
+    listener = listener_factory(engine)
+    listener.on_press(keyboard.Key.ctrl_l)
+    listener.on_press(keyboard.Key.shift_l)
+    entered, release, stopping, stopped = Event(), Event(), Event(), Event()
+    errors = []
+    handle = engine._on_key_press
+
+    def paused(key):
+        entered.set()
+        assert release.wait(5), 'Test did not release the paused key event'
+        handle(key)
+
+    monkeypatch.setattr(engine, '_on_key_press', paused)
+
+    def press():
+        try:
+            listener.on_press(keyboard.KeyCode(char='d'))
+        except Exception as error:
+            errors.append(error)
+
+    def stop():
+        stopping.set()
+        engine.stop()
+        stopped.set()
+
+    worker, stopper = Thread(target=press), Thread(target=stop)
+    worker.start()
+    try:
+        assert entered.wait(5), 'The key event did not start'
+        stopper.start()
+        assert stopping.wait(5), 'Stop was not requested'
+        assert not stopped.wait(0.05), 'Stop returned before the active key event finished'
+    finally:
+        release.set()
+        worker.join(5)
+        if stopper.ident is not None:
+            stopper.join(5)
+    assert not worker.is_alive() and not stopper.is_alive()
+    assert not errors
+    assert not engine.is_recording
