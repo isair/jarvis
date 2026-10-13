@@ -2,15 +2,32 @@
 Tests for voice listening state manager.
 
 These tests verify the state transitions, timer-based hot window management,
-and query collection behavior.
+and query collection behaviour.
 """
 
 import time
 import threading
+from types import SimpleNamespace
 import pytest
 from unittest.mock import patch, MagicMock
 
 from jarvis.listening.state_manager import StateManager, ListeningState
+
+pytestmark = pytest.mark.unit
+
+
+@pytest.fixture
+def collection_clock(monkeypatch):
+    """Advance collection deadlines without scheduling or wall-clock sleeps."""
+    from jarvis.listening import state_manager
+
+    now = [1000.0]
+    monkeypatch.setattr(state_manager, "time", SimpleNamespace(time=lambda: now[0]))
+
+    def advance(seconds):
+        now[0] += seconds
+
+    return advance
 
 
 class TestStateTransitions:
@@ -84,7 +101,7 @@ class TestQueryCollection:
         assert query.language is None
         assert sm.get_pending_query() == ""
 
-    def test_silence_timeout_triggers_collection_complete(self):
+    def test_silence_timeout_triggers_collection_complete(self, collection_clock):
         """Collection times out after silence period."""
         sm = StateManager(voice_collect_seconds=0.05)  # 50ms timeout
         sm.start_collection("test", language=None)
@@ -92,18 +109,17 @@ class TestQueryCollection:
         # Initially no timeout
         assert sm.check_collection_timeout() is False
 
-        # Wait for timeout
-        time.sleep(0.06)
+        collection_clock(sm.voice_collect_seconds * 1.25)
         assert sm.check_collection_timeout() is True
 
-    def test_max_duration_timeout(self):
+    def test_max_duration_timeout(self, collection_clock):
         """Collection times out after max duration."""
         sm = StateManager(max_collect_seconds=0.05)  # 50ms max
         sm.start_collection("test", language=None)
 
         # Keep adding to prevent silence timeout
         for _ in range(3):
-            time.sleep(0.02)
+            collection_clock(sm.max_collect_seconds / 2)
             sm.add_to_collection("more", language=None)
 
         assert sm.check_collection_timeout() is True
