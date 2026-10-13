@@ -22,7 +22,7 @@ def _response(message):
 @pytest.fixture
 def post(monkeypatch):
     transport = MagicMock(return_value=_response({"role": "assistant", "content": "Done"}))
-    monkeypatch.setattr("jarvis.llm.openai_compatible.requests.post", transport)
+    monkeypatch.setattr("jarvis.llm.http.post", transport)
     return transport
 
 

@@ -48,13 +48,13 @@ class TestLlmThinkingPayload:
     """Verify the ``think`` key appears in Ollama request payloads."""
 
     def _capture_payload(self, mock_post, *, expect_stream=False):
-        """Extract the JSON payload from the first call to requests.post."""
-        assert mock_post.called, "requests.post was never called"
+        """Extract the JSON payload from the first call to jarvis.llm.http.post."""
+        assert mock_post.called, "jarvis.llm.http.post was never called"
         _, kwargs = mock_post.call_args
         payload = kwargs.get("json") or {}
         return payload
 
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_call_llm_direct_thinking_false(self, mock_post):
         from jarvis.llm import call_llm_direct
 
@@ -67,7 +67,7 @@ class TestLlmThinkingPayload:
         payload = self._capture_payload(mock_post)
         assert payload["think"] is False
 
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_call_llm_direct_thinking_true(self, mock_post):
         from jarvis.llm import call_llm_direct
 
@@ -80,7 +80,7 @@ class TestLlmThinkingPayload:
         payload = self._capture_payload(mock_post)
         assert payload["think"] is True
 
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_call_llm_direct_thinking_defaults_false(self, mock_post):
         from jarvis.llm import call_llm_direct
 
@@ -93,7 +93,7 @@ class TestLlmThinkingPayload:
         payload = self._capture_payload(mock_post)
         assert payload["think"] is False
 
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_call_llm_streaming_thinking(self, mock_post):
         from jarvis.llm import call_llm_streaming
 
@@ -109,7 +109,7 @@ class TestLlmThinkingPayload:
         payload = self._capture_payload(mock_post)
         assert payload["think"] is True
 
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_chat_with_messages_thinking(self, mock_post):
         from jarvis.llm import chat_with_messages
 
@@ -124,7 +124,7 @@ class TestLlmThinkingPayload:
         payload = self._capture_payload(mock_post)
         assert payload["think"] is True
 
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_chat_with_messages_thinking_defaults_false(self, mock_post):
         from jarvis.llm import chat_with_messages
 
@@ -200,7 +200,7 @@ class TestDictationThinking:
     def test_llm_clean_dictation_sends_think_false(self):
         from jarvis.dictation.dictation_engine import _llm_clean_dictation
 
-        with patch("requests.post") as mock_post:
+        with patch("jarvis.llm.http.post") as mock_post:
             mock_resp = MagicMock()
             mock_resp.status_code = 200
             mock_resp.json.return_value = {"response": "cleaned"}
@@ -213,7 +213,7 @@ class TestDictationThinking:
     def test_llm_clean_dictation_sends_think_true(self):
         from jarvis.dictation.dictation_engine import _llm_clean_dictation
 
-        with patch("requests.post") as mock_post:
+        with patch("jarvis.llm.http.post") as mock_post:
             mock_resp = MagicMock()
             mock_resp.status_code = 200
             mock_resp.json.return_value = {"response": "cleaned"}
@@ -294,7 +294,7 @@ class TestCallLlmDirectFailurePaths:
         import requests
         from jarvis.llm import call_llm_direct
 
-        with patch('jarvis.llm.requests.post', side_effect=requests.exceptions.Timeout):
+        with patch('jarvis.llm.http.post', side_effect=requests.exceptions.Timeout):
             result = call_llm_direct(
                 base_url="http://localhost:99999",
                 chat_model="test-model",
@@ -307,7 +307,7 @@ class TestCallLlmDirectFailurePaths:
     def test_request_exception_returns_none(self):
         from jarvis.llm import call_llm_direct
 
-        with patch('jarvis.llm.requests.post', side_effect=ConnectionError("boom")):
+        with patch('jarvis.llm.http.post', side_effect=ConnectionError("boom")):
             result = call_llm_direct(
                 base_url="http://localhost:99999",
                 chat_model="test-model",

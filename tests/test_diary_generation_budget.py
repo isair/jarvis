@@ -29,7 +29,7 @@ def test_diary_answer_and_topics_survive_local_reasoning(monkeypatch, provider):
         response.json.return_value = ({'message': message} if provider == 'ollama'
                                      else {'choices': [{'message': message}]})
         return response
-    monkeypatch.setattr('requests.post', post)
+    monkeypatch.setattr('jarvis.llm.http.post', post)
     result = generate_conversation_summary(['User: I prefer Celsius.','User: I live in Hackney.'],
                                            None, cfg, timeout_sec=timeout)
     assert result == (summary, topics)

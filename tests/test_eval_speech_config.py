@@ -12,7 +12,7 @@ def test_speech_evals_reach_selected_endpoint_and_model(monkeypatch, provider, o
     def unavailable(*args, **kwargs):
         raise requests.ConnectionError('synthetic unavailable endpoint')
     with monkeypatch.context() as availability:
-        availability.setattr(requests, 'get', unavailable)
+        availability.setattr('jarvis.llm.http.get', unavailable)
         from evals.test_speech_constraint_resolution import (
             test_step_resolution_uses_the_current_request_count as resolve_case,
         )
@@ -34,7 +34,7 @@ def test_speech_evals_reach_selected_endpoint_and_model(monkeypatch, provider, o
         response.json.return_value = ({'message': message} if provider == 'ollama'
                                      else {'choices': [{'message': message}]})
         return response
-    monkeypatch.setattr(requests, 'post', post)
+    monkeypatch.setattr('jarvis.llm.http.post', post)
     if operation == 'resolution':
         resolve_case('Pick three items', 3)
     else:

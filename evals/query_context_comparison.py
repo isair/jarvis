@@ -368,7 +368,7 @@ def run_case(case: ComparisonCase, arm: str, repeat: int, cfg, *, no_thinking=Tr
     started = time.monotonic()
     try:
         with contextlib.closing(Database(":memory:", sqlite_vss_path=None)) as db, contextlib.ExitStack() as stack:
-            stack.enter_context(patch("jarvis.llm." + ("ollama" if cfg.llm_provider == "ollama" else "openai_compatible") + ".requests.post", recorder.post))
+            stack.enter_context(patch("jarvis.llm.http.post", recorder.post))
             stack.enter_context(patch.object(engine, "select_tools", route))
             stack.enter_context(patch.object(engine, "plan_query", plan))
             stack.enter_context(patch.object(engine, "run_tool_with_retries", tool_run))

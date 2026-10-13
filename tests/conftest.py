@@ -225,8 +225,8 @@ def no_network(monkeypatch):
 
 
 @pytest.fixture
-def owned_loopback_http(monkeypatch):
-    """Permit HTTP only to sockets bound by this test, without ambient credentials."""
+def owned_loopback_network(monkeypatch):
+    """Permit HTTP and socket connections only to endpoints owned by this test."""
     import ipaddress
     import socket
     from urllib.parse import urlsplit
@@ -237,14 +237,22 @@ def owned_loopback_http(monkeypatch):
     real_bind = socket.socket.bind
     real_connect = socket.socket.connect
     real_connect_ex = socket.socket.connect_ex
-    real_init = requests.Session.__init__
     real_send = requests.Session.send
 
-    def is_loopback(host):
+    def address(host):
         try:
-            return ipaddress.ip_address(host).is_loopback
+            return ipaddress.ip_address(host)
         except ValueError:
-            return False
+            try:
+                return ipaddress.ip_address(socket.getaddrinfo(
+                    host, None, flags=socket.AI_NUMERICHOST,
+                )[0][4][0])
+            except (OSError, TypeError):
+                return None
+
+    def is_loopback(host):
+        selected = address(host)
+        return selected is not None and selected.is_loopback
 
     def reject():
         denied.append("unowned network operation")
@@ -253,7 +261,7 @@ def owned_loopback_http(monkeypatch):
     def owns(host, port):
         return is_loopback(host) and any(
             stream.fileno() >= 0 and stream.getsockname()[1] == port
-            and ipaddress.ip_address(stream.getsockname()[0]) == ipaddress.ip_address(host)
+            and address(stream.getsockname()[0]) == address(host)
             for stream in bound_sockets
         )
 
@@ -269,10 +277,6 @@ def owned_loopback_http(monkeypatch):
             reject()
         return operation(stream, address)
 
-    def initialise(session, *args, **kwargs):
-        real_init(session, *args, **kwargs)
-        session.trust_env = False
-
     def send(session, request, **kwargs):
         target = urlsplit(request.url)
         if not owns(target.hostname, target.port):
@@ -283,12 +287,25 @@ def owned_loopback_http(monkeypatch):
     monkeypatch.setattr(socket.socket, "connect", lambda stream, address: connect(stream, address, operation=real_connect))
     monkeypatch.setattr(socket.socket, "connect_ex", lambda stream, address: connect(stream, address, operation=real_connect_ex))
     monkeypatch.setattr(socket, "getfqdn", lambda name="": "localhost")
-    monkeypatch.setattr(requests.Session, "__init__", initialise)
     monkeypatch.setattr(requests.Session, "send", send)
     yield
     for stream in bound_sockets:
         stream.close()
     assert not denied, "A local provider test attempted an unowned network operation"
+
+
+@pytest.fixture
+def owned_loopback_http(owned_loopback_network, monkeypatch):
+    """Keep owned HTTP tests independent of ambient proxies and credentials."""
+    import requests
+
+    real_init = requests.Session.__init__
+
+    def initialise(session, *args, **kwargs):
+        real_init(session, *args, **kwargs)
+        session.trust_env = False
+
+    monkeypatch.setattr(requests.Session, "__init__", initialise)
 
 
 @pytest.fixture

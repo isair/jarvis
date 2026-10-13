@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 """Multi-turn evaluations use selected inference and require actual answers."""
 import importlib
 from pathlib import Path
@@ -7,7 +8,6 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
-import requests
 
 from evals import helpers
 
@@ -24,7 +24,7 @@ ENTRIES = [
 
 @pytest.fixture
 def cases(monkeypatch):
-    monkeypatch.setattr(requests, 'get', lambda *args, **kwargs: SimpleNamespace(status_code=404))
+    monkeypatch.setattr('jarvis.llm.http.get', lambda *args, **kwargs: nullcontext(SimpleNamespace(status_code=404)))
     path = Path(__file__).resolve().parents[1] / 'evals' / 'test_multi_turn_context.py'
     if not path.exists():
         path = Path.cwd() / 'evals' / 'test_multi_turn_context.py'
@@ -66,7 +66,7 @@ def test_selected_multi_turn_backend_receives_each_turn(monkeypatch, cases, entr
         response.json.return_value = {'message': {'content': cases['MOCK_WEATHER_RESPONSE']},
                                      'choices': [{'message': {'content': cases['MOCK_WEATHER_RESPONSE']}}]}
         return response
-    monkeypatch.setattr(requests, 'post', post)
+    monkeypatch.setattr('jarvis.llm.http.post', post)
     def reply(*, cfg, text, **kwargs):
         answer = get_llm_backend(cfg).direct(cfg.llm_chat_model, 'Synthetic wire probe.', text)
         return synthetic_turn(engine, cfg, text, answer)
@@ -120,7 +120,7 @@ def test_default_model_is_bound_to_the_canonical_field(monkeypatch, cases):
         response.__enter__.return_value = response
         response.json.return_value = {'message': {'content': cases['MOCK_WEATHER_RESPONSE']}}
         return response
-    monkeypatch.setattr(requests, 'post', post)
+    monkeypatch.setattr('jarvis.llm.http.post', post)
     def reply(*, cfg, text, **kwargs):
         answer = get_llm_backend(cfg).direct(cfg.llm_chat_model, 'Synthetic wire probe.', text)
         return synthetic_turn(engine, cfg, text, answer)

@@ -37,7 +37,7 @@ def _response(*, content="Answer", stream=False):
     ],
 )
 def test_direct_serialises_thinking_and_delivers_answer(model, thinking, expected):
-    with patch("jarvis.llm.requests.post", return_value=_response()) as post:
+    with patch("jarvis.llm.http.post", return_value=_response()) as post:
         result = OllamaBackend("http://localhost:11434").direct(
             model, "system", "question", thinking=thinking,
         )
@@ -49,7 +49,7 @@ def test_direct_serialises_thinking_and_delivers_answer(model, thinking, expecte
 @pytest.mark.parametrize(("thinking", "expected"), [(False, "low"), (True, "high")])
 def test_streaming_serialises_thinking_and_delivers_only_answer(thinking, expected):
     seen = []
-    with patch("jarvis.llm.requests.post", return_value=_response(stream=True)) as post:
+    with patch("jarvis.llm.http.post", return_value=_response(stream=True)) as post:
         result = OllamaBackend("http://localhost:11434").streaming(
             "gpt-oss:20b", "system", "question", on_token=seen.append,
             thinking=thinking,
@@ -62,7 +62,7 @@ def test_streaming_serialises_thinking_and_delivers_only_answer(thinking, expect
 
 @pytest.mark.parametrize(("thinking", "expected"), [(False, "low"), (True, "high")])
 def test_chat_serialises_thinking_and_delivers_response(thinking, expected):
-    with patch("jarvis.llm.requests.post", return_value=_response()) as post:
+    with patch("jarvis.llm.http.post", return_value=_response()) as post:
         result = OllamaBackend("http://localhost:11434").chat(
             "gpt-oss:20b", [{"role": "user", "content": "question"}],
             thinking=thinking,
@@ -82,7 +82,7 @@ def test_chat_serialises_thinking_and_delivers_response(thinking, expected):
     ],
 )
 def test_chat_normalises_extra_options_think_after_override(model, override, expected):
-    with patch("jarvis.llm.requests.post", return_value=_response()) as post:
+    with patch("jarvis.llm.http.post", return_value=_response()) as post:
         result = OllamaBackend("http://localhost:11434").chat(
             model, [{"role": "user", "content": "question"}],
             thinking=True, extra_options={"think": override},

@@ -39,7 +39,7 @@ def test_nutrition_answer_survives_reasoning_budget(monkeypatch, provider, phase
         response.json.return_value = ({'message': message} if provider == 'ollama'
                                      else {'choices': [{'message': message}]})
         return response
-    monkeypatch.setattr('requests.post', post)
+    monkeypatch.setattr('jarvis.llm.http.post', post)
     if phase == 'eligibility':
         assert log_meal.meal_recording_requested(cfg, 'I ate eggs with toast', 'eggs with toast') is True
     elif phase == 'extraction':

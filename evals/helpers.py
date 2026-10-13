@@ -461,32 +461,32 @@ def is_judge_llm_available() -> bool:
     Supports both Ollama (``/api/tags``) and OpenAI-compatible (``/v1/models``)
     providers. An explicit provider override takes precedence over detection.
     """
-    import requests
+    from jarvis.llm import http
 
     native_base, openai_base = _judge_urls(JUDGE_BASE_URL)
 
     def _check_ollama() -> bool:
         try:
-            resp = requests.get(f"{native_base}/api/tags", timeout=2)
-            if resp.status_code != 200:
-                return False
-            data = resp.json()
-            models = data.get("models", [])
-            model_names = [m.get("name", "").split(":")[0] for m in models]
-            judge_base = JUDGE_MODEL.split(":")[0]
-            return any(judge_base in name for name in model_names)
+            with http.get(f"{native_base}/api/tags", timeout=2) as resp:
+                if resp.status_code != 200:
+                    return False
+                data = resp.json()
+                models = data.get("models", [])
+                model_names = [m.get("name", "").split(":")[0] for m in models]
+                judge_base = JUDGE_MODEL.split(":")[0]
+                return any(judge_base in name for name in model_names)
         except Exception:
             return False
 
     def _check_openai() -> bool:
         try:
-            resp = requests.get(f"{openai_base}/models", timeout=2)
-            if resp.status_code != 200:
-                return False
-            data = resp.json()
-            models = data.get("data", [])
-            model_ids = [m.get("id", "") for m in models]
-            return any(JUDGE_MODEL in mid for mid in model_ids)
+            with http.get(f"{openai_base}/models", timeout=2) as resp:
+                if resp.status_code != 200:
+                    return False
+                data = resp.json()
+                models = data.get("data", [])
+                model_ids = [m.get("id", "") for m in models]
+                return any(JUDGE_MODEL in mid for mid in model_ids)
         except Exception:
             return False
 
@@ -512,14 +512,15 @@ def call_judge_llm(system_prompt: str, user_prompt: str, timeout_sec: float = 12
     endpoints. An explicit provider override takes precedence over detection.
     ``response_schema`` requests constrained JSON; other callers retain free text.
     """
-    import requests
+    from jarvis.llm import http
 
     native_base, openai_base = _judge_urls(JUDGE_BASE_URL)
 
     # Detect provider
     def _is_ollama() -> bool:
         try:
-            return requests.get(f"{native_base}/api/tags", timeout=2).status_code == 200
+            with http.get(f"{native_base}/api/tags", timeout=2) as resp:
+                return resp.status_code == 200
         except Exception:
             return False
 
@@ -543,26 +544,17 @@ def call_judge_llm(system_prompt: str, user_prompt: str, timeout_sec: float = 12
 
     try:
         provider = _requested_judge_provider()
-        if provider == "ollama" or (not provider and _is_ollama()):
-            resp = requests.post(
-                f"{native_base}/api/chat",
-                json=ollama_payload,
-                timeout=timeout_sec
-            )
+        native = provider == "ollama" or (not provider and _is_ollama())
+        endpoint = f"{native_base}/api/chat" if native else f"{openai_base}/chat/completions"
+        payload = ollama_payload if native else openai_payload
+        with http.post(endpoint, json=payload, timeout=timeout_sec) as resp:
             resp.raise_for_status()
             data = resp.json()
-            if isinstance(data, dict) and "message" in data:
-                return data["message"].get("content", "")
-        else:
-            resp = requests.post(
-                f"{openai_base}/chat/completions",
-                json=openai_payload,
-                timeout=timeout_sec
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            if isinstance(data, dict) and "choices" in data:
-                return data["choices"][0].get("message", {}).get("content", "")
+            if isinstance(data, dict):
+                if native and "message" in data:
+                    return data["message"].get("content", "")
+                if not native and "choices" in data:
+                    return data["choices"][0].get("message", {}).get("content", "")
     except Exception as e:
         print(f"⚠️ Judge LLM call failed: {e}")
         return None
