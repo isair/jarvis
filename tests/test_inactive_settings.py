@@ -1,6 +1,7 @@
 """Inactive saved settings stay opaque while active controls remain configurable."""
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -59,3 +60,9 @@ def test_active_numeric_settings_are_still_validated(tmp_path, monkeypatch):
     with pytest.raises(ValueError):
         load_settings()
     assert path.read_bytes() == before
+
+
+def test_example_configuration_does_not_advertise_inactive_controls():
+    example = Path(__file__).resolve().parents[1] / "examples" / "config.json"
+    keys = json.loads(example.read_text(encoding="utf-8"))
+    assert set(keys).isdisjoint(INACTIVE_KEYS)
