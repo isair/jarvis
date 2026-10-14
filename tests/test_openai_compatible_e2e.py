@@ -293,3 +293,23 @@ class TestConfigRoundTrip:
         assert isinstance(backend, OpenAICompatibleBackend)
         out = backend.direct(settings.llm_chat_model, "sys", "hi", timeout_sec=5)
         assert out == "Hello from stub"
+
+
+def test_timing_recorder_observes_owned_http_requests(stub):
+    from jarvis.llm.factory import get_llm_backend
+    from tests.performance.timing_recorder import TimingRecorder
+
+    cfg = _cfg(stub)
+    backend = get_llm_backend(cfg)
+    with TimingRecorder() as recorder:
+        direct = backend.direct(cfg.llm_chat_model, 'system', 'user')
+        streamed = get_llm_backend(cfg).streaming(cfg.llm_chat_model, 'system', 'user')
+        chat = backend.chat(cfg.llm_chat_model, [{'role': 'user', 'content': 'user'}])
+    assert direct and streamed and chat['message']['content']
+    assert len(recorder.calls) == 3
+    assert {call.model for call in recorder.calls} == {cfg.llm_chat_model}
+    assert {call.outcome for call in recorder.calls} == {'response'}
+    assert {call.provider for call in recorder.calls} == {type(backend).__name__}
+    assert [call.response_chars for call in recorder.calls] == [
+        len(direct), len(streamed), len(chat['message']['content']),
+    ]
