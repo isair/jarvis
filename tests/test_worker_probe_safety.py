@@ -10,14 +10,17 @@ pytestmark = [pytest.mark.unit, pytest.mark.usefixtures('no_network')]
 ROOT = Path(__file__).resolve().parents[1]
 
 
-@pytest.mark.parametrize('caught_attempts', [None, 'immediate', 'shutdown'])
-def test_worker_probe_owns_writes_and_rejects_caught_audio(tmp_path, caught_attempts):
+@pytest.mark.parametrize('effect,timing', [
+    ('none', 'immediate'), ('write', 'immediate'), ('write', 'shutdown'),
+    ('audio', 'immediate'), ('audio', 'shutdown'),
+])
+def test_worker_probe_enforces_owned_write_and_audio_boundaries(tmp_path, effect, timing):
     owned = tmp_path / 'owned'
     owned.mkdir()
     runtime = owned / 'runtime'
     runtime.mkdir()
     outside = tmp_path / 'outside'
-    native_marker = tmp_path / 'native-audio'
+    native_marker = owned / 'native-audio'
     scenario = owned / 'scenario.py'
     code = '''from pathlib import Path
 import os, sounddevice
@@ -33,14 +36,19 @@ for operation in [lambda: open(os.environ['OUTSIDE_MARKER'], 'w').close(),
                   lambda: os.close(os.open(os.environ['OUTSIDE_MARKER'], os.O_WRONLY|os.O_CREAT)),
                   lambda: Path(os.environ['OUTSIDE_MARKER']).write_text('escaped'),
                   lambda: os.rename(owned/'destination',os.environ['OUTSIDE_MARKER']),
-                  lambda: os.replace(owned/'destination',os.environ['OUTSIDE_MARKER']),
-                  lambda: sounddevice.play(), lambda: sounddevice.InputStream()]:
+                  lambda: os.replace(owned/'destination',os.environ['OUTSIDE_MARKER'])]:
     try: operation()
     except AssertionError: pass
 '''
-    if caught_attempts == 'shutdown':
+    if effect == 'audio':
+        attempts = '''
+for operation in [lambda: sounddevice.play(), lambda: sounddevice.InputStream()]:
+    try: operation()
+    except AssertionError: pass
+'''
+    if effect != 'none' and timing == 'shutdown':
         code += '\nimport atexit\n@atexit.register\ndef caught_late_attempts():\n'+'\n'.join('    '+line for line in attempts.splitlines())+'\n'
-    elif caught_attempts:
+    elif effect != 'none':
         code += attempts
     scenario.write_text(code)
     # Native entries are marker stubs before the policy loads, even if it breaks.
@@ -63,10 +71,10 @@ runpy.run_path(sys.argv.pop(1),run_name='__main__')
         [sys.executable, '-c', driver, str(ROOT/'tests/fixtures/worker_probe.py'),
          str(owned), str(scenario)], env=env, capture_output=True, text=True, timeout=20,
     )
-    assert result.returncode == (1 if caught_attempts else 0), result.stdout+result.stderr
+    assert result.returncode == (1 if effect != 'none' else 0), result.stdout+result.stderr
     assert not outside.exists()
     assert not native_marker.exists()
-    if caught_attempts:
+    if effect != 'none':
         assert 'Worker probe attempted forbidden effects' in result.stderr
     else:
         assert (owned/'data/destination').read_text() == 'owned'
