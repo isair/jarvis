@@ -253,7 +253,11 @@ The engine consumes the plan in two phases.
   values stay literal; declared booleans, integers, finite numbers and null
   values use their JSON types, including values in the planner's quote syntax.
   Primitive type unions use the same conversion rules. Invalid primitive
-  values and complex types use the LLM resolver.
+  values and complex types use the LLM resolver. Declared `date`, `date-time`
+  and `time` strings must parse as ISO literals, following inline alternatives
+  and local schema references. Relative labels, invalid dates and calendar
+  references use the clock-grounded resolver. Ordinary string arguments stay
+  literal; valid ISO values retain the no-inference path.
   Each property appears once and all argument text must be consumed, apart
   from whitespace, commas between pairs and an optional final full stop.
   Unmatched quotes or unparsed text use the LLM resolver rather than dispatching
