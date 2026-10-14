@@ -1,8 +1,8 @@
 """
-Tests for setup wizard detection functions.
+Setup detection, provider configuration and wizard controls.
 
-These tests verify the Ollama detection logic without touching the UI.
-They treat the detection functions as black boxes, verifying inputs produce correct outputs.
+Unit scenarios are offline. Server discovery and model-listing integration
+scenarios use owned loopback HTTP endpoints.
 """
 
 import subprocess
@@ -205,6 +205,8 @@ class TestCheckOllamaServer:
                 real_http_protocol_probe()
 
 
+@pytest.mark.unit
+@pytest.mark.usefixtures("no_network")
 class TestGetRequiredModels:
     """Tests for getting required models from config."""
 
@@ -386,6 +388,8 @@ nomic-embed-text:latest    def456          274 MB    1 week ago
             assert (child.returncode, child.stdout) == (0, 'independent child\n')
 
 
+@pytest.mark.unit
+@pytest.mark.usefixtures("no_network")
 class TestResolveOllamaPath:
     """Tests for the ollama CLI path resolver."""
 
@@ -410,6 +414,8 @@ class TestResolveOllamaPath:
                 assert resolve_ollama_path() == "ollama"
 
 
+@pytest.mark.unit
+@pytest.mark.usefixtures("no_network")
 class TestCheckOllamaStatus:
     """Tests for complete Ollama status check."""
 
@@ -451,6 +457,8 @@ class TestCheckOllamaStatus:
                         assert status.is_fully_setup is False
 
 
+@pytest.mark.unit
+@pytest.mark.usefixtures("no_network")
 class TestShouldShowSetupWizard:
     """Tests for wizard display logic."""
 
@@ -573,6 +581,8 @@ class TestShouldShowSetupWizard:
             assert should_show_setup_wizard(force_server_check=True) is False
 
 
+@pytest.mark.unit
+@pytest.mark.usefixtures("no_network")
 class TestProviderChoicePage:
     """The first real wizard decision: which runtime serves the LLM."""
 
@@ -735,6 +745,8 @@ class TestProviderChoicePage:
             cfg_path.unlink(missing_ok=True)
 
 
+@pytest.mark.unit
+@pytest.mark.usefixtures("no_network")
 class TestWelcomePageFlow:
     """The Welcome/status page is reached only on the Ollama branch."""
 
@@ -748,6 +760,8 @@ class TestWelcomePageFlow:
             assert page.nextId() == 9
 
 
+@pytest.mark.unit
+@pytest.mark.usefixtures("no_network")
 class TestOpenAICompatiblePage:
     """Collects the OpenAI-compatible connection details."""
 
@@ -846,24 +860,6 @@ class TestOpenAICompatiblePage:
         finally:
             cfg_path.unlink(missing_ok=True)
 
-    @pytest.mark.integration
-    def test_initialize_page_defaults_base_url_for_first_run(self, qapp, tmp_path, monkeypatch, stub_openai_server):
-        """First-run defaults and discovery use the owned local server."""
-        base, _ = stub_openai_server
-        cfg_path = tmp_path / "config.json"
-        cfg_path.write_text("{}", encoding="utf-8")
-        monkeypatch.setenv("JARVIS_CONFIG_PATH", str(cfg_path))
-        monkeypatch.setattr(OpenAICompatiblePage, "_DEFAULT_BASE_URL", base)
-        monkeypatch.setattr(OpenAICompatiblePage, "_KNOWN_SERVERS", [("Owned", base)])
-        page = OpenAICompatiblePage()
-        page.initializePage()
-        assert page._base_url_input.text() == OpenAICompatiblePage._DEFAULT_BASE_URL
-        assert page._chat_model_combo.currentText() == ""
-        assert page._discovery_worker.wait(3000)
-        qapp.processEvents()
-        assert "Found Owned" in page._connect_status.text()
-        assert base in page._connect_status.text()
-
     def test_model_fields_are_editable_dropdowns(self, qapp):
         """Chat + embedding models are editable combo boxes: a guided list to
         pick from, but power users can still type a model id."""
@@ -873,20 +869,6 @@ class TestOpenAICompatiblePage:
         assert isinstance(page._embed_model_combo, QComboBox)
         assert page._chat_model_combo.isEditable()
         assert page._embed_model_combo.isEditable()
-
-    @pytest.mark.integration
-    def test_fetch_models_returns_server_model_ids(self, stub_openai_server):
-        """_fetch_models hits /v1/models on the configured server."""
-        base, _ = stub_openai_server
-        models = OpenAICompatiblePage._fetch_models(base, "", timeout=3)
-        assert "stub-chat" in models and "stub-embed" in models
-
-    @pytest.mark.integration
-    def test_fetch_models_failsoft_on_unreachable_server(self, unavailable_openai_endpoint):
-        """An unreachable server yields an empty list (never raises), so the
-        user can still type a model id by hand."""
-        models = OpenAICompatiblePage._fetch_models(unavailable_openai_endpoint, "", timeout=1)
-        assert models == []
 
     def test_populate_models_fills_dropdowns_preserving_current(self, qapp):
         """Fetched models populate the dropdowns; a value the user already
@@ -954,14 +936,6 @@ class TestOpenAICompatiblePage:
         label, url = OpenAICompatiblePage._KNOWN_SERVERS[0]
         page._preset_combo.setCurrentIndex(1)
         assert page._base_url_input.text() == url
-
-    @pytest.mark.integration
-    def test_discover_servers_finds_running_server(self, stub_openai_server, unavailable_openai_endpoint):
-        """Discovery returns reachable loopback servers and skips dead ports."""
-        base, _ = stub_openai_server
-        found = OpenAICompatiblePage._discover_servers(
-            [("Stub", base), ("Dead", unavailable_openai_endpoint)], timeout=2)
-        assert found == [("Stub", base)]
 
     def test_capability_summary_reports_each_feature(self):
         ok = SimpleNamespace(reachable=True, chat=True, tools=True, embeddings=True)
@@ -1068,6 +1042,8 @@ class TestOpenAICompatiblePage:
         assert page._base_url_input.text() == "http://mine:5/v1"
 
 
+@pytest.mark.unit
+@pytest.mark.usefixtures("no_network")
 class TestOllamaStatusDataclass:
     """Tests for OllamaStatus dataclass behavior."""
 
@@ -1117,6 +1093,8 @@ class TestOllamaStatusDataclass:
         assert status.missing_models == []
 
 
+@pytest.mark.unit
+@pytest.mark.usefixtures("no_network")
 class TestLocationDetectionForWizard:
     """Tests for location detection utilities used in setup wizard."""
 
@@ -1146,22 +1124,22 @@ class TestLocationDetectionForWizard:
                 # Should return Unknown since 192.168.x.x can't be geolocated
                 assert "Unknown" in context or "error" in context.lower()
 
-    def test_location_availability_check(self):
-        """is_location_available checks for GeoIP2 and database."""
-        with patch("jarvis.utils.location.GEOIP2_AVAILABLE", False):
-            # When library not available, should return False
-            # Note: We can't easily patch the constant after import,
-            # so we test the behavior indirectly
-            pass
+    @pytest.mark.parametrize("library_available,database_exists,expected", [
+        (False, True, False),
+        (True, False, False),
+        (True, True, True),
+    ])
+    def test_location_availability_check(
+            self, monkeypatch, tmp_path, library_available, database_exists, expected):
+        """Location needs both the optional library and a local database."""
+        from jarvis.utils import location
 
-        # With patched database path
-        with patch("jarvis.utils.location._get_database_path") as mock_path:
-            mock_path_obj = MagicMock()
-            mock_path_obj.exists.return_value = False
-            mock_path.return_value = mock_path_obj
-
-            # Can't easily test due to import-time GEOIP2_AVAILABLE check
-            # but the function should return False if DB doesn't exist
+        database = tmp_path / "owned-geoip.mmdb"
+        if database_exists:
+            database.touch()
+        monkeypatch.setattr(location, "GEOIP2_AVAILABLE", library_available)
+        monkeypatch.setattr(location, "_get_database_path", lambda: database)
+        assert is_location_available() is expected
 
     def test_location_context_with_config_ip(self):
         """When config IP is provided and valid, uses it for location."""
@@ -1180,6 +1158,8 @@ class TestLocationDetectionForWizard:
             assert "United States" in context
 
 
+@pytest.mark.unit
+@pytest.mark.usefixtures("no_network")
 class TestModelOptions:
     """Tests for model selection options in setup wizard."""
 
@@ -1209,6 +1189,8 @@ class TestModelOptions:
         assert ModelsPage.MODEL_OPTIONS is SUPPORTED_CHAT_MODELS
 
 
+@pytest.mark.unit
+@pytest.mark.usefixtures("no_network")
 class TestModelsPageUI:
     """Tests for the dropdown-based model selection UI in ModelsPage."""
 
@@ -1294,6 +1276,8 @@ class TestModelsPageUI:
             assert d in ModelsPage._FAST_MODEL_IDS
 
 
+@pytest.mark.unit
+@pytest.mark.usefixtures("no_network")
 class TestOpenAICompatiblePageDefaults:
     """Tests for default link state and fast model in OpenAI compatible page."""
 
@@ -1331,6 +1315,8 @@ class TestOpenAICompatiblePageDefaults:
         assert page._fast_model_combo.isHidden() is True
 
 
+@pytest.mark.unit
+@pytest.mark.usefixtures("no_network")
 class TestWizardMemoryBudget:
     """Model-memory guidance stays useful on both provider paths."""
 
@@ -1546,6 +1532,8 @@ class TestWizardMemoryBudget:
         assert "Whisper ~5.0 GB" in summary.text()
 
 
+@pytest.mark.unit
+@pytest.mark.usefixtures("no_network")
 class TestDefaultModelDetection:
     """Regression tests: the default small model must be detected as missing when not
     installed, triggering the setup wizard install prompt.
@@ -1630,6 +1618,8 @@ class TestDefaultModelDetection:
                         assert status.is_fully_setup is True
 
 
+@pytest.mark.unit
+@pytest.mark.usefixtures("no_network")
 class TestWhisperModelOptions:
     """Tests for whisper model selection options in setup wizard."""
 
@@ -1794,6 +1784,8 @@ class TestWhisperModelOptions:
             assert model_id.endswith(".en"), f"English model should end with .en: {model_id}"
 
 
+@pytest.mark.unit
+@pytest.mark.usefixtures("no_network")
 class TestWhisperSetupPageSliderRebuild:
     """Regression tests for WhisperSetupPage slider rebuild lifecycle.
 
@@ -1805,7 +1797,6 @@ class TestWhisperSetupPageSliderRebuild:
     safe pattern for clearing items out of a layout.
     """
 
-    @pytest.mark.unit
     @pytest.mark.parametrize("refresh", ["language", "initialise"])
     def test_rebuild_displays_only_current_labels_before_deferred_deletion(self, qapp, refresh):
         """Repeated refreshes must display one label set in each slider row."""
@@ -1904,6 +1895,8 @@ class TestWhisperSetupPageSliderRebuild:
                     assert w.parent() is container
 
 
+@pytest.mark.unit
+@pytest.mark.usefixtures("no_network")
 class TestMCPPage:
     """Tests for the MCP servers wizard page."""
 
@@ -2009,6 +2002,8 @@ class TestMCPPage:
             cfg_path.unlink(missing_ok=True)
 
 
+@pytest.mark.unit
+@pytest.mark.usefixtures("no_network")
 class TestSearchProvidersPage:
     """Tests for the Search Providers wizard page (Brave + Wikipedia)."""
 
@@ -2124,3 +2119,44 @@ class TestSearchProvidersPage:
             assert saved["mcps"] == {"x": {}}
         finally:
             cfg_path.unlink(missing_ok=True)
+
+
+@pytest.mark.integration
+class TestOpenAICompatibleServer:
+    """Setup discovery and listing use only owned HTTP endpoints."""
+
+    def test_initialize_page_defaults_base_url_for_first_run(self, qapp, tmp_path, monkeypatch, stub_openai_server):
+        """First-run defaults and discovery use the owned local server."""
+        base, _ = stub_openai_server
+        cfg_path = tmp_path / "config.json"
+        cfg_path.write_text("{}", encoding="utf-8")
+        monkeypatch.setenv("JARVIS_CONFIG_PATH", str(cfg_path))
+        monkeypatch.setattr(OpenAICompatiblePage, "_DEFAULT_BASE_URL", base)
+        monkeypatch.setattr(OpenAICompatiblePage, "_KNOWN_SERVERS", [("Owned", base)])
+        page = OpenAICompatiblePage()
+        page.initializePage()
+        assert page._base_url_input.text() == OpenAICompatiblePage._DEFAULT_BASE_URL
+        assert page._chat_model_combo.currentText() == ""
+        assert page._discovery_worker.wait(3000)
+        qapp.processEvents()
+        assert "Found Owned" in page._connect_status.text()
+        assert base in page._connect_status.text()
+
+    def test_fetch_models_returns_server_model_ids(self, stub_openai_server):
+        """_fetch_models hits /v1/models on the configured server."""
+        base, _ = stub_openai_server
+        models = OpenAICompatiblePage._fetch_models(base, "", timeout=3)
+        assert "stub-chat" in models and "stub-embed" in models
+
+    def test_fetch_models_failsoft_on_unreachable_server(self, unavailable_openai_endpoint):
+        """An unreachable server yields an empty list (never raises), so the
+        user can still type a model id by hand."""
+        models = OpenAICompatiblePage._fetch_models(unavailable_openai_endpoint, "", timeout=1)
+        assert models == []
+
+    def test_discover_servers_finds_running_server(self, stub_openai_server, unavailable_openai_endpoint):
+        """Discovery returns reachable loopback servers and skips dead ports."""
+        base, _ = stub_openai_server
+        found = OpenAICompatiblePage._discover_servers(
+            [("Stub", base), ("Dead", unavailable_openai_endpoint)], timeout=2)
+        assert found == [("Stub", base)]
