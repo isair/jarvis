@@ -24,12 +24,12 @@ unqualified features to improve queue counts.
    before changing anything. Preserve unfinished work and another session's
    changes; do not switch or reset their checkout. If no suitable worktree
    exists, create an isolated one using the available worktree tooling.
-3. Check account weekly usage and ordinary usage availability before each
-   substantial batch and after every merge. At 90% weekly usage, or when
-   ordinary usage is unavailable, checkpoint and pause the associated heartbeat
-   through the automation tool. Report completed work and what remains. Do not
-   consume reset credits or purchase capacity automatically. If usage cannot be
-   verified, record the limitation and stop substantial batches pending a check.
+3. Follow the user's active usage policy. Apply a budget or percentage cutoff
+   only when requested. When the user relies on automatic resets, continue
+   across weekly usage thresholds. Do not manually consume reset credits or
+   purchase capacity without authorisation. If ordinary usage actually becomes
+   unavailable, checkpoint and pause the associated heartbeat through the
+   automation tool, then report completed work and what remains.
 4. Refresh live GitHub state and `origin/develop`. Treat checkpoint facts as
    leads, not evidence of current heads, checks or issue status.
 
