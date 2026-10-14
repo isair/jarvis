@@ -17,6 +17,14 @@ memory.
    Malformed URLs are skipped. DDG redirector URLs
    (`//duckduckgo.com/l/?uddg=…` or the HTTPS equivalent) are unwrapped once,
    preserving percent-encoded characters within the destination URL.
+   The HTML request uses `curl_cffi`'s matched Chrome TLS and HTTP profile,
+   with no JavaScript, browser installation, browser profile, imported cookies
+   or persistent session. A native content callback caps decoded HTML at
+   512 KiB; oversized responses are discarded before parsing. The total
+   request timeout is at most 10 seconds and shrinks to the remaining chain
+   budget. Non-finite or sub-millisecond budgets are rejected before a
+   session is opened. Redirect responses are not followed. Challenge detection and
+   fallback providers apply to this single HTML attempt.
 3. **Parallel cascade fetch**: if there's no instant answer and we have
    result URLs, fetch the top 3 results **in parallel** under a single
    `_CASCADE_WALL_CLOCK_SEC` (8s) wall-clock cap. Selection rules:
@@ -260,4 +268,4 @@ Regression tests assert:
   or a user-pluggable provider registry is possible but out of scope.
 - JS rendering — we fetch raw HTML only. SPA-heavy pages may return
   nothing useful; the cascade handles this by trying the next result.
-- User-agent rotation — a single desktop Chrome UA is used.
+- User-agent rotation: the HTML request uses the Chrome profile provided by the pinned local client.

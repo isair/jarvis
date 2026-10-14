@@ -20,7 +20,6 @@ def test_short_search_titles_ground_answers_in_article_not_navigation(title):
             '<a href="https://navigation.test/about">About the festival website</a>'
             f'<a class="result-link" href="https://source.test/article">{title}</a>').encode()
     instant = SimpleNamespace(raise_for_status=lambda: None, json=lambda: {})
-    response = SimpleNamespace(status_code=200, content=html)
     cfg = SimpleNamespace(web_search_enabled=True, voice_debug=False,
                           brave_search_api_key='', wikipedia_fallback_enabled=False)
 
@@ -29,7 +28,8 @@ def test_short_search_titles_ground_answers_in_article_not_navigation(title):
                 if urls[0][1] == 'https://source.test/article'
                 else 'The website editor works in London.')
 
-    with patch.object(web_search.requests, 'get', side_effect=[instant, response]), patch.object(
+    with patch.object(web_search.requests, 'get', return_value=instant), patch.object(
+            web_search, 'download_search_html', return_value=(200, html)), patch.object(
             web_search, '_cascade_fetch', side_effect=fetch):
         result = web_search.WebSearchTool().run(
             {'search_query': 'Which city hosts the Kestrel festival?'},

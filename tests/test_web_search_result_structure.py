@@ -32,6 +32,7 @@ def search_html(monkeypatch, html, query):
     response = SimpleNamespace(status_code=200, content=html)
     monkeypatch.setattr(web_search.requests, 'get', lambda url, **kw:
                         instant if url.startswith('https://api.duckduckgo.com/') else response)
+    monkeypatch.setattr(web_search, 'download_search_html', lambda *a, **kw: (200, html))
     monkeypatch.setattr(web_search, '_cascade_fetch', lambda *a, **kw: query+' synthetic source reading.')
     cfg = SimpleNamespace(web_search_enabled=True, voice_debug=False,
                           brave_search_api_key='', wikipedia_fallback_enabled=False)
