@@ -2,6 +2,7 @@
 
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import textwrap
@@ -16,9 +17,10 @@ _CASES = {
         @pytest.mark.parametrize('backend,operation', [
             ('sounddevice', 'InputStream'), ('sounddevice', 'OutputStream'),
             ('sounddevice', 'play'), ('winsound', 'PlaySound'),
+            ('pygame', 'init'), ('pygame.mixer', 'init'), ('pygame.mixer.music', 'play'),
         ])
         def test_audio(backend, operation):
-            getattr(globals()[backend], operation)()
+            getattr(importlib.import_module(backend), operation)()
     ''',
     'caught': '''
         def test_caught_audio_error():
@@ -48,6 +50,14 @@ _CASES = {
         def test_delayed_audio(delayed_audio):
             pass
     ''',
+    'late_hook': '''
+        def test_finishes_before_shutdown_hook():
+            pass
+    ''',
+    'eval_only': '''
+        def test_eval_audio():
+            sounddevice.play()
+    ''',
     'fake': '''
         def test_owned_feedback(monkeypatch):
             monkeypatch.setattr(sounddevice, 'play', lambda: Path(os.environ['FAKE_MARKER']).write_text('owned feedback'))
@@ -64,14 +74,25 @@ def test_audio_policy_at_native_boundary(tmp_path, mode):
     config.write_text('{}')
     ini = tmp_path / 'pytest.ini'
     ini.write_text('[pytest]\nmarkers =\n    unit: owned synthetic unit case\n')
-    case = tmp_path / 'test_probe.py'
+    case_dir = tmp_path / 'evals' if mode == 'eval_only' else tmp_path
+    case_dir.mkdir(exist_ok=True)
+    case = case_dir / 'test_probe.py'
     case.write_text(
-        'import os, threading\nfrom pathlib import Path\nimport pytest, sounddevice, winsound\npytestmark = pytest.mark.unit\n'
+        'import importlib, os, threading\nfrom pathlib import Path\nimport pytest, sounddevice, winsound, pygame\npytestmark = pytest.mark.unit\n'
         + textwrap.dedent(_CASES[mode])
     )
     native_marker = tmp_path / 'native-call'
     fake_marker = tmp_path / 'fake-call'
-    conftest = Path(__file__).with_name('conftest.py')
+    conftest = Path(__file__).resolve().parents[1] / 'conftest.py'
+    repo = Path(__file__).resolve().parents[1]
+    if mode == 'eval_only':
+        for source in (repo / 'conftest.py', repo / 'tests' / 'conftest.py'):
+            if source.exists():
+                destination = tmp_path / source.relative_to(repo)
+                destination.parent.mkdir(exist_ok=True, parents=True)
+                shutil.copyfile(source, destination)
+    if mode == 'late_hook':
+        (tmp_path / 'conftest.py').write_text('import pytest, sounddevice\n@pytest.hookimpl(trylast=True)\ndef pytest_sessionfinish(session, exitstatus):\n    try: sounddevice.play()\n    except AssertionError: pass\n')
     # Every native entry is a harmless marker stub before pytest loads policy.
     driver = '''
 import importlib.util, os, sys, types
@@ -86,17 +107,32 @@ winsound = types.ModuleType('winsound')
 for operation in ('PlaySound', 'Beep', 'MessageBeep'):
     setattr(winsound, operation, native)
 sys.modules['winsound'] = winsound
+pygame = types.ModuleType('pygame')
+pygame.__path__ = []
+pygame.init = native
+mixer = types.ModuleType('pygame.mixer')
+mixer.init = native
+music = types.ModuleType('pygame.mixer.music')
+music.play = native
+mixer.music = music
+pygame.mixer = mixer
+for name, module in (('pygame', pygame), ('pygame.mixer', mixer), ('pygame.mixer.music', music)):
+    sys.modules[name] = module
 name = 'owned_repo_policy'
-spec = importlib.util.spec_from_file_location(name, sys.argv[1])
-module = importlib.util.module_from_spec(spec)
-sys.modules[name] = module
-spec.loader.exec_module(module)
-raise SystemExit(pytest.main(['-q', '-c', sys.argv[2], '-p', name, sys.argv[3]]))
+arguments = ['-q', '-c', sys.argv[2], sys.argv[3]]
+if os.environ['PROBE_MODE'] != 'eval_only':
+    spec = importlib.util.spec_from_file_location(name, sys.argv[1])
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    arguments.extend(['-p', name])
+raise SystemExit(pytest.main(arguments))
 '''
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1', QT_QPA_PLATFORM='offscreen',
                TMPDIR=str(runtime), TEMP=str(runtime), TMP=str(runtime),
                JARVIS_CONFIG_PATH=str(config), XDG_CONFIG_HOME=str(tmp_path / 'xdg'),
-               NATIVE_MARKER=str(native_marker), FAKE_MARKER=str(fake_marker))
+               NATIVE_MARKER=str(native_marker), FAKE_MARKER=str(fake_marker),
+               PROBE_MODE=mode, PYTHONPATH=str(repo / 'src'))
     result = subprocess.run(
         [sys.executable, '-c', driver, str(conftest), str(ini), str(case)],
         cwd=tmp_path, env=env, capture_output=True, text=True, timeout=30,
