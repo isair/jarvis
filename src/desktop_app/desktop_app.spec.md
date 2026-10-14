@@ -385,6 +385,12 @@ Updates are only available in bundled mode (PyInstaller builds).
 | **Windows** | Creates a batch script that waits for the current process (by PID via `tasklist`) to exit, then runs the Inno Setup installer with `/SILENT` so the installer's own progress window provides visual feedback during install, then relaunches the upgraded exe. Rollback is handled by Inno Setup's own in-session rollback + retained uninstaller data. |
 | **Linux** | Creates a shell script that waits for the current process (by PID via `kill -0`) to exit, moves the old directory to `Jarvis.backup` for rollback, moves the new directory in, and relaunches |
 
+Linux tar extraction explicitly uses the standard library's `data` filter,
+confining entries and link targets to staging and refusing special files.
+The payload root must be a real `Jarvis` directory. Rejected or failed staging
+is removed without launching the installation script; contained library links
+and executable permissions remain usable.
+
 ### Update Flow (Windows/Linux)
 
 ```mermaid

@@ -621,12 +621,12 @@ def install_update_linux(download_path: Path) -> bool:
 
     try:
         with tarfile.open(download_path, "r:gz") as tf:
-            tf.extractall(temp_dir)
+            tf.extractall(temp_dir, filter="data")
 
         new_app_dir = temp_dir / "Jarvis"
 
-        if not new_app_dir.exists():
-            raise FileNotFoundError("Jarvis directory not found in download")
+        if not new_app_dir.is_dir() or new_app_dir.is_symlink():
+            raise ValueError("Jarvis directory not found or invalid in download")
 
         # Escape paths using single quotes to prevent shell injection
         escaped_app_dir = _escape_shell_path(app_dir)
@@ -662,6 +662,7 @@ rm -rf {escaped_temp}
 
     except Exception as e:
         debug_log(f"Linux update failed: {e}", "updater")
+        shutil.rmtree(temp_dir, ignore_errors=True)
         return False
 
 
