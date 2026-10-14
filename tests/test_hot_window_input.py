@@ -10,6 +10,7 @@ but use real StateManager and EchoDetector instances to avoid coupling to intern
 """
 
 import time
+import sys
 from unittest.mock import patch, MagicMock
 
 import pytest
@@ -73,6 +74,25 @@ def _create_listener(**kwargs):
 
     return listener, mock_tts
 
+
+
+@pytest.fixture(autouse=True)
+def owned_listener_effects(monkeypatch, silent_thinking_tunes):
+    """Stop every synthetic listener before its cue output fixture is restored."""
+    original_factory = _create_listener
+    listeners = []
+
+    def create(*args, **kwargs):
+        listener, tts = original_factory(*args, **kwargs)
+        listeners.append(listener)
+        return listener, tts
+
+    monkeypatch.setattr(sys.modules[__name__], '_create_listener', create)
+    try:
+        yield
+    finally:
+        for listener in listeners:
+            listener.stop()
 
 def _make_judgment(directed=True, stop=False, confidence="high", reasoning="test"):
     """Build an IntentJudgment."""
@@ -912,6 +932,7 @@ class TestEarlyBeepFeedback:
         _process_transcript(listener, "jarvis what time is it", utterance_energy=0.01)
 
         assert _accepted_query(listener) != ""
+        assert _is_beeping(listener)
         listener.state_manager.stop()
 
     @patch("builtins.print")
@@ -924,10 +945,18 @@ class TestEarlyBeepFeedback:
         _simulate_tts_finish(listener)
         _wait_for_hot_window_state(listener)
 
-        _install_intent_judge(listener, _make_judgment(directed=True))
+        judgment = _make_judgment(directed=True)
+        judge = _install_intent_judge(listener, judgment)
+
+        def judge_after_feedback(**kwargs):
+            assert _is_beeping(listener), 'Intent judging began before feedback'
+            return judgment
+
+        judge.judge.side_effect = judge_after_feedback
         _process_transcript(listener, "tell me more", utterance_energy=0.01)
 
         assert _accepted_query(listener) == "tell me more"
+        assert _is_beeping(listener)
         listener.state_manager.stop()
 
     @patch("builtins.print")
@@ -1211,6 +1240,7 @@ class TestEchoCaughtBeforeBeepAndIntentJudge:
         _process_transcript(listener, "what about tomorrow", utterance_energy=0.01)
 
         assert _accepted_query(listener) == "what about tomorrow"
+        assert _is_beeping(listener)
         listener.state_manager.stop()
 
     @patch("builtins.print")
