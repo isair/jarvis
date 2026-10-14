@@ -15,6 +15,8 @@ pytestmark = [pytest.mark.eval, requires_judge_llm]
 @pytest.mark.parametrize('step', [
     "fetchMeals time_range='today'",
     'fetchMeals bugün kaydedilen öğünleri getir',
+    "fetchMeals since_utc='today' until_utc='today'",
+    "fetchMeals since_utc='bugün' until_utc='bugün'",
 ])
 def test_relative_calendar_day_uses_current_clock(monkeypatch, eval_db, step):
     instant = datetime(2029, 2, 6, 16, 30, tzinfo=timezone.utc)

@@ -16,8 +16,8 @@ multi-step shape from scratch every turn.
 Design principles:
 - Fail-open: if planning fails or times out, return an empty list and
   let the engine fall through to existing behaviour.
-- Cheap model chain: planner rides the router / intent-judge / chat model
-  chain so it doesn't page in extra weights.
+- Shared chat model: planner and step resolution use the CHAT tier without
+  loading additional model weights.
 - Dual mode: for LARGE models the plan is advisory — injected into the
   system message so the chat model can follow it. For SMALL models
   (`use_text_tools=True`) the engine calls `resolve_next_tool_call` to
@@ -767,6 +767,19 @@ _PLAN_STEP_KV_RE = re.compile(
 )
 
 
+def _temporal_literal_matches(value: str, format_name: str) -> bool:
+    """Accept ISO temporal literals independently of the sampled request clock."""
+    from datetime import date, datetime as iso_datetime, time
+
+    parser = {'date': date.fromisoformat, 'date-time': iso_datetime.fromisoformat,
+              'time': time.fromisoformat}[format_name]
+    try:
+        parser(value)
+    except ValueError:
+        return False
+    return format_name != 'date-time' or len(value) > 10
+
+
 def _parse_plan_step_concrete(
     next_step_text: str,
     allowed_names: Sequence[str],
@@ -847,9 +860,13 @@ def _parse_plan_step_concrete(
                 elif "string" not in kinds:
                     debug_log("planner: concrete typed argument needs resolver", "planning")
                     return None
-        if (isinstance(value, str) and isinstance(property_schema, dict)
-                and value.startswith('@calendar:') and _is_datetime_schema(property_schema, parameters)):
-            return None
+        if isinstance(value, str) and isinstance(property_schema, dict):
+            formats = {node['format'] for node in _schema_nodes(property_schema, parameters)
+                       if isinstance(node.get('format'), str)
+                       and node['format'] in {'date', 'date-time', 'time'}}
+            if formats and not any(_temporal_literal_matches(value, kind) for kind in formats):
+                debug_log("planner: relative or invalid temporal literal needs resolver", "planning")
+                return None
         args[key] = value
         cursor = m.end()
     if rest[cursor:].strip() not in ("", "."):
