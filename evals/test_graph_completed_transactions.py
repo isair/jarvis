@@ -3,8 +3,8 @@ import json
 
 import pytest
 
-from conftest import requires_judge_llm
-from helpers import voice_config
+from evals.conftest import requires_judge_llm
+from evals.helpers import voice_config
 
 pytestmark = [pytest.mark.eval, requires_judge_llm]
 
