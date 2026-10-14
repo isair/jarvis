@@ -22,6 +22,18 @@ def review_response(labels):
     } for index, label in labels.items()})
 
 
+@pytest.mark.parametrize('branch', ['USER', 'DIRECTIVES', 'WORLD'])
+@pytest.mark.parametrize('verdict', ['DURABLE', 'UNSUPPORTED', 'TRANSIENT', 'INTERACTION', 'ADVICE'])
+def test_matching_branch_also_requires_a_durable_source_verdict(mock_config, branch, verdict):
+    candidate = (branch.lower(), 'Source candidate')
+    response = json.dumps({'0': {'verdict': verdict, 'kind': branch}})
+    with patch('jarvis.memory.graph_ops.call_llm_direct', return_value=response):
+        assert graph_ops._review_graph_facts(
+            [candidate], mock_config, 'local-model', mock_config.llm_chat_timeout_sec,
+            False, 'Owned source summary',
+        ) == ([candidate] if verdict == 'DURABLE' else [])
+
+
 CANDIDATES = [
     {'branch': 'WORLD', 'fact': 'A weekly weather forecast'},
     {'branch': 'USER', 'fact': 'The user follows an 1800 kcal meal plan'},
