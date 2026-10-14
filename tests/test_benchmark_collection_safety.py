@@ -19,8 +19,8 @@ def test_benchmark_network_is_deferred_until_selected(tmp_path, mode):
     config.write_text('{}')
     marker = tmp_path / 'availability'
     native = tmp_path / 'unowned-network'
-    control = tmp_path / 'test_control.py'
-    control.write_text('import pytest\n@pytest.mark.unit\ndef test_owned_control(): pass\n')
+    # Keep every collection target inside the repository.
+    control = Path(__file__).resolve()
     script = '''
 import importlib, os
 from pathlib import Path
@@ -51,7 +51,7 @@ if os.environ['PROBE_MODE'] == 'import':
     importlib.import_module('tests.performance.test_pipeline_timings')
 else:
     import pytest
-    args = ['-q', '-c', os.environ['INI_PATH'], '-m', 'performance' if os.environ['PROBE_MODE'] in ('selected', 'available') else 'unit', os.environ['PERF_PATH']]
+    args = ['-q', '-rs', '-c', os.environ['INI_PATH'], '-m', 'performance' if os.environ['PROBE_MODE'] in ('selected', 'available') else 'unit', os.environ['PERF_PATH']]
     if os.environ['PROBE_MODE'] == 'collect':
         args.extend(['--collect-only', os.environ['CONTROL_PATH']])
     raise SystemExit(pytest.main(args))
@@ -61,7 +61,7 @@ else:
                PYTHONPATH=str(repo / 'src') + os.pathsep + str(repo),
                TMPDIR=str(runtime), TEMP=str(runtime), TMP=str(runtime),
                JARVIS_CONFIG_PATH=str(config), XDG_CONFIG_HOME=str(tmp_path/'xdg'),
-               JARVIS_PERF_OLLAMA_URL='http://owned.invalid', JARVIS_PERF_MODEL='owned-benchmark-model',
+               JARVIS_PERF_OLLAMA_URL='http://owned-user:owned-secret@owned.invalid', JARVIS_PERF_MODEL='owned-benchmark-model',
                JARVIS_PERF_RUNS='1', JARVIS_PERF_REPORT_DIR=str(tmp_path/'reports'),
                AVAILABILITY_MARKER=str(marker), NETWORK_MARKER=str(native),
                INI_PATH=str(repo/'pytest.ini'), CONTROL_PATH=str(control),
@@ -72,6 +72,7 @@ else:
     assert result.returncode == 0, output
     assert marker.exists() == (mode in ('selected', 'available')), output
     assert not native.exists(), output
+    assert 'owned-secret' not in output
     if mode == 'selected':
         assert 'skipped' in output
         assert ' passed' not in output

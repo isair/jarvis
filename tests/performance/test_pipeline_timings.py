@@ -72,7 +72,7 @@ pytestmark = pytest.mark.performance
 def require_performance_model():
     """Probe the selected local model only when benchmarks actually run."""
     if not _ollama_reachable():
-        pytest.skip(f"🔌 Ollama at {OLLAMA_URL} with {PERF_MODEL} not available")
+        pytest.skip(f"🔌 Model {PERF_MODEL} is unavailable on the selected Ollama server")
 
 
 def _make_cfg():
