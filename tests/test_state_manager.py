@@ -5,11 +5,10 @@ These tests verify the state transitions, timer-based hot window management,
 and query collection behaviour.
 """
 
-import time
 import threading
 from types import SimpleNamespace
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 from jarvis.listening.state_manager import StateManager, ListeningState
 
