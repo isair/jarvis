@@ -861,9 +861,9 @@ def auto_split_node(
     categories = result.get("categories", [])
     summary = result.get("summary", node.description)
 
-    # Validate: need at least 2 categories
-    if not isinstance(categories, list) or len(categories) < 2:
-        debug_log("auto-split: fewer than 2 categories proposed, aborting", "memory")
+    # Validate the organiser's category bounds before creating any children.
+    if not isinstance(categories, list) or not 2 <= len(categories) <= 5:
+        debug_log("auto-split: expected 2-5 categories, aborting", "memory")
         return False
 
     # Validate: each category needs a name and at least one fact
