@@ -11,8 +11,12 @@ memory.
    Answer / Definition fields. When present, these are preferred — they're
    short, authoritative, and don't need a page fetch.
 2. **Link extraction**: scrape `https://lite.duckduckgo.com/lite/` for the
-   top ~5 search results (title + URL). The DDG redirector URLs
-   (`//duckduckgo.com/l/?uddg=…`) are unwrapped to the real destination.
+   first five non-empty HTTP(S) results (title + URL) in page order. Result
+   anchors use DDG's `result-link` or `result__a` classes; navigation links
+   are excluded without language-specific title filters or minimum title lengths.
+   Malformed URLs are skipped. DDG redirector URLs
+   (`//duckduckgo.com/l/?uddg=…` or the HTTPS equivalent) are unwrapped once,
+   preserving percent-encoded characters within the destination URL.
 3. **Parallel cascade fetch**: if there's no instant answer and we have
    result URLs, fetch the top 3 results **in parallel** under a single
    `_CASCADE_WALL_CLOCK_SEC` (8s) wall-clock cap. Selection rules:

@@ -76,8 +76,8 @@ class TestWebSearchTool:
         lite.status_code = 200
         lite.content = (
             b'<html><body>'
-            b'<a href="https://site1.test/">First site result about something</a>'
-            b'<a href="https://site2.test/">Second site detailed result here</a>'
+            b'<a class="result-link" href="https://site1.test/">First site result about something</a>'
+            b'<a class="result-link" href="https://site2.test/">Second site detailed result here</a>'
             b'</body></html>'
         )
         mock_get.side_effect = [instant, lite]
@@ -156,9 +156,9 @@ class TestWebSearchTool:
         lite.status_code = 200
         lite.content = (
             b'<html><body>'
-            b'<a href="https://site1.test/">First site result title</a>'
-            b'<a href="https://site2.test/">Second site result title</a>'
-            b'<a href="https://site3.test/">Third site result title</a>'
+            b'<a class="result-link" href="https://site1.test/">First site result title</a>'
+            b'<a class="result-link" href="https://site2.test/">Second site result title</a>'
+            b'<a class="result-link" href="https://site3.test/">Third site result title</a>'
             b'</body></html>'
         )
         mock_get.side_effect = [instant, lite]
@@ -209,9 +209,9 @@ class TestWebSearchTool:
         lite.status_code = 200
         lite.content = (
             b'<html><body>'
-            b'<a href="https://site1.test/">Bieber hits rankings</a>'
-            b'<a href="https://site2.test/">Justin Bieber discography</a>'
-            b'<a href="https://site3.test/">Some unrelated blog</a>'
+            b'<a class="result-link" href="https://site1.test/">Bieber hits rankings</a>'
+            b'<a class="result-link" href="https://site2.test/">Justin Bieber discography</a>'
+            b'<a class="result-link" href="https://site3.test/">Some unrelated blog</a>'
             b'</body></html>'
         )
         mock_get.side_effect = [instant, lite]
@@ -264,9 +264,9 @@ class TestWebSearchTool:
         lite.status_code = 200
         lite.content = (
             b'<html><body>'
-            b'<a href="https://site1.test/">Result one</a>'
-            b'<a href="https://site2.test/">Result two</a>'
-            b'<a href="https://site3.test/">Result three</a>'
+            b'<a class="result-link" href="https://site1.test/">Result one</a>'
+            b'<a class="result-link" href="https://site2.test/">Result two</a>'
+            b'<a class="result-link" href="https://site3.test/">Result three</a>'
             b'</body></html>'
         )
         mock_get.side_effect = [instant, lite]
@@ -313,9 +313,9 @@ class TestWebSearchTool:
         lite.status_code = 200
         lite.content = (
             b'<html><body>'
-            b'<a href="https://site1.test/">First site result title</a>'
-            b'<a href="https://site2.test/">Second site result title</a>'
-            b'<a href="https://site3.test/">Third site result title</a>'
+            b'<a class="result-link" href="https://site1.test/">First site result title</a>'
+            b'<a class="result-link" href="https://site2.test/">Second site result title</a>'
+            b'<a class="result-link" href="https://site3.test/">Third site result title</a>'
             b'</body></html>'
         )
         mock_get.side_effect = [instant, lite]
@@ -360,7 +360,7 @@ class TestWebSearchTool:
         lite.status_code = 200
         lite.content = (
             b'<html><body>'
-            b'<a href="https://wiki.test/possessor">Possessor (film) - Wikipedia</a>'
+            b'<a class="result-link" href="https://wiki.test/possessor">Possessor (film) - Wikipedia</a>'
             b'</body></html>'
         )
         mock_get.side_effect = [instant, lite]
@@ -420,7 +420,7 @@ class TestWebSearchTool:
         lite.status_code = 200
         lite.content = (
             b'<html><body>'
-            b'<a href="https://site1.test/">First site result title</a>'
+            b'<a class="result-link" href="https://site1.test/">First site result title</a>'
             b'</body></html>'
         )
         mock_get.side_effect = [instant, lite]
