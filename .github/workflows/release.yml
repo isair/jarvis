@@ -44,6 +44,9 @@ jobs:
             @semantic-release/github@9 \
             conventional-changelog-conventionalcommits@7
 
+      - name: 🧪 Verify staged release publication
+        run: node tests/release_publication.mjs "$(npm root -g)/@semantic-release/github"
+
       - name: 🏷️ Semantic Release
         id: semantic
         env:

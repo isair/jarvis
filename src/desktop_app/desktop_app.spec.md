@@ -88,6 +88,10 @@ requires an explicit release run on `develop` with `validate_only=false`. The
 tested commit must match the freshly fetched `origin/develop` tip, and `main`
 must be its ancestor. A changed develop tip requires another smoke-test run.
 
+Stable release metadata stays in a draft while stable installers are built.
+The release becomes public only after every platform's installer is available
+and the release attachment step has uploaded the binaries successfully.
+
 ## Main Components
 
 ### JarvisSystemTray
