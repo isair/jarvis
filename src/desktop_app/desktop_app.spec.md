@@ -277,7 +277,7 @@ The desktop app runs the Jarvis daemon in a **QThread** (bundled mode) or **subp
 
 All long-lived worker QThreads in the desktop app inherit `KeepAliveWorker`
 (`src/desktop_app/qt_worker.py`): `DaemonThread`, `SetupCheckWorker`,
-`_LLMReachWorker`, `ServerCheckWorker` (app.py) and every setup-wizard
+`_LLMReachWorker`, `ServerCheckWorker` (app.py), `DownloadWorker` and every setup-wizard
 worker. The class keeps each started worker referenced in a class-level
 registry until its OS thread has fully finished (released via the built-in
 `finished` signal). Dropping the last Python reference to a winding-down
@@ -390,6 +390,14 @@ confining entries and link targets to staging and refusing special files.
 The payload root must be a real `Jarvis` directory. Rejected or failed staging
 is removed without launching the installation script; contained library links
 and executable permissions remain usable.
+
+Update download cancellation (Cancel, window close or Escape) leaves the GUI
+responsive while the current network operation finishes. The dialog shows
+cancellation progress and closes after its worker has finished; only then is
+its staging directory removed. Cancelled downloads ignore queued progress,
+errors, completion and deferred installation callbacks. HTTP responses are
+closed on success, failure and cancellation. After successful installer
+handoff, the restart completes; window close and Escape cannot cancel it.
 
 ### Update Flow (Windows/Linux)
 
