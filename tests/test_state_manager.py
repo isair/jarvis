@@ -230,12 +230,13 @@ class TestHotWindowExpiry:
         with patch('builtins.print'):
             sm.schedule_hot_window_activation()
 
-            # Wait for activation
-            hot_clock.advance(0.04)
+            hot_clock.advance(sm.echo_tolerance)
             assert sm.is_hot_window_active() is True
 
-            # Wait for expiry
-            hot_clock.advance(0.1)
+            hot_clock.advance(sm.hot_window_seconds * 0.9)
+            assert sm.is_hot_window_active() is True
+
+            hot_clock.advance(sm.hot_window_seconds * 0.2)
             assert sm.is_hot_window_active() is False
             assert sm.get_state() == ListeningState.WAKE_WORD
 
@@ -556,6 +557,7 @@ class TestThreadSafety:
                     _ = sm.get_state()
                     _ = sm.is_collecting()
                     _ = sm.get_pending_query()
+                    _ = sm.was_speech_during_hot_window(0.0)
                 except Exception as e:
                     errors.append(e)
 
