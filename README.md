@@ -62,6 +62,8 @@ Memory needs depend on model size, quantisation, context length and speech recog
 
 Budget memory for Whisper and, when different from chat, the fast model used for voice intent and tool routing. Apple Silicon uses unified memory; other GPUs use dedicated VRAM. Setup budgets chat and fast together alongside the selected Whisper model, using E2B for fast tasks when it fits or sharing E4B across both roles to save memory. Apple Silicon estimates reserve memory for macOS. Saved model choices are preserved, and insufficient memory shows CPU fallback guidance.
 
+For an experimental 27B alternative, see the [Bonsai 2 local setup guide](docs/BONSAI.md).
+
 </details>
 
 ## What you can do
