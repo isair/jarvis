@@ -64,6 +64,7 @@ except ImportError:
     QWebEngineView = None
 
 from jarvis.debug import debug_log
+from jarvis.llm.model_names import missing_ollama_models
 from jarvis.config import get_config_path, _default_db_path, get_model_recommendations, Settings
 from desktop_app.diary_dialog import DiaryUpdateDialog
 from desktop_app.themes import JARVIS_THEME_STYLESHEET, COLORS, apply_theme
@@ -903,8 +904,11 @@ def check_model_support(settings: Settings) -> dict[str, str]:
     unlisted = {}
     for role, provider, model in _model_role_selections(settings):
         recommended = get_model_recommendations(provider)[role]
-        identity = model.removesuffix(":latest") if provider == "ollama" else model
-        if identity not in recommended:
+        is_unlisted = (
+            bool(missing_ollama_models([model], recommended))
+            if provider == "ollama" else model not in recommended
+        )
+        if is_unlisted:
             unlisted[role] = model
     return unlisted
 
@@ -3674,15 +3678,7 @@ def main() -> int:
             required_models = get_required_models()
             installed_models = check_installed_models(resolve_ollama_path())
 
-            # Normalize model names for comparison (remove :latest suffix)
-            def normalize_model(name: str) -> str:
-                return name.split(":")[0] if ":" in name and name.endswith(":latest") else name
-
-            installed_normalized = {normalize_model(m) for m in installed_models}
-            missing_models = [
-                m for m in required_models
-                if normalize_model(m) not in installed_normalized and m not in installed_models
-            ]
+            missing_models = missing_ollama_models(required_models, installed_models)
 
             if missing_models and _chat_on_ollama:
                 splash.hide()

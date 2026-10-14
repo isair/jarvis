@@ -30,6 +30,7 @@ from pathlib import Path
 import pytest
 import requests
 
+from jarvis.llm.model_names import missing_ollama_models
 from tests.performance.timing_recorder import TimingRecorder
 
 
@@ -60,7 +61,7 @@ def _ollama_reachable() -> bool:
         if resp.status_code != 200:
             return False
         models = [m.get("name", "") for m in resp.json().get("models", [])]
-        return any(PERF_MODEL.split(":")[0] in m for m in models)
+        return not missing_ollama_models([PERF_MODEL], models)
     except Exception:
         return False
 

@@ -23,6 +23,7 @@ from urllib.parse import urlsplit
 import requests
 
 from desktop_app.whisper_models import get_whisper_vram_mb, wizard_model_options
+from jarvis.llm.model_names import missing_ollama_models
 from jarvis.listening import whisper_capabilities
 from jarvis.debug import debug_log
 from jarvis.config import SUPPORTED_CHAT_MODELS, DEFAULT_CHAT_MODEL, DEFAULT_FAST_MODEL, SUPPORTED_FAST_MODEL_IDS, DEFAULT_EMBEDDING_MODEL
@@ -306,17 +307,9 @@ def check_ollama_status() -> OllamaStatus:
         required = get_required_models()
         installed = check_installed_models(cli_path)
 
-        # Normalize model names (remove :latest suffix for comparison)
-        def normalize_model(name: str) -> str:
-            return name[:-len(":latest")] if name.endswith(":latest") else name
-
-        installed_normalized = {normalize_model(m) for m in installed}
-
         status.installed_models = installed
-        status.missing_models = [
-            m for m in required
-            if normalize_model(m) not in installed_normalized and m not in installed
-        ]
+        status.missing_models = missing_ollama_models(required, installed)
+
     else:
         status.missing_models = get_required_models()
 
@@ -2463,11 +2456,8 @@ class ModelsPage(ScrollableWizardPage):
         installed = []
         if isinstance(wiz, SetupWizard) and wiz.ollama_status:
             installed = wiz.ollama_status.installed_models
-        def norm(n):
-            return n[:-(len(":latest"))] if n.endswith(":latest") else n
-        inorm = {norm(m) for m in installed}
-        self._missing_models = [m for m in req if norm(m) not in inorm and m not in installed]
-        rinst = [m for m in req if norm(m) in inorm or m in installed]
+        self._missing_models = missing_ollama_models(req, installed)
+        rinst = [m for m in req if m not in self._missing_models]
         if self._missing_models:
             self.models_label.setText(
                 f"Missing: {', '.join('X ' + m for m in self._missing_models)}"
