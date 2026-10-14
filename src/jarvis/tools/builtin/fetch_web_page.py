@@ -1,15 +1,21 @@
 """Fetch web page tool implementation for extracting content from URLs."""
 
 import requests
-from requests.compat import chardet
+import codecs
+import time
+
+from lxml import etree
+from bs4.dammit import EncodingDetector
 from typing import Dict, Any, Optional
 from ...debug import debug_log
 from ..base import Tool, ToolContext
 from ..types import ToolExecutionResult
 from ..http_response import discard_redirect_body
+from ..page_content import PageText
 
 
-_MAX_FETCH_BYTES = 2 * 1024 * 1024
+_MAX_FETCH_BYTES = 32 * 1024 * 1024
+_FETCH_SECONDS = 15
 _READ_CHUNK_BYTES = 64 * 1024
 
 
@@ -63,84 +69,84 @@ class FetchWebPageTool(Tool):
                 'Connection': 'keep-alive',
                 'Upgrade-Insecure-Requests': '1',
             }
-            # ``with`` releases the connection back to the pool deterministically
-            # even if BeautifulSoup or the link extraction raises midway.
-            with requests.get(url, headers=headers, timeout=15, allow_redirects=True, stream=True,
+            deadline = time.monotonic() + _FETCH_SECONDS
+            with requests.get(url, headers=headers, timeout=_FETCH_SECONDS,
+                              allow_redirects=True, stream=True,
                               hooks={"response": discard_redirect_body}) as response:
                 response.raise_for_status()
-                body = bytearray()
+                final_url = response.url if isinstance(response.url, str) else url
+                page = PageText(final_url, include_links)
+                content_type = response.headers.get('Content-Type', '')
+                content_type = content_type if isinstance(content_type, str) else ''
+                header_encoding = response.encoding if 'charset=' in content_type.casefold() else None
+                def parser_for(prefix):
+                    _, bom_encoding = EncodingDetector.strip_byte_order_mark(prefix)
+                    encoding = (bom_encoding or header_encoding
+                                or EncodingDetector.find_declared_encoding(prefix, is_html=True)
+                                or 'utf-8')
+                    try:
+                        codecs.lookup(encoding)
+                        return etree.HTMLParser(target=page, encoding=encoding, no_network=True)
+                    except (LookupError, TypeError):
+                        return etree.HTMLParser(target=page, encoding='utf-8', no_network=True)
+
+                parser = None
+                initial = bytearray()
+                downloaded = 0
                 for chunk in response.iter_content(chunk_size=_READ_CHUNK_BYTES):
-                    if len(body) + len(chunk) > _MAX_FETCH_BYTES:
-                        debug_log("fetchWebPage: decoded page exceeds the download limit", "web")
-                        context.user_print("⚠️ Page exceeds the download limit.")
-                        return ToolExecutionResult(success=False, reply_text=f"Page too large to read: decoded content exceeds the {_MAX_FETCH_BYTES:,}-byte download limit.")
-                    body.extend(chunk)
-                response_content = bytes(body)
-                response_encoding = response.encoding
-            try:
-                from bs4 import BeautifulSoup
-                soup = BeautifulSoup(response_content, 'html.parser')
-                for script in soup(["script", "style", "meta", "link", "noscript"]):
-                    script.decompose()
-                title = ""
-                title_tag = soup.find('title')
-                if title_tag:
-                    title = title_tag.get_text().strip()
-                text_content = soup.get_text()
-                lines = []
-                for line in text_content.split('\n'):
-                    cleaned_line = line.strip()
-                    if cleaned_line and len(cleaned_line) > 3:
-                        lines.append(cleaned_line)
-                seen_lines = set()
-                unique_lines = []
-                for line in lines:
-                    if line not in seen_lines:
-                        unique_lines.append(line)
-                        seen_lines.add(line)
-                content = '\n'.join(unique_lines[:500])
-                links_section = ""
-                if include_links:
-                    links = []
-                    for link in soup.find_all('a', href=True):
-                        href = link.get('href', '').strip()
-                        link_text = link.get_text().strip()
-                        if href and link_text and len(link_text) > 3:
-                            if href.startswith('/'):
-                                from urllib.parse import urljoin
-                                href = urljoin(url, href)
-                            elif not href.startswith(('http://', 'https://', 'mailto:', 'tel:')):
-                                continue
-                            links.append(f"• {link_text}: {href}")
-                    if links:
-                        links_section = f"\n\n**Links found on page:**\n" + '\n'.join(links[:20])
-                reply_parts = []
-                if title:
-                    reply_parts.append(f"**Title:** {title}")
-                reply_parts.append(f"**URL:** {url}")
-                reply_parts.append(f"**Content:**\n{content}")
-                if links_section:
-                    reply_parts.append(links_section)
-                reply_text = '\n\n'.join(reply_parts)
-                max_chars = 50_000
-                if len(reply_text) > max_chars:
-                    reply_text = f"[Truncated to {max_chars} chars]\n\n" + reply_text[:max_chars]
-                debug_log(f"fetchWebPage: extracted {len(content)} chars of content", "web")
-                context.user_print("✅ Page content fetched.")
-                return ToolExecutionResult(success=True, reply_text=reply_text)
-            except ImportError:
-                encoding = response_encoding
-                if encoding is None:
-                    encoding = chardet.detect(response_content)["encoding"] if chardet is not None else "utf-8"
-                try:
-                    response_text = str(response_content, encoding, errors="replace")
-                except (LookupError, TypeError):
-                    response_text = str(response_content, errors="replace")
-                text = response_text[:10000]
-                reply_text = f"**URL:** {url}\n**Raw Content:**\n{text}"
-                debug_log("fetchWebPage: BeautifulSoup not available, returning raw text", "web")
-                context.user_print("✅ Page content fetched (raw).")
-                return ToolExecutionResult(success=True, reply_text=reply_text)
+                    remaining = _MAX_FETCH_BYTES-downloaded
+                    if time.monotonic() >= deadline:
+                        page.truncated = True
+                        break
+                    if not chunk:
+                        continue
+                    retained = chunk[:remaining]
+                    if parser is None:
+                        initial.extend(retained)
+                        if len(initial) >= 1024:
+                            prefix = bytes(initial)
+                            parser = parser_for(prefix)
+                            parser.feed(prefix)
+                            initial.clear()
+                    else:
+                        parser.feed(retained)
+                    downloaded += min(len(chunk), remaining)
+                    if len(chunk) > remaining or page.truncated:
+                        page.truncated = True
+                        break
+                if parser is None and initial:
+                    prefix = bytes(initial)
+                    parser = parser_for(prefix)
+                    parser.feed(prefix)
+                if parser is not None:
+                    parser.close()
+                if parser is not None and any(error.level >= etree.ErrorLevels.FATAL for error in parser.feed_error_log):
+                    page.truncated = True
+            content = page.text()
+            if not content:
+                if page.truncated:
+                    debug_log("fetchWebPage: bounded download produced no readable excerpt", "web")
+                    context.user_print("⚠️ Page exceeds the reading limit without readable content.")
+                    return ToolExecutionResult(success=False, reply_text="Page could not be read within the download limit; no readable content was obtained.")
+                context.user_print("⚠️ No readable page content found.")
+                return ToolExecutionResult(success=False, reply_text="The page returned no readable text content.")
+            reply_parts = []
+            if page.title.strip():
+                reply_parts.append(f"**Title:** {page.title.strip()}")
+            reply_parts.extend((f"**URL:** {final_url}", f"**Content:**\n{content}"))
+            if page.links:
+                reply_parts.append("**Links found on page:**\n" + '\n'.join(
+                    f"• {label}: {href}" for label, href in page.links))
+            reply_text = '\n\n'.join(reply_parts)
+            if len(reply_text) > 50_000:
+                page.truncated = True
+                reply_text = reply_text[:50_000]
+            if page.truncated:
+                label = "[Partial page excerpt: reading or content limit reached.]\n\n"
+                reply_text = label + reply_text[:50_000-len(label)]
+            debug_log(f"fetchWebPage: {downloaded} decoded bytes, {len(content)} text chars, partial={page.truncated}", "web")
+            context.user_print("✅ Page excerpt fetched." if page.truncated else "✅ Page content fetched.")
+            return ToolExecutionResult(success=True, reply_text=reply_text)
         except requests.exceptions.RequestException as e:
             debug_log(f"fetchWebPage: request failed: {e}", "web")
             context.user_print("⚠️ Failed to fetch page.")
