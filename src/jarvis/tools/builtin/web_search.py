@@ -672,35 +672,32 @@ class WebSearchTool(Tool):
                     )
                 elif ddg_response.status_code == 200:
                     soup = BeautifulSoup(body_bytes, 'html.parser')
-                    links = soup.find_all('a', href=True)
+                    links = soup.select('a.result-link[href], a.result__a[href]')
                     result_count = 0
-                    debug_log(f"Found {len(links)} total links on DDG page", "web")
-                    for i, link in enumerate(links):
+                    for link in links:
                         if result_count >= 5:
                             break
-                        href = link.get('href', '')
                         title = link.get_text().strip()
-                        if i < 10:
-                            debug_log(f"Link {i}: href='{href[:50]}...', title='{title[:50]}...'", "web")
-                        actual_url = href
-                        if href.startswith('//duckduckgo.com/l/') and 'uddg=' in href:
-                            try:
-                                import urllib.parse
-                                parsed = urllib.parse.urlparse(href)
-                                qs = urllib.parse.parse_qs(parsed.query)
-                                if 'uddg' in qs:
-                                    actual_url = urllib.parse.unquote(qs['uddg'][0])
-                            except Exception:
-                                actual_url = href
-                        if ((href.startswith('http') or href.startswith('//duckduckgo.com/l/')) and
-                            len(title) > 10 and
-                            not any(skip in title.lower() for skip in ['settings', 'privacy', 'about', 'help'])):
-                            result_count += 1
-                            search_results.append(f"{result_count}. **{title}**")
-                            search_results.append(f"   Link: {actual_url}")
-                            search_results.append("")
-                            result_urls.append((title, actual_url))
-                            debug_log(f"Accepted result {result_count}: '{title[:50]}...'", "web")
+                        if not title:
+                            continue
+                        actual_url = link['href']
+                        try:
+                            parsed = urllib.parse.urlparse(actual_url)
+                            if parsed.hostname == 'duckduckgo.com' and parsed.path == '/l/':
+                                # parse_qs decodes the redirect parameter once;
+                                # encoded characters inside the destination stay intact.
+                                actual_url = urllib.parse.parse_qs(parsed.query).get('uddg', [''])[0]
+                                parsed = urllib.parse.urlparse(actual_url)
+                            if parsed.scheme not in ('http', 'https') or not parsed.hostname:
+                                continue
+                        except ValueError:
+                            debug_log("Skipping malformed DuckDuckGo result URL", "web")
+                            continue
+                        result_count += 1
+                        search_results.append(f"{result_count}. **{title}**")
+                        search_results.append(f"   Link: {actual_url}")
+                        search_results.append("")
+                        result_urls.append((title, actual_url))
                     debug_log(f"DuckDuckGo found {result_count} results", "web")
                 else:
                     debug_log(f"DuckDuckGo returned status {ddg_response.status_code}", "web")
