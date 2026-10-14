@@ -65,13 +65,14 @@ def _ollama_reachable() -> bool:
         return False
 
 
-pytestmark = [
-    pytest.mark.performance,
-    pytest.mark.skipif(
-        not _ollama_reachable(),
-        reason=f"Ollama at {OLLAMA_URL} with {PERF_MODEL} not available",
-    ),
-]
+pytestmark = pytest.mark.performance
+
+
+@pytest.fixture(scope="module", autouse=True)
+def require_performance_model():
+    """Probe the selected local model only when benchmarks actually run."""
+    if not _ollama_reachable():
+        pytest.skip(f"🔌 Model {PERF_MODEL} is unavailable on the selected Ollama server")
 
 
 def _make_cfg():
@@ -152,7 +153,6 @@ def _assert_usable_samples(recorder: TimingRecorder):
 # =============================================================================
 
 
-@pytest.mark.performance
 def test_micro_benchmark_tiny_prompt():
     """Baseline: how long does a single tiny round-trip to Ollama take?
 
@@ -191,7 +191,6 @@ def test_micro_benchmark_tiny_prompt():
 # =============================================================================
 
 
-@pytest.mark.performance
 def test_pipeline_timings_by_context():
     """Run the full reply pipeline N times, record per-context timings.
 
