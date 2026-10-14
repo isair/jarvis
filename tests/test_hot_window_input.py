@@ -948,14 +948,17 @@ class TestEarlyBeepFeedback:
         judgment = _make_judgment(directed=True)
         judge = _install_intent_judge(listener, judgment)
 
+        feedback_at_judgment = []
+
         def judge_after_feedback(**kwargs):
-            assert _is_beeping(listener), 'Intent judging began before feedback'
+            feedback_at_judgment.append(_is_beeping(listener))
             return judgment
 
         judge.judge.side_effect = judge_after_feedback
         _process_transcript(listener, "tell me more", utterance_energy=0.01)
 
         assert _accepted_query(listener) == "tell me more"
+        assert feedback_at_judgment and all(feedback_at_judgment), 'Intent judging began before feedback'
         assert _is_beeping(listener)
         listener.state_manager.stop()
 
