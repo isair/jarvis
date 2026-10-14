@@ -630,6 +630,7 @@ class UpdateProgressDialog(QDialog):
             return
         if install_update(download_path):
             self._installer_handoff_complete = True
+            self._cleanup_temp_dir()
             save_installed_asset_id(self.release.asset_id)
 
             self.title_label.setText("Update Complete")
