@@ -2,12 +2,15 @@
 
 from unittest.mock import Mock, patch
 
+import pytest
 import requests
 
 from jarvis.tools.base import ToolContext
 from jarvis.tools.builtin.time_tool import TimeTool
 from jarvis.tools.registry import BUILTIN_TOOLS
 from jarvis.tools.types import ToolExecutionResult
+
+pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("no_network")]
 
 
 class TestTimeTool:
@@ -148,24 +151,15 @@ class TestTimeTool:
         assert result.success is True
         mock_fmt.assert_called_once_with(None)
 
+    @pytest.mark.parametrize("failure,expected", [
+        (requests.exceptions.Timeout("Connection timed out"), "taking too long"),
+        (requests.exceptions.ConnectionError("Network error"), "unavailable"),
+    ], ids=["timeout", "connection"])
     @patch("requests.get")
-    def test_run_network_timeout(self, mock_get):
-        """Network timeouts degrade to a clear message, not a crash."""
-        mock_get.side_effect = requests.exceptions.Timeout("Connection timed out")
-
+    def test_run_network_failure(self, mock_get, failure, expected):
+        """Time lookup failures return an honest explanation without crashing."""
+        mock_get.side_effect = failure
         result = self.tool.run({"location": "London"}, self.context)
-
         assert isinstance(result, ToolExecutionResult)
         assert result.success is False
-        assert "taking too long" in result.reply_text.lower()
-
-    @patch("requests.get")
-    def test_run_network_error(self, mock_get):
-        """Network failures degrade to a clear message, not a crash."""
-        mock_get.side_effect = requests.exceptions.ConnectionError("Network error")
-
-        result = self.tool.run({"location": "London"}, self.context)
-
-        assert isinstance(result, ToolExecutionResult)
-        assert result.success is False
-        assert "unavailable" in result.reply_text.lower()
+        assert expected in result.reply_text.lower()
