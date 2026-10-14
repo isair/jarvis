@@ -609,8 +609,18 @@ _TEMPORAL_RESOLUTION_GUIDANCE = (
     "over these windows. For date-time arguments selecting a nearby local day, "
     "emit the matching @calendar reference exactly as shown instead of calculating "
     "an ISO timestamp. These are permitted intermediate date-time arguments: "
-    "the runtime expands them to the actual UTC timestamps before tool execution."
+    "the runtime expands them to the actual UTC timestamps before tool execution. "
+    "When the schema says an upper bound is inclusive, select end_inclusive_utc. "
+    "Use end_exclusive_utc only when the schema explicitly requires an exclusive upper bound."
 )
+
+
+def _local_day_start_utc(local_midnight: datetime) -> datetime:
+    """Find the first real instant at or after a local calendar midnight."""
+    candidates = [local_midnight.replace(fold=fold).astimezone(timezone.utc)
+                  for fold in (0, 1)]
+    return min(candidate for candidate in candidates
+               if candidate.astimezone().replace(tzinfo=None) >= local_midnight)
 
 
 def _clock_snapshot(now_utc: datetime) -> dict:
@@ -623,8 +633,8 @@ def _clock_snapshot(now_utc: datetime) -> dict:
     days = []
     for offset in (0, 1, -1):
         start = local_start + timedelta(days=offset)
-        start_utc = start.astimezone(timezone.utc)
-        next_start_utc = (start + timedelta(days=1)).astimezone(timezone.utc)
+        start_utc = _local_day_start_utc(start)
+        next_start_utc = _local_day_start_utc(start + timedelta(days=1))
         days.append({
             'day_offset': offset, 'date': start.date().isoformat(),
             'start_utc': start_utc.isoformat(),
@@ -658,17 +668,23 @@ def _schema_nodes(schema, root_schema):
         seen.add(id(node))
         yield node
         for keyword in ('anyOf', 'oneOf', 'allOf'):
-            pending.extend(node.get(keyword, ()))
+            alternatives = node.get(keyword)
+            if isinstance(alternatives, list):
+                pending.extend(alternatives)
         reference = node.get('$ref')
         if isinstance(reference, str) and reference.startswith('#/'):
             target = root_schema
             from urllib.parse import unquote
             for key in unquote(reference[2:]).split('/'):
                 key = key.replace('~1', '/').replace('~0', '~')
-                if not isinstance(target, dict) or key not in target:
+                if isinstance(target, dict) and key in target:
+                    target = target[key]
+                elif (isinstance(target, list) and key.isascii() and key.isdecimal()
+                      and (key == '0' or not key.startswith('0')) and int(key) < len(target)):
+                    target = target[int(key)]
+                else:
                     target = None
                     break
-                target = target[key]
             pending.append(target)
 
 
@@ -832,7 +848,7 @@ def _parse_plan_step_concrete(
                     debug_log("planner: concrete typed argument needs resolver", "planning")
                     return None
         if (isinstance(value, str) and isinstance(property_schema, dict)
-                and _is_datetime_schema(property_schema, parameters) and value.startswith('@calendar:')):
+                and value.startswith('@calendar:') and _is_datetime_schema(property_schema, parameters)):
             return None
         args[key] = value
         cursor = m.end()

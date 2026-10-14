@@ -100,11 +100,12 @@ class FetchMealsTool(Tool):
         return {
             "type": "object",
             "properties": {
-                "since_utc": {"type": "string", "format": "date-time", "description": "Inclusive start time in ISO date-time format (UTC)."},
+                "since_utc": {"type": "string", "format": "date-time", "description": "Inclusive start time in ISO date-time format (UTC). For a nearby local calendar day, select its start_utc reference."},
                 "until_utc": {"type": "string", "format": "date-time", "description": (
                     "Inclusive end time in ISO date-time format (UTC). "
                     "For a calendar day, use its final instant (23:59:59.999999 in that calendar time zone), "
-                    "not midnight at the start of the following day."
+                    "not midnight at the start of the following day. "
+                    "For a nearby local calendar day, select its end_inclusive_utc reference."
                 )}
             },
             "required": []

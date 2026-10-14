@@ -1,5 +1,6 @@
 """Relative arguments can be grounded in the current clock."""
 import json
+import time
 from datetime import datetime, timezone
 
 import pytest
@@ -162,3 +163,27 @@ def test_unknown_calendar_reference_does_not_dispatch(monkeypatch):
     }}}]
     assert planner.resolve_next_tool_call(voice_config(), 'retrieve selected records', [], schema,
                                           original_query='retrieve selected records') is None
+
+
+@pytest.mark.skipif(not hasattr(time,'tzset'),reason='POSIX timezone control unavailable')
+@pytest.mark.parametrize('offset,start,end',[
+ (-1,'2026-09-05T04:00:00+00:00','2026-09-06T04:00:00+00:00'),
+ (0,'2026-09-06T04:00:00+00:00','2026-09-07T03:00:00+00:00'),
+ (1,'2026-09-07T03:00:00+00:00','2026-09-08T03:00:00+00:00')])
+def test_calendar_midnight_gap_excludes_previous_day(monkeypatch,offset,start,end):
+ try:
+  with monkeypatch.context() as scoped:
+   scoped.setenv('TZ','America/Santiago');time.tzset()
+   clock=planner._clock_snapshot(datetime(2026,9,6,12,tzinfo=timezone.utc))
+   day=next(day for day in clock['calendar_days'] if day['day_offset']==offset)
+   assert datetime.fromisoformat(day['start_utc'])==datetime.fromisoformat(start)
+   assert datetime.fromisoformat(day['end_exclusive_utc'])==datetime.fromisoformat(end)
+ finally:time.tzset()
+@pytest.mark.parametrize('keyword',['anyOf','oneOf','prefixItems'])
+def test_array_json_pointer_expands_date_argument(monkeypatch,keyword):
+ schema={'type':'object','properties':{'start':{'$ref':f'#/$defs/bounds/{keyword}/0'}},'$defs':{'bounds':{keyword:[{'type':'string','format':'date-time'}]}},'required':['start']}
+ monkeypatch.setattr(planner,'call_llm_direct',lambda **_:json.dumps({'name':'retrieve','arguments':{'start':'@calendar:0:start_utc'}}))
+ catalogue=[{'type':'function','function':{'name':'retrieve','parameters':schema}}]
+ result=planner.resolve_next_tool_call(voice_config(),'retrieve current day',[],catalogue,original_query='retrieve current day')
+ assert result is not None
+ assert datetime.fromisoformat(result[1]['start']).astimezone().date()==datetime.now().astimezone().date()
