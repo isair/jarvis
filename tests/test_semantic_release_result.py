@@ -23,14 +23,19 @@ def test_release_preparation_reports_its_actual_result(tmp_path, output, exit_co
     binaries = tmp_path / 'bin'
     binaries.mkdir()
     stub = binaries / 'npx'
-    stub.write_text('#!/bin/sh\nprintf "%s\\n" "$OWNED_RELEASE_OUTPUT"\nexit "$OWNED_RELEASE_EXIT"\n')
+    stub.write_text('#!/bin/sh\nprintf "%s\\n" "$OWNED_RELEASE_OUTPUT" >&"$OWNED_RELEASE_STREAM"\n'
+                    'exit "$OWNED_RELEASE_EXIT"\n')
     stub.chmod(0o755)
     outputs = tmp_path / 'outputs'
+    runtime = tmp_path / 'runtime'
+    runtime.mkdir()
     environment = {
         'PATH': str(binaries) + os.pathsep + os.defpath,
         'GITHUB_OUTPUT': str(outputs),
         'OWNED_RELEASE_OUTPUT': output,
         'OWNED_RELEASE_EXIT': str(exit_code),
+        'OWNED_RELEASE_STREAM': '2' if exit_code else '1',
+        **{key: str(runtime) for key in ('TMPDIR', 'TEMP', 'TMP')},
     }
     result = subprocess.run([shutil.which('bash'), '-eo', 'pipefail', '-c', step['run']],
                             cwd=tmp_path, env=environment, text=True, capture_output=True, timeout=10)
