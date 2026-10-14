@@ -24,11 +24,12 @@ from desktop_app.settings_window import (
 from desktop_app.mcp_catalogue import CATALOGUE_BY_NAME
 from jarvis.config import get_default_config
 
+pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("no_network")]
+
 
 class TestFieldMetadata:
     """Tests for the config field metadata registry."""
 
-    @pytest.mark.unit
     def test_settings_offer_every_wizard_model(self):
         from desktop_app.setup_wizard import WhisperSetupPage
 
@@ -263,13 +264,21 @@ class TestCategories:
 class TestInputDevices:
     """Tests for audio device enumeration."""
 
-    def test_always_includes_system_default(self):
-        """get_input_devices() always returns at least the system default."""
-        # Even if sounddevice fails, we should get the default option
-        with patch.dict("sys.modules", {"sounddevice": None}):
+    @pytest.mark.parametrize("failure", ["missing-library", "enumeration-error", "empty-list"])
+    def test_always_includes_system_default(self, failure):
+        """Device failures and an empty list retain the system default."""
+        mock_sd = MagicMock()
+        if failure == "enumeration-error":
+            mock_sd.query_devices.side_effect = RuntimeError("Owned enumeration failure")
+        else:
+            mock_sd.query_devices.return_value = []
+        with patch.dict("sys.modules", {
+            "sounddevice": None if failure == "missing-library" else mock_sd,
+        }):
             devices = get_input_devices()
-        assert len(devices) >= 1
-        assert devices[0][0] == ""  # empty string = system default
+        assert len(devices) == 1
+        assert devices[0][0] == ""
+        assert devices[0][1]
 
     def test_with_mock_sounddevice(self):
         """With mock devices, returns them plus system default."""
@@ -280,11 +289,7 @@ class TestInputDevices:
             {"name": "External Mic", "max_input_channels": 1, "default_samplerate": 16000},
         ]
         with patch.dict("sys.modules", {"sounddevice": mock_sd}):
-            # Need to reimport to pick up the mock
-            import importlib
-            import desktop_app.settings_window as sw
-            importlib.reload(sw)
-            devices = sw.get_input_devices()
+            devices = get_input_devices()
 
         # System default + 2 input devices (USB Speaker has 0 input channels)
         assert len(devices) == 3
@@ -292,19 +297,10 @@ class TestInputDevices:
         assert "Built-in Mic" in devices[1][1]
         assert "External Mic" in devices[2][1]
 
-    def test_handles_sounddevice_import_error(self):
-        """Gracefully handles missing sounddevice."""
-        devices = get_input_devices()
-        # Should always at least have the default
-        assert len(devices) >= 1
-
-
-
 
 class TestConfigSaveLogic:
     """Tests for save/load round-trip behaviour."""
 
-    @pytest.mark.unit
     @pytest.mark.parametrize("key,value", [
         ("whisper_model", "large-v3-turbo"),
         ("whisper_model", "local/custom-whisper"),
@@ -326,6 +322,7 @@ class TestConfigSaveLogic:
         changed = window._widgets[changed_key]
         selected = "7" if changed_key == "voice_device" else "cpu"
         changed.setCurrentIndex(changed.findData(selected))
+        assert window._config_path == path
         window._on_save()
         saved = json.loads(path.read_text(encoding="utf-8"))
         assert saved[key] == value
@@ -334,7 +331,6 @@ class TestConfigSaveLogic:
         reopened = sw.SettingsWindow()
         assert reopened._widgets[key].currentData() == value
 
-    @pytest.mark.unit
     def test_reset_custom_selection_then_save_omits_defaults(self, settings_config_path, monkeypatch):
         from desktop_app import settings_window as sw
 
@@ -345,10 +341,10 @@ class TestConfigSaveLogic:
         window._on_reset()
         assert window._widgets["whisper_model"].currentData() == get_default_config()["whisper_model"]
         assert json.loads(path.read_text(encoding="utf-8"))["whisper_model"] == "local/custom-whisper"
+        assert window._config_path == path
         window._on_save()
         assert "whisper_model" not in json.loads(path.read_text(encoding="utf-8"))
 
-    @pytest.mark.unit
     def test_actual_save_omits_all_managed_defaults(self, settings_config_path):
         from desktop_app import settings_window as sw
 
@@ -357,10 +353,10 @@ class TestConfigSaveLogic:
         initial = {fm.key: defaults[fm.key] for fm in FIELD_METADATA}
         path.write_text(json.dumps(initial), encoding="utf-8")
         window = sw.SettingsWindow()
+        assert window._config_path == path
         window._on_save()
         assert json.loads(path.read_text(encoding="utf-8")) == {}
 
-    @pytest.mark.unit
     def test_actual_save_keeps_changes_and_unmanaged_keys(self, settings_config_path):
         from desktop_app import settings_window as sw
 
@@ -375,12 +371,12 @@ class TestConfigSaveLogic:
         model = next(chat.itemData(i) for i in range(chat.count())
                      if chat.itemData(i) != get_default_config()["ollama_chat_model"])
         chat.setCurrentIndex(chat.findData(model))
+        assert window._config_path == path
         window._on_save()
         assert json.loads(path.read_text(encoding="utf-8")) == {
             **initial, "tts_enabled": enabled, "ollama_chat_model": model,
         }
 
-    @pytest.mark.unit
     def test_removing_last_mcp_is_staged_until_save(self, settings_config_path, monkeypatch):
         from desktop_app import settings_window as sw
 
@@ -393,6 +389,7 @@ class TestConfigSaveLogic:
         window._mcp_list.setCurrentRow(0)
         window._on_mcp_remove()
         assert json.loads(path.read_text(encoding="utf-8")) == initial
+        assert window._config_path == path
         window._on_save()
         assert json.loads(path.read_text(encoding="utf-8")) == {"future_setting": initial["future_setting"]}
 
@@ -509,7 +506,6 @@ class TestMCPCatalogueDialogLogic:
             assert _MCPCatalogueDialog._is_node_available() is False
 
 
-@pytest.mark.unit
 def test_settings_keep_one_active_speech_detector_control(settings_config_path, monkeypatch):
     from PyQt6.QtWidgets import QLabel
     from desktop_app import settings_window as sw
@@ -523,6 +519,7 @@ def test_settings_keep_one_active_speech_detector_control(settings_config_path, 
     window = sw.SettingsWindow()
     assert 'Use VAD Filter' not in [label.text() for label in window.findChildren(QLabel)]
     window._widgets['vad_enabled'].setChecked(False)
+    assert window._config_path == path
     window._on_save()
     saved = json.loads(path.read_text(encoding='utf-8'))
     assert saved['vad_enabled'] is False
