@@ -13,12 +13,60 @@ from jarvis.memory.graph_ops import extract_graph_memories
 pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("no_network")]
 
 
+def review_response(labels):
+    """Encode separate source verdicts and semantic types for an owned backend."""
+    kinds = {'USER', 'DIRECTIVES', 'WORLD', 'REQUEST_HISTORY', 'ASSISTANT_SELF'}
+    return json.dumps({index: {
+        'verdict': 'DURABLE' if label in kinds else label,
+        'kind': label if label in kinds else 'OTHER',
+    } for index, label in labels.items()})
+
+
+@pytest.mark.parametrize('branch', ['USER', 'DIRECTIVES', 'WORLD'])
+@pytest.mark.parametrize('verdict', ['DURABLE', 'UNSUPPORTED', 'TRANSIENT', 'INTERACTION', 'ADVICE'])
+def test_matching_branch_also_requires_a_durable_source_verdict(mock_config, branch, verdict):
+    candidate = (branch.lower(), 'Source candidate')
+    response = json.dumps({'0': {'verdict': verdict, 'kind': branch}})
+    with patch('jarvis.memory.graph_ops.call_llm_direct', return_value=response):
+        assert graph_ops._review_graph_facts(
+            [candidate], mock_config, 'local-model', mock_config.llm_chat_timeout_sec,
+            False, 'Owned source summary',
+        ) == ([candidate] if verdict == 'DURABLE' else [])
+
+
 CANDIDATES = [
     {'branch': 'WORLD', 'fact': 'A weekly weather forecast'},
     {'branch': 'USER', 'fact': 'The user follows an 1800 kcal meal plan'},
     {'branch': 'USER', 'fact': 'A question about camera systems'},
     {'branch': 'DIRECTIVES', 'fact': 'Always reply briefly'},
 ]
+
+
+def test_independent_classification_rejects_misrouted_facts_without_rewriting_them(mock_config):
+    candidates = [
+        {'branch': 'USER', 'fact': 'Keep replies concise'},
+        {'branch': 'DIRECTIVES', 'fact': 'The user likes coffee'},
+        {'branch': 'USER', 'fact': 'The user lives in London'},
+        {'branch': 'DIRECTIVES', 'fact': 'Answer in British English'},
+        {'branch': 'WORLD', 'fact': 'This assistant can keep a diary'},
+        {'branch': 'USER', 'fact': 'The user requested concise replies'},
+    ]
+
+    def infer(**kwargs):
+        if kwargs['user_content'].startswith('Extract'):
+            return json.dumps(candidates)
+        review = json.loads(kwargs['user_content'])
+        assert review['candidates'] == [
+            {'id': index, 'fact': candidate['fact']}
+            for index, candidate in enumerate(candidates)
+        ], 'The reviewer must classify meaning without the proposed destination'
+        return review_response({'0': 'DIRECTIVES', '1': 'USER', '2': 'USER',
+                           '3': 'DIRECTIVES', '4': 'ASSISTANT_SELF', '5': 'REQUEST_HISTORY'})
+
+    with patch('jarvis.memory.graph_ops.call_llm_direct', side_effect=infer):
+        assert extract_graph_memories('Source summary', mock_config, 'local-model') == [
+            ('user', candidates[2]['fact']), ('directives', candidates[3]['fact']),
+        ]
 
 
 @pytest.mark.parametrize('source_day', ['2027-12-31', None])
@@ -33,7 +81,7 @@ def test_fact_retains_the_reference_source_used_to_extract_it(mock_config, sourc
             assert content.endswith(source)
             return json.dumps([{'branch': 'USER', 'fact': fact}])
         review = json.loads(content)
-        return json.dumps({'0': 'DURABLE' if review['summary'] == source else 'UNSUPPORTED'})
+        return review_response({'0': 'USER' if review['summary'] == source else 'UNSUPPORTED'})
 
     with patch('jarvis.memory.graph_ops.call_llm_direct', side_effect=infer):
         assert extract_graph_memories(summary, mock_config, 'local-model', date_utc=source_day) == [
@@ -51,7 +99,7 @@ def test_malformed_fact_cannot_become_personal_memory(mock_config, invalid_fact)
         if kwargs['user_content'].startswith('Extract'):
             return json.dumps(candidates)
         review = json.loads(kwargs['user_content'])
-        return json.dumps({str(item['id']): 'DURABLE' for item in review['candidates']})
+        return review_response({str(item['id']): 'USER' for item in review['candidates']})
 
     with patch('jarvis.memory.graph_ops.call_llm_direct', side_effect=infer):
         assert extract_graph_memories('The user prefers concise replies', mock_config, 'local-model') == [
@@ -61,23 +109,35 @@ def test_malformed_fact_cannot_become_personal_memory(mock_config, invalid_fact)
 
 def test_transient_and_interaction_candidates_are_not_returned(mock_config):
     with patch('jarvis.memory.graph_ops.call_llm_direct', side_effect=[
-        json.dumps(CANDIDATES), json.dumps({'0': 'TRANSIENT', '1': 'DURABLE', '2': 'INTERACTION', '3': 'DURABLE'}),
+        json.dumps(CANDIDATES), review_response({'0': 'TRANSIENT', '1': 'USER', '2': 'INTERACTION', '3': 'DIRECTIVES'}),
     ]):
         assert extract_graph_memories('Mixed summary', mock_config, 'local-model') == [
             ('user', CANDIDATES[1]['fact']), ('directives', CANDIDATES[3]['fact']),
         ]
 
 
-@pytest.mark.parametrize('verdict', [
-    None, '', '{"1": "DURABLE"}',
-    '{"0": "DURABLE", "0": "DURABLE", "1": "DURABLE", "2": "DURABLE", "3": "DURABLE"}',
-    '{"0": "DURABLE", "1": "DURABLE", "2": "UNKNOWN", "3": "DURABLE"}',
-    '{"0": "DURABLE", "1": "DURABLE", "2": "DURABLE", "4": "DURABLE"}',
-    '[]', 'null',
-    '{"0": false, "1": "DURABLE", "2": "INTERACTION", "3": "DURABLE"}',
-    '{"0": {}, "1": "DURABLE", "2": "INTERACTION", "3": "DURABLE"}',
-    'All entries are valid',
-])
+def invalid_reviews():
+    valid = json.loads(review_response({'0': 'TRANSIENT', '1': 'USER',
+                                        '2': 'INTERACTION', '3': 'DIRECTIVES'}))
+    encoded = json.dumps(valid)
+    yield from (None, '', '[]', 'null', 'All entries are valid',
+                '{"0":"DURABLE","1":"DURABLE","2":"DURABLE","3":"DURABLE"}',
+                json.dumps({'1': valid['1']}),
+                json.dumps({**valid, '4': valid['0']}),
+                encoded[:-1] + ', "0": ' + json.dumps(valid['0']) + '}',
+                encoded.replace('"verdict": "TRANSIENT"',
+                                '"verdict": "TRANSIENT", "verdict": "DURABLE"', 1))
+    for malformed in (False, {}, 'DURABLE',
+                      {'verdict': 'UNKNOWN', 'kind': 'USER'},
+                      {'verdict': 'DURABLE', 'kind': 'UNKNOWN'},
+                      {'verdict': False, 'kind': 'USER'},
+                      {'verdict': 'DURABLE', 'kind': {}},
+                      {'verdict': 'DURABLE'},
+                      {'verdict': 'DURABLE', 'kind': 'USER', 'fact': 'Invented text'}):
+        yield json.dumps({**valid, '0': malformed})
+
+
+@pytest.mark.parametrize('verdict', invalid_reviews())
 def test_incomplete_or_invalid_review_does_not_store_unreviewed_facts(mock_config, verdict):
     with patch('jarvis.memory.graph_ops.call_llm_direct', side_effect=[json.dumps(CANDIDATES), verdict]):
         assert extract_graph_memories('Mixed summary', mock_config, 'local-model') == []
@@ -96,7 +156,7 @@ def test_durable_facts_keep_their_original_branch_text_and_date(mock_config):
         {'branch': 'WORLD', 'fact': '[2026-10-03] Trenches Boxing Club offers evening classes'},
     ]
     with patch('jarvis.memory.graph_ops.call_llm_direct', side_effect=[
-        json.dumps(candidates), json.dumps({'0': 'DURABLE', '1': 'DURABLE'}),
+        json.dumps(candidates), review_response({'0': 'DIRECTIVES', '1': 'WORLD'}),
     ]):
         assert extract_graph_memories('Summary', mock_config, 'local-model', date_utc='2026-10-03') == [
             ('directives', '[2026-10-03] Réponds brièvement'),
@@ -106,7 +166,7 @@ def test_durable_facts_keep_their_original_branch_text_and_date(mock_config):
 
 def test_unordered_verdicts_preserve_durable_facts_in_original_order(mock_config):
     with patch('jarvis.memory.graph_ops.call_llm_direct', side_effect=[
-        json.dumps(CANDIDATES), json.dumps({'3': 'DURABLE', '1': 'DURABLE', '0': 'TRANSIENT', '2': 'INTERACTION'}),
+        json.dumps(CANDIDATES), review_response({'3': 'DIRECTIVES', '1': 'USER', '0': 'TRANSIENT', '2': 'INTERACTION'}),
     ]):
         assert extract_graph_memories('Mixed summary', mock_config, 'local-model') == [
             ('user', CANDIDATES[1]['fact']), ('directives', CANDIDATES[3]['fact']),
@@ -144,7 +204,7 @@ def test_review_uses_only_the_remaining_extraction_budget(mock_config, clock, el
             clock[0] += budget * elapsed_fraction
             return json.dumps(CANDIDATES)
         assert kwargs['timeout_sec'] == pytest.approx(budget - clock[0])
-        return json.dumps({'0': 'TRANSIENT', '1': 'DURABLE', '2': 'INTERACTION', '3': 'DURABLE'})
+        return review_response({'0': 'TRANSIENT', '1': 'USER', '2': 'INTERACTION', '3': 'DIRECTIVES'})
 
     with patch('jarvis.memory.graph_ops.call_llm_direct', side_effect=backend):
         result = extract_graph_memories('Summary', mock_config, 'local-model', timeout_sec=budget)
@@ -170,7 +230,7 @@ def test_source_relationship_review_preserves_only_supported_candidates(mock_con
         if kwargs['user_content'].startswith('Extract'):
             return json.dumps(candidates)
         source = json.loads(kwargs['user_content'])['summary']
-        return json.dumps({'0': 'UNSUPPORTED', '1': 'DURABLE'}) if source == summary else ''
+        return review_response({'0': 'UNSUPPORTED', '1': 'USER'}) if source == summary else ''
     with patch('jarvis.memory.graph_ops.call_llm_direct', side_effect=infer):
         assert extract_graph_memories(summary, mock_config, 'local-model') == [
             ('user', 'The user is vegetarian'),

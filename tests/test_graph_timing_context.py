@@ -14,7 +14,7 @@ pytestmark = pytest.mark.unit
 def test_graph_extraction_and_review_have_separate_timings(mock_config):
     responses = iter([
         json.dumps([{'branch': 'USER', 'fact': 'The user has a cat named Miso'}]),
-        '{"0": "DURABLE"}',
+        '{"0": {"verdict": "DURABLE", "kind": "USER"}}',
     ])
     with patch.object(OllamaBackend, 'direct', side_effect=lambda *args, **kwargs: next(responses)):
         with TimingRecorder() as recorder:
