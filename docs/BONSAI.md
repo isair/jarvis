@@ -12,7 +12,7 @@ Download `Ternary-Bonsai-2-27B-PQ2_0.gguf` from revision `b072e1d3b35a0a630cece3
 
 ## Serve chat, fast and embeddings locally
 
-Create `models.ini`, replacing every model path with your own absolute path. The fast Gemma and Nomic files must be compatible GGUF files obtained from their publishers. These model IDs are endpoint aliases, not download commands.
+Create `models.ini`, replacing every model path with your own absolute path. The fast Gemma and Nomic files must be compatible GGUF files from a trusted distribution of those models. If they are already installed in Ollama, `ollama show gemma4:e4b --modelfile` and `ollama show nomic-embed-text --modelfile` identify their local `FROM` files. Use those paths without renaming or modifying the files. These model IDs are endpoint aliases, not download commands.
 
 ```ini
 version = 1
@@ -52,7 +52,7 @@ Run the fork's `llama-server` from its installed directory:
 
 `reasoning = off` matters for Jarvis's short classification and planning deadlines. Bonsai's default extended reasoning can consume the output budget before producing an answer. The server-level setting is required for this recipe; a client flag alone does not establish that the template disables reasoning.
 
-In Jarvis's Setup Wizard, select **OpenAI-compatible**, connect to `http://127.0.0.1:18965/v1`, and select Bonsai for chat, Gemma for fast and Nomic for embeddings. Review the memory budget and run the connection checks. The warning for an experimental chat model offers **Continue Anyway**; this does not certify the server or downloaded weights. All three models remain loaded in this example, so budget their combined memory.
+In Jarvis's Setup Wizard, select **OpenAI-compatible**, connect to `http://127.0.0.1:18965/v1`, and select Bonsai for chat, Gemma for fast and Nomic for embeddings. Review the memory budget and run the connection checks. The warning for an experimental chat model offers **Continue Anyway**; this does not certify the server or downloaded weights. All three models remain loaded in this example, so budget their combined memory. This recipe is qualified on Apple Silicon with PQ2_0; publisher support for another backend does not establish Jarvis qualification on that hardware.
 
 ## Suitability
 
