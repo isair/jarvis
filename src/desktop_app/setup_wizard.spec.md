@@ -98,6 +98,10 @@ Detection uses DXGI on Windows, NVIDIA detection on Linux and unified physical m
 
 **WhisperSetupPage** — Always shown first (it has no LLM dependencies and its model selection informs the later memory budget). Language mode toggle (multilingual vs English-only), then model size selection from the shared `whisper_models.py` catalogue via a slider. Apple Silicon: additional FFmpeg and MLX Whisper installation buttons. The model list follows the listener's effective backend and uses the core `whisper_capabilities.py` engine-version check: `large-v3-turbo` is offered when usable MLX is selected on Apple Silicon or when the installed faster-whisper supports it; it is hidden when MLX is unavailable/disabled and faster-whisper is too old. Installing MLX refreshes the list immediately. Every slider refresh displays exactly one current set of model names and memory labels. Removed labels are hidden immediately and retain their container parent until deferred deletion, including during language changes and repeated page entry. Both provider paths use the catalogue's `get_whisper_vram_mb()` function for memory estimates. Labels and estimates share the same model records as Settings; English-only variants derive from their base model records. `nextId` routes to Provider Choice.
 
+The shared catalogue's `offered` flag controls both wizard and Settings model
+choices. Non-Turbo `large-v3` is retained for saved-model memory estimates and
+is not offered in either selector.
+
 **DictationPage** — Enable/disable dictation, hotkey selection dropdown (4 presets), filler word removal toggle with delay warning. Reads current config values on open so re-running the wizard preserves user choices.
 
 **MCPPage** — Shows wizard-featured entries from `mcp_catalogue.py` as selectable cards (checkbox + name + description). Already-configured servers start checked. On validate, selected servers are added to `config.mcps` and deselected wizard entries are removed. Includes a tip pointing users to Settings → MCP Servers for the full catalogue and custom servers.

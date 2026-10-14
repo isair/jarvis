@@ -303,6 +303,7 @@ class TestConfigSaveLogic:
 
     @pytest.mark.parametrize("key,value", [
         ("whisper_model", "large-v3-turbo"),
+        ("whisper_model", "large-v3"),
         ("whisper_model", "local/custom-whisper"),
         ("whisper_compute_type", "int8_float16"),
         ("voice_device", "99"),
