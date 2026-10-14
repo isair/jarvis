@@ -31,6 +31,8 @@ Tested local servers (all run on your own machine):
 | vLLM | `http://localhost:8000/v1` | Tool calling depends on the model. |
 | oMLX (Apple Silicon) | varies | No embeddings endpoint, so memory uses keyword search unless you route embeddings to Ollama (below). |
 
+For experimental Bonsai 2 chat with separate fast and embedding models, see the [local serving guide](BONSAI.md).
+
 For reference, the underlying config keys are:
 
 ```json
