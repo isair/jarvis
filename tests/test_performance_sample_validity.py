@@ -132,3 +132,25 @@ def test_pipeline_failure_is_explicit_without_retaining_exception_text(benchmark
     assert payload['status'] == 'failed'
     assert payload['failure_type'] == type(failure).__name__
     assert str(failure) not in report
+
+
+@pytest.mark.parametrize('request_fails', [True, False])
+def test_report_failure_does_not_hide_original_error(benchmark, monkeypatch, tmp_path, capsys, request_fails):
+    target = tmp_path / 'owned-file'
+    target.write_text('owned marker')
+    monkeypatch.setattr(benchmark, 'PERF_REPORT_DIR', target)
+    failure = RuntimeError('owned private backend detail')
+    def direct(*args, **kwargs):
+        if request_fails:
+            raise failure
+        return 'OK'
+    monkeypatch.setattr(OllamaBackend, 'direct', direct)
+    with pytest.raises(RuntimeError if request_fails else FileExistsError) as raised:
+        benchmark.test_micro_benchmark_tiny_prompt()
+    if request_fails:
+        assert raised.value is failure
+        output = capsys.readouterr().out
+        assert 'FileExistsError' in output and 'report' in output
+        assert str(failure) not in output
+        assert str(target) not in output
+    assert target.read_text() == 'owned marker'

@@ -130,9 +130,14 @@ def _record_benchmark(name: str, title: str):
         failure_type = type(error).__name__
         raise
     finally:
-        recorder.print_report(title=title)
-        path = _write_report(recorder, name, failure_type=failure_type)
-        print(f"   📄 saved: {path}")
+        try:
+            recorder.print_report(title=title)
+            path = _write_report(recorder, name, failure_type=failure_type)
+            print(f"   📄 saved: {path}")
+        except Exception as report_error:
+            if failure_type is None:
+                raise
+            print(f"   ⚠️ Benchmark report could not be saved ({type(report_error).__name__})")
 
 
 def _assert_usable_samples(recorder: TimingRecorder):
