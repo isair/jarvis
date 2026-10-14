@@ -12,6 +12,7 @@ from ...debug import debug_log
 from ..base import Tool, ToolContext
 from ..types import ToolExecutionResult
 from ..http_response import discard_redirect_body
+from ..search_http import download_search_html
 
 
 # Per-fetch deadline — tight enough that a worst-case 3-way cascade fits the
@@ -652,25 +653,25 @@ class WebSearchTool(Tool):
                 from bs4 import BeautifulSoup
                 encoded_query = urllib.parse.quote_plus(search_query)
                 ddg_lite_url = f"https://lite.duckduckgo.com/lite/?q={encoded_query}"
-                headers = { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' }
-                ddg_response = requests.get(ddg_lite_url, headers=headers, timeout=10)
-                body_bytes = ddg_response.content or b""
+                status, body_bytes = download_search_html(
+                    ddg_lite_url, min(10.0, _budget_left()), _MAX_FETCH_BYTES,
+                )
                 # Challenge detection: HTTP 202/400/429 is the strongest signal,
                 # but DDG has also been observed serving 200 with the anomaly
                 # modal embedded. Check the body for the stable structural
                 # markers (CSS class / form action) rather than human-readable
                 # copy — those are English-only and CLAUDE.md asks us to avoid
                 # hardcoded language patterns.
-                if (ddg_response.status_code in (202, 400, 429)
+                if (status in (202, 400, 429)
                         or b"anomaly-modal" in body_bytes
                         or b"anomaly.js" in body_bytes):
                     ddg_rate_limited = True
                     debug_log(
                         f"DuckDuckGo bot-challenge detected (status "
-                        f"{ddg_response.status_code}); skipping result parse",
+                        f"{status}); skipping result parse",
                         "web",
                     )
-                elif ddg_response.status_code == 200:
+                elif status == 200:
                     soup = BeautifulSoup(body_bytes, 'html.parser')
                     links = soup.select('a.result-link[href], a.result__a[href]')
                     result_count = 0
@@ -700,7 +701,7 @@ class WebSearchTool(Tool):
                         result_urls.append((title, actual_url))
                     debug_log(f"DuckDuckGo found {result_count} results", "web")
                 else:
-                    debug_log(f"DuckDuckGo returned status {ddg_response.status_code}", "web")
+                    debug_log(f"DuckDuckGo returned status {status}", "web")
             except ImportError:
                 debug_log("BeautifulSoup not available", "web")
             except Exception as ddg_error:

@@ -223,6 +223,16 @@ def no_network(monkeypatch):
         attempts.append(address)
         raise AssertionError("Offline test attempted a network connection")
 
+    from importlib.util import find_spec
+
+    def blocked_native(*args, **kwargs):
+        attempts.append("native HTTP request")
+        raise AssertionError("Offline test attempted a native network connection")
+
+    # Minimal dependency jobs cannot load the optional native client.
+    if find_spec("curl_cffi") is not None:
+        from curl_cffi.requests import Session
+        monkeypatch.setattr(Session, "request", blocked_native)
     monkeypatch.setattr(socket.socket, "connect", blocked)
     monkeypatch.setattr(socket.socket, "connect_ex", blocked)
     yield

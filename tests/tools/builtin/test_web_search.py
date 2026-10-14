@@ -20,11 +20,25 @@ def reject_external_network(monkeypatch):
         attempts.append('unmocked network or DNS access')
         raise AssertionError(attempts[-1])
 
+    from curl_cffi.requests import Session
+    monkeypatch.setattr(Session, 'request', blocked)
     monkeypatch.setattr(socket.socket, 'connect', blocked)
     monkeypatch.setattr(socket.socket, 'connect_ex', blocked)
     monkeypatch.setattr(socket, 'getaddrinfo', blocked)
     yield
     assert not attempts, attempts
+
+
+@pytest.fixture(autouse=True)
+def scripted_ddg_html(monkeypatch):
+    """Use the test's scripted response queue for the HTML transport boundary."""
+    from jarvis.tools.builtin import web_search
+
+    def download(url, timeout_sec, max_bytes):
+        response = web_search.requests.get(url, timeout=timeout_sec)
+        return response.status_code, response.content
+
+    monkeypatch.setattr(web_search, 'download_search_html', download)
 
 
 @pytest.fixture
