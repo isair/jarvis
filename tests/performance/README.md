@@ -33,6 +33,14 @@ requests and is not pipeline wall time, time to first token or time to first aud
 Reports contain context, model, provider, prompt/response sizes and outcome counts.
 They do not contain prompt or response text.
 
+Benchmarks fail for empty model samples, raised requests or empty pipeline
+answers. JSON reports retain observed calls and their outcomes on failure;
+exceptions keep their original type. Reports mark completed/failed runs and
+record the exception class without its potentially private message. A report-write
+failure preserves an existing request exception and is diagnosed by class only;
+it fails a completed run. Call counts and timing-shape checks still apply to
+usable runs.
+
 Unknown callers appear as `other:<qualname>`. Keep `_CALLER_TO_CONTEXT` in
 `timing_recorder.py` aligned with `docs/llm_contexts.md` when contexts change.
 Reports are git-ignored.
