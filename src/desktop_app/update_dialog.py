@@ -513,6 +513,7 @@ class UpdateProgressDialog(QDialog):
         self.download_path: Optional[Path] = None
         self._temp_dir: Optional[Path] = None
         self._cancelled = False
+        self._installer_handoff_complete = False
         self._setup_ui()
         self._connect_signals()
 
@@ -628,6 +629,7 @@ class UpdateProgressDialog(QDialog):
         if self._cancelled:
             return
         if install_update(download_path):
+            self._installer_handoff_complete = True
             save_installed_asset_id(self.release.asset_id)
 
             self.title_label.setText("Update Complete")
@@ -653,6 +655,8 @@ class UpdateProgressDialog(QDialog):
         self._cleanup_temp_dir()
 
     def _cancel_download(self):
+        if self._installer_handoff_complete:
+            return
         if not self._cancelled:
             from jarvis.debug import debug_log
             debug_log("Update download cancellation requested", "updater")
@@ -674,7 +678,7 @@ class UpdateProgressDialog(QDialog):
 
     def closeEvent(self, event):
         self._cancel_download()
-        if self.download_worker and self.download_worker.isRunning():
+        if self._installer_handoff_complete or (self.download_worker and self.download_worker.isRunning()):
             event.ignore()
         else:
             event.accept()

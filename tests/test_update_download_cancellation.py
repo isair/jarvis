@@ -2,9 +2,10 @@
 import threading
 import time
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
+from PyQt6.QtWidgets import QDialog
 
 from desktop_app import updater, update_dialog
 
@@ -130,3 +131,28 @@ def test_deferred_install_does_not_run_after_cancel(tmp_path, monkeypatch, qapp)
         callback()
     install.assert_not_called()
     dialog.deleteLater()
+
+
+@pytest.mark.parametrize('action', ['close', 'escape'])
+def test_staged_update_finishes_restart_after_handoff(tmp_path, qapp, action):
+    pending = []
+    dialog = update_dialog.UpdateProgressDialog(SimpleNamespace(asset_id=1))
+    dialog.show()
+    try:
+        with (
+            patch.object(update_dialog, 'install_update', return_value=True),
+            patch.object(update_dialog, 'save_installed_asset_id'),
+            patch.object(update_dialog.QTimer, 'singleShot', side_effect=lambda delay, callback: pending.append(callback)),
+        ):
+            dialog._on_completed(str(tmp_path / 'bundle.zip'))
+            pending.pop(0)()
+            if action == 'close':
+                dialog.close()
+            else:
+                dialog.reject()
+            assert dialog.isVisible(), 'Cancellation interrupted restart after installer handoff'
+            for callback in pending:
+                callback()
+            assert dialog.result() == QDialog.DialogCode.Accepted
+    finally:
+        dialog.deleteLater()

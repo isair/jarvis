@@ -396,7 +396,8 @@ responsive while the current network operation finishes. The dialog shows
 cancellation progress and closes after its worker has finished; only then is
 its staging directory removed. Cancelled downloads ignore queued progress,
 errors, completion and deferred installation callbacks. HTTP responses are
-closed on success, failure and cancellation.
+closed on success, failure and cancellation. After successful installer
+handoff, the restart completes; window close and Escape cannot cancel it.
 
 ### Update Flow (Windows/Linux)
 
