@@ -119,8 +119,8 @@ class TestWeatherTool:
         assert result.success is False
         assert "could not find" in result.reply_text.lower()
 
-    @pytest.mark.parametrize("args", [{}, {"location": None}, {"location": ""}],
-                             ids=["omitted", "null", "empty"])
+    @pytest.mark.parametrize("args", [None, {}, {"location": None}, {"location": ""}],
+                             ids=["no-args", "omitted", "null", "empty"])
     @patch('jarvis.tools.builtin.weather.get_location_info')
     def test_missing_location_uses_fallback(self, mock_location, args):
         """Missing locations use detection, never geocoding null or empty text."""
@@ -128,13 +128,16 @@ class TestWeatherTool:
         result = self.tool.run(args, self.context)
         assert isinstance(result, ToolExecutionResult)
         assert result.success is False
+        mock_location.assert_called_once()
         assert result.reply_text and any(
             keyword in result.reply_text.lower() for keyword in ("location", "city")
         )
 
+    @pytest.mark.parametrize("args", [None, {}, {"location": None}, {"location": ""}],
+                             ids=["no-args", "omitted", "null", "empty"])
     @patch('requests.get')
     @patch('jarvis.tools.builtin.weather.get_location_info')
-    def test_run_no_location_with_successful_fallback(self, mock_location, mock_get):
+    def test_run_no_location_with_successful_fallback(self, mock_location, mock_get, args):
         """Test weather with no location but successful user location detection."""
         # Mock successful location detection with coordinates (no geocoding needed)
         mock_location.return_value = {
@@ -163,7 +166,7 @@ class TestWeatherTool:
         mock_get.return_value = weather_response
 
         # Call with no location - should use fallback coordinates directly
-        result = self.tool.run({}, self.context)
+        result = self.tool.run(args, self.context)
 
         assert isinstance(result, ToolExecutionResult)
         assert result.success is True
