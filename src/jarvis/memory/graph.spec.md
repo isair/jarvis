@@ -225,7 +225,7 @@ Split quality safeguards:
 - The request has an 8192-token context and a 4096-token response budget for
   the organised facts, category metadata and parent summary. The timeout is
   45 seconds by default; incomplete generations preserve the source node.
-- Minimum 2 categories required (abort if LLM proposes fewer)
+- Between 2 and 5 categories required (abort outside these bounds)
 - Each category must have at least one fact
 - Categories form a JSON array of objects with non-empty string names and
   non-empty arrays of non-empty string facts. Every category is validated before

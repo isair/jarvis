@@ -205,7 +205,7 @@ control is evaluation-only; raw-context data flow matches the reply path.
 - **Model**: the graph update's `chat_model`, through the configured backend.
 - **Inputs**: node name, description and full stored fact text.
 - **System prompt**: inline category organisation, consolidation and common-knowledge pruning rules.
-- **Output**: category objects and a parent summary. Categories must form an array with at least two objects, each with a non-empty string name and a non-empty array of non-empty string facts. All categories are validated before storage. Child insertion and parent clearing share one immediate SQLite transaction, conditional on the source name, description and raw data still matching the model input. Inference holds no write lock. Invalid categories, stale/deleted sources and failed writes preserve current data and create no partial split.
+- **Output**: category objects and a parent summary. Categories must form an array of two to five objects, each with a non-empty string name and a non-empty array of non-empty string facts. All categories are validated before storage. Child insertion and parent clearing share one immediate SQLite transaction, conditional on the source name, description and raw data still matching the model input. Inference holds no write lock. Invalid categories, stale/deleted sources and failed writes preserve current data and create no partial split.
 - **Limits**: 45s timeout, `max_tokens: 4096`, 8192-token context; thinking follows the graph update. No retries in the split operation.
 
 ## 12. Task-list Planner (pre-flight decomposition, gates the whole turn)

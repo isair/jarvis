@@ -283,18 +283,17 @@ class TestAutoSplitNode:
         )
         return node
 
+    @pytest.mark.parametrize('category_count', [2, 5])
     @patch("jarvis.memory.graph_ops.call_llm_direct")
-    def test_successful_split(self, mock_llm, store, mock_config):
+    def test_successful_split(self, mock_llm, store, mock_config, category_count):
 
         node = self._make_large_node(store)
         assert node.data_token_count > SPLIT_THRESHOLD
 
         mock_llm.return_value = json.dumps({
-            "categories": [
-                {"name": "Category A", "description": "First category", "facts": ["Fact 1", "Fact 2"]},
-                {"name": "Category B", "description": "Second category", "facts": ["Fact 3", "Fact 4"]},
-            ],
-            "summary": "A topic covering categories A and B"
+            "categories": [{"name": f"Category {index}", "description": f"Group {index}",
+                            "facts": [f"Independent fact {index}"]} for index in range(category_count)],
+            "summary": "A topic covering independent facts"
         })
 
         result = auto_split_node(store, node.id, mock_config, "model")
@@ -302,25 +301,24 @@ class TestAutoSplitNode:
 
         # Verify children were created
         children = store.get_children(node.id)
-        assert len(children) == 2
-        names = {c.name for c in children}
-        assert "Category A" in names
-        assert "Category B" in names
+        assert len(children) == category_count
+        assert {c.name for c in children} == {f"Category {index}" for index in range(category_count)}
+        assert {c.data for c in children} == {f"Independent fact {index}" for index in range(category_count)}
 
         # Verify parent data was cleared and description updated
         updated_parent = store.get_node(node.id)
         assert updated_parent.data == ""
-        assert "categories A and B" in updated_parent.description
+        assert updated_parent.description == "A topic covering independent facts"
 
+    @pytest.mark.parametrize('category_count', [0, 1, 6])
     @patch("jarvis.memory.graph_ops.call_llm_direct")
-    def test_split_aborts_with_fewer_than_2_categories(self, mock_llm, store, mock_config):
+    def test_split_aborts_outside_category_bounds(self, mock_llm, store, mock_config, category_count):
 
         node = self._make_large_node(store)
 
         mock_llm.return_value = json.dumps({
-            "categories": [
-                {"name": "Only One", "description": "Just one", "facts": ["All the facts"]},
-            ],
+            "categories": [{"name": f"Category {index}", "description": f"Group {index}",
+                            "facts": [f"Independent fact {index}"]} for index in range(category_count)],
             "summary": "Everything"
         })
 
@@ -329,7 +327,9 @@ class TestAutoSplitNode:
 
         # Data should still be on the parent
         parent = store.get_node(node.id)
-        assert parent.data != ""
+        assert parent.data == node.data
+        assert parent.description == node.description
+        assert store.get_children(node.id) == []
 
     @patch("jarvis.memory.graph_ops.call_llm_direct")
     def test_split_aborts_on_llm_failure(self, mock_llm, store, mock_config):
