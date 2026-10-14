@@ -19,6 +19,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: 🧪 Verify staged release publication
+        run: |
+          npm install --prefix "$RUNNER_TEMP/release-plugin" --ignore-scripts --no-audit --no-fund @semantic-release/github@9
+          node tests/release_publication.mjs "$RUNNER_TEMP/release-plugin/node_modules/@semantic-release/github"
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y portaudio19-dev libegl1 libxkbcommon0
       - name: Install deps
