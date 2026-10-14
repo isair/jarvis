@@ -1,5 +1,5 @@
 ---
-name: loop
+name: maintenance-loop
 description: >
   Run or resume the Jarvis reliability and maintenance loop across open issues
   and pull requests. Prioritise core product quality, general fixes and
