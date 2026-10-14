@@ -161,18 +161,19 @@ def test_extractor_wraps_user_text_in_untrusted_fence():
     )
 
 
+@pytest.mark.unit
 def test_planner_fast_path_accepts_meal_key():
     """The planner emits `logMeal meal='Big Mac'`. The fast-path parser must
     accept this and return ('logMeal', {'meal': 'Big Mac'}) without any LLM
     resolver call, so direct-exec works for small models."""
     tool = LogMealTool()
     allowed_names = ["logMeal"]
-    property_schemas = {"logMeal": tool.inputSchema.get("properties", {})}
+    parameter_schemas = {"logMeal": tool.inputSchema}
 
     result = _parse_plan_step_concrete(
         "logMeal meal='Big Mac'",
         allowed_names,
-        property_schemas,
+        parameter_schemas,
     )
 
     assert result is not None, (
@@ -180,3 +181,11 @@ def test_planner_fast_path_accepts_meal_key():
     )
     assert result[0] == "logMeal"
     assert result[1] == {"meal": "Big Mac"}
+
+
+@pytest.mark.unit
+def test_planner_fast_path_rejects_undeclared_meal_arguments():
+    tool = LogMealTool()
+    assert _parse_plan_step_concrete(
+        "logMeal invented='Big Mac'", [tool.name], {tool.name: tool.inputSchema},
+    ) is None
