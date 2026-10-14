@@ -800,48 +800,102 @@ class TestFormatHotkeyDisplay:
 # _clipboard_windows ctypes correctness
 # ---------------------------------------------------------------------------
 
+@pytest.mark.unit
+@pytest.mark.usefixtures('no_network')
 class TestClipboardWindowsCtypes:
-    """Verify _clipboard_windows sets proper ctypes return types."""
+    """Windows clipboard delivery and ownership use an owned native ABI."""
 
-    @pytest.mark.skipif(
-        __import__("sys").platform != "win32",
-        reason="Windows-only clipboard API",
-    )
-    def test_clipboard_windows_roundtrip(self):
-        """Write to clipboard and read back to verify ctypes bindings."""
+    @pytest.fixture
+    def clipboard(self, monkeypatch):
         import ctypes
-        from ctypes import wintypes
+        from types import SimpleNamespace
+
+        state = {'failure': None, 'opened': False, 'allocated': set(),
+                 'published': None, 'buffer': None}
+        handle = (1 << 40) + 17
+        callbacks = []
+
+        def function(result_type, argument_types, callback):
+            signature = ctypes.CFUNCTYPE(result_type, *argument_types)
+            native = signature(callback)
+            callbacks.append(native)
+            # Unconfigured foreign functions return a C int and infer arguments.
+            bound = ctypes.CFUNCTYPE(ctypes.c_int)(ctypes.cast(native, ctypes.c_void_p).value)
+            return bound
+
+        def allocate(flags, size):
+            if state['failure'] == 'allocate':
+                return 0
+            state['buffer'] = ctypes.create_string_buffer(size)
+            state['allocated'].add(handle)
+            return handle
+
+        def lock(value):
+            if value not in state['allocated'] or state['failure'] == 'lock':
+                return 0
+            return ctypes.addressof(state['buffer'])
+
+        def free(value):
+            state['allocated'].discard(value)
+            return 0
+
+        def open_clipboard(owner):
+            state['opened'] = state['failure'] != 'open'
+            return int(state['opened'])
+
+        def publish(kind, value):
+            if kind != 13 or value not in state['allocated'] or state['failure'] == 'publish':
+                return 0
+            state['published'] = state['buffer'].raw
+            state['allocated'].remove(value)
+            return value
+
+        def close_clipboard():
+            state['opened'] = False
+            return 1
+
+        user = SimpleNamespace(
+            OpenClipboard=function(ctypes.c_int, [ctypes.c_void_p], open_clipboard),
+            CloseClipboard=function(ctypes.c_int, [], close_clipboard),
+            EmptyClipboard=function(ctypes.c_int, [], lambda: 1),
+            SetClipboardData=function(ctypes.c_void_p, [ctypes.c_uint, ctypes.c_void_p], publish),
+        )
+        kernel = SimpleNamespace(
+            GlobalAlloc=function(ctypes.c_void_p, [ctypes.c_uint, ctypes.c_size_t], allocate),
+            GlobalLock=function(ctypes.c_void_p, [ctypes.c_void_p], lock),
+            GlobalUnlock=function(ctypes.c_int, [ctypes.c_void_p], lambda value: 1),
+            GlobalFree=function(ctypes.c_void_p, [ctypes.c_void_p], free),
+        )
+        monkeypatch.setattr(ctypes, 'windll', SimpleNamespace(user32=user, kernel32=kernel), raising=False)
+        copy = ctypes.memmove
+
+        def owned_copy(destination, source, size):
+            assert destination == ctypes.addressof(state['buffer']), 'Unowned or truncated destination'
+            assert size <= ctypes.sizeof(state['buffer'])
+            return copy(destination, source, size)
+
+        monkeypatch.setattr(ctypes, 'memmove', owned_copy)
+        yield state
+        assert not state['opened'], 'Clipboard ownership must be released'
+        assert not state['allocated'], 'Unpublished memory must be released'
+
+    @pytest.mark.parametrize('text', ['dictation test', 'Dictée, Türkçe, 日本語 🎙️', ''])
+    def test_unicode_text_reaches_the_clipboard_with_full_width_handles(self, clipboard, text):
         from jarvis.dictation.dictation_engine import _clipboard_windows
 
-        test_text = "dictation test 🎙️"
-        _clipboard_windows(test_text)
+        _clipboard_windows(text)
 
-        # Read back from clipboard
-        user32 = ctypes.windll.user32
-        kernel32 = ctypes.windll.kernel32
-        user32.OpenClipboard.argtypes = [wintypes.HWND]
-        user32.OpenClipboard.restype = wintypes.BOOL
-        user32.GetClipboardData.argtypes = [wintypes.UINT]
-        user32.GetClipboardData.restype = wintypes.HANDLE
-        user32.CloseClipboard.restype = wintypes.BOOL
-        kernel32.GlobalLock.argtypes = [wintypes.HANDLE]
-        kernel32.GlobalLock.restype = ctypes.c_void_p
-        kernel32.GlobalUnlock.argtypes = [wintypes.HANDLE]
-        kernel32.GlobalUnlock.restype = wintypes.BOOL
+        assert clipboard['published'] == text.encode('utf-16-le') + b'\x00\x00'
 
-        CF_UNICODETEXT = 13
-        assert user32.OpenClipboard(None)
-        try:
-            h = user32.GetClipboardData(CF_UNICODETEXT)
-            assert h, "GetClipboardData returned NULL"
-            ptr = kernel32.GlobalLock(h)
-            assert ptr, "GlobalLock returned NULL"
-            result = ctypes.wstring_at(ptr)
-            kernel32.GlobalUnlock(h)
-            assert result == test_text
-        finally:
-            user32.CloseClipboard()
+    @pytest.mark.parametrize('failure', ['open', 'allocate', 'lock', 'publish'])
+    def test_failed_delivery_preserves_ownership_and_publishes_nothing(self, clipboard, failure):
+        from jarvis.dictation.dictation_engine import _clipboard_windows
 
+        clipboard['failure'] = failure
+        with pytest.raises(OSError):
+            _clipboard_windows('Synthetic dictated text')
+
+        assert clipboard['published'] is None
 
 @pytest.mark.unit
 @pytest.mark.usefixtures('no_network')
