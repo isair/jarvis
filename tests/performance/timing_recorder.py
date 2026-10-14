@@ -1,29 +1,24 @@
-"""⏱️ LLM call timing recorder.
+"""⏱️ Per-context timings at the configured local LLM backend boundary.
 
-Monkey-patches the three entry points in ``jarvis.llm`` (``call_llm_direct``,
-``call_llm_streaming``, ``chat_with_messages``) to record per-call timings
-grouped by the context that issued the call (intent judge, tool
-router, etc.). The context is inferred from the caller's ``__qualname__`` on
-the Python call stack, so no instrumentation is needed at the call site.
-
-Usage:
-    with TimingRecorder() as rec:
-        run_reply_engine(...)
-    rec.print_report()
-    assert rec.p95("tool_router") < rec.p95("main_chat_turn")  # shape check
+Backend calls through production factories and function-style helpers share
+one measurement boundary. Reports count returned content, empty results and
+exceptions separately; these outcomes do not assess answer correctness.
 """
 
 from __future__ import annotations
 
 import sys
+import threading
 import time
 import statistics
+from collections import Counter
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from functools import wraps
 from typing import Callable, Optional
 
-from jarvis import llm as _llm_module
-from jarvis.memory import graph_ops as _graph_ops_module
+from jarvis.llm.ollama import OllamaBackend, extract_text_from_response
+from jarvis.llm.openai_compatible import OpenAICompatibleBackend
 
 
 # Map caller __qualname__ to context names from docs/llm_contexts.md.
@@ -36,6 +31,7 @@ from jarvis.memory import graph_ops as _graph_ops_module
 _CALLER_TO_CONTEXT: dict[str, str] = {
     # main chat loop uses chat_with_messages
     "run_reply_engine": "main_chat_turn",
+    "chat_with_messages": "main_chat_turn",
     # intent judge (calls via internal helper)
     "IntentJudge.evaluate": "intent_judge",
     "IntentJudge._call_llm": "intent_judge",
@@ -53,6 +49,9 @@ _CALLER_TO_CONTEXT: dict[str, str] = {
     # tool router
     # Tool searcher reuses select_tools_with_llm and shares this bucket.
     "select_tools_with_llm": "tool_router",
+    "plan_query": "planner",
+    "resolve_next_tool_call": "plan_step_resolver",
+    "merge_node_data": "graph_node_merge",
     # conversation summariser
     "generate_conversation_summary": "summariser",
     # graph fact extraction
@@ -76,12 +75,15 @@ class _Call:
     model: str
     prompt_chars: int
     response_chars: int
+    provider: str
+    outcome: str
 
 
 @dataclass
 class TimingRecorder:
     calls: list[_Call] = field(default_factory=list)
-    _originals: dict = field(default_factory=dict)
+    _originals: list = field(default_factory=list, repr=False)
+    _active: threading.local = field(default_factory=threading.local, repr=False)
 
     def __enter__(self) -> "TimingRecorder":
         self._patch()
@@ -115,86 +117,59 @@ class TimingRecorder:
 
     # ── patching ─────────────────────────────────────────────────────────
     def _wrap(self, name: str, original: Callable) -> Callable:
-        def wrapped(*args, **kwargs):
-            ctx = self._infer_context(skip_frames=2)
-            # Extract model + prompt sizes from args heuristically — all three
-            # entry points take (base_url, chat_model, ...). chat_with_messages
-            # takes a messages list.
-            model = ""
-            prompt_chars = 0
-            if name == "chat_with_messages":
-                model = kwargs.get("chat_model") or (args[1] if len(args) > 1 else "")
-                msgs = kwargs.get("messages") or (args[2] if len(args) > 2 else [])
-                if isinstance(msgs, list):
-                    prompt_chars = sum(len(str(m.get("content", ""))) for m in msgs)
+        @wraps(original)
+        def wrapped(backend, *args, **kwargs):
+            if getattr(self._active, "recording", False):
+                return original(backend, *args, **kwargs)
+            model = kwargs.get("chat_model", args[0] if args else "")
+            if name == "chat":
+                messages = kwargs.get("messages", args[1] if len(args) > 1 else [])
+                prompt_chars = sum(len(str(message.get("content", ""))) for message in messages)
             else:
-                model = kwargs.get("chat_model") or (args[1] if len(args) > 1 else "")
-                sys_p = kwargs.get("system_prompt") or (args[2] if len(args) > 2 else "")
-                user_c = kwargs.get("user_content") or (args[3] if len(args) > 3 else "")
-                prompt_chars = len(str(sys_p)) + len(str(user_c))
-
-            t0 = time.perf_counter()
-            result = original(*args, **kwargs)
-            elapsed = time.perf_counter() - t0
-
-            # response size: str for direct/streaming, dict for chat_with_messages
-            if isinstance(result, str):
-                response_chars = len(result)
-            elif isinstance(result, dict):
-                response_chars = len(str(result.get("content", "")))
-            else:
-                response_chars = 0
-
-            self.calls.append(_Call(
-                context=ctx,
-                duration_sec=elapsed,
-                model=str(model),
-                prompt_chars=prompt_chars,
-                response_chars=response_chars,
-            ))
-            return result
-
+                system = kwargs.get("system_prompt", args[1] if len(args) > 1 else "")
+                user = kwargs.get("user_content", args[2] if len(args) > 2 else "")
+                prompt_chars = len(str(system)) + len(str(user))
+            context = self._infer_context(skip_frames=2)
+            started = time.perf_counter()
+            result = None
+            outcome = "error"
+            self._active.recording = True
+            try:
+                result = original(backend, *args, **kwargs)
+                if isinstance(result, dict):
+                    text = extract_text_from_response(result) or ""
+                    message = result.get("message", result)
+                    tools = message.get("tool_calls") if isinstance(message, dict) else None
+                    returned = bool(text.strip() or tools)
+                else:
+                    returned = isinstance(result, str) and bool(result.strip())
+                outcome = "response" if returned else "empty"
+                return result
+            finally:
+                self._active.recording = False
+                text = extract_text_from_response(result) if isinstance(result, dict) else result
+                self.calls.append(_Call(
+                    context=context,
+                    duration_sec=time.perf_counter() - started,
+                    model=str(model),
+                    prompt_chars=prompt_chars,
+                    response_chars=len(text) if isinstance(text, str) else 0,
+                    provider=type(backend).__name__,
+                    outcome=outcome,
+                ))
         return wrapped
 
     def _patch(self) -> None:
-        """Patch every module that has already imported one of the LLM entry
-        points via ``from ..llm import X``. Those bindings were resolved at
-        import time and do NOT see a setattr on ``jarvis.llm`` itself, so we
-        have to replace the attribute on each importer.
-        """
-        import sys as _sys
-        names = ("call_llm_direct", "call_llm_streaming", "chat_with_messages")
-        # Capture the originals from the llm module once.
-        originals = {n: getattr(_llm_module, n) for n in names}
-        # self._originals stores [(module, name, original_fn)] so _unpatch
-        # can put each binding back exactly where it came from.
-        self._originals["_sites"] = []
-        for mod in list(_sys.modules.values()):
-            if mod is None or mod is _llm_module:
-                continue
-            mod_name = getattr(mod, "__name__", "")
-            if not mod_name.startswith(("jarvis", "tests", "evals")):
-                continue
-            for name in names:
-                current = getattr(mod, name, None)
-                if current is originals[name]:
-                    wrapped = self._wrap(name, originals[name])
-                    setattr(mod, name, wrapped)
-                    self._originals["_sites"].append((mod, name, originals[name]))
-        # Graph operations own a provider-dispatched direct-call boundary.
-        graph_direct = _graph_ops_module.call_llm_direct
-        _graph_ops_module.call_llm_direct = self._wrap("call_llm_direct", graph_direct)
-        self._originals["_sites"].append((_graph_ops_module, "call_llm_direct", graph_direct))
-        # Also patch the canonical module so any late `from jarvis.llm import X`
-        # after we enter the context sees the wrapper.
-        for name in names:
-            wrapped = self._wrap(name, originals[name])
-            setattr(_llm_module, name, wrapped)
-            self._originals["_sites"].append((_llm_module, name, originals[name]))
+        """Observe existing and factory-created instances of supported backends."""
+        for backend in (OllamaBackend, OpenAICompatibleBackend):
+            for name in ("direct", "streaming", "chat"):
+                original = getattr(backend, name)
+                setattr(backend, name, self._wrap(name, original))
+                self._originals.append((backend, name, original))
 
     def _unpatch(self) -> None:
-        for mod, name, original in self._originals.get("_sites", []):
-            setattr(mod, name, original)
+        for backend, name, original in reversed(self._originals):
+            setattr(backend, name, original)
         self._originals.clear()
 
     # ── queries ──────────────────────────────────────────────────────────
@@ -241,6 +216,8 @@ class TimingRecorder:
                     "avg_prompt_chars": int(statistics.mean(c.prompt_chars for c in calls)) if calls else 0,
                     "avg_response_chars": int(statistics.mean(c.response_chars for c in calls)) if calls else 0,
                     "models": sorted({c.model for c in calls if c.model}),
+                    "providers": sorted({c.provider for c in calls}),
+                    "outcomes": dict(Counter(c.outcome for c in calls)),
                 }
                 for ctx, calls in buckets.items()
             },
@@ -248,7 +225,7 @@ class TimingRecorder:
 
     def print_report(self, title: str = "LLM pipeline timings") -> None:
         print(f"\n⏱️  {title}")
-        print(f"   total calls: {len(self.calls)}   total wall time: {self.total():.2f}s")
+        print(f"   total calls: {len(self.calls)}   sum of call times: {self.total():.2f}s")
         rows = sorted(
             self.by_context().items(),
             key=lambda kv: -sum(c.duration_sec for c in kv[1]),

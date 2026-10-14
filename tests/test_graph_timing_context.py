@@ -5,6 +5,7 @@ from unittest.mock import patch
 import pytest
 
 from jarvis.memory import graph_ops
+from jarvis.llm.ollama import OllamaBackend
 from tests.performance.timing_recorder import TimingRecorder
 
 pytestmark = pytest.mark.unit
@@ -15,7 +16,7 @@ def test_graph_extraction_and_review_have_separate_timings(mock_config):
         json.dumps([{'branch': 'USER', 'fact': 'The user has a cat named Miso'}]),
         '{"0": "DURABLE"}',
     ])
-    with patch.object(graph_ops, 'call_llm_direct', side_effect=lambda **kwargs: next(responses)):
+    with patch.object(OllamaBackend, 'direct', side_effect=lambda *args, **kwargs: next(responses)):
         with TimingRecorder() as recorder:
             facts = graph_ops.extract_graph_memories('Summary', mock_config, 'local-model')
         assert facts == [('user', 'The user has a cat named Miso')]
