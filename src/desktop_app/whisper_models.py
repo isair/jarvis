@@ -11,7 +11,7 @@ class WhisperModel:
     vram_mb: int
     description: str
     english_description: str | None = None
-    wizard: bool = True
+    offered: bool = True
 
 
 # Approximate GPU memory follows OpenAI's Whisper model table:
@@ -26,7 +26,7 @@ WHISPER_MODELS = (
     WhisperModel("medium", "Medium", "~1.5GB", 5120, "Best balance (Recommended)",
                  "Best balance (Recommended)"),
     WhisperModel("large-v3", "Large v3", "~3GB", 10240,
-                 "Full-size multilingual model", wizard=False),
+                 "Full-size multilingual model", offered=False),
     WhisperModel("large-v3-turbo", "Large V3 Turbo", "~1.5GB", 6144,
                  "Best accuracy, needs more VRAM"),
 )
@@ -39,15 +39,16 @@ def wizard_model_options(english_only: bool = False) -> list[tuple[str, str, str
          model.download_size, f"~{model.vram_mb / 1024:g}GB VRAM",
          model.english_description if english_only else model.description)
         for model in WHISPER_MODELS
-        if model.wizard and (not english_only or model.english_description is not None)
+        if model.offered and (not english_only or model.english_description is not None)
     ]
 
 
 def settings_model_choices() -> list[tuple[str, str]]:
-    """Return all catalogued models, with distinct English-only labels."""
-    choices = [(model.model_id, model.name) for model in WHISPER_MODELS]
+    """Return offered models, with distinct English-only labels."""
+    choices = [(model.model_id, model.name) for model in WHISPER_MODELS if model.offered]
     choices.extend((model.model_id + ".en", f"{model.name} (English)")
-                   for model in WHISPER_MODELS if model.english_description is not None)
+                   for model in WHISPER_MODELS
+                   if model.offered and model.english_description is not None)
     return choices
 
 

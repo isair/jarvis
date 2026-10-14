@@ -51,8 +51,11 @@ their option list, including local model references and unavailable microphones.
 They display that value as an additional selected option. Saving another field
 preserves it; choosing an alternative or resetting to defaults replaces it.
 Whisper choices come from the shared `whisper_models.py` catalogue, including
-`large-v3-turbo` and English-only variants. The setup wizard uses the same model
-records and derives its memory labels and estimates from them.
+`large-v3-turbo` and English-only variants. Settings and the setup wizard offer
+the same catalogue entries; non-Turbo `large-v3` is excluded from both lists.
+The wizard filters these entries for the selected language and usable backend.
+Memory labels and estimates derive from the catalogue, including retained
+records for saved models that are not offered as choices.
 
 ## Layout
 
