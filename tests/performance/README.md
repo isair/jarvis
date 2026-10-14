@@ -7,8 +7,9 @@ pipeline calls. It is excluded from the default pytest run.
 pytest tests/performance/ -v -m performance -s
 ```
 
-The harness skips when the configured model is unavailable. Set these variables
-before running it:
+Availability is checked only when selected benchmarks run. Importing or
+collecting the harness does not contact the model server. Benchmarks skip when
+the configured model is unavailable. Set these variables before running it:
 
 | Variable | Default | Purpose |
 |----------|---------|---------|

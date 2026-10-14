@@ -4,7 +4,6 @@ import importlib
 import json
 
 import pytest
-import requests
 
 from jarvis.llm.ollama import OllamaBackend
 
@@ -13,7 +12,6 @@ pytestmark = [pytest.mark.unit, pytest.mark.usefixtures('no_network')]
 
 @pytest.fixture
 def benchmark(monkeypatch, tmp_path):
-    monkeypatch.setattr(requests, 'get', lambda *args, **kwargs: None)
     module = importlib.import_module('tests.performance.test_pipeline_timings')
     monkeypatch.setattr(module, 'PERF_REPORT_DIR', tmp_path)
     monkeypatch.setattr(module, 'PERF_RUNS', 1)
