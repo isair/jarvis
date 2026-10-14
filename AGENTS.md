@@ -115,6 +115,8 @@ Always use TDD: write failing tests first, then implement the fix. Tests should 
 
 Tests must isolate user stores across the whole suite, including default dictation history. Fake transcriptions belong in temporary test storage and must never reach a user's saved history.
 
+Automated tests use owned audio fakes and never open microphones or play sound. Pytest keeps native audio entry points blocked through teardown and rejects even caught attempts. Physical hardware checks require an explicitly authorised manual run outside pytest.
+
 Ensure all your changes are covered by all appropriate form of automated tests - unit, integration, visual regression, evals, etc.
 
 Tests should verify mechanisms, not current values. Assert against config-driven or computed references rather than hardcoding specifics that change between migrations.
