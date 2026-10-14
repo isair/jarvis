@@ -80,6 +80,16 @@ Provider-aware fields in `Settings` (see [src/jarvis/config.py](../config.py)):
 
 The `ollama_base_url` / `ollama_chat_model` / `ollama_embed_model` keys hold the Ollama configuration and are authoritative whenever the active (chat or embedding) provider is Ollama. `_load_settings` resolves `cfg.llm_chat_model`, `cfg.embedding_model`, and `cfg.fast_model` per-provider — the Ollama keys win on the Ollama path, the provider-aware keys win on the OpenAI-compatible path — so the codebase reads a single resolved field while each provider keeps its own on-disk model name. The v1 → v2 migration promotes any explicitly-set `ollama_*` values into the provider-aware keys; per-provider resolution means a promoted value never shadows the Ollama picker. The v2 → v3 migration folds the retired per-context model keys (`intent_judge_model`, `tool_router_model`, `evaluator_model`, `planner_model`) into `fast_model` (an explicitly chosen judge or router model is kept; the old default value is not pinned).
 
+### Ollama model catalogue identity
+
+`model_names.missing_ollama_models` compares required names with available
+catalogue names. An omitted tag and a terminal `:latest` are equivalent on
+both sides. Registry hosts and ports, namespaces, paths and explicit variants
+remain distinct. Missing results retain the original required names and order;
+comparison never rewrites configuration, download arguments or inference requests.
+Desktop startup, setup, recommendation advice and performance prerequisites use
+this comparison. Other providers' recommendation IDs are compared literally.
+
 ### Model tiers
 
 Every LLM context runs on one of two models, resolved through `resolve_model(cfg, tier)` in `tiers.py`:
