@@ -837,7 +837,9 @@ def auto_split_node(
         user_content=user_content,
         timeout_sec=timeout_sec,
         thinking=thinking,
-        max_tokens=200,
+        # Splitting returns the organised facts as well as category metadata.
+        num_ctx=8192,
+        max_tokens=4096,
     )
 
     if not response:

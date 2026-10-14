@@ -244,6 +244,33 @@ class TestLLMPickBestChild:
 class TestAutoSplitNode:
     """Tests for the auto-split logic."""
 
+    @pytest.mark.parametrize('prefix', ['Private equipment', 'Özel cihaz kaydı'])
+    def test_large_split_can_return_all_independent_facts(self, store, mock_config, monkeypatch, prefix):
+        facts = [f'{prefix} ZX{i:03d} has private calibration QN{i * 137 + 9713}: '
+                 'this is a distinct personal record, with an independently assigned value.'
+                 for i in range(60)]
+        node = store.create_node('Inventory', 'Personal records', data='\n'.join(facts), parent_id='user')
+        assert node.data_token_count > SPLIT_THRESHOLD
+        response = json.dumps({'categories': [
+            {'name': 'First group', 'facts': facts[:30]},
+            {'name': 'Second group', 'facts': facts[30:]},
+        ], 'summary': 'Personal inventory'}, ensure_ascii=False)
+
+        def bounded_backend(**kwargs):
+            # Model the transport's finite generation and shared context window.
+            response_tokens = (len(response) + 3) // 4
+            input_tokens = (len(kwargs['system_prompt']) + len(kwargs['user_content']) + 3) // 4
+            if response_tokens > kwargs['max_tokens']:
+                return None
+            if input_tokens + response_tokens > kwargs.get('num_ctx', 4096):
+                return None
+            return response
+
+        monkeypatch.setattr('jarvis.memory.graph_ops.call_llm_direct', bounded_backend)
+        assert auto_split_node(store, node.id, mock_config, 'model')
+        assert store.get_node(node.id).data == ''
+        assert sorted(line for child in store.get_children(node.id) for line in child.data.splitlines()) == sorted(facts)
+
     def _make_large_node(self, store, token_count=2000):
         """Create a node with data exceeding the split threshold."""
         # ~4 chars per token, so token_count * 4 chars

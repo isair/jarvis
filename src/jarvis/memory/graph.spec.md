@@ -222,6 +222,9 @@ Triggered automatically when `data_token_count > SPLIT_THRESHOLD` (1500 tokens) 
 This means the tree depth itself encodes a raw→refined spectrum: surface-level nodes hold recently ingested knowledge, deeper nodes hold distilled novel knowledge that survived multiple split cycles. Model upgrades naturally shrink the graph as previously-novel facts become common knowledge.
 
 Split quality safeguards:
+- The request has an 8192-token context and a 4096-token response budget for
+  the organised facts, category metadata and parent summary. The timeout is
+  45 seconds by default; incomplete generations preserve the source node.
 - Minimum 2 categories required (abort if LLM proposes fewer)
 - Each category must have at least one fact
 - Categories form a JSON array of objects with non-empty string names and
