@@ -1,10 +1,9 @@
 """Desktop worker churn preserves running threads and retires completed workers.
 
 Real Qt threads and completion signals run against synthetic startup probes.
-The subprocess confines settings and home paths to temporary storage.
+The subprocess uses owned settings, runtime storage and synthetic command output.
 """
 
-import json
 import os
 import subprocess
 import sys
@@ -17,7 +16,7 @@ pytestmark = pytest.mark.unit
 ROOT = Path(__file__).resolve().parent.parent
 
 CHURN_SCENARIO = r"""
-import os, sys, time
+import io, os, sys, time
 from pathlib import Path
 import socket
 import subprocess
@@ -44,6 +43,7 @@ from desktop_app.app import DaemonThread
 from desktop_app.app import SetupCheckWorker, ServerCheckWorker
 from desktop_app.app import _LLMReachWorker
 from desktop_app.qt_worker import KeepAliveWorker
+from desktop_app.setup_wizard import CommandWorker
 from desktop_app import app as desktop_module, setup_wizard
 
 setup_wizard.should_show_setup_wizard = lambda: False
@@ -53,7 +53,28 @@ desktop_module._check_openai_compat_reachable = lambda cfg: True
 app = QApplication([])
 
 N = 150
-state = {{"i": 0, "worker": None}}
+state = {{"i": 0, "completed": 0, "worker": None, "error": None}}
+command = [sys.executable, "-c", "print('pulled')"]
+command_output = []
+
+
+class SyntheticProcess:
+    returncode = 0
+
+    def __init__(self):
+        self.stdout = io.StringIO("pulled\n")
+
+    def wait(self):
+        return self.returncode
+
+
+def owned_program(args, **kwargs):
+    if args != command or not isinstance(state["worker"], CommandWorker):
+        return forbidden_program(args, **kwargs)
+    return SyntheticProcess()
+
+
+subprocess.Popen = owned_program
 
 
 class _Sig:
@@ -75,36 +96,53 @@ class BusyDaemonThread(DaemonThread):
         time.sleep(0.02)
 
 
-# Worker classes and the constructor arguments they need.
+# Worker classes, constructor arguments and expected status.
 WORKERS = [
-    (BusyDaemonThread, ()),
-    (SetupCheckWorker, ()),
-    (ServerCheckWorker, ()),
-    (_LLMReachWorker, (None,)),
+    (BusyDaemonThread, (), None),
+    (SetupCheckWorker, (), False),
+    (ServerCheckWorker, (), True),
+    (_LLMReachWorker, (None,), True),
+    (CommandWorker, (command,), True),
 ]
 
 
-def start_next(worker_cls, args):
-    if state["i"] >= N:
+def start_next(worker_cls, args, expected):
+    if state["i"] >= state["limit"]:
         app.quit()
         return
     state["i"] += 1
-    # Mirrors app.py's teardown: the previous worker's reference is dropped
-    # from a slot connected to `finished`, while its OS thread can still be
-    # winding down after run() returned.
+    # Rebinding in a completion slot drops the previous application reference
+    # while its OS thread can still be winding down.
     state["worker"] = worker_cls(*args)
+    def completed(*result):
+        if expected is not None and (not result or result[0] is not expected):
+            state["error"] = f"{{worker_cls.__name__}} returned {{result!r}}"
+            app.quit()
+            return
+        state["completed"] += 1
+        start_next(worker_cls, args, expected)
+
     if isinstance(state["worker"], DaemonThread):
-        state["worker"].finished.connect(lambda: start_next(worker_cls, args))
+        state["worker"].finished.connect(completed)
+    elif isinstance(state["worker"], CommandWorker):
+        state["worker"].output.connect(command_output.append)
+        state["worker"].completed.connect(completed)
     else:
-        state["worker"].check_done.connect(lambda ok: start_next(worker_cls, args))
+        state["worker"].check_done.connect(completed)
     state["worker"].start()
 
 
-for cls, args in WORKERS:
-    state["i"] = 0
-    start_next(cls, args)
+for cls, args, expected in WORKERS:
+    state.update(i=0, completed=0, error=None, limit=300 if cls is CommandWorker else N)
+    start_next(cls, args, expected)
     app.exec()
-    assert state["i"] >= N, f"chain stopped early for {{cls.__name__}} at {{state['i']}}"
+    for worker in tuple(KeepAliveWorker._active):
+        assert worker.wait(5000), "Worker did not finish"
+    app.processEvents()
+    assert state["error"] is None, state["error"]
+    assert state["completed"] == state["limit"], f"chain stopped early for {{cls.__name__}} at {{state['completed']}}"
+
+assert command_output == ["pulled"]*300, "Command output was lost or duplicated"
 
 assert issubclass(DaemonThread, KeepAliveWorker)
 assert issubclass(SetupCheckWorker, KeepAliveWorker)
@@ -117,14 +155,17 @@ print("CHAIN_OK")
 
 
 def _run_scenario(tmp_path) -> str:
-    config_path = tmp_path / "config.json"
-    config_path.write_text(json.dumps({"_config_version": 3, "voice_debug": False,
-                                       "db_path": str(tmp_path / "synthetic.sqlite")}))
-    env = dict(os.environ, QT_QPA_PLATFORM="offscreen", JARVIS_CONFIG_PATH=str(config_path),
-               WORKER_PRIVATE_ROOT=str(tmp_path), TMPDIR=str(tmp_path),
-               TEMP=str(tmp_path), TMP=str(tmp_path))
+    runtime = tmp_path/'runtime'
+    runtime.mkdir()
+    env = dict(os.environ, QT_QPA_PLATFORM="offscreen", PYTHONDONTWRITEBYTECODE="1",
+               JARVIS_CONFIG_PATH=str(tmp_path/'data/config.json'),
+               XDG_CONFIG_HOME=str(tmp_path/'data/xdg'), XDG_CACHE_HOME=str(runtime/'cache'),
+               TMPDIR=str(runtime), TEMP=str(runtime), TMP=str(runtime))
+    scenario_path = tmp_path/"scenario.py"
+    scenario_path.write_text(CHURN_SCENARIO.format(src=ROOT/"src"))
     proc = subprocess.run(
-        [sys.executable, "-c", CHURN_SCENARIO.format(src=ROOT / "src")],
+        [sys.executable, str(ROOT/"tests/fixtures/worker_probe.py"), str(tmp_path),
+         str(scenario_path)],
         capture_output=True,
         text=True,
         timeout=45,
