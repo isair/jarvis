@@ -344,6 +344,40 @@ class TestTimestampBasedHotWindowDetection:
     start time against the hot window's time span. This eliminates race
     conditions between the expiry timer and Whisper transcription."""
 
+    @pytest.mark.parametrize('phase,start,end,expected', [
+        ('pending', None, None, True),
+        ('pending', -1, -0.1, False),
+        ('active', None, None, True),
+        ('active', -1, -0.1, True),
+        ('expired', -1, -0.1, False),
+        ('expired', -1, 0.5, True),
+        ('expired', 0.5, 2, True),
+        ('expired', -1, 0, True),
+        ('expired', 1, 2, True),
+        ('expired', 1.1, 2, False),
+        ('expired', None, None, False),
+    ], ids=['pending-no-times', 'pending-before-span', 'active-no-times',
+            'active-state-fallback', 'tts-only', 'overlaps-span',
+            'transcription-after-expiry', 'ends-at-opening', 'starts-at-expiry',
+            'after-expiry', 'expired-no-times'])
+    def test_capture_times_govern_delayed_follow_up(self, hot_clock, phase, start, end, expected):
+        manager = StateManager(echo_tolerance=0.2, hot_window_seconds=1.0)
+        opened = hot_clock.now
+        span = manager.echo_tolerance + manager.hot_window_seconds
+        try:
+            manager.schedule_hot_window_activation()
+            if phase == 'active':
+                hot_clock.advance(manager.echo_tolerance + manager.hot_window_seconds / 2)
+            elif phase == 'expired':
+                hot_clock.advance(span + manager.hot_window_seconds)
+                assert not manager.is_hot_window_active()
+            start_time = 0.0 if start is None else opened + start * span
+            end_time = 0.0 if end is None else opened + end * span
+
+            assert manager.was_speech_during_hot_window(start_time, end_time) is expected
+        finally:
+            manager.stop()
+
     def test_speech_during_active_window_detected(self, hot_clock):
         """Speech starting while hot window is active returns True."""
         sm = StateManager(echo_tolerance=0.02, hot_window_seconds=3.0)
