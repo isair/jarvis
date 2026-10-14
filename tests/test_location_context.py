@@ -17,7 +17,7 @@ def test_disabled_location_retains_time_without_looking_up_location(mock_config,
 
     monkeypatch.setattr(engine, "get_location_context_with_timezone", forbidden_lookup)
     monkeypatch.setattr(engine, "format_time_context", lambda zone: "System time" if zone is None else "Unexpected timezone")
-    assert engine._live_time_location_string(mock_config) == "Current local time: System time. Location: Disabled"
+    assert engine._live_time_location_string(mock_config) == "Current local time: System time. Saved event dates must match the requested calendar date. Location: Disabled"
 
 
 @pytest.mark.parametrize("timezone", [None, "Europe/London"])
@@ -38,7 +38,7 @@ def test_enabled_location_uses_configured_lookup_and_returned_timezone(mock_conf
 
     monkeypatch.setattr(engine, "get_location_context_with_timezone", configured_lookup)
     monkeypatch.setattr(engine, "format_time_context", lambda zone: "Selected time" if zone == timezone else "Unexpected timezone")
-    assert engine._live_time_location_string(mock_config) == "Current local time: Selected time. Location: Synthetic city"
+    assert engine._live_time_location_string(mock_config) == "Current local time: Selected time. Saved event dates must match the requested calendar date. Location: Synthetic city"
 
 
 def test_location_lookup_failure_omits_context_without_interrupting_reply(mock_config, monkeypatch):
