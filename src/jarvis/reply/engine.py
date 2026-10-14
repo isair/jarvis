@@ -837,7 +837,9 @@ def _live_time_location_string(cfg) -> str:
                 resolve_cgnat_public_ip=getattr(cfg, 'location_cgnat_resolve_public_ip', True),
                 location_cache_minutes=getattr(cfg, 'location_cache_minutes', 60),
             )
-        return f"Current local time: {format_time_context(tz_name)}. {location_context}"
+        return (f"Current local time: {format_time_context(tz_name)}. "
+                "Saved event dates must match the requested calendar date. "
+                f"{location_context}")
     except Exception as e:
         debug_log(f"live time/location lookup failed: {e}", "memory")
         return ""

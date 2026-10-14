@@ -258,11 +258,13 @@ sequenceDiagram
 #### Dynamic Context Injection
 The system injects fresh contextual information before each LLM call in the agentic loop to ensure the model has current, relevant information:
 
+The clock includes its human-readable local time and ISO dates labelled `Today` and `Tomorrow`. Both dates derive from the same selected local calendar, including timezone fallback and daylight-saving transitions. The reply context requires saved event dates to match the requested calendar date. These current dates compare established event dates; they do not supply missing source dates for historical relative statements.
+
 **Context Format:**
 ```
 {original system prompt content}
 
-[Context: Monday, September 15, 2025 at 17:53 UTC, Location: San Francisco, CA, United States (America/Los_Angeles)]
+[Context: Current local time: Monday, September 15, 2025 at 17:53 UTC; Today: 2025-09-15; Tomorrow: 2025-09-16. Saved event dates must match the requested calendar date. Location: San Francisco, CA, United States (America/Los_Angeles)]
 ```
 
 **Implementation Details:**
