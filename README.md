@@ -128,7 +128,6 @@ Jarvis is developed primarily on macOS. Windows and Linux behaviour may differ. 
 - **Accuracy and speed depend on your models and hardware.** Smaller models can miss parts of complex requests, and slow speech recognition can drop utterances.
 - **Dictation is unavailable on macOS 26+** ([#172](https://github.com/isair/jarvis/issues/172)). Linux dictation requires X11, with limited Wayland support.
 - **Spoken “stop” can be mistaken for echo** while Jarvis is speaking ([#24](https://github.com/isair/jarvis/issues/24)).
-- **Very large web pages cannot be read.** Page downloads have a 2 MiB limit.
 - **No mobile app** is available ([#17](https://github.com/isair/jarvis/issues/17)).
 
 ## Configuration

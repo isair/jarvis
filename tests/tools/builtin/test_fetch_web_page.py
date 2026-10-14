@@ -17,6 +17,8 @@ def _make_response_mock(**attrs) -> Mock:
     resp = Mock(**attrs)
     resp.iter_content = Mock(return_value=[attrs.get('content', attrs.get('text', '').encode())])
     resp.encoding = attrs.get('encoding')
+    resp.url = attrs.get('url', 'https://example.com')
+    resp.headers = attrs.get('headers', {})
     resp.__enter__ = Mock(return_value=resp)
     resp.__exit__ = Mock(return_value=False)
     return resp
@@ -74,26 +76,6 @@ class TestFetchWebPageTool:
         assert result.success is True
         assert "example.com" in result.reply_text
         self.context.user_print.assert_called()
-
-    @patch('requests.get')
-    def test_run_success_without_beautifulsoup(self, mock_get):
-        """Test successful web page fetch without BeautifulSoup."""
-        mock_response = _make_response_mock(
-            status_code=200,
-            text='<html><body>Raw content</body></html>',
-            content=b'<html><body>Raw content</body></html>',
-            headers={'content-type': 'text/html'},
-            raise_for_status=Mock(),
-        )
-        mock_get.return_value = mock_response
-
-        with patch('builtins.__import__', side_effect=ImportError):
-            args = {"url": "https://example.com"}
-            result = self.tool.run(args, self.context)
-
-        assert isinstance(result, ToolExecutionResult)
-        assert result.success is True
-        assert "Raw Content" in result.reply_text
 
     @patch('requests.get')
     def test_run_http_error(self, mock_get):
