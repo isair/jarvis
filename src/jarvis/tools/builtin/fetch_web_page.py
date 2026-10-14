@@ -3,6 +3,7 @@
 import requests
 import codecs
 import time
+from email.message import Message
 
 from lxml import etree
 from bs4.dammit import EncodingDetector
@@ -17,6 +18,13 @@ from ..page_content import PageText
 _MAX_FETCH_BYTES = 32 * 1024 * 1024
 _FETCH_SECONDS = 15
 _READ_CHUNK_BYTES = 64 * 1024
+
+
+def _check_parser_limits(parser):
+    unsafe = {'ERR_RESOURCE_LIMIT', 'ERR_COMMENT_NOT_FINISHED', 'ERR_ENTITY_LOOP'}
+    if any(error.level >= etree.ErrorLevels.FATAL or error.type_name in unsafe
+           for error in parser.feed_error_log):
+        raise ValueError('Page markup exceeded a safe parsing limit; no page content was returned.')
 
 
 class FetchWebPageTool(Tool):
@@ -74,11 +82,12 @@ class FetchWebPageTool(Tool):
                               allow_redirects=True, stream=True,
                               hooks={"response": discard_redirect_body}) as response:
                 response.raise_for_status()
-                final_url = response.url if isinstance(response.url, str) else url
+                final_url = response.url
                 page = PageText(final_url, include_links)
                 content_type = response.headers.get('Content-Type', '')
-                content_type = content_type if isinstance(content_type, str) else ''
-                header_encoding = response.encoding if 'charset=' in content_type.casefold() else None
+                metadata = Message()
+                metadata['Content-Type'] = content_type
+                header_encoding = metadata.get_content_charset()
                 def parser_for(prefix):
                     _, bom_encoding = EncodingDetector.strip_byte_order_mark(prefix)
                     encoding = (bom_encoding or header_encoding
@@ -107,9 +116,11 @@ class FetchWebPageTool(Tool):
                             prefix = bytes(initial)
                             parser = parser_for(prefix)
                             parser.feed(prefix)
+                            _check_parser_limits(parser)
                             initial.clear()
                     else:
                         parser.feed(retained)
+                        _check_parser_limits(parser)
                     downloaded += min(len(chunk), remaining)
                     if len(chunk) > remaining or page.truncated:
                         page.truncated = True
@@ -118,10 +129,10 @@ class FetchWebPageTool(Tool):
                     prefix = bytes(initial)
                     parser = parser_for(prefix)
                     parser.feed(prefix)
+                    _check_parser_limits(parser)
                 if parser is not None:
                     parser.close()
-                if parser is not None and any(error.level >= etree.ErrorLevels.FATAL for error in parser.feed_error_log):
-                    page.truncated = True
+                    _check_parser_limits(parser)
             content = page.text()
             if not content:
                 if page.truncated:
@@ -144,7 +155,7 @@ class FetchWebPageTool(Tool):
             if page.truncated:
                 label = "[Partial page excerpt: reading or content limit reached.]\n\n"
                 reply_text = label + reply_text[:50_000-len(label)]
-            debug_log(f"fetchWebPage: {downloaded} decoded bytes, {len(content)} text chars, partial={page.truncated}", "web")
+            debug_log(f"fetchWebPage: {downloaded} decoded bytes, {len(content)} text chars, partial={page.truncated}, invalid_links={page.invalid_links}", "web")
             context.user_print("✅ Page excerpt fetched." if page.truncated else "✅ Page content fetched.")
             return ToolExecutionResult(success=True, reply_text=reply_text)
         except requests.exceptions.RequestException as e:

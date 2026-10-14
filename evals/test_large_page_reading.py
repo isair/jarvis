@@ -37,7 +37,7 @@ def test_reading_large_pages_preserves_facts_and_unread_footer(partial, sample):
         cfg.llm_chat_model, build_system_prompt(),
         'Using only this page result, return a JSON object with indicator (colour), '
         'footer_code (null if unavailable) and partial (whether the page read is incomplete).\n\n'
-        +result.reply_text,
+        +result.reply_text+'\nReturn only the JSON object, with no surrounding prose.',
         timeout_sec=60, temperature=0.0, max_tokens=1024,
     )
     assert answer, 'No reply'

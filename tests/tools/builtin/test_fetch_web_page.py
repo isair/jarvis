@@ -17,6 +17,8 @@ def _make_response_mock(**attrs) -> Mock:
     resp = Mock(**attrs)
     resp.iter_content = Mock(return_value=[attrs.get('content', attrs.get('text', '').encode())])
     resp.encoding = attrs.get('encoding')
+    resp.url = attrs.get('url', 'https://example.com')
+    resp.headers = attrs.get('headers', {})
     resp.__enter__ = Mock(return_value=resp)
     resp.__exit__ = Mock(return_value=False)
     return resp

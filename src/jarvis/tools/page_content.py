@@ -18,6 +18,7 @@ class PageText:
         self.title = ''
         self.links = []
         self.truncated = False
+        self.invalid_links = 0
         self._hidden_depth = 0
         self._in_title = False
         self._link = None
@@ -51,9 +52,12 @@ class PageText:
             self._in_title = True
         if tag == 'a' and self.include_links and len(self.links) < 20:
             href = attrs.get('href', '').strip()
-            resolved = urljoin(self.url, href)
-            if href and len(resolved) <= 2048 and urlsplit(resolved).scheme in ('http', 'https', 'mailto', 'tel'):
-                self._link, self._link_text = resolved, ''
+            try:
+                resolved = urljoin(self.url, href)
+                if href and len(resolved) <= 2048 and urlsplit(resolved).scheme in ('http', 'https', 'mailto', 'tel'):
+                    self._link, self._link_text = resolved, ''
+            except ValueError:
+                self.invalid_links += 1
 
     def end(self, tag):
         if self._hidden_depth:

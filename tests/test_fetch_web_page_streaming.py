@@ -93,3 +93,53 @@ def test_download_deadline_labels_only_content_received_before_it(monkeypatch):
     assert 'Received article introduction.' in result.reply_text
     assert 'Unread footer secret.' not in result.reply_text
     assert 'Partial page excerpt' in result.reply_text
+
+
+def test_malformed_optional_link_does_not_discard_readable_article(monkeypatch):
+    body = b'<p>Article content survives.</p><a href="http://[invalid">Bad source</a><a href="child">Good source</a>'
+    result = read_page(monkeypatch, body, include_links=True)
+    assert result.success, result.reply_text
+    assert 'Article content survives.' in result.reply_text
+    assert 'https://example.test/final/child' in result.reply_text
+    assert 'http://[invalid' not in result.reply_text
+
+
+def test_spaced_http_charset_keeps_non_utf8_text(monkeypatch):
+    body = '<p>Café déjà vu.</p>'.encode('iso-8859-1')
+    response = SimpleNamespace(
+        raise_for_status=lambda: None,
+        iter_content=lambda chunk_size: (body,), encoding='iso-8859-1',
+        headers={'Content-Type': 'text/html; charset = "iso-8859-1"'},
+        url='https://example.test/article',
+    )
+    monkeypatch.setattr(fetch_web_page.requests, 'get', lambda *a, **kw: nullcontext(response))
+    result = fetch_web_page.FetchWebPageTool().run(
+        {'url': response.url}, SimpleNamespace(user_print=Mock()),
+    )
+    assert result.success, result.reply_text
+    assert 'Café déjà vu.' in result.reply_text
+
+
+def test_native_parser_limit_never_returns_comment_payload_as_page_text(monkeypatch):
+    body = b'<p>Public article introduction.</p><!--'+b'Hidden comment payload. '*(600000)+b'--><p>Footer.</p>'
+    result = read_page(monkeypatch, body)
+    assert not result.success, result.reply_text[:200]
+    assert 'Hidden comment payload' not in result.reply_text
+
+
+@pytest.mark.parametrize('diagnostic', ['ERR_RESOURCE_LIMIT', 'ERR_COMMENT_NOT_FINISHED', 'ERR_ENTITY_LOOP'])
+def test_unsafe_parser_diagnostics_reject_all_recovered_content(monkeypatch, diagnostic):
+    class RecoveredParser:
+        def __init__(self, target, **kwargs):
+            self.target = target
+            self.feed_error_log = [SimpleNamespace(level=fetch_web_page.etree.ErrorLevels.ERROR,
+                                                  type_name=diagnostic)]
+        def feed(self, chunk):
+            self.target.data('Untrusted recovered hidden payload.')
+        def close(self):
+            return self.target
+    monkeypatch.setattr(fetch_web_page.etree, 'HTMLParser', RecoveredParser)
+    result = read_page(monkeypatch, b'<p>Ordinary introduction.</p>')
+    assert not result.success
+    assert 'safe parsing limit' in result.reply_text
+    assert 'hidden payload' not in result.reply_text
