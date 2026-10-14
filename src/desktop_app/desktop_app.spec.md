@@ -92,6 +92,9 @@ Stable release metadata stays in a draft while stable installers are built.
 The release becomes public only after every platform's installer is available
 and the release attachment step has uploaded the binaries successfully.
 
+Release preparation errors fail the workflow with visible diagnostics. A
+successful run without releasable changes reports that no release is needed.
+
 ## Main Components
 
 ### JarvisSystemTray
