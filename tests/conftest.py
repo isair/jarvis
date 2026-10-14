@@ -334,3 +334,44 @@ def settings_config_path(qapp, tmp_path, monkeypatch):
     monkeypatch.setattr(sw, "get_input_devices", lambda: [("", "Default"), ("7", "Microphone")])
     monkeypatch.setattr(sw.QMessageBox, "information", lambda *args: None)
     return path
+
+
+@pytest.fixture
+def silent_thinking_tunes(monkeypatch):
+    """Exercise real cue workers against owned output streams and drain them."""
+    import sounddevice
+    from jarvis.output import tune_player
+
+    players = []
+    streams = []
+    real_player = tune_player.TunePlayer
+
+    class SilentStream:
+        def __init__(self, **kwargs):
+            self.closed = False
+            streams.append(self)
+
+        def start(self):
+            pass
+
+        def close(self):
+            self.closed = True
+
+    class OwnedPlayer(real_player):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            players.append(self)
+
+    monkeypatch.setattr(sounddevice, 'OutputStream', SilentStream)
+    monkeypatch.setattr(tune_player, 'TunePlayer', OwnedPlayer)
+    try:
+        yield
+    finally:
+        workers = [player._thread for player in players if player._thread is not None]
+        for player in players:
+            player.stop_tune()
+        for worker in workers:
+            worker.join(timeout=5)
+        assert all(not worker.is_alive() for worker in workers), 'Test left a thinking-cue worker running'
+        assert all(not player.is_playing() for player in players), 'Test left a thinking cue active'
+        assert all(stream.closed for stream in streams), 'Test left an output stream open'

@@ -15,7 +15,7 @@ pytestmark = pytest.mark.unit
 
 
 @pytest.fixture
-def synthetic_listener(monkeypatch):
+def synthetic_listener(monkeypatch, silent_thinking_tunes):
     cfg = replace(load_settings(), voice_debug=False, vad_enabled=False,
                   whisper_backend='faster-whisper', whisper_device='cpu')
     monkeypatch.setattr(capture, 'create_intent_judge', lambda _cfg: None)
