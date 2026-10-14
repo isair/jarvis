@@ -22,7 +22,8 @@ memory.
    or persistent session. A native content callback caps decoded HTML at
    512 KiB; oversized responses are discarded before parsing. The total
    request timeout is at most 10 seconds and shrinks to the remaining chain
-   budget. Redirect responses are not followed. Challenge detection and
+   budget. Non-finite or sub-millisecond budgets are rejected before a
+   session is opened. Redirect responses are not followed. Challenge detection and
    fallback providers apply to this single HTML attempt.
 3. **Parallel cascade fetch**: if there's no instant answer and we have
    result URLs, fetch the top 3 results **in parallel** under a single

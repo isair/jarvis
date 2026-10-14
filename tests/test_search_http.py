@@ -141,8 +141,8 @@ def test_native_tls_accepts_explicit_owned_ca(download, servers, monkeypatch):
     assert download(servers[1]) == {'status': 200, 'body': 'Owned fixture'}
 
 
-@pytest.mark.parametrize('timeout,limit', [(0, 1), (-1, 1), (1, 0), (1, -1)])
+@pytest.mark.parametrize('timeout,limit', [(0, 1), (-1, 1), (1, 0), (1, -1), (.0001, 1024), (float('nan'), 1024), (float('inf'), 1024)])
 def test_invalid_budget_is_rejected(download, servers, timeout, limit):
-    result = download(servers[0], timeout=timeout, limit=limit)
+    result = download(servers[0] + '/slow', timeout=timeout, limit=limit)
     assert result['error'] == 'ValueError'
     assert 'positive' in result['message']
