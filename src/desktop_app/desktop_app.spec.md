@@ -517,3 +517,7 @@ that connection after a complete or empty import, an early read or graph failure
 and when the client closes the stream before completion. The shared graph store
 retains its separate viewer lifetime. Per-summary failures remain isolated so
 the stream can continue processing later entries.
+
+## Local memory import
+
+The shared tray/face menu opens a lazy `MemoryImportWindow`. It reviews selected Claude Code or Codex instruction files, or pasted/chosen ChatGPT and Claude text, without reading private app caches or contacting those providers. Source and editable entry pages scroll, with navigation outside the viewport. Discovery, reads and atomic persistence use `KeepAliveWorker`; queued completion slots are generation-scoped. Closing hides the window without destroying an authorised writer. The memory viewer displays import quotations and dates alongside current node data. See `src/jarvis/memory/imports.spec.md`.

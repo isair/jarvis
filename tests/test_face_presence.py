@@ -163,7 +163,7 @@ def face_tray(face, monkeypatch):
     tray = object.__new__(JarvisSystemTray)
     tray.face_window = face
     tray.tray_icon = Mock()
-    for name in ('show_log_viewer', 'show_memory_viewer', 'show_dictation_history',
+    for name in ('show_log_viewer', 'show_memory_viewer', 'show_memory_import', 'show_dictation_history',
                  'show_chat', 'show_setup_wizard', 'show_settings', 'show_runtime_status',
                  'check_for_updates', 'open_config_directory', 'open_data_directory',
                  'toggle_listening', 'quit_app'):
