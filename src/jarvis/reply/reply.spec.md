@@ -163,7 +163,8 @@ Design principles enforced by the engine:
      text, then an empty-result marker. Whitespace is collapsed and the preview
      is capped at 240 characters; debug output uses the same bounded preview.
      Model-facing tool content and failure recovery retain the original data.
-   - Duplicate suppression: the engine returns a tool error response for repeated calls with identical args, guiding the model to use prior results
+   - Duplicate suppression: repeated calls with identical arguments return guidance to use the recorded outcome, without another execution. Feedback retains that outcome's success/failure state.
+   - Recognised text-tool requests retain assistant `tool_calls` metadata with the parsed name, arguments and a unique engine-assigned string call ID. The same `tool_call_id` links native-role and tagged text outcomes to their request for carryover. Invalid arguments stay invalid and are not executed. Original response content and thinking remain available. Ordinary prose does not become a tool request. Rejected or capped requests retain tagged failed outcomes. Feedback does not advance executed-task progress or supply evidence of a new action.
    - Tool results: native path appends `{role: "tool", tool_call_id: "<id>", content: "<text>"}` messages; text-based fallback appends `{role: "user", content: "[Tool result: name]\n<text>"}` messages
    - No system message injection: The engine does NOT add system messages during the loop as this breaks native tool calling; instead, guidance is provided via tool error responses when needed
 
