@@ -11,6 +11,7 @@ See graph.spec.md for the full specification.
 
 from __future__ import annotations
 
+import codecs
 import re
 from contextlib import contextmanager
 import sqlite3
@@ -382,11 +383,27 @@ class GraphMemoryStore:
                        check_active: Callable[[], None]) -> str:
         """Read a bounded text prefix without materialising a node payload."""
         with self._checked_read(check_active) as connection:
+            if max_chars <= 0:
+                return ""
             row = connection.execute(
-                "SELECT substr(data, 1, ?) FROM memory_nodes WHERE id = ?",
-                (max(0, max_chars), node_id),
+                "SELECT rowid FROM memory_nodes WHERE id = ?", (node_id,),
             ).fetchone()
-            return (row[0] or "") if row else ""
+            if row is None:
+                return ""
+            encoding = connection.execute("PRAGMA encoding").fetchone()[0]
+            decoder = codecs.getincrementaldecoder(encoding)()
+            parts = []
+            characters = 0
+            with connection.blobopen("memory_nodes", "data", row[0], readonly=True) as data:
+                while characters < max_chars and data.tell() < len(data):
+                    check_active()
+                    unread = len(data) - data.tell()
+                    size = min(4096, (max_chars - characters) * 4, unread)
+                    part = decoder.decode(data.read(size), final=size == unread)
+                    check_active()
+                    parts.append(part)
+                    characters += len(part)
+            return "".join(parts)[:max_chars]
 
     def get_child_ids(self, node_id: str, *, limit: int,
                       check_active: Callable[[], None]) -> list[str]:

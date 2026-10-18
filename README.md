@@ -215,7 +215,7 @@ pwsh -ExecutionPolicy Bypass -File scripts\run_windows.ps1
 bash scripts/run_linux.sh
 ```
 
-Running from source also enables Chatterbox TTS. Piper works in both packaged and source installations.
+Source installations require Python 3.11 or newer. Running from source also enables Chatterbox TTS. Piper works in both packaged and source installations.
 
 </details>
 

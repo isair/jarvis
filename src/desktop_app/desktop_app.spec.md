@@ -353,3 +353,9 @@ content and the report-issue body, so these aborts become diagnosable.
 | Database | `~/.local/share/jarvis/` | `%LOCALAPPDATA%\jarvis\` | `~/.local/share/jarvis/` |
 | Crash logs | `~/Library/Logs/Jarvis/` | `%LOCALAPPDATA%\Jarvis\` | `~/.jarvis/` |
 | Instance lock | `~/Library/Application Support/Jarvis/` | `%LOCALAPPDATA%\Jarvis\` | `~/.jarvis/` |
+
+## Source runtime
+
+Source installations require Python 3.11 or newer. The desktop development
+launcher validates interpreter candidates before creating a virtual environment
+and stops with an actionable message when no supported interpreter is available.

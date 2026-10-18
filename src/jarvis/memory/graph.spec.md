@@ -51,6 +51,9 @@ excludes root. `get_subtree`, `get_ancestors` and `get_graph_data` provide
 the viewer's tree, breadcrumb and canvas representations.
 
 `read_node_text` returns at most the requested number of text characters.
+It uses incremental SQLite BLOB reads of at most 4,096 bytes, checks activity
+between reads, and decodes the database encoding incrementally. Embedded NULs
+and complete Unicode characters are preserved without loading the whole node.
 `get_child_ids` returns at most the requested number of child identifiers in
 access-score order, without loading their text. These bounded read methods
 check caller activity before and after reading and every 1,000 SQLite

@@ -213,25 +213,28 @@ def test_sqlite_scan_interrupt_preserves_profile_or_propagates_query_stop(profil
     from jarvis.memory import facts
     with closing(GraphMemoryStore(profile_path)) as graph:
         graph.conn.execute("UPDATE memory_nodes SET data='Useful note' WHERE id='user'")
-        for index in range(300):
+        for index in range(1000):
             graph.create_node(f'Child {index}', '', parent_id='user', data='Other note')
         graph.conn.commit()
-    monkeypatch.setattr(facts, 'LEGACY_PROFILE_MAX_READ_CHECKPOINTS', 3)
+    monkeypatch.setattr(facts, 'LEGACY_PROFILE_MAX_READ_CHECKPOINTS', 16)
     connections = []
+    started_child_query = threading.Event()
     initialise = GraphMemoryStore.__init__
     def owned_graph(graph, *args, **kwargs):
         initialise(graph, *args, **kwargs)
         connections.append(graph.conn)
+        def trace(statement):
+            if statement.startswith('SELECT id FROM memory_nodes WHERE parent_id'):
+                started_child_query.set()
+        graph.conn.set_trace_callback(trace)
     monkeypatch.setattr(GraphMemoryStore, '__init__', owned_graph)
     observed = []
     cancelled = threading.Event()
     clock = [0.0]
     control = ExecutionControl(cancelled, timeout_sec=10, clock=lambda: clock[0])
     def active():
-        # SQLite invokes its progress handler while ordering a broad branch.
-        import inspect
-        if any(frame.function == 'progress' for frame in inspect.stack()):
-            observed.append('SQLite progress checkpoint')
+        if started_child_query.is_set():
+            observed.append('Activity check after child query began')
             if reason == 'cancel':
                 cancelled.set()
             if reason == 'deadline':
@@ -244,7 +247,31 @@ def test_sqlite_scan_interrupt_preserves_profile_or_propagates_query_stop(profil
         expected = ExecutionCancelled if reason == 'cancel' else ExecutionDeadlineExceeded
         with pytest.raises(expected):
             build_fact_warm_profile(profile_path, check_active=active)
-    assert observed, 'The synthetic graph must exercise SQLite progress, not a pre-read check'
+    assert observed, 'The owned cancellation boundary must follow the start of a child query'
     for connection in connections:
         with pytest.raises(sqlite3.ProgrammingError):
             connection.execute('SELECT 1')
+
+
+def test_profile_does_not_cut_a_saved_line_at_embedded_nul(profile_path):
+    note = 'Useful prefix\0remaining instruction'
+    with closing(GraphMemoryStore(profile_path)) as graph:
+        graph.conn.execute("UPDATE memory_nodes SET data=? WHERE id='user'", (note,))
+        graph.conn.commit()
+    profile = build_fact_warm_profile(profile_path, check_active=lambda: None)
+    assert profile['legacy'] == 'Unverified legacy memory (reference only):\n' + note
+
+
+@pytest.mark.parametrize('encoding', ['UTF-8', 'UTF-16le', 'UTF-16be'])
+def test_bounded_reader_preserves_unicode_and_nul_under_allocation_ceiling(tmp_path, encoding):
+    path = str(tmp_path / 'encoded.db')
+    with sqlite3.connect(path) as connection:
+        connection.execute('PRAGMA encoding=' + repr(encoding))
+        connection.execute('CREATE TABLE encoding_anchor(value TEXT)')
+    note = 'café🦉\0complete note\n' + 'x' * 100000
+    with closing(GraphMemoryStore(path)) as graph:
+        graph.conn.execute("UPDATE memory_nodes SET data=? WHERE id='user'", (note,))
+        graph.conn.commit()
+        graph.conn.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, 65536)
+        for cap in (1, 2, 4, 5, 6, 32):
+            assert graph.read_node_text('user', max_chars=cap, check_active=lambda: None) == note[:cap]
