@@ -756,7 +756,7 @@ class TestMergeNodeData:
         assert store.get_node(node.id).data == "A.\nB."
 
     @patch("jarvis.memory.graph_ops.call_llm_direct")
-    def test_non_string_facts_filtered(self, mock_llm, store):
+    def test_non_string_facts_reject_the_entire_rewrite(self, mock_llm, store):
         node = store.create_node(
             name="T", description="d", data="A.", parent_id="user",
         )
@@ -772,8 +772,8 @@ class TestMergeNodeData:
             chat_model="model",
         )
 
-        assert result.success is True
-        assert store.get_node(node.id).data == "Kept fact.\nAnother kept."
+        assert result.success is False
+        assert store.get_node(node.id).data == "A."
 
     @patch("jarvis.memory.graph_ops.call_llm_direct")
     def test_hallucination_guard_rejects_oversized_rewrite(self, mock_llm, store):
