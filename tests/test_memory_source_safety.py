@@ -82,3 +82,15 @@ def test_regular_selected_utf8_file_is_read_exactly(tmp_path):
     preview=imports.read_source(imports.MemorySource('Claude','Selected memory','personal',path))
     assert [item.text for item in preview.items]==text.split('\n\n')
     assert path.read_text(encoding='utf-8')==text
+
+
+@pytest.mark.skipif(sys.platform!='win32',reason='Requires the Windows filesystem')
+def test_windows_selected_file_stays_readonly_until_its_descriptor_closes(tmp_path):
+    from jarvis.utils.windows_files import open_readonly_no_links
+    path=tmp_path/'memory.md';path.write_text('Owned original memory.')
+    with os.fdopen(open_readonly_no_links(path),'rb') as source:
+        with pytest.raises(PermissionError):path.write_text('Competing write.')
+        with pytest.raises(PermissionError):path.rename(tmp_path/'moved.md')
+        assert source.read()==b'Owned original memory.'
+    path.write_text('Owned later version.')
+    assert path.read_text()=='Owned later version.'

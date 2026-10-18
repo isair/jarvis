@@ -104,11 +104,21 @@ def _digest(text: str) -> str:
 
 
 def _has_symlink(path: Path) -> bool:
-    return any(part.is_symlink() for part in (path, *path.parents))
+    for part in (path, *path.parents):
+        try:
+            info = part.lstat()
+        except FileNotFoundError:
+            continue
+        if stat.S_ISLNK(info.st_mode) or getattr(info, 'st_file_attributes', 0) & 0x400:
+            return True
+    return False
 
 
 def _open_source(path: Path, flags: int) -> int:
-    """Retain each directory on platforms with directory-relative opens."""
+    """Reject indirection while retaining the selected ancestry during opens."""
+    if os.name == 'nt':
+        from ..utils.windows_files import open_readonly_no_links
+        return open_readonly_no_links(path)
     if os.open not in os.supports_dir_fd or not hasattr(os, 'O_DIRECTORY'):
         return os.open(path, flags)
     directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
@@ -123,10 +133,14 @@ def _open_source(path: Path, flags: int) -> int:
         os.close(directory)
 
 
+def _file_revision(info) -> tuple[int, int, int, int, int]:
+    return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
 def _read_text(path: Path, *, limit: int = MAX_SOURCE_BYTES) -> str:
-    if not path.is_absolute() or _has_symlink(path):
-        raise MemoryImportError('Choose a regular file directly, rather than a symbolic link.')
     try:
+        if not path.is_absolute() or _has_symlink(path):
+            raise MemoryImportError('Choose a regular file directly, rather than a symbolic link.')
         before = path.stat()
         if not stat.S_ISREG(before.st_mode) or before.st_size > limit:
             raise MemoryImportError('Choose a text file smaller than 256 KB.')
@@ -137,12 +151,19 @@ def _read_text(path: Path, *, limit: int = MAX_SOURCE_BYTES) -> str:
                 raise MemoryImportError('The file changed. Select it again.')
             raw = stream.read(limit + 1)
             after = os.fstat(stream.fileno())
-        if len(raw) > limit or (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+        current = path.stat()
+        if (len(raw) > limit or _has_symlink(path) or
+                _file_revision(before) != _file_revision(after) or
+                _file_revision(current) != _file_revision(after)):
             raise MemoryImportError('The file changed or is too large. Select it again.')
         if b'\0' in raw:
             raise MemoryImportError('Choose a UTF-8 text or Markdown file, or paste the memories.')
         return raw.decode('utf-8-sig')
+    except MemoryImportError:
+        debug_log('📥 Memory source rejected: unsafe, oversized or changing local file.', 'memory')
+        raise
     except (OSError, UnicodeError) as exc:
+        debug_log('📥 Memory source could not be read as stable local text.', 'memory')
         raise MemoryImportError('Could not read this text file. Choose another file or paste the memories.') from exc
 
 
