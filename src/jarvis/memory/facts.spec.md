@@ -97,7 +97,14 @@ continues.
 `build_fact_warm_profile()` prioritises active user-owned facts and direct user
 instructions. It adds whole lines that fit each budget and never cuts a rule
 mid-string. Collection stops when the whole-line output budget is exhausted;
-a zero legacy budget does not open the graph. The caller supplies an active-query
+a zero legacy budget does not open the graph. Legacy collection examines at
+most `LEGACY_PROFILE_MAX_NODES` nodes and `LEGACY_PROFILE_MAX_CHARS` text
+characters, with one lookahead character per visited node. It has a separate
+`LEGACY_PROFILE_MAX_READ_CHECKPOINTS` allowance checked before and after SQLite
+reads and every 1,000 SQLite virtual-machine operations. Exhausting any legacy
+read allowance preserves collected complete lines and permits the reply to
+continue. A text prefix cut by the scan allowance never contributes a partial
+line. Child enumeration reads bounded identifiers, without sibling payloads. The caller supplies an active-query
 check before store reads and between nodes and lines. Optional legacy-read
 failures preserve already collected reference text; cancellation and deadline
 expiry propagate. Graph readers close on completion, abandonment and errors.

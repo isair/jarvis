@@ -27,15 +27,15 @@ def profile_path(tmp_path):
 
 def test_full_profile_does_not_read_descendants(profile_path, monkeypatch):
     attempts = []
-    original = GraphMemoryStore.get_children
+    original = GraphMemoryStore.get_child_ids
 
-    def guarded_children(graph, node_id):
+    def guarded_children(graph, node_id, **kwargs):
         if node_id == 'user':
             attempts.append('read beyond full profile')
             raise AssertionError('No output budget remains for descendants')
-        return original(graph, node_id)
+        return original(graph, node_id, **kwargs)
 
-    monkeypatch.setattr(GraphMemoryStore, 'get_children', guarded_children)
+    monkeypatch.setattr(GraphMemoryStore, 'get_child_ids', guarded_children)
     profile = build_fact_warm_profile(profile_path, check_active=lambda: None, user_max_chars=len('One complete note'))
     assert profile['legacy'].split('\n', 1)[1] == 'One complete note'
     assert attempts == [], 'A swallowed read violation crossed the profile budget'
@@ -118,15 +118,15 @@ def test_profile_stops_reading_and_closes_its_graph_after_abandonment(profile_pa
     clock = [0.0]
     control = ExecutionControl(cancelled, timeout_sec=10, clock=lambda: clock[0])
     connections, violations = [], []
-    initialise, get_node, get_children = (GraphMemoryStore.__init__, GraphMemoryStore.get_node,
-                                         GraphMemoryStore.get_children)
+    initialise, read_text, get_children = (GraphMemoryStore.__init__, GraphMemoryStore.read_node_text,
+                                          GraphMemoryStore.get_child_ids)
 
     def owned_graph(graph, *args, **kwargs):
         initialise(graph, *args, **kwargs)
         connections.append(graph.conn)
 
-    def signal_abandonment(graph, node_id):
-        node = get_node(graph, node_id)
+    def signal_abandonment(graph, node_id, **kwargs):
+        node = read_text(graph, node_id, **kwargs)
         if node_id == 'user':
             if reason == 'cancel':
                 cancelled.set()
@@ -134,20 +134,117 @@ def test_profile_stops_reading_and_closes_its_graph_after_abandonment(profile_pa
                 clock[0] = control.deadline
         return node
 
-    def guarded_children(graph, node_id):
+    def guarded_children(graph, node_id, **kwargs):
         if cancelled.is_set() or clock[0] >= control.deadline:
             violations.append('graph read after abandonment')
             raise AssertionError('Query no longer active')
-        return get_children(graph, node_id)
+        return get_children(graph, node_id, **kwargs)
 
     monkeypatch.setattr(GraphMemoryStore, '__init__', owned_graph)
-    monkeypatch.setattr(GraphMemoryStore, 'get_node', signal_abandonment)
-    monkeypatch.setattr(GraphMemoryStore, 'get_children', guarded_children)
+    monkeypatch.setattr(GraphMemoryStore, 'read_node_text', signal_abandonment)
+    monkeypatch.setattr(GraphMemoryStore, 'get_child_ids', guarded_children)
     expected = ExecutionCancelled if reason == 'cancel' else ExecutionDeadlineExceeded
     with pytest.raises(expected):
         build_fact_warm_profile(profile_path, check_active=control.check)
     assert violations == []
     assert connections
+    for connection in connections:
+        with pytest.raises(sqlite3.ProgrammingError):
+            connection.execute('SELECT 1')
+
+
+@pytest.mark.parametrize('prefix', ['Useful note', ''])
+def test_unusable_remainder_cannot_scan_the_whole_graph(profile_path, monkeypatch, prefix):
+    from jarvis.memory import facts
+    monkeypatch.setattr(facts, 'LEGACY_PROFILE_MAX_NODES', 8, raising=False)
+    monkeypatch.setattr(facts, 'LEGACY_PROFILE_MAX_CHARS', 10000 if prefix else 128, raising=False)
+    with closing(GraphMemoryStore(profile_path)) as graph:
+        graph.conn.execute("UPDATE memory_nodes SET data=? WHERE id='user'", (prefix,))
+        for index in range(80):
+            graph.create_node(f'Note {index}', '', parent_id='user', data='A note too long to fit')
+        graph.conn.commit()
+    checks = []
+    def active():
+        checks.append(None)
+        if len(checks) > 100:
+            raise ExecutionDeadlineExceeded('Optional profile scanning used the reply allowance')
+    profile = build_fact_warm_profile(profile_path, check_active=active,
+                                      user_max_chars=len(prefix) + 2 if prefix else 2)
+    assert profile['legacy'] == ('Unverified legacy memory (reference only):\n' + prefix if prefix else '')
+
+
+def test_profile_bounds_database_text_delivery_for_a_wide_branch(profile_path, monkeypatch):
+    from jarvis.memory import facts
+    monkeypatch.setattr(facts, 'LEGACY_PROFILE_MAX_NODES', 8, raising=False)
+    monkeypatch.setattr(facts, 'LEGACY_PROFILE_MAX_CHARS', 128, raising=False)
+    with closing(GraphMemoryStore(profile_path)) as graph:
+        graph.conn.execute("UPDATE memory_nodes SET data='' WHERE id='user'")
+        for index in range(40):
+            graph.create_node(f'Note {index}', '', parent_id='user', data='Useful note\n' + 'x' * 10000)
+        graph.conn.commit()
+    delivered = []
+    initialise = GraphMemoryStore.__init__
+    def observed_graph(graph, *args, **kwargs):
+        initialise(graph, *args, **kwargs)
+        def row_factory(cursor, values):
+            for column, value in zip(cursor.description, values):
+                if isinstance(value, str) and column[0] not in {'id', 'parent_id'}:
+                    delivered.append(len(value))
+            return sqlite3.Row(cursor, values)
+        graph.conn.row_factory = row_factory
+    monkeypatch.setattr(GraphMemoryStore, '__init__', observed_graph)
+    profile = build_fact_warm_profile(profile_path, check_active=lambda: None, user_max_chars=len('Useful note'))
+    assert profile['legacy'].endswith('\nUseful note')
+    assert sum(delivered) <= facts.LEGACY_PROFILE_MAX_CHARS + facts.LEGACY_PROFILE_MAX_NODES
+
+
+def test_partial_line_at_scan_limit_never_becomes_a_saved_note(profile_path, monkeypatch):
+    from jarvis.memory import facts
+    monkeypatch.setattr(facts, 'LEGACY_PROFILE_MAX_CHARS', 20, raising=False)
+    with closing(GraphMemoryStore(profile_path)) as graph:
+        graph.conn.execute("UPDATE memory_nodes SET data=? WHERE id='user'", ('Complete note\nNever truncate this instruction',))
+        graph.conn.commit()
+    profile = build_fact_warm_profile(profile_path, check_active=lambda: None)
+    assert profile['legacy'] == 'Unverified legacy memory (reference only):\nComplete note'
+
+
+@pytest.mark.parametrize('reason', ['allowance', 'cancel', 'deadline'])
+def test_sqlite_scan_interrupt_preserves_profile_or_propagates_query_stop(profile_path, monkeypatch, reason):
+    from jarvis.memory import facts
+    with closing(GraphMemoryStore(profile_path)) as graph:
+        graph.conn.execute("UPDATE memory_nodes SET data='Useful note' WHERE id='user'")
+        for index in range(300):
+            graph.create_node(f'Child {index}', '', parent_id='user', data='Other note')
+        graph.conn.commit()
+    monkeypatch.setattr(facts, 'LEGACY_PROFILE_MAX_READ_CHECKPOINTS', 3)
+    connections = []
+    initialise = GraphMemoryStore.__init__
+    def owned_graph(graph, *args, **kwargs):
+        initialise(graph, *args, **kwargs)
+        connections.append(graph.conn)
+    monkeypatch.setattr(GraphMemoryStore, '__init__', owned_graph)
+    observed = []
+    cancelled = threading.Event()
+    clock = [0.0]
+    control = ExecutionControl(cancelled, timeout_sec=10, clock=lambda: clock[0])
+    def active():
+        # SQLite invokes its progress handler while ordering a broad branch.
+        import inspect
+        if any(frame.function == 'progress' for frame in inspect.stack()):
+            observed.append('SQLite progress checkpoint')
+            if reason == 'cancel':
+                cancelled.set()
+            if reason == 'deadline':
+                clock[0] = control.deadline
+        control.check()
+    if reason == 'allowance':
+        profile = build_fact_warm_profile(profile_path, check_active=active)
+        assert profile['legacy'] == 'Unverified legacy memory (reference only):\nUseful note'
+    else:
+        expected = ExecutionCancelled if reason == 'cancel' else ExecutionDeadlineExceeded
+        with pytest.raises(expected):
+            build_fact_warm_profile(profile_path, check_active=active)
+    assert observed, 'The synthetic graph must exercise SQLite progress, not a pre-read check'
     for connection in connections:
         with pytest.raises(sqlite3.ProgrammingError):
             connection.execute('SELECT 1')

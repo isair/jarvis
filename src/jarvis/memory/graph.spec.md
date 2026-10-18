@@ -50,6 +50,13 @@ case-insensitive keyword matches over name, description and data; it
 excludes root. `get_subtree`, `get_ancestors` and `get_graph_data` provide
 the viewer's tree, breadcrumb and canvas representations.
 
+`read_node_text` returns at most the requested number of text characters.
+`get_child_ids` returns at most the requested number of child identifiers in
+access-score order, without loading their text. These bounded read methods
+check caller activity before and after reading and every 1,000 SQLite
+virtual-machine operations. A caller exception interrupts the read and
+propagates unchanged; the progress handler is removed on every exit.
+
 `register_graph_mutation_listener` and `unregister_graph_mutation_listener`
 manage callbacks receiving `action`, `node_id`, and fixed-branch ancestry.
 They run after successful node mutations. Listener errors are logged and do

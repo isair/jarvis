@@ -12,6 +12,7 @@ See graph.spec.md for the full specification.
 from __future__ import annotations
 
 import re
+from contextlib import contextmanager
 import sqlite3
 import threading
 import unicodedata
@@ -352,6 +353,50 @@ class GraphMemoryStore:
             if row is None:
                 return None
             return self._row_to_node(row)
+
+    @contextmanager
+    def _checked_read(self, check_active: Callable[[], None]):
+        """Check activity before, during and after an owned SQLite read."""
+        interrupted = []
+        def progress():
+            try:
+                check_active()
+            except Exception as exc:
+                interrupted.append(exc)
+                return 1
+            return 0
+        with self._lock:
+            check_active()
+            self.conn.set_progress_handler(progress, 1000)
+            try:
+                yield self.conn
+                check_active()
+            except sqlite3.OperationalError:
+                if interrupted:
+                    raise interrupted[0]
+                raise
+            finally:
+                self.conn.set_progress_handler(None, 0)
+
+    def read_node_text(self, node_id: str, *, max_chars: int,
+                       check_active: Callable[[], None]) -> str:
+        """Read a bounded text prefix without materialising a node payload."""
+        with self._checked_read(check_active) as connection:
+            row = connection.execute(
+                "SELECT substr(data, 1, ?) FROM memory_nodes WHERE id = ?",
+                (max(0, max_chars), node_id),
+            ).fetchone()
+            return (row[0] or "") if row else ""
+
+    def get_child_ids(self, node_id: str, *, limit: int,
+                      check_active: Callable[[], None]) -> list[str]:
+        """Read bounded child identifiers in decayed access order."""
+        score = _decay_score_sql()
+        with self._checked_read(check_active) as connection:
+            return [row[0] for row in connection.execute(
+                f"SELECT id FROM memory_nodes WHERE parent_id = ? ORDER BY {score} DESC LIMIT ?",
+                (node_id, max(0, limit)),
+            )]
 
     def get_children(self, node_id: str) -> list[MemoryNode]:
         """Get all direct children of a node, ordered by decayed access score."""

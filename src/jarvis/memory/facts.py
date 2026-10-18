@@ -445,7 +445,27 @@ def _whole_lines(lines: Iterable[str], cap: int, *, check_active: Callable[[], N
     return "\n".join(chosen)
 
 
+LEGACY_PROFILE_MAX_NODES = 128
+LEGACY_PROFILE_MAX_CHARS = 16384
+LEGACY_PROFILE_MAX_READ_CHECKPOINTS = 256
+
+
+class _ProfileReadBudgetReached(Exception):
+    pass
+
+
 def _legacy_profile_lines(db_path: str, check_active: Callable[[], None]) -> Iterator[str]:
+    nodes_left = LEGACY_PROFILE_MAX_NODES
+    chars_left = LEGACY_PROFILE_MAX_CHARS
+    checkpoints_left = LEGACY_PROFILE_MAX_READ_CHECKPOINTS
+
+    def check_read():
+        nonlocal checkpoints_left
+        check_active()
+        checkpoints_left -= 1
+        if checkpoints_left < 0:
+            raise _ProfileReadBudgetReached
+
     try:
         check_active()
         from .graph import GraphMemoryStore
@@ -455,20 +475,33 @@ def _legacy_profile_lines(db_path: str, check_active: Callable[[], None]) -> Ite
                 seen = set()
                 while queue:
                     check_active()
+                    if nodes_left <= 0 or chars_left <= 0:
+                        raise _ProfileReadBudgetReached
                     node_id = queue.popleft()
                     if node_id in seen:
                         continue
                     seen.add(node_id)
-                    node = graph.get_node(node_id)
-                    if node and node.data:
-                        for line in node.data.splitlines():
-                            check_active()
-                            if line.strip():
-                                yield line.strip()
+                    nodes_left -= 1
+                    text = graph.read_node_text(node_id, max_chars=chars_left + 1,
+                                                check_active=check_read)
+                    truncated = len(text) > chars_left
+                    chars_left -= min(len(text), chars_left)
+                    lines = text.splitlines()
+                    if truncated and not text.endswith(("\n", "\r", "\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029")):
+                        lines.pop()
+                    for line in lines:
+                        check_active()
+                        if line.strip():
+                            yield line.strip()
                     check_active()
-                    children = graph.get_children(node_id)
-                    check_active()
-                    queue.extend(child.id for child in children)
+                    if nodes_left <= 0 or chars_left <= 0:
+                        raise _ProfileReadBudgetReached
+                    queue.extend(graph.get_child_ids(
+                        node_id, limit=max(0, nodes_left - len(queue)), check_active=check_read,
+                    ))
+    except _ProfileReadBudgetReached:
+        check_active()
+        debug_log("legacy profile read allowance reached; keeping collected whole lines", "memory")
     except Exception as exc:
         # Cancellation and deadline expiry cannot become an optional-read fallback.
         check_active()
