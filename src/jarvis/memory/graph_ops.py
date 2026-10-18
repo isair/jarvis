@@ -766,7 +766,8 @@ def merge_node_data(
     cleaned: list[str] = []
     for item in parsed["facts"]:
         if not isinstance(item, str):
-            continue
+            debug_log("merge: rejected non-string fact entry", "memory")
+            return MergeResult(success=False)
         line = item.strip()
         if line:
             cleaned.append(line)
