@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from ..debug import debug_log
 from ..memory.conversation import scrub_secrets
 from ..utils.redact import redact
 
@@ -50,8 +51,15 @@ class TaskStore:
     """Persist compact outcomes and full evidence beside the configured DB."""
 
     def __init__(self, db_path: str | Path) -> None:
-        self.root = Path(db_path).expanduser().resolve().parent / ".jarvis_tasks"
-        self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if str(db_path) == ":memory:":
+            raise ValueError("Task persistence requires a file-backed database")
+        database_path = Path(db_path).expanduser().resolve()
+        canonical = os.path.normcase(str(database_path))
+        self.database_id = hashlib.sha256(os.fsencode(canonical)).hexdigest()
+        journal_root = database_path.parent / ".jarvis_tasks"
+        journal_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.root = journal_root / self.database_id
+        self.root.mkdir(mode=0o700, exist_ok=True)
         self.results_dir = self.root / "results"
         self.results_dir.mkdir(mode=0o700, exist_ok=True)
 
@@ -84,7 +92,13 @@ class TaskStore:
                 os.unlink(temporary)
 
     def _load(self, task_id: str) -> dict:
-        return json.loads(self._task_path(task_id).read_text(encoding="utf-8"))
+        task = json.loads(self._task_path(task_id).read_text(encoding="utf-8"))
+        if (not isinstance(task, dict)
+                or task.get("database_id") != self.database_id
+                or task.get("task_id") != self._safe_id(task_id)):
+            debug_log("🔒 Task record rejected outside its database scope", "planning")
+            raise ValueError("Task does not belong to this database")
+        return task
 
     def _save(self, task: dict) -> None:
         task["updated_at"] = time.time()
@@ -115,6 +129,7 @@ class TaskStore:
         task_id = uuid.uuid4().hex
         task = {
             "task_id": task_id,
+            "database_id": self.database_id,
             "objective": redact(objective),
             "steps": [
                 {"text": redact(step), "status": "pending"} for step in steps
@@ -213,7 +228,7 @@ class TaskStore:
             candidates: list[dict] = []
             for path in self.root.glob("*.json"):
                 try:
-                    task = json.loads(path.read_text(encoding="utf-8"))
+                    task = self._load(path.stem)
                 except (OSError, ValueError):
                     continue
                 if task.get("status") in {"active", "interrupted", "deadline", "partial"}:

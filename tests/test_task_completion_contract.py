@@ -22,7 +22,7 @@ def _tool_reply(*calls):
 
 
 def _task_record(tmp_path):
-    paths = list((tmp_path / ".jarvis_tasks").glob("*.json"))
+    paths = list(TaskStore(tmp_path / "jarvis.db").root.glob("*.json"))
     assert len(paths) == 1
     return json.loads(paths[0].read_text())
 
