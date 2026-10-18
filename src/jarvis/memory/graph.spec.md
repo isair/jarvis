@@ -58,7 +58,10 @@ and complete Unicode characters are preserved without loading the whole node.
 access-score order, without loading their text. These bounded read methods
 check caller activity before and after reading and every 1,000 SQLite
 virtual-machine operations. A caller exception interrupts the read and
-propagates unchanged; the progress handler is removed on every exit.
+propagates unchanged; the progress handler is removed on every exit. Each
+bounded read owns a savepoint spanning identity lookup through BLOB closure,
+so concurrent replacement cannot substitute another node with a reused row ID.
+Cleanup releases only that savepoint and preserves any caller-owned transaction.
 
 `register_graph_mutation_listener` and `unregister_graph_mutation_listener`
 manage callbacks receiving `action`, `node_id`, and fixed-branch ancestry.

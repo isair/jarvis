@@ -275,3 +275,46 @@ def test_bounded_reader_preserves_unicode_and_nul_under_allocation_ceiling(tmp_p
         graph.conn.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, 65536)
         for cap in (1, 2, 4, 5, 6, 32):
             assert graph.read_node_text('user', max_chars=cap, check_active=lambda: None) == note[:cap]
+
+
+def test_blob_text_stays_bound_to_node_during_viewer_replacement(profile_path):
+    with closing(GraphMemoryStore(profile_path)) as reader:
+        reader.conn.execute('PRAGMA journal_mode=WAL')
+        original = reader.create_node('Owned user note', '', 'Original user note', 'user')
+        replacements = []
+        def replace_after_identity_lookup(cursor, values):
+            row = sqlite3.Row(cursor, values)
+            if cursor.description[0][0] == 'rowid' and not replacements:
+                with closing(GraphMemoryStore(profile_path)) as writer:
+                    writer.delete_node(original.id)
+                    replacement = writer.create_node('World replacement', '', 'Unrelated world note', 'world')
+                    reused = writer.conn.execute('SELECT rowid FROM memory_nodes WHERE id=?', (replacement.id,)).fetchone()[0]
+                    assert reused == row[0], 'The owned fixture must exercise actual rowid reuse'
+                    replacements.append(replacement.id)
+            return row
+        reader.conn.row_factory = replace_after_identity_lookup
+        result = reader.read_node_text(original.id, max_chars=128, check_active=lambda: None)
+        assert replacements
+        assert result == 'Original user note'
+        assert not reader.conn.in_transaction
+
+
+@pytest.mark.parametrize('outer_transaction', [False, True])
+def test_cancelled_node_snapshot_releases_only_its_own_transaction(profile_path, outer_transaction):
+    with closing(GraphMemoryStore(profile_path)) as reader:
+        if outer_transaction:
+            reader.conn.execute("UPDATE memory_nodes SET data='Uncommitted owned text' WHERE id='user'")
+        cancelled = threading.Event()
+        control = ExecutionControl(cancelled, timeout_sec=10)
+        def active():
+            if reader.conn.in_transaction:
+                cancelled.set()
+            control.check()
+        with pytest.raises(ExecutionCancelled):
+            reader.read_node_text('user', max_chars=128, check_active=active)
+        assert reader.conn.in_transaction is outer_transaction
+        if outer_transaction:
+            reader.conn.rollback()
+        reader.conn.execute("UPDATE memory_nodes SET data='Subsequent write works' WHERE id='user'")
+        reader.conn.commit()
+        assert reader.get_node('user').data == 'Subsequent write works'

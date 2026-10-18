@@ -368,16 +368,20 @@ class GraphMemoryStore:
             return 0
         with self._lock:
             check_active()
-            self.conn.set_progress_handler(progress, 1000)
+            self.conn.execute("SAVEPOINT bounded_graph_read")
             try:
-                yield self.conn
-                check_active()
-            except sqlite3.OperationalError:
-                if interrupted:
-                    raise interrupted[0]
-                raise
+                self.conn.set_progress_handler(progress, 1000)
+                try:
+                    yield self.conn
+                    check_active()
+                except sqlite3.OperationalError:
+                    if interrupted:
+                        raise interrupted[0]
+                    raise
+                finally:
+                    self.conn.set_progress_handler(None, 0)
             finally:
-                self.conn.set_progress_handler(None, 0)
+                self.conn.execute("RELEASE bounded_graph_read")
 
     def read_node_text(self, node_id: str, *, max_chars: int,
                        check_active: Callable[[], None]) -> str:

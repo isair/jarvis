@@ -1,6 +1,7 @@
 """Desktop source launching rejects unsupported interpreters before creating a venv."""
 from pathlib import Path
 import subprocess
+import sys
 
 import pytest
 
@@ -16,9 +17,14 @@ def _select_python(tmp_path, interpreters):
     selection = selection.replace('/opt/homebrew/bin/', unavailable).replace('/usr/local/bin/', unavailable)
     binary = tmp_path / 'bin'
     binary.mkdir()
-    for name, supported in interpreters.items():
+    for name, version in interpreters.items():
         path = binary / name
-        path.write_text('#!/bin/sh\nexit ' + ('0' if supported else '1') + '\n')
+        path.write_text(
+            f'#!{sys.executable}\nimport sys\n'
+            f'sys.version_info = {version!r}\n'
+            'assert sys.argv[1] == "-c"\n'
+            'exec(sys.argv[2], {"__name__": "__main__"})\n'
+        )
         path.chmod(0o700)
     return subprocess.run(
         ['/bin/bash', '-c', selection + '\nprintf "selected:%s\\n" "$PYTHON"'],
@@ -27,13 +33,13 @@ def _select_python(tmp_path, interpreters):
 
 
 def test_no_supported_python_stops_before_virtualenv_creation(tmp_path):
-    result = _select_python(tmp_path, {'python3.12': False, 'python3': False})
+    result = _select_python(tmp_path, {'python3.12': (3, 10, 0), 'python3': (3, 10, 0)})
     assert result.returncode != 0
     assert 'selected:' not in result.stdout
     assert not (tmp_path / '.venv').exists()
 
 
 def test_unsupported_candidate_does_not_hide_a_supported_python(tmp_path):
-    result = _select_python(tmp_path, {'python3.12': False, 'python3.11': True})
+    result = _select_python(tmp_path, {'python3.12': (3, 10, 0), 'python3.11': (3, 11, 0)})
     assert result.returncode == 0
     assert 'selected:python3.11' in result.stdout
