@@ -23,7 +23,7 @@ def test_recommendation_survives_page_entry(qapp, monkeypatch, chat):
                           fast_model=DEFAULT_FAST_MODEL, whisper_model='small')
     monkeypatch.setattr(setup_wizard, 'load_settings', lambda: cfg)
     overhead = (setup_wizard.ModelsPage._EMBED_VRAM_MB
-                + setup_wizard.WhisperSetupPage.get_whisper_vram_mb(cfg.whisper_model))
+                + setup_wizard.get_whisper_vram_mb(cfg.whisper_model))
     budget = overhead + vram.required_vram_mb(chat)
     monkeypatch.setattr(setup_wizard, 'detect_total_vram_mb', lambda: budget)
     page = setup_wizard.ModelsPage()
@@ -40,7 +40,7 @@ def test_e4b_shares_memory_only_when_separate_e2b_cannot_fit(qapp, monkeypatch, 
     monkeypatch.setattr(setup_wizard, 'load_settings', lambda: cfg)
     monkeypatch.setattr(config, '_load_json', lambda path: {'ollama_chat_model': cfg.ollama_chat_model})
     overhead = (setup_wizard.ModelsPage._EMBED_VRAM_MB
-                + setup_wizard.WhisperSetupPage.get_whisper_vram_mb(cfg.whisper_model))
+                + setup_wizard.get_whisper_vram_mb(cfg.whisper_model))
     budget = overhead + vram.required_vram_mb(cfg.ollama_chat_model)
     if separate:
         budget += vram.required_vram_mb(cfg.fast_model)
@@ -76,7 +76,7 @@ def test_failed_unified_memory_detection_is_unknown(monkeypatch, output, status)
 def test_explicit_default_chat_choice_survives_higher_memory(qapp, monkeypatch, tmp_path):
     path = tmp_path / 'config.json'
     path.write_text('{"ollama_chat_model":"gemma4:e4b","fast_model":"gemma4:e2b"}')
-    monkeypatch.setattr(config, 'default_config_path', lambda: path)
+    monkeypatch.setattr(config, 'get_config_path', lambda: path)
     cfg = SimpleNamespace(ollama_chat_model=DEFAULT_CHAT_MODEL,
                           fast_model=DEFAULT_FAST_MODEL, whisper_model='small')
     monkeypatch.setattr(setup_wizard, 'load_settings', lambda: cfg)
@@ -92,7 +92,7 @@ def test_larger_chat_recommendation_leaves_room_for_a_capable_fast_model(qapp, m
                           fast_model=DEFAULT_FAST_MODEL, whisper_model='small')
     monkeypatch.setattr(setup_wizard, 'load_settings', lambda: cfg)
     overhead = (setup_wizard.ModelsPage._EMBED_VRAM_MB
-                + setup_wizard.WhisperSetupPage.get_whisper_vram_mb(cfg.whisper_model))
+                + setup_wizard.get_whisper_vram_mb(cfg.whisper_model))
     largest = max(setup_wizard.ModelsPage._ALL_MODELS, key=vram.required_vram_mb)
     monkeypatch.setattr(setup_wizard, 'detect_total_vram_mb',
                         lambda: overhead + vram.required_vram_mb(largest))

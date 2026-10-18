@@ -110,7 +110,7 @@ def test_invalid_native_arguments_retain_valid_provider_wire_shape(arguments):
             'function': {'name': 'getWeather', 'arguments': arguments}}]},
         {'role': 'tool', 'tool_call_id': 'c1', 'content': 'Invalid arguments, tool not executed.'},
     ]
-    with patch('jarvis.llm.openai_compatible.requests.post', side_effect=post):
+    with patch('jarvis.llm.http.post', side_effect=post):
         result = OpenAICompatibleBackend('http://127.0.0.1:1234/v1').chat('fixture-model', messages)
     encoded = received[0]['messages'][0]['tool_calls'][0]['function']['arguments']
     assert isinstance(encoded, str), 'Provider history requires JSON strings, even for failed calls'

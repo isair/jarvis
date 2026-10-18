@@ -595,82 +595,6 @@ class TestCheckPreviousCrash:
         crash_log.unlink(missing_ok=True)
 
 
-class TestCheckModelSupport:
-    """Tests for check_model_support() function."""
-
-    @patch("jarvis.config.load_config")
-    def test_returns_none_for_supported_model(self, mock_load_config):
-        """check_model_support() should return None for supported models."""
-        from desktop_app import check_model_support
-        from jarvis.config import DEFAULT_CHAT_MODEL
-
-        mock_load_config.return_value = {"ollama_chat_model": DEFAULT_CHAT_MODEL}
-
-        result = check_model_support()
-        assert result is None
-
-    @patch("jarvis.config.load_config")
-    def test_returns_model_name_for_unsupported_model(self, mock_load_config):
-        """check_model_support() should return model name for unsupported models."""
-        from desktop_app import check_model_support
-
-        mock_load_config.return_value = {"ollama_chat_model": "some-unsupported-model:7b"}
-
-        result = check_model_support()
-        assert result == "some-unsupported-model:7b"
-
-    @patch("jarvis.config.load_config")
-    def test_matches_base_model_name(self, mock_load_config):
-        """check_model_support() should match base model names without tags."""
-        from desktop_app import check_model_support
-        from jarvis.config import SUPPORTED_CHAT_MODELS
-
-        # Get a supported model and use just its base name
-        supported_model = next(iter(SUPPORTED_CHAT_MODELS.keys()))
-        base_name = supported_model.split(":")[0]
-
-        mock_load_config.return_value = {"ollama_chat_model": base_name}
-
-        result = check_model_support()
-        assert result is None  # Should be recognized as supported
-
-    @patch("jarvis.config.load_config")
-    def test_handles_config_error_gracefully(self, mock_load_config):
-        """check_model_support() should return None on config errors."""
-        from desktop_app import check_model_support
-
-        mock_load_config.side_effect = Exception("Config error")
-
-        result = check_model_support()
-        assert result is None
-
-    @patch("jarvis.config.load_config")
-    def test_uses_default_when_not_configured(self, mock_load_config):
-        """check_model_support() should use default model when not in config."""
-        from desktop_app import check_model_support
-
-        mock_load_config.return_value = {}  # No ollama_chat_model key
-
-        result = check_model_support()
-        # Default model is supported, so should return None
-        assert result is None
-
-
-class TestModelSupportIntegration:
-    """Integration tests for model support checking."""
-
-    def test_all_supported_models_pass_check(self):
-        """All models in SUPPORTED_CHAT_MODELS should pass the support check."""
-        from desktop_app import check_model_support
-        from jarvis.config import SUPPORTED_CHAT_MODELS
-
-        for model_id in SUPPORTED_CHAT_MODELS:
-            with patch("jarvis.config.load_config") as mock_config:
-                mock_config.return_value = {"ollama_chat_model": model_id}
-                result = check_model_support()
-                assert result is None, f"Model {model_id} should be supported"
-
-
 class TestLogViewerReportIssue:
     """Tests for report issue URL generation logic.
 
@@ -1301,61 +1225,60 @@ class TestCudaRecoveryAction:
         assert "-LogPath" in captured["params"]
 
 
-class TestMemoryViewerModulePath:
-    """Tests to verify memory viewer module references are valid.
+class TestMemoryViewerSubprocessLaunch:
+    """The development launcher supplies a runnable local viewer module."""
 
-    These tests catch issues like wrong module paths in subprocess calls
-    without requiring actual GUI/server components.
-    """
-
-    def test_memory_viewer_module_is_importable(self):
-        """The module used for subprocess mode should be importable."""
-        import importlib
+    @pytest.mark.parametrize("existing_pythonpath", [None, "unrelated-source-path"])
+    def test_launched_module_imports_from_the_selected_checkout(
+        self, qapp, monkeypatch, tmp_path, existing_pythonpath,
+    ):
+        import socket
+        from desktop_app import app as app_mod
 
         pytest.importorskip("flask")
-
-        # This is the module path used in MemoryViewerWindow.start_server()
-        # If this fails, the subprocess command will fail at runtime
-        module = importlib.import_module("desktop_app.memory_viewer")
-        assert hasattr(module, "app"), "memory_viewer should have Flask 'app' attribute"
-        assert hasattr(module, "main"), "memory_viewer should have 'main' function"
-
-    def test_memory_viewer_subprocess_module_runs(self):
-        """The module should be runnable with python -m (with correct PYTHONPATH)."""
-        pytest.importorskip("flask")
-
-        # Set PYTHONPATH the same way start_server() does
-        src_path = Path(__file__).parent.parent / "src"
-        env = os.environ.copy()
-        env["PYTHONPATH"] = str(src_path)
-
-        # Test that the module can at least be imported in subprocess
-        result = subprocess.run(
-            [sys.executable, "-c", "import desktop_app.memory_viewer"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            env=env,
-        )
-        assert result.returncode == 0, f"Module import failed: {result.stderr}"
-
-    def test_memory_viewer_module_path_matches_code(self):
-        """Verify the module path in start_server matches the actual location."""
-        import re
-        from pathlib import Path
-
-        # Read the actual code to find the module path used
-        app_py = Path(__file__).parent.parent / "src" / "desktop_app" / "app.py"
-        content = app_py.read_text(encoding="utf-8")
-
-        # Find the subprocess module path
-        match = re.search(r'"-m",\s*"([^"]+)"', content)
-        assert match, "Could not find subprocess module path in app.py"
-
-        module_path = match.group(1)
-        assert module_path == "desktop_app.memory_viewer", (
-            f"Module path should be 'desktop_app.memory_viewer', found '{module_path}'"
-        )
+        launches = []
+        connections = iter([1, 0])
+        process = MagicMock()
+        process.poll.return_value = None
+        window = None
+        with monkeypatch.context() as launch:
+            launch.setattr(app_mod, "HAS_WEBENGINE", False)
+            launch.setattr(app_mod.sys, "frozen", False, raising=False)
+            if existing_pythonpath is None:
+                launch.delenv("PYTHONPATH", raising=False)
+            else:
+                launch.setenv("PYTHONPATH", existing_pythonpath)
+            sock = MagicMock()
+            sock.connect_ex.side_effect = lambda address: next(connections)
+            launch.setattr(socket, "socket", lambda *args: sock)
+            def capture(command, **options):
+                launches.append((command, options["env"]))
+                return process
+            launch.setattr(app_mod.subprocess, "Popen", capture)
+            window = app_mod.MemoryViewerWindow()
+            assert window.start_server()
+        try:
+            command, environment = launches[0]
+            assert command[1] == "-m"
+            probe = (
+                "import importlib, sys; from flask import Flask; "
+                "viewer = importlib.import_module(sys.argv[1]); "
+                "assert isinstance(viewer.app, Flask); assert callable(viewer.main); "
+                "print(viewer.__file__)"
+            )
+            result = subprocess.run(
+                [command[0], "-c", probe, command[2]], env=environment,
+                cwd=tmp_path, capture_output=True, text=True, timeout=10,
+            )
+            assert result.returncode == 0, result.stderr
+            assert Path(result.stdout.strip()).resolve() == (
+                Path(app_mod.__file__).with_name("memory_viewer.py").resolve()
+            )
+            if existing_pythonpath is not None:
+                assert existing_pythonpath in environment["PYTHONPATH"].split(os.pathsep)
+        finally:
+            window.stop_server()
+            window.close()
 
 
 class TestDaemonSmokeTest:
@@ -1379,7 +1302,7 @@ class TestDaemonSmokeTest:
         memory = MagicMock()
         memory.get_pending_chunks.return_value = []
         graph_store = MagicMock()
-        graph_store.migrate_legacy_shape.return_value = False
+        graph_store.has_unclassified_root_content.return_value = False
         threads = MagicMock(wraps=threading)
         threads.Thread = MagicMock()
         monkeypatch.setenv("JARVIS_STDIN_IPC", "1")
@@ -1608,6 +1531,34 @@ class TestTrayMenuLayout:
         tray.tray_icon = QSystemTrayIcon()
         tray.create_menu()
         return tray.menu
+
+    def test_dictation_menu_action_opens_saved_history(self, qapp, tmp_path, monkeypatch):
+        from desktop_app.app import JarvisSystemTray
+        from desktop_app.dictation_history import DictationHistoryWindow
+        from jarvis.dictation.history import DictationHistory
+        from PyQt6.QtWidgets import QLabel, QSystemTrayIcon
+
+        history = DictationHistory(path=tmp_path / "history.json")
+        entry = history.add("A saved dictation, café")
+        tray = JarvisSystemTray.__new__(JarvisSystemTray)
+        tray.tray_icon = QSystemTrayIcon()
+        tray.dictation_history_window = DictationHistoryWindow(history)
+        monkeypatch.setattr(tray, "_maybe_add_cuda_recovery_action", lambda: None)
+        tray.create_menu()
+        try:
+            assert not tray.dictation_history_window.isVisible()
+            action = next(action for action in tray.menu.actions() if "Dictation History" in action.text())
+            action.trigger()
+            qapp.processEvents()
+            assert tray.dictation_history_window.isVisible()
+            assert entry["text"] in [label.text() for label in tray.dictation_history_window.findChildren(QLabel)]
+        finally:
+            tray.dictation_history_window.close()
+            tray.dictation_history_window.deleteLater()
+            tray._voice_pause_timer.stop()
+            tray._voice_pause_timer.deleteLater()
+            tray.menu.deleteLater()
+            tray.tray_icon.deleteLater()
 
     def test_power_toggle_is_above_voice_pause_and_status_in_same_section(self, qapp):
         menu = self._tray_menu(qapp)

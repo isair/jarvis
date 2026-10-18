@@ -1,5 +1,7 @@
 # Setup Wizard Specification
 
+[Configuration file selection](../jarvis/config.spec.md) is shared with the daemon. Desktop configuration reads, writes and directory navigation use the selected file.
+
 First-run wizard that sets up Whisper and a local model provider before Jarvis starts.
 
 ## Overview
@@ -94,7 +96,11 @@ A fitting fast selection is retained. Otherwise, the largest fast-suitable model
 
 Detection uses DXGI on Windows, NVIDIA detection on Linux and unified physical memory on Apple Silicon. The Apple Silicon budget reserves the larger of 4 GB or 25% for macOS and other applications before model and Whisper estimates are applied. Detection failure is unknown, not zero memory. These conservative estimates guide setup and do not guarantee model residency or runtime latency.
 
-**WhisperSetupPage** — Always shown first (it has no LLM dependencies and its model selection informs the later memory budget). Language mode toggle (multilingual vs English-only), then model size selection from hardcoded options via a slider. Apple Silicon: additional FFmpeg and MLX Whisper installation buttons. The model list follows the listener's effective backend: `large-v3-turbo` is offered when usable MLX is selected on Apple Silicon or when the installed faster-whisper supports it; it is hidden when MLX is unavailable/disabled and faster-whisper is too old. Installing MLX refreshes the list immediately. Every slider refresh displays exactly one current set of model names and memory labels. Removed labels are hidden immediately and retain their container parent until deferred deletion, including during language changes and repeated page entry. Exposes a `get_whisper_vram_mb()` static method used by both provider paths for memory estimates. `nextId` routes to Provider Choice.
+**WhisperSetupPage** — Always shown first (it has no LLM dependencies and its model selection informs the later memory budget). Language mode toggle (multilingual vs English-only), then model size selection from the shared `whisper_models.py` catalogue via a slider. Apple Silicon: additional FFmpeg and MLX Whisper installation buttons. The model list follows the listener's effective backend and uses the core `whisper_capabilities.py` engine-version check: `large-v3-turbo` is offered when usable MLX is selected on Apple Silicon or when the installed faster-whisper supports it; it is hidden when MLX is unavailable/disabled and faster-whisper is too old. Installing MLX refreshes the list immediately. Every slider refresh displays exactly one current set of model names and memory labels. Removed labels are hidden immediately and retain their container parent until deferred deletion, including during language changes and repeated page entry. Both provider paths use the catalogue's `get_whisper_vram_mb()` function for memory estimates. Labels and estimates share the same model records as Settings; English-only variants derive from their base model records. `nextId` routes to Provider Choice.
+
+The shared catalogue's `offered` flag controls both wizard and Settings model
+choices. Non-Turbo `large-v3` is retained for saved-model memory estimates and
+is not offered in either selector.
 
 **DictationPage** — Enable/disable dictation, hotkey selection dropdown (4 presets), filler word removal toggle with delay warning. Reads current config values on open so re-running the wizard preserves user choices.
 
@@ -146,3 +152,7 @@ The wizard is deliberately limited to prerequisites. These are configured via th
 - Dictation hotkey
 - Full MCP catalogue and custom MCP servers (wizard only shows featured entries)
 - All advanced parameters
+
+## Local Provider Validation
+
+Model-list and first-run discovery integration checks use loopback HTTP servers owned by each test. Unreachable-server cases reserve a port without listening. The tests disable ambient proxies and credentials, reject connections outside their owned endpoints, wait for discovery workers and close the server threads.

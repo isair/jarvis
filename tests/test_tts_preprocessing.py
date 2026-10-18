@@ -3,7 +3,7 @@
 import pytest
 
 pytestmark = pytest.mark.unit
-from src.jarvis.output.tts import (
+from jarvis.output.tts import (
     _preprocess_for_speech,
     _strip_markdown_for_speech,
     _extract_domain_description,

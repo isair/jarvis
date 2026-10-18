@@ -169,3 +169,60 @@ def test_graph_reply_readers_close_after_every_retrieval_path(graph_recall_conte
     for connection in opened:
         with pytest.raises(sqlite3.ProgrammingError, match='closed'):
             connection.execute('SELECT 1')
+
+
+
+def _remove_profile_revision(store, missing):
+    if missing == 'table':
+        names = [row[0] for row in store.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'warm_profile_%'")]
+        for name in names:
+            store.conn.execute(f'DROP TRIGGER "{name}"')
+        store.conn.execute('DROP TABLE memory_graph_revisions')
+    else:
+        store.conn.execute("DELETE FROM memory_graph_revisions WHERE name = 'warm_profile'")
+    store.conn.commit()
+
+
+@pytest.mark.parametrize('missing', ['table', 'counter'])
+@pytest.mark.parametrize('cached', [False, True])
+def test_unversioned_graph_profile_remains_available_and_fresh(reply_context, missing, cached):
+    store, reply, _ = reply_context
+    node = store.create_node('Marker', 'Synthetic fact', data='Cache-visible fact: Alpha', parent_id='user')
+    if cached:
+        assert reply() == 'Supplied memory: Alpha'
+    _remove_profile_revision(store, missing)
+    before = tuple(store.conn.iterdump())
+    assert reply() == 'Supplied memory: Alpha'
+    assert tuple(store.conn.iterdump()) == before, 'Profile reads must not bootstrap or edit saved data'
+    store.conn.execute('UPDATE memory_nodes SET data = ? WHERE id = ?', ('Cache-visible fact: Beta', node.id))
+    store.conn.commit()
+    assert reply() == 'Supplied memory: Beta'
+
+
+@pytest.mark.parametrize('missing', ['table', 'counter'])
+def test_restored_revision_cannot_revive_an_old_profile(reply_context, missing):
+    store, reply, _ = reply_context
+    node = store.create_node('Marker', 'Synthetic fact', data='Cache-visible fact: Alpha', parent_id='user')
+    assert reply() == 'Supplied memory: Alpha'
+    revision = store.get_warm_profile_revision()
+    _remove_profile_revision(store, missing)
+    store.conn.execute('UPDATE memory_nodes SET data = ? WHERE id = ?', ('Cache-visible fact: Beta', node.id))
+    store.conn.commit()
+    assert reply() == 'Supplied memory: Beta'
+    if missing == 'table':
+        store.conn.execute('CREATE TABLE memory_graph_revisions (name TEXT PRIMARY KEY, revision INTEGER NOT NULL)')
+    store.conn.execute('INSERT INTO memory_graph_revisions(name, revision) VALUES(?, ?)', ('warm_profile', revision))
+    store.conn.commit()
+    assert reply() == 'Supplied memory: Beta'
+
+
+
+def test_unavailable_revision_reader_does_not_reuse_a_cached_profile(reply_context, monkeypatch):
+    store, reply, _ = reply_context
+    store.create_node('Marker', 'Synthetic fact', data='Cache-visible fact: Alpha', parent_id='user')
+    assert reply() == 'Supplied memory: Alpha'
+    def unavailable(_store):
+        raise sqlite3.OperationalError('Synthetic revision reader unavailable')
+    monkeypatch.setattr(GraphMemoryStore, 'get_warm_profile_revision', unavailable)
+    assert reply() == 'Supplied memory: Absent'

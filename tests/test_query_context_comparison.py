@@ -363,7 +363,7 @@ def test_native_ollama_replay_preserves_native_controls_and_reports(case, model_
     recorder = RequestRecorder(cfg.llm_base_url, no_thinking=True, provider=cfg.llm_provider)
     from jarvis.llm import get_llm_backend
     from unittest.mock import patch
-    with patch('jarvis.llm.ollama.requests.post', recorder.post):
+    with patch('jarvis.llm.http.post', recorder.post):
         response = get_llm_backend(cfg).chat(
             cfg.llm_chat_model, [{'role': 'user', 'content': 'Price?'}],
             extra_options={'max_tokens': 33, 'num_ctx': 8192}, thinking=False,

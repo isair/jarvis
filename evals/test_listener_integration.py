@@ -11,7 +11,7 @@ This fills the gap between:
 These integration evals verify the COUPLING:
 1. Does the listener pass correct segments/state to the judge?
 2. Does the listener correctly interpret the judge's output?
-3. Do safety nets (wake word validation, echo reasoning distrust) work end-to-end?
+3. Do engagement validation and echo boundaries work end-to-end?
 
 Requires the selected local evaluation backend and model to be available.
 """
@@ -55,6 +55,33 @@ def isolated_face_state(monkeypatch, tmp_path):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.eval
+class TestShortFollowUpEchoBoundary:
+    @requires_voice_model
+    @pytest.mark.parametrize('tts,text', [
+        ('Tomorrow in London is forecast to be cloudy.', 'And tomorrow?'),
+        ('Light rain showers are likely.', 'How?'),
+        ('Morgen wird es bewölkt.', 'Und morgen?'),
+        ('Mañana estará nublado.', '¿Y mañana?'),
+        ('कल मौसम साफ रहेगा।', 'कला?'),
+        ('วันนี้ไม่มี ฝน', 'ฝัน?'),
+        ('Rain today.', 'Train today costs twelve pounds'),
+        ('Ready now.', 'Read now the full text'),
+        ('कल शाम', 'कला शाम विषय अलग है'),
+        ('ฝน วันนี้', 'ฝัน วันนี้ เป็น เรื่อง อื่น'),
+    ])
+    def test_real_judge_accepts_short_follow_up_after_overlapping_tts(self, tts, text):
+        listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=3)
+        listener.echo_detector.track_tts_start(tts)
+        _simulate_tts_finish(listener)
+        assert _wait_for_hot_window_active(listener)
+        now = time.time()
+        _add_buffer_segment(listener, text, now, now+0.1)
+        _process_transcript(listener, text, utterance_energy=0.01,
+                            utterance_start_time=now, utterance_end_time=now+0.1)
+        assert _accepted_query(listener) == text
 
 def _create_listener(**kwargs):
     """Create a VoiceListener with mocked audio and a real intent judge.
@@ -207,24 +234,17 @@ class TestWakeWordValidationSafetyNet:
 
 
 # ---------------------------------------------------------------------------
-# Gap 2: Echo reasoning distrust when EchoDetector cleared
+# Follow-up admission after TTS
 # ---------------------------------------------------------------------------
 
 @pytest.mark.eval
-class TestEchoReasoningDistrust:
-    """When the judge says 'echo' but EchoDetector already cleared the input,
-    the listener has a surgical override. These tests verify it works end-to-end.
-    """
+class TestFollowUpAfterTTS:
+    """Genuine directed follow-ups pass the echo boundary after assistant speech."""
 
     @requires_voice_model
     @patch("builtins.print")
-    def test_judge_echo_claim_overridden_in_hot_window(self, _print):
-        """If judge claims echo but we're in hot window, input should still be accepted.
-
-        Scenario: TTS said 'The weather is sunny', user says 'What about tomorrow?'
-        The judge might see text similarity with TTS and claim echo — but
-        EchoDetector already cleared it (no text match), and it's hot window.
-        """
+    def test_genuine_follow_up_is_accepted_in_hot_window(self, _print):
+        """A genuine follow-up passes the echo boundary and intent judgement."""
         listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=3.0)
 
         # TTS spoke about weather
@@ -248,8 +268,7 @@ class TestEchoReasoningDistrust:
         query = _accepted_query(listener)
         # Should be accepted — hot window + user speech, not echo
         assert query != "", (
-            "User speech during hot window should be accepted even if judge "
-            "claims echo — EchoDetector cleared it"
+            "A genuine directed follow-up should be accepted after TTS"
         )
         listener.state_manager.stop()
 

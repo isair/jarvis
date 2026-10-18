@@ -85,7 +85,7 @@ def test_expired_stream_is_not_a_successful_response(transport, clock, expiry):
             response.events = [(timeout, content('late'))]
         return response
 
-    with patch('requests.post', side_effect=post):
+    with patch('jarvis.llm.http.post', side_effect=post):
         result = backend.streaming('model', 'system', 'user', on_token=receive, timeout_sec=timeout)
 
     assert result is None, 'Expired output must not become a completed model response'
@@ -112,7 +112,7 @@ def test_stream_within_budget_preserves_content_and_callback(transport, clock, b
                 observed.append(pool.submit(background_clock).result(timeout=5))
         return response
 
-    with patch('requests.post', side_effect=post):
+    with patch('jarvis.llm.http.post', side_effect=post):
         result = backend.streaming('model', 'system', 'user', on_token=tokens.append, timeout_sec=5)
     assert result == 'hello world'
     assert tokens == ['hello ', 'world']

@@ -1,5 +1,7 @@
 # Desktop App Specification
 
+[Configuration file selection](../jarvis/config.spec.md) is shared with the daemon. Desktop configuration reads, writes and directory navigation use the selected file.
+
 This document outlines the architecture and behavior of the Jarvis Desktop App - a cross-platform PyQt6 system tray application that provides a graphical interface for the Jarvis voice assistant.
 
 ## Overview
@@ -68,7 +70,7 @@ flowchart TD
 ### Key Startup Features
 
 1. **Splash Screen**: Shows immediately to provide visual feedback while loading. It stays hidden throughout the unreachable-server warning and any setup wizard opened from that warning, then resumes when startup continues (whether the wizard is accepted or cancelled).
-2. **Provider-aware Ollama gating** (`_ollama_runtime_flags` in `app.py`): The Ollama server-start and model-verification steps run only when a local provider actually uses Ollama. A pure OpenAI-compatible setup (chat and embeddings both remote) skips them entirely. `get_required_models()` is provider-aware, so model verification pulls exactly the models that run locally: chat + intent-judge when chat is on Ollama, and the embedding model when embeddings are on Ollama. When chat is on Ollama, a missing model opens the setup wizard; when only embeddings are local (remote chat), a missing embedding model surfaces a clear non-blocking instruction (memory search falls back to keyword matching until it is pulled). The unsupported-chat-model check runs only on the Ollama chat path. `should_show_setup_wizard()` returns False for an OpenAI-compatible chat provider.
+2. **Provider-aware Ollama gating** (`_ollama_runtime_flags` in `app.py`): The Ollama server-start and model-verification steps run only when a local provider actually uses Ollama. A pure OpenAI-compatible setup (chat and embeddings both remote) skips them entirely. `get_required_models()` is provider-aware, so model verification pulls exactly the models that run locally: chat + intent-judge when chat is on Ollama, and the embedding model when embeddings are on Ollama. When chat is on Ollama, a missing model opens the setup wizard; when only embeddings are local (remote chat), a missing embedding model surfaces a clear non-blocking instruction (memory search falls back to keyword matching until it is pulled). The recommendation check reports all unlisted model selections together, independently for Chat, Fast and Embedding roles using settings reloaded after startup setup steps and the central role catalogues. Chat and Fast follow the chat provider, while Embedding follows its effective provider independently. Ollama recommendations use pull IDs, with untagged and `:latest` IDs treated as equivalent. OpenAI-compatible recommendations use exact publisher model IDs from the same central model-family metadata. Unknown aliases and variants receive advice rather than inheriting a family recommendation. Model names do not certify weights, performance or runtime compatibility; advice for external servers explains aliases and directs users to Connect & load models in setup for capability checks. No network request is made by the recommendation check. The advice offers Open Setup Wizard and Continue Anyway, never changes settings automatically, and renders model names as plain text. Its scroll viewport retains the description’s minimum usable size, with both action buttons outside the viewport and reachable in a constrained window. `should_show_setup_wizard()` returns False for an OpenAI-compatible chat provider.
 3. **Ollama Auto-Start**: When Ollama is in use and not running, automatically starts it (up to 15s wait). If the wait times out, the setup wizard opens so the user can diagnose connectivity; cancelling the wizard exits the app. The desktop app records ownership only for an Ollama runtime it launches in this session. On app exit, it stops that owned runtime and leaves any pre-existing user-managed Ollama process running.
 3a. **OpenAI-compatible reachability check** (`_check_openai_compat_reachable` in `app.py`): Jarvis cannot start a third-party server the way it starts Ollama, so on a pure OpenAI-compatible setup it checks the server answers `GET /v1/models` and, if not, shows a one-off warning naming the address (never the API key) and pointing to Settings, then continues. The user only otherwise discovers a down server when their first request fails.
 4. **Single Instance Lock**: Prevents multiple copies from running simultaneously. If another instance is detected, shows a dialog offering to close the existing instance and start fresh.
@@ -79,6 +81,19 @@ flowchart TD
 | Flag | Purpose |
 |------|---------|
 | `--smoke-test` | CI smoke-test mode. Creates a minimal offscreen QApplication, runs the daemon initialisation (`daemon.main(smoke_test=True)`), prints `SMOKE_TEST_PASSED` on success (or the error + traceback on failure), and exits with code 0 or 1. Forces UTF-8 stdout/stderr on every OS (emoji-safe even when the console is an ANSI code page or absent) and Qt's offscreen platform on Linux so the gate never depends on xvfb/xcb. Bypasses the single-instance lock, crash detection, splash screen, setup wizard, Ollama checks, model verification, tray icon, and event loop. Used by the `release-smoke.yml` workflow to verify the bundled binary starts without missing DLLs or broken imports before fast-forwarding `main` to `develop`. |
+
+The Release Smoke Test workflow defaults to validation only. It builds and
+smoke-tests the selected ref without publishing a stable release. Promotion
+requires an explicit release run on `develop` with `validate_only=false`. The
+tested commit must match the freshly fetched `origin/develop` tip, and `main`
+must be its ancestor. A changed develop tip requires another smoke-test run.
+
+Stable release metadata stays in a draft while stable installers are built.
+The release becomes public only after every platform's installer is available
+and the release attachment step has uploaded the binaries successfully.
+
+Release preparation errors fail the workflow with visible diagnostics. A
+successful run without releasable changes reports that no release is needed.
 
 ## Main Components
 
@@ -209,7 +224,11 @@ The Inno Setup script also runs a `VerifyCudaInstall` hook after the CUDA downlo
 
 ### DictationHistoryWindow Behaviour
 
-- **Backing store**: File-backed via `DictationHistory` (`src/jarvis/dictation/history.py`); entries are newest-first with `id`, `text`, `timestamp`, `duration`. Disk is the source of truth — the window must not assume its in-memory instance is authoritative.
+- **Backing store**: File-backed via `DictationHistory` (`src/jarvis/dictation/history.py`); entries are newest-first with `id`, `text`, `timestamp`, `duration`. Disk is the source of truth — the window must not assume its in-memory instance is authoritative. Adding or deleting an entry reads the current disk contents before applying that change. Deleting a cached entry preserves external additions and deletions, and returns false if the requested ID is already absent.
+- **Unavailable history**: Mutations require a readable JSON list. Read errors, invalid JSON and an unknown top-level shape raise `HistoryUpdateError` before any replacement, preserving saved bytes and the cached snapshot. A missing file or a valid empty list can accept a new entry. Initial unavailable history is presented as empty without rewriting it; failed refreshes retain the last valid cached view. Failed writes restore the snapshot read for that transaction, without relying on another read after the failure.
+- **Literal dictation text**: Cards display saved text as plain text, including markup and image-like tags. Saved input cannot request rich-text formatting or image resources; copy actions retain the original text.
+- **Record validity**: History reads and publication require object entries with non-empty text IDs and UTF-8 encodable text. Timestamp and duration metadata, when present, are finite numbers rather than booleans; timestamps must be representable by the local datetime renderer. Missing legacy metadata retains the renderer's zero defaults, and extra fields remain literal. Invalid records reject the complete update rather than being filtered, repaired or coerced; cached valid entries and saved bytes remain intact.
+- **Complete saved history**: Writes serialise into a private temporary file beside the history file and publish it with an atomic replacement after closing it. An incomplete write or failed replacement leaves the saved history intact. Temporary files are removed after success or handled write failures. A shared sidecar file lock serialises each complete read-modify-write across desktop and daemon processes. Background writes wait at most two seconds for native ownership before taking the instance lock. Foreground Delete and Clear operations acquire both locks without waiting. Busy foreground actions show the retry message and retain the displayed cards without reading the locked history. Clear confirmation uses the displayed cards, so it does not wait for a background writer. Unavailable or failed mutations raise `HistoryUpdateError`; the window shows a retry message, and the engine does not publish a successful-history callback. The sidecar remains separate from the replaced JSON file.
 - **Hidden windows are inert**: Signals from the dictation engine must not mutate the widget tree while the window is hidden; pending entries are surfaced on next open instead. The engine persists entries regardless, so no data is lost.
 - **On show, reload from disk and rebuild**: The window reads disk state on every show, because the daemon may be in a separate process (subprocess mode) or may have recorded entries while the window was hidden (bundled mode). In-memory state alone is not trusted.
 - **While visible, poll for external writes**: A short interval timer watches the history file's mtime and reloads on change so subprocess-mode dictations appear without requiring a re-open.
@@ -265,7 +284,7 @@ The desktop app runs the Jarvis daemon in a **QThread** (bundled mode) or **subp
 
 All long-lived worker QThreads in the desktop app inherit `KeepAliveWorker`
 (`src/desktop_app/qt_worker.py`): `DaemonThread`, `SetupCheckWorker`,
-`_LLMReachWorker`, `ServerCheckWorker` (app.py) and every setup-wizard
+`_LLMReachWorker`, `ServerCheckWorker` (app.py), `DownloadWorker` and every setup-wizard
 worker. The class keeps each started worker referenced in a class-level
 registry until its OS thread has fully finished (released via the built-in
 `finished` signal). Dropping the last Python reference to a winding-down
@@ -373,6 +392,22 @@ Updates are only available in bundled mode (PyInstaller builds).
 | **Windows** | Creates a batch script that waits for the current process (by PID via `tasklist`) to exit, then runs the Inno Setup installer with `/SILENT` so the installer's own progress window provides visual feedback during install, then relaunches the upgraded exe. Rollback is handled by Inno Setup's own in-session rollback + retained uninstaller data. |
 | **Linux** | Creates a shell script that waits for the current process (by PID via `kill -0`) to exit, moves the old directory to `Jarvis.backup` for rollback, moves the new directory in, and relaunches |
 
+Linux tar extraction explicitly uses the standard library's `data` filter,
+confining entries and link targets to staging and refusing special files.
+The payload root must be a real `Jarvis` directory. Rejected or failed staging
+is removed without launching the installation script; contained library links
+and executable permissions remain usable.
+
+Update download cancellation (Cancel, window close or Escape) leaves the GUI
+responsive while the current network operation finishes. The dialog shows
+cancellation progress and closes after its worker has finished; only then is
+its staging directory removed. Cancelled downloads ignore queued progress,
+errors, completion and deferred installation callbacks. HTTP responses are
+closed on success, failure and cancellation. After successful installer
+handoff, the downloaded archive is removed while the installer retains its
+separate extracted staging. The restart completes; window close and Escape
+cannot cancel it.
+
 ### Update Flow (Windows/Linux)
 
 ```mermaid
@@ -411,7 +446,11 @@ A Flask-based web interface for browsing conversation history:
 - Runs on `localhost:5050`
 - **Bundled mode**: Flask runs in a daemon thread
 - **Development mode**: Flask runs as subprocess
-- Opens in embedded QWebEngineView or system browser (macOS fallback)
+- Opens in embedded QWebEngineView or the system browser (macOS bundle, unavailable or failed WebEngine). Browser mode opens directly without showing or focusing a native placeholder window.
+- Browser and server opening failures display actionable feedback; closing an embedded viewer keeps the server available until app quit.
+- Viewer typography uses system fonts. Styling and static resources are local or inline, with no third-party font or stylesheet requests when opening the viewer.
+- Meal descriptions display as literal text, including markup-like content. Saved descriptions cannot introduce HTML elements, resource requests or event handlers.
+- Maintenance progress rows display streamed dates, node names and error details as literal text. Each row is appended without reparsing existing rows as HTML, and the log follows its latest entry.
 
 ## Error Handling
 
@@ -429,8 +468,9 @@ stack faulthandler cannot capture — it only dumps Python frames, which for
 the abort family (#584/#575/#576) shows nothing but the main thread parked
 in `app.exec()`. On macOS the OS still writes a full report with native
 frames to `~/Library/Logs/DiagnosticReports/Jarvis-*.ips`. On the next
-launch, `collect_macos_crash_report()` finds the newest report newer than
-the previous crash log and appends its exception type, termination
+launch, `collect_macos_crash_report()` finds the newest readable report with
+a valid thread payload newer than the previous crash log, skipping incomplete
+or unusable files, and appends its exception type, termination
 indicator and the crashed thread's top native frames to the crash-dialog
 content and the report-issue body, so these aborts become diagnosable.
 
@@ -461,7 +501,10 @@ content and the report-issue body, so these aborts become diagnosable.
 | Crash logs | `~/Library/Logs/Jarvis/` | `%LOCALAPPDATA%\Jarvis\` | `~/.jarvis/` |
 | Instance lock | `~/Library/Application Support/Jarvis/` | `%LOCALAPPDATA%\Jarvis\` | `~/.jarvis/` |
 
-## Apple Silicon speech packaging
+## Speech packaging
+
+- Desktop builds include faster-whisper's local speech detector assets. The installed engine's Turbo capability remains available in the frozen executable.
+- The speech runtime uses faster-whisper 1.2.1 with PyAV 11 or 12. Recognition and speech detection run locally.
 
 - macOS arm64 desktop builds include the MLX Whisper backend, its tokeniser/audio assets, native MLX libraries and `mlx/lib/mlx.metallib`. SciPy remains available for word alignment.
 - The MLX namespace is collected explicitly rather than recursively, and the optional PyTorch Whisper implementation is excluded from collection. Numba uses the PyInstaller dependency hook.

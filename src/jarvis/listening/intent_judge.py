@@ -16,6 +16,7 @@ from ..debug import debug_log
 from ..utils.redact import scrub_secrets
 from ..llm import get_llm_backend, resolve_model, Tier
 from .transcript_buffer import TranscriptSegment
+from .wake_detection import normalise_wake_aliases
 
 
 DEFAULT_OLLAMA_KEEP_ALIVE = "30m"
@@ -217,10 +218,20 @@ Return only JSON: {{"directed": true/false, "stop": true/false,
 "confidence": "high"/"medium"/"low", "reasoning": "brief explanation"}}.
 Classify only the CURRENT utterance. Never rewrite or generate a replacement query.
 
-Every non-echo follow-up is directed=true. An assistant name is not required.
+Default directed=true for the current non-echo utterance in this active conversation.
+An assistant name is not required. The exceptions are clear other-person speech
+and pure repetition of assistant TTS output.
+The hot window permits follow-ups; it does not make every nearby conversation
+addressed to the assistant. Speech clearly addressed to another person, including
+an explanation to that person about speaking to the assistant, is directed=false
+and stop=false. A current statement that the user is talking to someone else is
+also directed=false. Use the current addressee, not mere proximity or a mentioned
+assistant name. A statement, command or question need not refer to the preceding
+assistant response to be addressed to the assistant.
 Fragments, one-word replies, statements, thanks, corrections and philosophical
 opinions are all directed. A follow-up can change the topic. Neither a full
 sentence nor an explicit request is required. This applies in every language.
+One-word questions are follow-ups even when they introduce a new topic.
 Prior segments supply references only; do not judge them as new requests.
 Pure repetition of assistant TTS speech is directed=false and stop=false.
 Mixed echo and genuine user speech can be directed; judge the user engagement.
@@ -233,6 +244,8 @@ Examples:
 - 'What about Germany' -> {{"directed":true,"stop":false,"confidence":"high","reasoning":"non-echo follow-up"}}
 - 'I think absurdism is better' -> {{"directed":true,"stop":false,"confidence":"high","reasoning":"replying to the assistant"}}
 - 'And tomorrow' -> {{"directed":true,"stop":false,"confidence":"high","reasoning":"fragment in active follow-up window"}}
+- 'Thanks' -> {{"directed":true,"stop":false,"confidence":"high","reasoning":"acknowledgement to the assistant, no action required"}}
+- 'Do you already know where I live?' -> {{"directed":true,"stop":false,"confidence":"high","reasoning":"follow-up about the assistant's knowledge"}}
 - 'stop' -> {{"directed":true,"stop":true,"confidence":"high","reasoning":"direct cancellation"}}
 """
 
@@ -272,15 +285,7 @@ Examples:
         in the transcript, doesn't know it refers to {name}, and may decide
         the user is addressing a different person.
         """
-        if not text or not self.config.aliases:
-            return text
-        # Longest-first avoids a shorter alias matching inside a longer one.
-        for alias in sorted(self.config.aliases, key=len, reverse=True):
-            if not alias:
-                continue
-            pattern = r"\b" + re.escape(alias) + r"\b"
-            text = re.sub(pattern, self.config.assistant_name, text, flags=re.IGNORECASE)
-        return text
+        return normalise_wake_aliases(text, self.config.aliases, self.config.assistant_name)
 
     def _build_user_prompt(
         self,

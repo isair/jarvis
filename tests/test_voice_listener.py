@@ -61,6 +61,7 @@ def _create_mock_config(**kwargs):
     mock_cfg.vad_frame_ms = kwargs.get("vad_frame_ms", 20)
     from jarvis.config import get_default_config
     defaults = get_default_config()
+    mock_cfg.voice_min_energy = kwargs.get("voice_min_energy", defaults["voice_min_energy"])
     mock_cfg.max_utterance_ms = kwargs.get("max_utterance_ms", defaults["max_utterance_ms"])
     mock_cfg.tts_max_utterance_ms = kwargs.get("tts_max_utterance_ms", defaults["tts_max_utterance_ms"])
     mock_cfg.tune_enabled = kwargs.get("tune_enabled", False)
@@ -427,7 +428,7 @@ class TestLargeV3TurboFallback:
                 with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
                     with patch("jarvis.listening.listener.WhisperModel", return_value=mock_whisper_model) as mock_class:
                         with patch("jarvis.listening.listener.sd") as mock_sd:
-                            with patch("jarvis.listening.listener._is_faster_whisper_turbo_supported", return_value=False):
+                            with patch("jarvis.listening.whisper_capabilities.is_faster_whisper_turbo_supported", return_value=False):
                                 _mock_input_devices(mock_sd, [{"name": "Test Mic", "max_input_channels": 1}])
                                 mock_sd.InputStream.side_effect = Exception("Stop test here")
 
@@ -456,7 +457,7 @@ class TestLargeV3TurboFallback:
                 with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
                     with patch("jarvis.listening.listener.WhisperModel", return_value=mock_whisper_model) as mock_class:
                         with patch("jarvis.listening.listener.sd") as mock_sd:
-                            with patch("jarvis.listening.listener._is_faster_whisper_turbo_supported", return_value=True):
+                            with patch("jarvis.listening.whisper_capabilities.is_faster_whisper_turbo_supported", return_value=True):
                                 _mock_input_devices(mock_sd, [{"name": "Test Mic", "max_input_channels": 1}])
                                 mock_sd.InputStream.side_effect = Exception("Stop test here")
 
@@ -736,7 +737,7 @@ class TestCpuOptimisations:
         assert call_kwargs["condition_on_previous_text"] is False
 
     def test_gpu_does_not_get_cpu_optimisations(self):
-        """CUDA mode does not apply CPU-specific transcribe optimisations."""
+        """CUDA retains timestamps while using independent decoding windows."""
         import numpy as np
 
         listener, mock_model = self._create_listener_for_transcribe_test("cuda")
@@ -745,7 +746,7 @@ class TestCpuOptimisations:
         mock_model.transcribe.assert_called_once()
         call_kwargs = mock_model.transcribe.call_args[1]
         assert call_kwargs["without_timestamps"] is False
-        assert call_kwargs["condition_on_previous_text"] is True
+        assert call_kwargs["condition_on_previous_text"] is False
 
 
 class TestRepetitiveHallucinationDetectionExtended:
@@ -1841,116 +1842,46 @@ class TestWhisperWarmup:
         assert not (audio_arg == 0).all(), "warmup should not use silent audio"
 
 
-class TestFilterNoisySegmentsNoSpeechProb:
-    """Tests that _filter_noisy_segments rejects high no_speech_prob segments."""
+class TestWhisperNoSpeechBackendContract:
+    """Both recognition backends apply the configured no-speech policy."""
 
-    def _create_mock_listener(self):
-        with patch("jarvis.listening.listener.FASTER_WHISPER_AVAILABLE", True):
-            with patch("jarvis.listening.listener.MLX_WHISPER_AVAILABLE", False):
-                with patch("jarvis.listening.listener.WhisperModel"):
-                    with patch("jarvis.listening.listener.webrtcvad", None):
-                        from jarvis.listening.listener import VoiceListener
-
-                        mock_cfg = MagicMock()
-                        mock_cfg.sample_rate = 16000
-                        mock_cfg.vad_enabled = False
-                        mock_cfg.echo_tolerance = 0.3
-                        mock_cfg.echo_energy_threshold = 2.0
-                        mock_cfg.hot_window_seconds = 3.0
-                        mock_cfg.voice_collect_seconds = 2.0
-                        mock_cfg.voice_max_collect_seconds = 60.0
-                        mock_cfg.tune_enabled = False
-                        mock_cfg.whisper_min_confidence = 0.3
-                        mock_cfg.whisper_no_speech_threshold = 0.5
-                        return VoiceListener(MagicMock(), mock_cfg, MagicMock(), MagicMock())
-
-    def _make_segment(self, text, avg_logprob=None, no_speech_prob=None):
-        from types import SimpleNamespace
-        attrs = {"text": text}
-        if avg_logprob is not None:
-            attrs["avg_logprob"] = avg_logprob
-        if no_speech_prob is not None:
-            attrs["no_speech_prob"] = no_speech_prob
-        return SimpleNamespace(**attrs)
-
-    def test_high_no_speech_prob_rejected_even_with_high_logprob(self):
-        """Segments with high no_speech_prob are filtered even when avg_logprob signals confidence."""
-        listener = self._create_mock_listener()
-        # avg_logprob=-0.1 → confidence 0.9 (high), but no_speech_prob=0.8 → hallucination
-        seg = self._make_segment("MBC 뉴스 이재경입니다", avg_logprob=-0.1, no_speech_prob=0.8)
-        result, events = listener._filter_noisy_segments([seg])
-        assert result == [], "High no_speech_prob segment should be filtered"
-        assert events == ()
-
-    def test_low_no_speech_prob_passes_through(self):
-        """Segments with low no_speech_prob and good logprob pass through."""
-        listener = self._create_mock_listener()
-        seg = self._make_segment("what is the weather today", avg_logprob=-0.2, no_speech_prob=0.1)
-        result, events = listener._filter_noisy_segments([seg])
-        assert len(result) == 1, "Low no_speech_prob segment should not be filtered"
-        assert events == ()
-
-    def test_no_speech_prob_at_threshold_filtered(self):
-        """Segment at the 0.5 threshold is filtered."""
-        listener = self._create_mock_listener()
-        seg = self._make_segment("hello world", avg_logprob=-0.2, no_speech_prob=0.5)
-        result, events = listener._filter_noisy_segments([seg])
-        assert result == [], "Segment at no_speech_prob threshold should be filtered"
-        assert events == ()
-
-    def test_no_speech_prob_below_threshold_passes(self):
-        """Segment below threshold passes through."""
-        listener = self._create_mock_listener()
-        seg = self._make_segment("hello world", avg_logprob=-0.2, no_speech_prob=0.49)
-        result, events = listener._filter_noisy_segments([seg])
-        assert len(result) == 1
-        assert events == ()
-
-    def test_only_avg_logprob_uses_logprob_confidence(self):
-        """When only avg_logprob is present, confidence logic still applies."""
-        listener = self._create_mock_listener()
-        seg = self._make_segment("hello", avg_logprob=-0.5)  # confidence 0.5 > 0.3 threshold
-        result, events = listener._filter_noisy_segments([seg])
-        assert len(result) == 1
-        assert events == ()
-
-
-class TestIsWhisperHallucination:
-    """Parity gate for the no_speech filter — both backends must agree."""
-
-    @pytest.mark.parametrize("no_speech_prob,threshold,expected", [
-        (0.8, 0.5, True),   # clear hallucination
-        (0.5, 0.5, True),   # at threshold is filtered (>=)
-        (0.49, 0.5, False), # just below threshold passes
-        (0.0, 0.5, False),  # clean speech
-        (0.3, 0.5, False),
-        (1.0, 0.5, True),
-        # Threshold at 0 rejects everything non-negative
-        (0.0, 0.0, True),
-        # Threshold at 1.0 rejects only the extreme
-        (1.0, 1.0, True),
-        (0.99, 1.0, False),
+    @pytest.mark.parametrize("backend", ["faster-whisper", "mlx"])
+    @pytest.mark.parametrize("threshold,probability,accepted", [
+        (0, 0, False),
+        (1, 1, False),
+        (1, .99, True),
+        (.62, .61, True),
+        (.62, .62, False),
+        (.62, .9, False),
+        (.62, None, True),
     ])
-    def test_gate_policy(self, no_speech_prob, threshold, expected):
-        from jarvis.listening.listener import is_whisper_hallucination
-        assert is_whisper_hallucination(no_speech_prob, threshold) is expected
+    def test_transcription_filters_noise_and_preserves_speech(
+        self, monkeypatch, backend, threshold, probability, accepted,
+    ):
+        from types import SimpleNamespace
+        import numpy as np
+        from jarvis.listening import listener as capture
 
-    def test_mlx_and_faster_whisper_use_same_helper(self):
-        """Both code paths must reach the same gate — guaranteed by sharing
-        `is_whisper_hallucination`. This test pins that the helper is
-        referenced from both `_filter_noisy_segments` (faster-whisper) and
-        `_finalize_utterance` (MLX) so a future refactor can't silently
-        diverge the two.
-        """
-        import inspect
-        from jarvis.listening import listener as listener_mod
-        src = inspect.getsource(listener_mod)
-        # Both sites must call the shared helper.
-        assert src.count("is_whisper_hallucination(") >= 3, (
-            "Expected at least 3 references to is_whisper_hallucination "
-            "(definition + faster-whisper site + MLX site). Found: "
-            f"{src.count('is_whisper_hallucination(')}"
-        )
+        monkeypatch.setattr(capture, "create_intent_judge", lambda cfg: None)
+        cfg = SimpleNamespace(vad_enabled=False, voice_debug=False,
+                              whisper_min_confidence=.3,
+                              whisper_no_speech_threshold=threshold)
+        obj = capture.VoiceListener(None, cfg, None, None)
+        obj._whisper_backend = backend
+        segment = {"text": "  Spoken data, café  ", "avg_logprob": -.1}
+        if probability is not None:
+            segment["no_speech_prob"] = probability
+        if backend == "mlx":
+            model = SimpleNamespace(transcribe=lambda *args, **kwargs: {
+                "segments": [segment], "language": "fr",
+            })
+            monkeypatch.setattr(capture, "mlx_whisper", model, raising=False)
+        else:
+            obj.model = SimpleNamespace(transcribe=lambda *args, **kwargs: (
+                iter([SimpleNamespace(**segment)]), SimpleNamespace(language="fr"),
+            ))
+        result = obj._transcribe_audio(np.ones(16000, dtype=np.float32))
+        assert result == (segment["text"].strip() if accepted else "", "fr", ())
 
 
 class TestWeatherBannerExample:

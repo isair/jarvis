@@ -102,7 +102,7 @@ def test_incomplete_plan_returns_to_chat_before_any_invalid_dispatch(monkeypatch
         return ToolExecutionResult(success=complete, reply_text='Document guide.' if complete else 'Missing search query.')
 
     monkeypatch.setattr(engine, 'run_tool_with_retries', run_tool)
-    monkeypatch.setattr('requests.post', lambda *args, **kwargs: pytest.fail('🗺️ Dispatch regression must not contact a model'))
+    monkeypatch.setattr('jarvis.llm.http.post', lambda *args, **kwargs: pytest.fail('🗺️ Dispatch regression must not contact a model'))
     result = engine.run_reply_engine(
         db=db, cfg=mock_config, tts=None, text='Search for a document index, Jarvis.',
         dialogue_memory=dialogue_memory,

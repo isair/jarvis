@@ -1,6 +1,5 @@
-"""Web pages are bounded before HTML parsing or raw-text extraction."""
+"""Bounded streamed pages label incomplete excerpts and preserve text."""
 import gzip
-import builtins
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
@@ -57,7 +56,7 @@ def bounded_page_server(monkeypatch, mock_config):
     server.shutdown(); server.server_close(); worker.join(timeout=2)
 
 @pytest.mark.parametrize('transport', ['length', 'unknown_length', 'gzip'])
-def test_oversized_pages_return_failure_without_partial_content(bounded_page_server, transport):
+def test_oversized_pages_return_explicit_partial_content(bounded_page_server, transport):
     tool, context, state, url, limit, html = bounded_page_server
     body = html + b' ' * (limit + 1 - len(html))
     if transport == 'gzip':
@@ -66,9 +65,9 @@ def test_oversized_pages_return_failure_without_partial_content(bounded_page_ser
     else:
         state.body = body; state.length = transport != 'unknown_length'
     result = tool.run({'url': url}, context)
-    assert not result.success, '🌐 Oversized decoded pages need an honest fetch failure'
-    assert 'Bounded page content' not in result.reply_text
-    assert 'limit' in result.reply_text.casefold() or 'large' in result.reply_text.casefold()
+    assert result.success, result.reply_text
+    assert 'Bounded page content' in result.reply_text
+    assert 'Partial page excerpt' in result.reply_text
 
 @pytest.mark.parametrize('padding', [False, True])
 def test_small_and_exact_limit_pages_keep_content(bounded_page_server, padding):
@@ -79,19 +78,11 @@ def test_small_and_exact_limit_pages_keep_content(bounded_page_server, padding):
     assert 'Bounded page content' in result.reply_text
 
 
-@pytest.mark.parametrize('parser_available', [False, True])
 @pytest.mark.parametrize('charset, text', [('utf-8', 'İstanbul ve İzmir'), ('iso-8859-1', 'Café déjà vu')])
-def test_bounded_pages_preserve_decoded_text(monkeypatch, bounded_page_server, parser_available, charset, text):
+def test_bounded_pages_preserve_decoded_text(bounded_page_server, charset, text):
     tool, context, state, url, limit, html = bounded_page_server
     state.charset = charset
     state.body = f'<html><meta charset="{charset}"><p>{text}</p></html>'.encode(charset)
-    if not parser_available:
-        original_import = builtins.__import__
-        def import_without_parser(name, *args, **kwargs):
-            if name == 'bs4':
-                raise ImportError('Private missing-parser fixture')
-            return original_import(name, *args, **kwargs)
-        monkeypatch.setattr(builtins, '__import__', import_without_parser)
     result = tool.run({'url': url}, context)
     assert result.success, result.reply_text
     assert text in result.reply_text
@@ -109,17 +100,11 @@ def test_redirects_follow_headers_without_downloading_the_redirect_body(bounded_
 
 
 @pytest.mark.parametrize('charset', [None, 'unsupported-fixture-encoding'])
-def test_raw_text_keeps_utf8_with_missing_or_unsupported_charset(monkeypatch, bounded_page_server, charset):
+def test_text_keeps_utf8_with_missing_or_unsupported_charset(bounded_page_server, charset):
     tool, context, state, url, limit, html = bounded_page_server
     text = 'İstanbul ve İzmir, kıyı şehirleri hakkında bir metin.'
     state.charset = charset
     state.body = text.encode('utf-8')
-    original_import = builtins.__import__
-    def import_without_parser(name, *args, **kwargs):
-        if name == 'bs4':
-            raise ImportError('Private missing-parser fixture')
-        return original_import(name, *args, **kwargs)
-    monkeypatch.setattr(builtins, '__import__', import_without_parser)
     result = tool.run({'url': url}, context)
     assert result.success, result.reply_text
     assert text in result.reply_text

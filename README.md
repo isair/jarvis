@@ -4,12 +4,12 @@
 
 ### Your intelligence. Your hardware.
 
-A private, local-first voice assistant that lives on your computer.<br>
+A private, local-first AI assistant with voice and text chat.<br>
 Talk naturally, as if Jarvis were a third person in the room.
 
 **Voice-first · Local AI · Personal memory · No subscription**
 
-[**Download Jarvis →**](https://github.com/isair/jarvis/releases) &nbsp; · &nbsp; [Get started](#quick-install) &nbsp; · &nbsp; [Explore the app](#inside-jarvis) &nbsp; · &nbsp; [Support the project](#support)
+[**Download Jarvis →**](https://github.com/isair/jarvis/releases) &nbsp; · &nbsp; [Website](https://barissencan.com/jarvis/) &nbsp; · &nbsp; [Get started](#quick-install) &nbsp; · &nbsp; [Explore the app](#inside-jarvis) &nbsp; · &nbsp; [Support the project](#support)
 
 </div>
 
@@ -21,7 +21,7 @@ Jarvis is built to be part of the conversation. Talk through an idea, discuss pl
 
 Address Jarvis by name anywhere in a sentence and follow up naturally. Speech recognition, language models and speech synthesis run on hardware you control.
 
-Your conversation and all data stays solely on your computer. Sensitive information is redacted before it reaches model context or the saved diary, even though both are local, to ensure the security of your private information. Web search, weather and connected tools use the network but send only what is necessary when you ask for those capabilities.
+Your diary and knowledge graph stay on your computer. Speech and chat models run locally when you use a local model server. Sensitive information is redacted before reaching model context or the saved diary. Web search, weather and connected tools use the network for those requests.
 
 <p align="center">
   <img src="docs/img/face.png" alt="Jarvis's floating amber face, with no frame or background" width="420">
@@ -61,6 +61,8 @@ Memory needs depend on model size, quantisation, context length and speech recog
 | Larger local setup | `qwen3.8:27b` |
 
 Budget memory for Whisper and, when different from chat, the fast model used for voice intent and tool routing. Apple Silicon uses unified memory; other GPUs use dedicated VRAM. Setup budgets chat and fast together alongside the selected Whisper model, using E2B for fast tasks when it fits or sharing E4B across both roles to save memory. Apple Silicon estimates reserve memory for macOS. Saved model choices are preserved, and insufficient memory shows CPU fallback guidance.
+
+For an experimental 27B alternative, see the [Bonsai 2 local setup guide](docs/BONSAI.md).
 
 </details>
 
@@ -126,7 +128,6 @@ Jarvis is developed primarily on macOS. Windows and Linux behaviour may differ. 
 - **Accuracy and speed depend on your models and hardware.** Smaller models can miss parts of complex requests, and slow speech recognition can drop utterances.
 - **Dictation is unavailable on macOS 26+** ([#172](https://github.com/isair/jarvis/issues/172)). Linux dictation requires X11, with limited Wayland support.
 - **Spoken “stop” can be mistaken for echo** while Jarvis is speaking ([#24](https://github.com/isair/jarvis/issues/24)).
-- **Very large web pages cannot be read.** Page downloads have a 2 MiB limit.
 - **No mobile app** is available ([#17](https://github.com/isair/jarvis/issues/17)).
 
 ## Configuration
@@ -179,7 +180,7 @@ Select the headset's microphone/input profile in Settings, not its playback devi
 <details>
 <summary><strong>Linux says Listening, but never hears speech</strong></summary>
 
-Check Logs for missing-callback or silent-input warnings. Verify the recording source and mute state in PipeWire/PulseAudio, and select a microphone rather than an output monitor. Enable `voice_debug` in Settings for capture-level diagnostics. See the [troubleshooting guide](docs/CONFIGURATION.md#troubleshooting).
+Check Logs for missing-callback or silent-input warnings. Verify the recording source and mute state in PipeWire/PulseAudio, and select a microphone rather than an output monitor. Set `JARVIS_VOICE_DEBUG=1` for capture-level diagnostics. See the [troubleshooting guide](docs/CONFIGURATION.md#troubleshooting).
 
 </details>
 

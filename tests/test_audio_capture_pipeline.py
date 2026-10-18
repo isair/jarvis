@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 from jarvis.listening.listener import VoiceListener
+from jarvis.config import get_default_config
 import jarvis.listening.listener as capture
 import jarvis.utils.audio_capture as audio_capture
 
@@ -16,7 +17,10 @@ pytestmark = pytest.mark.unit
 
 def listener(rate=48000):
     obj = VoiceListener.__new__(VoiceListener)
-    obj.cfg = SimpleNamespace(voice_min_energy=0.0045, voice_debug=False)
+    defaults = get_default_config()
+    obj.cfg = SimpleNamespace(voice_min_energy=0.0045, voice_debug=False,
+                              stop_commands=defaults["stop_commands"],
+                              stop_command_fuzzy_ratio=defaults["stop_command_fuzzy_ratio"])
     obj._samplerate = 16000
     obj._stream_samplerate = rate
     obj._frame_samples = rate * 20 // 1000
@@ -315,7 +319,8 @@ def test_utterance_finalisation_queues_transcription_without_blocking():
                                         _last_tts_finish_time=0, echo_tolerance=0.3)
     obj.tts = None
     obj._capture_generation = 0
-    obj.cfg = SimpleNamespace(voice_debug=False, whisper_min_audio_duration=0.3)
+    obj.cfg = SimpleNamespace(voice_min_energy=obj.cfg.voice_min_energy,
+                              voice_debug=False, whisper_min_audio_duration=0.3)
     obj._calculate_audio_energy = lambda frames: 0.1
 
     obj._finalize_utterance()
@@ -401,7 +406,8 @@ def test_utterance_finalisation_continues_while_whisper_is_busy():
         obj._silence_frames = 0
         obj.echo_detector = SimpleNamespace(_utterance_start_time=1.0, _tts_start_time=0,
                                             _last_tts_finish_time=0, echo_tolerance=0.3)
-        obj.cfg = SimpleNamespace(voice_debug=False, whisper_min_audio_duration=0.3)
+        obj.cfg = SimpleNamespace(voice_min_energy=obj.cfg.voice_min_energy,
+                                  voice_debug=False, whisper_min_audio_duration=0.3)
         obj.tts = None
         obj._calculate_audio_energy = lambda frames: 0.1
 
@@ -426,7 +432,6 @@ def test_transcription_result_keeps_language_and_utterance_context():
     from unittest.mock import Mock
 
     obj = listener()
-    obj._last_detected_language = None
     obj._first_utterance = True
     obj.tts = None
     obj.echo_detector = SimpleNamespace(_tts_start_time=0, _last_tts_finish_time=0, echo_tolerance=0.3)
@@ -447,7 +452,6 @@ def test_transcription_result_keeps_language_and_utterance_context():
 
     obj._handle_transcription_result(result)
 
-    assert obj._last_detected_language == "en"
     obj._transcript_buffer.add.assert_called_once_with(
         text="hello there",
         start_time=10.0,
@@ -457,7 +461,7 @@ def test_transcription_result_keeps_language_and_utterance_context():
     )
     obj._process_transcript.assert_called_once_with(
         "hello there", 0.2, 10.0, 11.0,
-        generation=result.capture_generation,
+        language=result.language, generation=result.capture_generation,
         captured_during_tts=False, captured_tts_start_time=0,
     )
 
@@ -507,7 +511,6 @@ def test_transcription_result_during_dictation_is_not_dispatched():
 
     obj = listener()
     obj.set_capture_paused('dictation', True)
-    obj._last_detected_language = "fr"
     obj._first_utterance = True
     obj.tts = None
     obj.echo_detector = SimpleNamespace(_tts_start_time=0, _last_tts_finish_time=0, echo_tolerance=0.3)
@@ -518,16 +521,14 @@ def test_transcription_result_during_dictation_is_not_dispatched():
 
     obj._handle_transcription_result(result)
 
-    assert obj._last_detected_language == "fr"
     obj._transcript_buffer.add.assert_not_called()
     obj._process_transcript.assert_not_called()
 
 
-def test_transcription_result_without_detected_language_clears_previous_locale():
+def test_transcription_result_without_detected_language_passes_unknown_locale():
     from unittest.mock import Mock
 
     obj = listener()
-    obj._last_detected_language = "fr"
     obj._first_utterance = True
     obj.tts = None
     obj.echo_detector = SimpleNamespace(_tts_start_time=0, _last_tts_finish_time=0, echo_tolerance=0.3)
@@ -537,14 +538,14 @@ def test_transcription_result_without_detected_language_clears_previous_locale()
 
     obj._handle_transcription_result(SimpleNamespace(text="hello", language=None, low_confidence_events=(), start_time=10.0, end_time=11.0, energy=0.2, capture_generation=0, captured_during_tts=False, captured_tts_start_time=0))
 
-    assert obj._last_detected_language is None
+    assert obj._process_transcript.call_args.kwargs["language"] is None
+
 
 
 def test_echo_flag_uses_capture_interval_when_tts_starts_during_whisper():
     from unittest.mock import Mock
 
     obj = listener()
-    obj._last_detected_language = None
     obj._first_utterance = True
     obj.tts = SimpleNamespace(is_speaking=lambda: True)
     obj.echo_detector = SimpleNamespace(_tts_start_time=12.0, _last_tts_finish_time=0, echo_tolerance=0.3)
@@ -570,7 +571,8 @@ def test_queued_job_keeps_tts_context_from_audio_capture():
     obj.echo_detector = SimpleNamespace(_utterance_start_time=10.0, _tts_start_time=0,
                                         _last_tts_finish_time=0, echo_tolerance=0.3)
     obj.tts = SimpleNamespace(is_speaking=Mock(return_value=False))
-    obj.cfg = SimpleNamespace(voice_debug=False, whisper_min_audio_duration=0.3)
+    obj.cfg = SimpleNamespace(voice_min_energy=obj.cfg.voice_min_energy,
+                              voice_debug=False, whisper_min_audio_duration=0.3)
     obj._calculate_audio_energy = lambda frames: 0.1
 
     obj._finalize_utterance()
@@ -661,7 +663,6 @@ def test_delayed_stop_only_interrupts_tts_that_overlapped_capture(
     obj._intent_judge = None
     obj._transcript_buffer = Mock()
     obj._stop_thinking_tune = Mock()
-    obj._is_thinking_tune_active = lambda: False
     obj._start_thinking_tune = Mock()
     obj._set_face_state_listening = Mock()
     obj._clear_audio_buffers = Mock()
@@ -671,7 +672,7 @@ def test_delayed_stop_only_interrupts_tts_that_overlapped_capture(
                             else (10.0, 11.0))
     obj._process_transcript("stop", 0.2, start_time, end_time,
                             captured_during_tts=captured_during_tts,
-                            captured_tts_start_time=captured_tts_start_time, generation=obj._capture_generation)
+                            captured_tts_start_time=captured_tts_start_time, generation=obj._capture_generation, language=None)
 
     assert obj.tts.interrupt.called is should_interrupt
 
@@ -695,14 +696,13 @@ def test_delayed_utterance_does_not_inherit_later_tts_text_for_intent():
     obj._transcript_buffer = Mock()
     obj._buffer_duration = 120
     obj._stop_thinking_tune = Mock()
-    obj._is_thinking_tune_active = lambda: False
     obj._start_thinking_tune = Mock()
     obj._set_face_state_listening = Mock()
     obj._clear_audio_buffers = Mock()
     obj._wake_timestamp = None
 
     obj._process_transcript("jarvis weather", 0.2, 10.0, 11.0,
-                            captured_during_tts=False, captured_tts_start_time=0, generation=obj._capture_generation)
+                            captured_during_tts=False, captured_tts_start_time=0, generation=obj._capture_generation, language=None)
 
     assert obj._intent_judge.judge.call_args.kwargs["last_tts_text"] == ""
 

@@ -163,7 +163,8 @@ Design principles enforced by the engine:
      text, then an empty-result marker. Whitespace is collapsed and the preview
      is capped at 240 characters; debug output uses the same bounded preview.
      Model-facing tool content and failure recovery retain the original data.
-   - Duplicate suppression: the engine returns a tool error response for repeated calls with identical args, guiding the model to use prior results
+   - Duplicate suppression: repeated calls with identical arguments return guidance to use the recorded outcome, without another execution. Feedback retains that outcome's success/failure state.
+   - Recognised text-tool requests retain assistant `tool_calls` metadata with the parsed name, arguments and a unique engine-assigned string call ID. The same `tool_call_id` links native-role and tagged text outcomes to their request for carryover. Invalid arguments stay invalid and are not executed. Original response content and thinking remain available. Ordinary prose does not become a tool request. Rejected or capped requests retain tagged failed outcomes. Feedback does not advance executed-task progress or supply evidence of a new action.
    - Tool results: native path appends `{role: "tool", tool_call_id: "<id>", content: "<text>"}` messages; text-based fallback appends `{role: "user", content: "[Tool result: name]\n<text>"}` messages
    - No system message injection: The engine does NOT add system messages during the loop as this breaks native tool calling; instead, guidance is provided via tool error responses when needed
 
@@ -258,11 +259,13 @@ sequenceDiagram
 #### Dynamic Context Injection
 The system injects fresh contextual information before each LLM call in the agentic loop to ensure the model has current, relevant information:
 
+The clock includes its human-readable local time and ISO dates labelled `Today` and `Tomorrow`. Both dates derive from the same selected local calendar, including timezone fallback and daylight-saving transitions. The reply context requires saved event dates to match the requested calendar date. These current dates compare established event dates; they do not supply missing source dates for historical relative statements.
+
 **Context Format:**
 ```
 {original system prompt content}
 
-[Context: Monday, September 15, 2025 at 17:53 UTC, Location: San Francisco, CA, United States (America/Los_Angeles)]
+[Context: Current local time: Monday, September 15, 2025 at 17:53 UTC; Today: 2025-09-15; Tomorrow: 2025-09-16. Saved event dates must match the requested calendar date. Location: San Francisco, CA, United States (America/Los_Angeles)]
 ```
 
 **Implementation Details:**
@@ -439,3 +442,17 @@ Recorded resource metadata also supplies a bounded reply data block independent
 of result prose truncation. When resources are carried over, reply guidance requires the current
 follow-up action to run using the referenced ID before claiming completion.
 Earlier results provide identity rather than proof of the latest action.
+
+
+## Private prompt diagnostics
+
+`JARVIS_DUMP_PROMPTS` enables per-turn JSON snapshots of the complete messages,
+tool schema and model response for local reproduction. Diagnostics are off by
+default. Each snapshot is written to a private temporary file in the diagnostic
+directory and atomically replaces its target after successful serialisation.
+New diagnostic directories use mode `0700` and files use mode `0600` on POSIX.
+Existing targets remain intact when serialisation or publication fails;
+cleanup attempts to remove unpublished temporary files. Failure logs contain the exception
+class only, keeping private payload text out of error messages. Diagnostic
+failures never interrupt the reply loop. Windows uses the directory's inherited
+access controls; POSIX mode assertions do not describe Windows ACLs.

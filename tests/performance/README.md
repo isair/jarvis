@@ -1,43 +1,49 @@
 # Performance tests
 
-Per-context timings for the reply pipeline. Excluded from the default pytest run
-(see `pytest.ini`'s `addopts = -m "not performance"`).
-
-## Running
+The manual Ollama harness measures model round trips and per-context reply
+pipeline calls. It is excluded from the default pytest run.
 
 ```bash
 pytest tests/performance/ -v -m performance -s
 ```
 
-The `-s` flag lets the report table print to stdout. Tests auto-skip when Ollama
-is unreachable, so the harness is safe to leave in the repo.
+Availability is checked only when selected benchmarks run. Importing or
+collecting the harness does not contact the model server. Benchmarks skip when
+the configured model is unavailable. Skip messages identify the model without
+displaying the configured endpoint or its credentials. Set these variables before
+running it:
 
-## Env vars
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `JARVIS_PERF_OLLAMA_URL` | `http://localhost:11434` | Local Ollama endpoint |
+| `JARVIS_PERF_MODEL` | `gemma4:e2b` | Installed model |
+| `JARVIS_PERF_RUNS` | `3` | Measured repetitions per query |
+| `JARVIS_PERF_REPORT_DIR` | `tests/performance/reports/` | JSON output directory |
 
-| Var | Default | Description |
-|-----|---------|-------------|
-| `JARVIS_PERF_OLLAMA_URL` | `http://localhost:11434` | Ollama endpoint |
-| `JARVIS_PERF_MODEL` | `gemma4:e2b` | Model pulled in Ollama for the run |
-| `JARVIS_PERF_RUNS` | `3` | Runs per query (bump for tighter p95) |
-| `JARVIS_PERF_REPORT_DIR` | `tests/performance/reports/` | JSON report output |
+The micro-benchmark includes a warmup call. Pipeline runs use three small queries.
+Three repetitions provide smoke evidence; sample p50/p95 values do not establish
+stable tail latency. More repetitions help assess variability.
 
-`PERF_RUNS=3` is a fast-iteration default. For stable p95 numbers when
-benchmarking a change, use `JARVIS_PERF_RUNS=10` or higher.
+`TimingRecorder` measures Ollama and OpenAI-compatible backend methods, including
+existing instances, factory-created instances and function-style helpers. It
+counts a nested backend implementation once per outer operation, while retaining
+separate concurrent requests. Reports keep empty results and exceptions alongside
+returned text or tool-call responses. A `response` outcome describes transport
+content, not a correct answer or successful tool execution.
 
-## What it measures
+Durations cover each complete backend operation. Their sum can include overlapping
+requests and is not pipeline wall time, time to first token or time to first audio.
+Reports contain context, model, provider, prompt/response sizes and outcome counts.
+They do not contain prompt or response text.
 
-- **`test_micro_benchmark_tiny_prompt`** — one warmup + N tiny round-trips.
-  Hardware baseline: the floor for every context's per-call cost.
-- **`test_pipeline_timings_by_context`** — three representative queries × N runs
-  of `run_reply_engine`, with per-context timings bucketed via stack-frame
-  inspection in [`timing_recorder.py`](timing_recorder.py).
+Benchmarks fail for empty model samples, raised requests or empty pipeline
+answers. JSON reports retain observed calls and their outcomes on failure;
+exceptions keep their original type. Reports mark completed/failed runs and
+record the exception class without its potentially private message. A report-write
+failure preserves an existing request exception and is diagnosed by class only;
+it fails a completed run. Call counts and timing-shape checks still apply to
+usable runs.
 
-Shape invariants (not absolute numbers):
-- Evaluator p50 ≤ main chat turn p50 × 1.5.
-- Tool router p50 ≤ main chat turn p50 × 1.5.
-- Enrichment extractor shares the router model chain.
-
-Unmapped callers print as `other:<qualname>` — that's a signal to update the
-`_CALLER_TO_CONTEXT` map in `timing_recorder.py` alongside `docs/llm_contexts.md`.
-
-Reports are written to `reports/` and git-ignored.
+Unknown callers appear as `other:<qualname>`. Keep `_CALLER_TO_CONTEXT` in
+`timing_recorder.py` aligned with `docs/llm_contexts.md` when contexts change.
+Reports are git-ignored.

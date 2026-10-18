@@ -391,72 +391,45 @@ class GraphMemoryStore:
                 )
             self.conn.commit()
 
-    def migrate_legacy_shape(self) -> bool:
-        """Wipe the graph if it has a non-conforming (pre-taxonomy) shape.
+    def has_unclassified_root_content(self) -> bool:
+        """Report root-level content without changing saved memory.
 
-        The purpose-driven taxonomy (root → User / Directives / World)
-        is a hard reorganisation: pre-existing nodes under root that
-        don't match this shape would sit invisible to the warm profile
-        forever.
-        Rather than carrying them as dead weight, we wipe on daemon
-        start-up and let the diary re-import repopulate with correctly
-        classified facts.
-
-        Called ONLY from the daemon start-up path — the memory viewer
-        instantiates ``GraphMemoryStore`` read-mostly and must not
-        trigger a wipe mid-session.
-
-        Non-conforming shape is defined as:
-          - root has a direct child whose id is not in ``FIXED_BRANCHES``
-          - OR root's own ``data`` column is non-empty (cold-start writes
-            that landed on root before the taxonomy existed).
-
-        Returns True if a wipe happened, False if the graph was already
-        in the expected shape.
+        Root facts and children outside the fixed branches can be manually
+        created or imported. Their shape does not establish their age or
+        classification, so they remain available for explicit organisation.
         """
-        expected_ids = FIXED_BRANCH_IDS
         with self._lock:
             root_row = self.conn.execute(
                 "SELECT data FROM memory_nodes WHERE id = 'root'"
             ).fetchone()
             root_has_data = bool(root_row and (root_row["data"] or "").strip())
-
-            rogue_child = self.conn.execute(
+            root_child = self.conn.execute(
                 "SELECT id FROM memory_nodes "
                 "WHERE parent_id = 'root' AND id NOT IN ({}) LIMIT 1".format(
-                    ",".join("?" * len(expected_ids))
+                    ",".join("?" * len(FIXED_BRANCH_IDS))
                 ),
-                tuple(expected_ids),
+                tuple(FIXED_BRANCH_IDS),
             ).fetchone()
-
-            if not root_has_data and rogue_child is None:
-                return False
-
-            reason = (
-                "root holds pre-taxonomy data"
-                if root_has_data
-                else f"found non-conforming root child: {rogue_child['id']!r}"
-            )
-            debug_log(
-                f"wiping knowledge graph ({reason}); will re-seed fixed branches",
-                "memory",
-            )
-            self.conn.execute("DELETE FROM memory_nodes")
-            self.conn.commit()
-
-        # Re-seed root + fixed branches from scratch.
-        self._ensure_root()
-        return True
+            return root_has_data or root_child is not None
 
     # ── CRUD ────────────────────────────────────────────────────────────
 
-    def get_warm_profile_revision(self) -> int:
-        """Read the persisted revision of User/Directives profile inputs."""
+    def get_warm_profile_revision(self) -> Optional[int]:
+        """Read the profile revision, or None when its metadata is absent."""
         with self._lock:
-            row = self.conn.execute(
-                "SELECT revision FROM memory_graph_revisions WHERE name = 'warm_profile'"
-            ).fetchone()
-        return row["revision"]
+            try:
+                row = self.conn.execute(
+                    "SELECT revision FROM memory_graph_revisions WHERE name = 'warm_profile'"
+                ).fetchone()
+            except sqlite3.OperationalError:
+                table = self.conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+                    "AND name = 'memory_graph_revisions' COLLATE NOCASE"
+                ).fetchone()
+                if table is not None:
+                    raise
+                return None
+        return row["revision"] if row is not None else None
 
     def get_node(self, node_id: str) -> Optional[MemoryNode]:
         """Fetch a single node by ID."""
@@ -767,11 +740,10 @@ class GraphMemoryStore:
         # Resolve branch BEFORE the delete so listeners get a meaningful
         # branch attribution even though the row is about to vanish.
         branch = self._resolve_branch(node_id)
-        with self._lock:
+        with self._lock, self.conn:
             cur = self.conn.execute(
                 "DELETE FROM memory_nodes WHERE id = ?", (node_id,)
             )
-            self.conn.commit()
             deleted = cur.rowcount > 0
         if deleted:
             _notify_graph_mutation("delete", node_id, branch)
@@ -815,16 +787,26 @@ class GraphMemoryStore:
         return node
 
     def touch_node(self, node_id: str) -> None:
-        """Increment access_count and update last_accessed."""
+        """Track access without waiting for a writer or interrupting retrieval."""
         now = datetime.now(timezone.utc).isoformat()
         with self._lock:
-            self.conn.execute(
-                """UPDATE memory_nodes
-                   SET access_count = access_count + 1, last_accessed = ?
-                   WHERE id = ?""",
-                (now, node_id),
-            )
-            self.conn.commit()
+            if self.conn.in_transaction:
+                debug_log("Graph access tracking skipped: caller transaction active", "memory")
+                return
+            wait_ms = self.conn.execute("PRAGMA busy_timeout").fetchone()[0]
+            try:
+                self.conn.execute("PRAGMA busy_timeout = 0")
+                with self.conn:
+                    self.conn.execute(
+                        """UPDATE memory_nodes
+                           SET access_count = access_count + 1, last_accessed = ?
+                           WHERE id = ?""",
+                        (now, node_id),
+                    )
+            except sqlite3.DatabaseError as exc:
+                debug_log(f"Graph access tracking skipped: {exc}", "memory")
+            finally:
+                self.conn.execute(f"PRAGMA busy_timeout = {int(wait_ms)}")
 
     # ── Entry points ────────────────────────────────────────────────────
 

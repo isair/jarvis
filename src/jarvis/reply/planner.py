@@ -16,8 +16,8 @@ multi-step shape from scratch every turn.
 Design principles:
 - Fail-open: if planning fails or times out, return an empty list and
   let the engine fall through to existing behaviour.
-- Cheap model chain: planner rides the router / intent-judge / chat model
-  chain so it doesn't page in extra weights.
+- Shared chat model: planner and step resolution use the CHAT tier without
+  loading additional model weights.
 - Dual mode: for LARGE models the plan is advisory — injected into the
   system message so the chat model can follow it. For SMALL models
   (`use_text_tools=True`) the engine calls `resolve_next_tool_call` to
@@ -38,7 +38,7 @@ from __future__ import annotations
 import json
 import math
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Sequence, Tuple
 
 from ..debug import debug_log
@@ -599,8 +599,130 @@ _TEMPORAL_RESOLUTION_GUIDANCE = (
     "\nCURRENT CLOCK provides UTC and system-local ISO timestamps. Resolve relative "
     "dates and times from this clock. The system-local date is the default calendar "
     "unless the step or prior results specify another timezone. Use the temporal "
-    "format required by the schema, not relative labels."
+    "format required by the schema, not relative labels. calendar_days supplies "
+    "system-local dates by day_offset (-1 previous, 0 current, 1 next), with UTC "
+    "start, inclusive end and exclusive end boundaries. For a system-local day "
+    "range, use the supplied boundaries matching the schema inclusivity. "
+    "The current calendar date is current_date, even when the UTC date differs. "
+    "The supplied range boundaries are already UTC: copy them without applying "
+    "another offset. An explicitly requested different timezone takes precedence "
+    "over these windows. For date-time arguments selecting a nearby local day, "
+    "emit the matching @calendar reference exactly as shown instead of calculating "
+    "an ISO timestamp. These are permitted intermediate date-time arguments: "
+    "the runtime expands them to the actual UTC timestamps before tool execution. "
+    "When the schema says an upper bound is inclusive, select end_inclusive_utc. "
+    "Use end_exclusive_utc only when the schema explicitly requires an exclusive upper bound."
 )
+
+
+def _local_day_start_utc(local_midnight: datetime) -> datetime:
+    """Find the first real instant at or after a local calendar midnight."""
+    candidates = [local_midnight.replace(fold=fold).astimezone(timezone.utc)
+                  for fold in (0, 1)]
+    return min(candidate for candidate in candidates
+               if candidate.astimezone().replace(tzinfo=None) >= local_midnight)
+
+
+def _clock_snapshot(now_utc: datetime) -> dict:
+    """Current clock and nearby local calendar windows with DST-aware UTC bounds."""
+    local_now = now_utc.astimezone()
+    # Naive local conversion asks the operating system for the offset at each
+    # midnight, rather than carrying the current instant's fixed UTC offset.
+    local_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0,
+                                    tzinfo=None, fold=0)
+    days = []
+    for offset in (0, 1, -1):
+        start = local_start + timedelta(days=offset)
+        start_utc = _local_day_start_utc(start)
+        next_start_utc = _local_day_start_utc(start + timedelta(days=1))
+        days.append({
+            'day_offset': offset, 'date': start.date().isoformat(),
+            'start_utc': start_utc.isoformat(),
+            'end_inclusive_utc': (next_start_utc - timedelta(microseconds=1)).isoformat(),
+            'end_exclusive_utc': next_start_utc.isoformat(),
+        })
+    return {'default_calendar': 'system_local', 'current_date': local_now.date().isoformat(),
+            'system_local': local_now.isoformat(), 'calendar_days': days,
+            'utc': now_utc.isoformat()}
+
+
+def _calendar_argument_refs(clock: dict) -> dict[str, str]:
+    """Replace this call's day bounds with references to their exact UTC values."""
+    references = {}
+    for day in clock['calendar_days']:
+        for field in ('start_utc', 'end_inclusive_utc', 'end_exclusive_utc'):
+            reference = f"@calendar:{day['day_offset']}:{field}"
+            references[reference] = day[field]
+            day[field] = reference
+    return references
+
+
+def _schema_nodes(schema, root_schema):
+    """Visit inline alternatives and local JSON pointers without network access."""
+    pending = [schema]
+    seen = set()
+    while pending:
+        node = pending.pop()
+        if not isinstance(node, dict) or id(node) in seen:
+            continue
+        seen.add(id(node))
+        yield node
+        for keyword in ('anyOf', 'oneOf', 'allOf'):
+            alternatives = node.get(keyword)
+            if isinstance(alternatives, list):
+                pending.extend(alternatives)
+        reference = node.get('$ref')
+        if isinstance(reference, str) and reference.startswith('#/'):
+            target = root_schema
+            from urllib.parse import unquote
+            for key in unquote(reference[2:]).split('/'):
+                key = key.replace('~1', '/').replace('~0', '~')
+                if isinstance(target, dict) and key in target:
+                    target = target[key]
+                elif (isinstance(target, list) and key.isascii() and key.isdecimal()
+                      and (key == '0' or not key.startswith('0')) and int(key) < len(target)):
+                    target = target[int(key)]
+                else:
+                    target = None
+                    break
+            pending.append(target)
+
+
+def _is_datetime_schema(schema, root_schema) -> bool:
+    return any(node.get('format') == 'date-time' for node in _schema_nodes(schema, root_schema))
+
+
+def _expand_calendar_refs(value, schema, references: dict[str, str], root_schema):
+    """Expand references only in declared date-time fields, rejecting unknown IDs."""
+    nodes = list(_schema_nodes(schema, root_schema))
+    if isinstance(value, str) and _is_datetime_schema(schema, root_schema) and value.startswith('@calendar:'):
+        if value not in references:
+            raise ValueError('Unknown calendar reference')
+        return references[value]
+    if isinstance(value, dict):
+        result = {}
+        for key, item in value.items():
+            children = [node['properties'][key] for node in nodes if key in node.get('properties', {})]
+            children.extend(node['additionalProperties'] for node in nodes
+                            if key not in node.get('properties', {}) and isinstance(node.get('additionalProperties'), dict))
+            result[key] = _expand_calendar_refs(item, {'anyOf': children}, references, root_schema)
+        return result
+    if isinstance(value, list):
+        result = []
+        for index, item in enumerate(value):
+            children = []
+            for node in nodes:
+                prefix = node.get('prefixItems', ())
+                items = node.get('items', {})
+                if index < len(prefix):
+                    children.append(prefix[index])
+                elif isinstance(items, dict):
+                    children.append(items)
+                elif isinstance(items, list) and index < len(items):
+                    children.append(items[index])
+            result.append(_expand_calendar_refs(item, {'anyOf': children}, references, root_schema))
+        return result
+    return value
 
 
 def _has_temporal_format(schema) -> bool:
@@ -645,10 +767,23 @@ _PLAN_STEP_KV_RE = re.compile(
 )
 
 
+def _temporal_literal_matches(value: str, format_name: str) -> bool:
+    """Accept ISO temporal literals independently of the sampled request clock."""
+    from datetime import date, datetime as iso_datetime, time
+
+    parser = {'date': date.fromisoformat, 'date-time': iso_datetime.fromisoformat,
+              'time': time.fromisoformat}[format_name]
+    try:
+        parser(value)
+    except ValueError:
+        return False
+    return format_name != 'date-time' or len(value) > 10
+
+
 def _parse_plan_step_concrete(
     next_step_text: str,
     allowed_names: Sequence[str],
-    property_schemas: dict[str, dict],
+    parameter_schemas: dict[str, dict],
 ) -> Optional[Tuple[str, dict]]:
     """Deterministically parse ``toolName key='value' key2="value2"`` steps.
 
@@ -683,7 +818,9 @@ def _parse_plan_step_concrete(
     if not rest_stripped:
         return name, {}
     args: dict = {}
-    properties = property_schemas.get(name, {})
+    parameters = parameter_schemas[name]
+    properties = parameters.get("properties", {}) if isinstance(parameters, dict) else {}
+    properties = properties if isinstance(properties, dict) else {}
     cursor = 0
     for m in _PLAN_STEP_KV_RE.finditer(rest):
         key = m.group("key")
@@ -723,6 +860,13 @@ def _parse_plan_step_concrete(
                 elif "string" not in kinds:
                     debug_log("planner: concrete typed argument needs resolver", "planning")
                     return None
+        if isinstance(value, str) and isinstance(property_schema, dict):
+            formats = {node['format'] for node in _schema_nodes(property_schema, parameters)
+                       if isinstance(node.get('format'), str)
+                       and node['format'] in {'date', 'date-time', 'time'}}
+            if formats and not any(_temporal_literal_matches(value, kind) for kind in formats):
+                debug_log("planner: relative or invalid temporal literal needs resolver", "planning")
+                return None
         args[key] = value
         cursor = m.end()
     if rest[cursor:].strip() not in ("", "."):
@@ -812,8 +956,9 @@ def resolve_next_tool_call(
         })
 
     # Fast path: fully-concrete plan step parses deterministically.
+    parameter_schemas = {entry["name"]: entry["parameters"] for entry in tool_catalogue}
     fast = _parse_plan_step_concrete(
-        next_step_text, allowed_names, property_schemas,
+        next_step_text, allowed_names, parameter_schemas,
     )
     if fast is not None and _has_required_arguments(fast[0], fast[1], required_props):
         debug_log(
@@ -837,10 +982,12 @@ def resolve_next_tool_call(
     needs_clock = any(entry['name'] in referenced_names and _has_temporal_format(entry['parameters'])
                       for entry in tool_catalogue)
     clock_context = ''
+    calendar_references = {}
     system_prompt = _STEP_RESOLVER_SYSTEM
     if needs_clock:
         now_utc = datetime.now(timezone.utc)
-        clock = {'utc': now_utc.isoformat(), 'system_local': now_utc.astimezone().isoformat()}
+        clock = _clock_snapshot(now_utc)
+        calendar_references = _calendar_argument_refs(clock)
         clock_context = f"CURRENT CLOCK:\n{json.dumps(clock)}\n\n"
         system_prompt += _TEMPORAL_RESOLUTION_GUIDANCE
         debug_log("planner.resolve_next_tool_call: added declared temporal clock context", "planning")
@@ -932,6 +1079,13 @@ def resolve_next_tool_call(
             )
         args = filtered
     if not _has_required_arguments(name, args, required_props):
+        return None
+    try:
+        parameters = parameter_schemas[name]
+        if calendar_references:
+            args = _expand_calendar_refs(args, parameters, calendar_references, parameters)
+    except (ValueError, TypeError, RecursionError):
+        debug_log("planner.resolve_next_tool_call: invalid calendar reference or schema", "planning")
         return None
     return name, _normalise_url_args(args, property_schemas[name])
 

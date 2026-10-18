@@ -16,6 +16,13 @@ jobs:
           python-version: '3.11'
           cache: pip
           cache-dependency-path: requirements.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: 🧪 Verify staged release publication
+        run: |
+          npm install --prefix "$RUNNER_TEMP/release-plugin" --ignore-scripts --no-audit --no-fund @semantic-release/github@9
+          node tests/release_publication.mjs "$RUNNER_TEMP/release-plugin/node_modules/@semantic-release/github"
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y portaudio19-dev libegl1 libxkbcommon0
       - name: Install deps
@@ -25,6 +32,9 @@ jobs:
       - name: Run unit tests
         run: |
           python -m pytest -q -m unit
+      - name: 🧪 Verify local provider transport
+        run: |
+          python -m pytest -q -m integration tests/test_openai_compatible_e2e.py tests/test_provider_model_resolution.py tests/test_setup_wizard.py tests/test_local_llm_privacy.py
 
 
   daemon-lock:
@@ -58,3 +68,60 @@ jobs:
         run: python -m pip install pytest requests python-dotenv
       - name: Verify voice download publication and recovery
         run: python -m pytest -q tests/test_piper_download_concurrency.py tests/test_piper_download_recovery.py
+
+  dictation-history:
+    name: Dictation history (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Install history test dependencies
+        run: python -m pip install pytest python-dotenv filelock==3.32.7
+      - name: Verify saved history publication and writer coordination
+        run: python -m pytest -q tests/test_dictation_history_writers.py tests/test_dictation_history_atomic_save.py tests/test_dictation_history_read_failure.py tests/test_dictation_history_record_validation.py
+
+
+  search-transport:
+    name: Search transport (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Qualify source and frozen native search requests
+        shell: python
+        run: |
+          import os
+          from pathlib import Path
+          import subprocess
+          import sys
+          import shutil
+          dependency = next(line for line in Path('requirements.txt').read_text().splitlines()
+                            if line.startswith('curl_cffi=='))
+          subprocess.run([sys.executable, '-m', 'pip', 'install', dependency,
+                          'pytest', 'python-dotenv', 'pyinstaller', 'cryptography'], check=True)
+          # A narrow source copy avoids shadowing stdlib types with tools/types.py.
+          probe_source = Path('build/search-native/source')
+          probe_source.mkdir(parents=True, exist_ok=True)
+          shutil.copyfile('src/jarvis/tools/search_http.py', probe_source / 'search_http.py')
+          subprocess.run([sys.executable, '-m', 'PyInstaller', '--noconfirm', '--clean',
+                          '--onedir', '--name', 'search-probe', '--paths', str(probe_source),
+                          '--additional-hooks-dir', 'installer/hooks',
+                          '--distpath', 'build/search-native/dist', '--workpath', 'build/search-native/work',
+                          '--specpath', 'build/search-native', 'tests/fixtures/search_transport_probe.py'], check=True)
+          env = os.environ.copy()
+          executable = 'search-probe.exe' if os.name == 'nt' else 'search-probe'
+          env['JARVIS_SEARCH_PROBE_EXE'] = str(Path('build/search-native/dist/search-probe', executable).resolve())
+          subprocess.run([sys.executable, '-m', 'pytest', '-q', '-m', 'integration',
+                          'tests/test_search_http.py'], env=env, check=True)

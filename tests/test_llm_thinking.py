@@ -6,8 +6,7 @@ the ``think`` parameter sent to Ollama across all call sites.
 """
 
 import json
-import threading
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -15,304 +14,162 @@ from jarvis.config import get_default_config
 
 
 # ---------------------------------------------------------------------------
-# Config defaults
-# ---------------------------------------------------------------------------
-
-class TestThinkingConfig:
-    """Config layer tests for thinking settings."""
-
-    def test_default_config_has_chat_thinking_disabled(self):
-        """llm_thinking_enabled should default to False."""
-        config = get_default_config()
-        assert "llm_thinking_enabled" in config
-        assert config["llm_thinking_enabled"] is False
-
-    def test_default_config_has_intent_judge_thinking_disabled(self):
-        """intent_judge_thinking_enabled should default to False."""
-        config = get_default_config()
-        assert "intent_judge_thinking_enabled" in config
-        assert config["intent_judge_thinking_enabled"] is False
-
-    def test_default_config_has_dictation_thinking_disabled(self):
-        """dictation_thinking_enabled should default to False."""
-        config = get_default_config()
-        assert "dictation_thinking_enabled" in config
-        assert config["dictation_thinking_enabled"] is False
-
-
-# ---------------------------------------------------------------------------
 # llm.py — payload construction
 # ---------------------------------------------------------------------------
 
+@pytest.mark.unit
+@pytest.mark.usefixtures('no_network')
 class TestLlmThinkingPayload:
-    """Verify the ``think`` key appears in Ollama request payloads."""
+    """Public local-model helpers forward reasoning and deliver usable content."""
 
-    def _capture_payload(self, mock_post, *, expect_stream=False):
-        """Extract the JSON payload from the first call to requests.post."""
-        assert mock_post.called, "requests.post was never called"
-        _, kwargs = mock_post.call_args
-        payload = kwargs.get("json") or {}
-        return payload
+    @pytest.mark.parametrize('operation', ['direct', 'streaming', 'chat'])
+    @pytest.mark.parametrize('thinking', [None, False, True], ids=['default', 'disabled', 'enabled'])
+    def test_reasoning_and_answer_delivery(self, monkeypatch, operation, thinking):
+        from contextlib import nullcontext
+        from inspect import signature
+        from jarvis import llm
+        from jarvis.llm import http
 
-    @patch("jarvis.llm.requests.post")
-    def test_call_llm_direct_thinking_false(self, mock_post):
-        from jarvis.llm import call_llm_direct
-
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {"message": {"content": "ok"}}
-        mock_post.return_value = mock_resp
-
-        call_llm_direct("http://localhost:11434", "gemma4:e2b", "sys", "hi", thinking=False)
-        payload = self._capture_payload(mock_post)
-        assert payload["think"] is False
-
-    @patch("jarvis.llm.requests.post")
-    def test_call_llm_direct_thinking_true(self, mock_post):
-        from jarvis.llm import call_llm_direct
-
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {"message": {"content": "ok"}}
-        mock_post.return_value = mock_resp
-
-        call_llm_direct("http://localhost:11434", "gemma4:e2b", "sys", "hi", thinking=True)
-        payload = self._capture_payload(mock_post)
-        assert payload["think"] is True
-
-    @patch("jarvis.llm.requests.post")
-    def test_call_llm_direct_thinking_defaults_false(self, mock_post):
-        from jarvis.llm import call_llm_direct
-
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {"message": {"content": "ok"}}
-        mock_post.return_value = mock_resp
-
-        call_llm_direct("http://localhost:11434", "gemma4:e2b", "sys", "hi")
-        payload = self._capture_payload(mock_post)
-        assert payload["think"] is False
-
-    @patch("jarvis.llm.requests.post")
-    def test_call_llm_streaming_thinking(self, mock_post):
-        from jarvis.llm import call_llm_streaming
-
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.iter_lines.return_value = [
-            json.dumps({"message": {"content": "hi"}}).encode()
+        helpers = {'direct': llm.call_llm_direct, 'streaming': llm.call_llm_streaming,
+                   'chat': llm.chat_with_messages}
+        helper = helpers[operation]
+        kwargs = {} if thinking is None else {'thinking': thinking}
+        expected = signature(helper).parameters['thinking'].default if thinking is None else thinking
+        answer = 'Synthetic answer'
+        response = MagicMock()
+        response.status_code = 200
+        response.json.return_value = {'message': {'content': answer}, 'done': True}
+        response.iter_lines.return_value = [
+            json.dumps({'message': {'thinking': 'Synthetic reasoning'}}).encode(),
+            json.dumps({'message': {'content': answer}, 'done': True}).encode(),
         ]
-        mock_resp.raise_for_status = MagicMock()
-        mock_post.return_value = mock_resp
 
-        call_llm_streaming("http://localhost:11434", "gemma4:e2b", "sys", "hi", thinking=True)
-        payload = self._capture_payload(mock_post)
-        assert payload["think"] is True
+        def post(url, **options):
+            payload = options['json']
+            assert url == 'http://127.0.0.1:1/api/chat'
+            assert payload['model'] == 'synthetic-model'
+            assert payload['messages'][-1]['content'] == 'Synthetic question'
+            assert payload['think'] is expected
+            return nullcontext(response)
 
-    @patch("jarvis.llm.requests.post")
-    def test_chat_with_messages_thinking(self, mock_post):
-        from jarvis.llm import chat_with_messages
-
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {"message": {"content": "ok"}}
-        mock_resp.raise_for_status = MagicMock()
-        mock_post.return_value = mock_resp
-
-        msgs = [{"role": "user", "content": "hi"}]
-        chat_with_messages("http://localhost:11434", "gemma4:e2b", msgs, thinking=True)
-        payload = self._capture_payload(mock_post)
-        assert payload["think"] is True
-
-    @patch("jarvis.llm.requests.post")
-    def test_chat_with_messages_thinking_defaults_false(self, mock_post):
-        from jarvis.llm import chat_with_messages
-
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {"message": {"content": "ok"}}
-        mock_resp.raise_for_status = MagicMock()
-        mock_post.return_value = mock_resp
-
-        msgs = [{"role": "user", "content": "hi"}]
-        chat_with_messages("http://localhost:11434", "gemma4:e2b", msgs)
-        payload = self._capture_payload(mock_post)
-        assert payload["think"] is False
-
-
-# ---------------------------------------------------------------------------
-# Intent judge
-# ---------------------------------------------------------------------------
-
-class TestIntentJudgeThinking:
-    """Intent judge respects the thinking config."""
-
-    def test_config_default_thinking_false(self):
-        from jarvis.listening.intent_judge import IntentJudgeConfig
-        config = IntentJudgeConfig()
-        assert config.thinking is False
-
-    def test_config_accepts_thinking_true(self):
-        from jarvis.listening.intent_judge import IntentJudgeConfig
-        config = IntentJudgeConfig(thinking=True)
-        assert config.thinking is True
-
-    def test_create_intent_judge_passes_thinking(self):
-        """create_intent_judge should read intent_judge_thinking_enabled from cfg."""
-        from jarvis.listening.intent_judge import create_intent_judge
-
-        cfg = MagicMock()
-        cfg.wake_word = "jarvis"
-        cfg.wake_aliases = []
-        cfg.fast_model = "gemma4:e2b"
-        cfg.ollama_base_url = "http://localhost:11434"
-        cfg.intent_judge_timeout_sec = 10.0
-        cfg.intent_judge_thinking_enabled = True
-
-        judge = create_intent_judge(cfg)
-        assert judge is not None
-        assert judge.config.thinking is True
-
-    def test_create_intent_judge_independent_from_chat_thinking(self):
-        """Intent judge thinking should be independent from chat thinking."""
-        from jarvis.listening.intent_judge import create_intent_judge
-
-        cfg = MagicMock()
-        cfg.wake_word = "jarvis"
-        cfg.wake_aliases = []
-        cfg.fast_model = "gemma4:e2b"
-        cfg.ollama_base_url = "http://localhost:11434"
-        cfg.intent_judge_timeout_sec = 10.0
-        cfg.llm_thinking_enabled = True
-        cfg.intent_judge_thinking_enabled = False
-
-        judge = create_intent_judge(cfg)
-        assert judge.config.thinking is False
-
-
-# ---------------------------------------------------------------------------
-# Dictation engine
-# ---------------------------------------------------------------------------
-
-class TestDictationThinking:
-    """Dictation engine respects the thinking config."""
-
-    def test_llm_clean_dictation_sends_think_false(self):
-        from src.jarvis.dictation.dictation_engine import _llm_clean_dictation
-
-        with patch("requests.post") as mock_post:
-            mock_resp = MagicMock()
-            mock_resp.status_code = 200
-            mock_resp.json.return_value = {"response": "cleaned"}
-            mock_post.return_value = mock_resp
-
-            _llm_clean_dictation("um hello", "http://localhost:11434", thinking=False)
-            payload = mock_post.call_args[1].get("json") or mock_post.call_args[0][1] if len(mock_post.call_args[0]) > 1 else mock_post.call_args[1]["json"]
-            assert payload["think"] is False
-
-    def test_llm_clean_dictation_sends_think_true(self):
-        from src.jarvis.dictation.dictation_engine import _llm_clean_dictation
-
-        with patch("requests.post") as mock_post:
-            mock_resp = MagicMock()
-            mock_resp.status_code = 200
-            mock_resp.json.return_value = {"response": "cleaned"}
-            mock_post.return_value = mock_resp
-
-            _llm_clean_dictation("um hello", "http://localhost:11434", thinking=True)
-            payload = mock_post.call_args[1].get("json") or mock_post.call_args[0][1] if len(mock_post.call_args[0]) > 1 else mock_post.call_args[1]["json"]
-            assert payload["think"] is True
-
-    def test_engine_stores_thinking(self):
-        from src.jarvis.dictation.dictation_engine import DictationEngine
-
-        engine = DictationEngine(
-            whisper_model_ref=lambda: MagicMock(),
-            whisper_backend_ref=lambda: "faster-whisper",
-            mlx_repo_ref=lambda: None,
-            hotkey="ctrl+shift+d",
-            sample_rate=16000,
-            transcribe_lock=threading.Lock(),
-            thinking=True,
-        )
-        assert engine._thinking is True
+        monkeypatch.setattr(http, 'post', post)
+        seen = []
+        if operation == 'chat':
+            result = helper('http://127.0.0.1:1', 'synthetic-model',
+                            [{'role': 'user', 'content': 'Synthetic question'}], **kwargs)
+            assert result and result['message']['content'] == answer
+        else:
+            if operation == 'streaming':
+                kwargs['on_token'] = seen.append
+            result = helper('http://127.0.0.1:1', 'synthetic-model',
+                            'Synthetic instructions', 'Synthetic question', **kwargs)
+            assert result == answer
+            if operation == 'streaming':
+                assert seen == [answer]
 
 
 # ---------------------------------------------------------------------------
 # Settings window metadata
 # ---------------------------------------------------------------------------
 
+@pytest.mark.unit
+@pytest.mark.usefixtures('no_network')
 class TestSettingsWindowThinking:
-    """Settings window includes all three thinking fields."""
+    """Thinking switches remain visible, independent and persistent."""
 
-    def test_field_metadata_includes_chat_thinking(self):
-        from desktop_app.settings_window import FIELD_METADATA
-        keys = [fm.key for fm in FIELD_METADATA]
-        assert "llm_thinking_enabled" in keys
+    @pytest.mark.parametrize('key,category', [
+        ('llm_thinking_enabled', 'llm'),
+        ('intent_judge_thinking_enabled', 'llm'),
+        ('dictation_thinking_enabled', 'features'),
+    ], ids=['chat', 'intent', 'dictation'])
+    @pytest.mark.parametrize('enabled', [False, True])
+    def test_toggling_and_saving_preserves_other_values(
+        self, settings_config_path, qapp, key, category, enabled,
+    ):
+        from desktop_app import settings_window as sw
+        from jarvis.config import load_settings
 
-    def test_chat_thinking_field_is_bool_in_llm_category(self):
-        from desktop_app.settings_window import FIELD_METADATA
-        field = next(fm for fm in FIELD_METADATA if fm.key == "llm_thinking_enabled")
-        assert field.field_type == "bool"
-        assert field.category == "llm"
+        keys = ['llm_thinking_enabled', 'intent_judge_thinking_enabled', 'dictation_thinking_enabled']
+        original = {name: not enabled for name in keys}
+        original['opaque'] = {'text': 'İstanbul, 東京'}
+        path = settings_config_path
+        path.write_text(json.dumps(original), encoding='utf-8')
+        window = sw.SettingsWindow()
+        control = window._widgets[key]
+        assert control.isChecked() is not enabled
+        index = next(i for i, (name, _) in enumerate(sw.CATEGORIES) if name == category)
+        window._sidebar.setCurrentRow(index)
+        window.show()
+        qapp.processEvents()
+        assert control.isVisible()
+        control.setChecked(enabled)
+        window._on_save()
 
-    def test_field_metadata_includes_intent_judge_thinking(self):
-        from desktop_app.settings_window import FIELD_METADATA
-        keys = [fm.key for fm in FIELD_METADATA]
-        assert "intent_judge_thinking_enabled" in keys
-
-    def test_intent_judge_thinking_field_is_bool_in_llm_category(self):
-        from desktop_app.settings_window import FIELD_METADATA
-        field = next(fm for fm in FIELD_METADATA if fm.key == "intent_judge_thinking_enabled")
-        assert field.field_type == "bool"
-        assert field.category == "llm"
-
-    def test_field_metadata_includes_dictation_thinking(self):
-        from desktop_app.settings_window import FIELD_METADATA
-        keys = [fm.key for fm in FIELD_METADATA]
-        assert "dictation_thinking_enabled" in keys
-
-    def test_dictation_thinking_field_is_bool_in_features_category(self):
-        from desktop_app.settings_window import FIELD_METADATA
-        field = next(fm for fm in FIELD_METADATA if fm.key == "dictation_thinking_enabled")
-        assert field.field_type == "bool"
-        assert field.category == "features"
+        saved = json.loads(path.read_text(encoding='utf-8'))
+        cfg = load_settings()
+        assert getattr(cfg, key) is enabled
+        assert (key in saved) is (enabled != get_default_config()[key])
+        assert all(getattr(cfg, name) is original[name] for name in keys if name != key)
+        assert saved['opaque'] == original['opaque']
 
 
-# ---------------------------------------------------------------------------
-# Timeout / error paths — regression test for missing debug_log import
-# ---------------------------------------------------------------------------
-
+@pytest.mark.unit
+@pytest.mark.usefixtures('no_network')
 class TestCallLlmDirectFailurePaths:
-    """Exercises the exception branches in call_llm_direct.
+    """Failed local requests stay private and permit a subsequent answer."""
 
-    These branches call debug_log; a missing import would surface here as a
-    NameError instead of the intended graceful None return.
-    """
-
-    def test_timeout_returns_none(self):
+    @pytest.mark.parametrize('entry', ['ollama', 'openai_compatible', 'helper'])
+    @pytest.mark.parametrize('stage,error_type', [
+        ('request', 'Timeout'), ('request', 'ConnectionError'),
+        ('status', 'HTTPError'), ('decode', 'ValueError'),
+    ])
+    def test_failure_diagnostics_and_recovery(self, monkeypatch, capsys, entry, stage, error_type):
+        from contextlib import nullcontext
         import requests
-        from jarvis.llm import call_llm_direct
+        from jarvis import llm
 
-        with patch('jarvis.llm.requests.post', side_effect=requests.exceptions.Timeout):
-            result = call_llm_direct(
-                base_url="http://localhost:99999",
-                chat_model="test-model",
-                system_prompt="sys",
-                user_content="hi",
-                timeout_sec=0.1,
-            )
-        assert result is None
+        monkeypatch.setenv('JARVIS_VOICE_DEBUG', '1')
+        endpoint = 'http://127.0.0.1:1/private-endpoint?token=private-token'
+        private_text = 'Synthetic private question'
+        message = f'{endpoint}, {private_text}'
+        error_class = ValueError if error_type == 'ValueError' else getattr(requests.exceptions, error_type)
+        error = error_class(message)
+        response = MagicMock()
+        response.json.return_value = (
+            {'choices': [{'message': {'content': 'Complete synthetic answer'}, 'finish_reason': 'stop'}]}
+            if entry == 'openai_compatible' else
+            {'message': {'content': 'Complete synthetic answer'}, 'done': True}
+        )
+        if stage == 'status':
+            response.raise_for_status.side_effect = [error, None]
+        elif stage == 'decode':
+            response.json.side_effect = [error, response.json.return_value]
+        failed = False
 
-    def test_request_exception_returns_none(self):
-        from jarvis.llm import call_llm_direct
+        def post(*args, **kwargs):
+            nonlocal failed
+            if stage == 'request' and not failed:
+                failed = True
+                raise error
+            return nullcontext(response)
 
-        with patch('jarvis.llm.requests.post', side_effect=ConnectionError("boom")):
-            result = call_llm_direct(
-                base_url="http://localhost:99999",
-                chat_model="test-model",
-                system_prompt="sys",
-                user_content="hi",
-                timeout_sec=0.1,
-            )
-        assert result is None
+        monkeypatch.setattr(llm.http, 'post', post)
+        if entry == 'helper':
+            call = lambda: llm.call_llm_direct(endpoint, 'synthetic-model', 'Synthetic instructions',
+                                             private_text, timeout_sec=0.25)
+        else:
+            backend_type = llm.OllamaBackend if entry == 'ollama' else llm.OpenAICompatibleBackend
+            backend = backend_type(endpoint)
+            call = lambda: backend.direct('synthetic-model', 'Synthetic instructions',
+                                          private_text, timeout_sec=0.25)
+        assert call() is None
+        captured = capsys.readouterr()
+        diagnostic = captured.out + captured.err
+        assert endpoint not in diagnostic
+        assert 'private-token' not in diagnostic
+        assert private_text not in diagnostic
+        if error_type == 'Timeout':
+            assert 'timeout' in diagnostic and '0.25' in diagnostic
+        else:
+            assert error_type in diagnostic
+        assert call() == 'Complete synthetic answer'

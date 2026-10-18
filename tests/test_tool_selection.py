@@ -586,7 +586,6 @@ class TestLLMStrategy:
 @pytest.mark.unit
 @pytest.mark.parametrize('provider', ['ollama', 'openai_compatible'])
 def test_reasoning_router_has_room_for_answer_before_fallback(monkeypatch, provider):
-    import requests
     from types import SimpleNamespace
     from jarvis.llm import get_llm_backend
     tools = _builtin()
@@ -603,7 +602,7 @@ def test_reasoning_router_has_room_for_answer_before_fallback(monkeypatch, provi
             'choices': [{'message': {'content': content}}],
         }
         return response
-    monkeypatch.setattr(requests, 'post', post)
+    monkeypatch.setattr('jarvis.llm.http.post', post)
     cfg = SimpleNamespace(llm_provider=provider, llm_base_url='http://127.0.0.1:11439/v1',
                           ollama_base_url='http://127.0.0.1:11439')
     selected = select_tools(

@@ -47,6 +47,7 @@
     [
       "@semantic-release/github",
       {
+        "draftRelease": true,
         "successComment": false,
         "failTitle": false,
         "failComment": false,

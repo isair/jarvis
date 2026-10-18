@@ -14,6 +14,7 @@ def test_directed_echo_does_not_start_a_query_while_thinking():
     from test_hot_window_input import (
         _create_listener, _simulate_tts_finish, _wait_for_hot_window_state,
         _install_intent_judge, _make_judgment, _process_transcript, _accepted_query,
+        _install_silent_thinking_tune,
     )
     listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=3.0)
     spoken = 'The weather is sunny today.'
@@ -22,8 +23,8 @@ def test_directed_echo_does_not_start_a_query_while_thinking():
     _wait_for_hot_window_state(listener)
     _install_intent_judge(listener, _make_judgment(directed=True))
     try:
-        with patch.object(listener, '_is_thinking_tune_active', return_value=True):
-            _process_transcript(listener, spoken, utterance_energy=0.01)
+        _install_silent_thinking_tune(listener)
+        _process_transcript(listener, spoken, utterance_energy=0.01)
         assert _accepted_query(listener) == ''
     finally:
         listener.state_manager.stop()
@@ -167,7 +168,7 @@ def test_voice_snapshot_precedes_waiting_for_the_shared_lock():
         return None
 
     with patch('jarvis.daemon.query_lock', lock), patch('jarvis.reply.engine.run_reply_engine', side_effect=reply):
-        listener._dispatch_query('What is its price?', generation=listener._capture_generation)
+        listener._dispatch_query('What is its price?', generation=listener._capture_generation, language=None)
     assert 'Copper lantern' in contexts[0]
     assert 'Different entity' not in contexts[0]
 
@@ -297,7 +298,7 @@ def test_salvaged_speech_is_dispatched_and_recorded_without_echo(mock_config, db
         with patch.object(engine, 'select_tools', return_value=['stop']), \
              patch.object(engine, 'plan_query', return_value=['Reply to the user.']), \
              patch.object(engine, 'chat_with_messages', side_effect=chat):
-            listener._dispatch_query(user, generation=listener._capture_generation)
+            listener._dispatch_query(user, generation=listener._capture_generation, language=None)
         messages = dialogue_memory.get_recent_messages()
         assert any(message['role']=='user' and message['content']==user for message in messages)
         assert any(message['role']=='user' and user in message['content'] for message in messages)

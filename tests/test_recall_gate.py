@@ -4,7 +4,7 @@ long-term memory enrichment when the hot-window already covers the topic.
 
 import pytest
 
-from src.jarvis.memory.recall_gate import should_recall
+from jarvis.memory.recall_gate import should_recall
 
 
 @pytest.mark.unit

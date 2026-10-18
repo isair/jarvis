@@ -88,22 +88,40 @@ def test_mutation_listener_can_read_committed_data_from_another_thread(stores, o
             unregister_graph_mutation_listener(listener)
 
 
-@pytest.mark.parametrize('operation', ['update', 'append'])
-def test_failed_write_does_not_block_another_writer(stores, operation):
+@pytest.mark.parametrize('failure_stage', ['statement', 'commit'])
+@pytest.mark.parametrize('operation', ['update', 'append', 'delete', 'touch'])
+def test_failed_write_does_not_block_another_writer(stores, operation, failure_stage):
     import sqlite3
 
     first, other = stores[0], stores[-1]
     blocked = first.create_node('Reject this write', 'Synthetic failure', data='Keep facts', parent_id='user')
     writable = first.create_node('Other node', 'Writable', parent_id='user')
-    first.conn.execute(f"""CREATE TRIGGER reject_one_node BEFORE UPDATE ON memory_nodes
-        WHEN OLD.id = '{blocked.id}' BEGIN SELECT RAISE(ABORT, 'Synthetic write failure'); END""")
+    saved = first.get_node(blocked.id).to_dict()
+    event = 'DELETE' if operation == 'delete' else 'UPDATE'
+    if failure_stage == 'commit':
+        failure = """INSERT INTO memory_nodes
+            (id, name, description, parent_id, last_accessed, created_at, updated_at)
+            VALUES ('synthetic-orphan', 'Rejected child', 'Commit failure', 'missing-parent',
+                    OLD.last_accessed, OLD.created_at, OLD.updated_at);"""
+    else:
+        failure = "SELECT RAISE(ABORT, 'Synthetic write failure');"
+    first.conn.execute(f"""CREATE TRIGGER reject_one_node BEFORE {event} ON memory_nodes
+        WHEN OLD.id = '{blocked.id}' BEGIN {failure} END""")
     first.conn.commit()
+    if failure_stage == 'commit':
+        first.conn.execute('PRAGMA defer_foreign_keys = ON')
     other.conn.execute('PRAGMA busy_timeout = 100')
-    with pytest.raises(sqlite3.IntegrityError):
-        if operation == 'update':
-            first.update_node(blocked.id, data='Rejected facts')
-        else:
-            first.append_to_node(blocked.id, 'Rejected facts')
+    if operation == 'touch':
+        first.touch_node(blocked.id)
+    else:
+        with pytest.raises(sqlite3.IntegrityError):
+            if operation == 'update':
+                first.update_node(blocked.id, data='Rejected facts')
+            elif operation == 'append':
+                first.append_to_node(blocked.id, 'Rejected facts')
+            else:
+                first.delete_node(blocked.id)
     assert other.update_node(writable.id, data='Committed fact') is not None
-    assert first.get_node(blocked.id).data == 'Keep facts'
+    assert first.get_node(blocked.id).to_dict() == saved
+    assert first.get_node('synthetic-orphan') is None
     assert first.get_node(writable.id).data == 'Committed fact'

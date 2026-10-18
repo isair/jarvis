@@ -44,6 +44,23 @@ that failed. PortAudio guidance belongs to capture failures, not VAD or array
 processing failures. Capture cannot start without sounddevice and NumPy; these
 failures do not prevent the daemon's text-chat path from loading.
 
+Before recognition, a completed capture must contain
+at least one native-rate frame whose RMS energy meets `voice_min_energy`.
+This evidence gate applies with or without WebRTC VAD and is independent of
+language or recognised words. Accepted captures retain all assembled samples,
+including pre-roll and softer speech; the energy floor does not clip syllables.
+A zero energy floor disables this additional rejection gate.
+
+Faster-whisper applies its bundled local Silero VAD to each assembled utterance
+before decoding. This speech guard is independent of the optional capture-frame
+VAD and rejects non-speech without relying on language or recognised phrases.
+The decoder uses the configured `whisper_no_speech_threshold`, and segment
+filtering independently enforces that threshold regardless of text confidence.
+Previous-text conditioning is disabled on CPU and CUDA to avoid propagating
+hallucinated text between decoding windows. CPU decoding retains its
+without-timestamps optimisation. Decoder errors do not retry with speech guards
+removed; CUDA recovery retains the same guarded options on CPU.
+
 Utterance assembly enforces `max_utterance_ms` during continuous speech as
 well as at silent endpoints. While TTS is speaking, `tts_max_utterance_ms`
 applies so interruption audio reaches Whisper promptly. Limits count complete
@@ -173,7 +190,7 @@ Instead of extracting post-wake-word audio, we:
 
 ### 2. Text-Based Wake Detection
 
-Wake detection checks the current transcript for case-insensitive, literal primary-name and alias matches at Unicode word boundaries. Empty names are ignored. Configured aliases represent known mishearings and require exact whole-name matches; their approximate neighbours are not wake signals. Only a single-word primary name participates in fuzzy token matching, using `wake_fuzzy_ratio`. Tokens may extend the primary name by at most one character; shorter forms use the configured similarity threshold. Accepted requests retain configured names and all other recognised words. These rules use configured names without language-specific exclusions.
+Wake detection checks the current transcript for case-insensitive, literal primary-name and alias matches at Unicode word boundaries. Names and matching text use canonical Unicode composition; combining marks stay inside word tokens. Empty names are ignored. Configured aliases represent known mishearings and require exact whole-name matches; their approximate neighbours are not wake signals. Only a single-word primary name participates in fuzzy token matching, using `wake_fuzzy_ratio`. Tokens may extend the primary name by at most one character; shorter forms use the configured similarity threshold. Accepted requests retain configured names and all other recognised words. These rules use configured names without language-specific exclusions.
 
 ### 3. Context-Aware Intent Judge
 
@@ -184,7 +201,7 @@ The intent judge receives full context and makes intelligent decisions:
 
 **Gating:** The judge is called only when there is an engagement signal — (a) a wake word was detected in the current utterance, (b) the utterance falls inside (or pending) a hot window, or (c) TTS is currently speaking. Pure ambient speech skips the judge entirely. This keeps the synchronous audio loop from blocking up to `intent_judge_timeout_sec` on every background utterance, which would otherwise freeze the UI when Ollama is slow or contended.
 
-**Alias normalisation:** Before the transcript is sent to the judge, every configured wake-word alias in each segment is replaced with the primary assistant name (case-insensitive, word-boundary-aware). Aliases are Whisper mishearings of the wake word (e.g. "Jervis", "Jaivis" for "Jarvis"); without this step the small judge model sees the alias, doesn't know it refers to the assistant, and can decide the user is addressing a different person. Normalisation happens at prompt-build time only — the raw transcript buffer is untouched.
+**Alias normalisation:** Before the transcript is sent to the judge, every configured wake-word alias in each segment is replaced with the primary assistant name (case-insensitive, word-boundary-aware). Aliases are Whisper mishearings of the wake word (e.g. "Jervis", "Jaivis" for "Jarvis"); without this step the small judge model sees the alias, doesn't know it refers to the assistant, and can decide the user is addressing a different person. Detection and prompt alias replacement share the same complete-name boundary policy. The judge receives a canonically composed copy with literal assistant-name replacements; replacement strings are not regex templates. Normalisation happens at prompt-build time only; the raw transcript buffer is untouched.
 
 **Request preservation:** Accepted speech retains its words and casing, including wake words and ASR errors. The intent decision contains no query. Tool arguments are composed by the planner or chat model using the original request and separate transcript context, where the wake word is an address rather than a search term. Names such as "Jarvis Cocker" retain their meaning.
 **Mention versus address:** The judge determines the addressee. Explanations to another person about speaking to the assistant are mentions and return `directed=false`. Outside the hot window, a high-confidence non-echo rejection stops collection despite a wake-word mention. Inconclusive or unavailable judgements retain wake-word fallback.
@@ -217,7 +234,7 @@ On small models, a caveat line is appended above a more involved example to set 
 - **Chat model** (`cfg.llm_chat_model`) — verifies the server is actually Ollama via `GET /api/version`, then issues a minimal `/api/generate` request with the power-mode `keep_alive` (`30m` normally, `1m` in low-power mode) so the weights stay resident.
 - **Intent judge model** (the fast tier: `resolve_model(cfg, Tier.FAST)`) — same pattern. If it points at the same Ollama model as the chat model, a single warmup covers both roles (Ollama loads the weights once).
 
-**Whisper backend/model capability:** Auto mode prefers MLX on Apple Silicon only when `mlx-whisper` imports successfully. An explicit `faster-whisper` preference disables MLX, and an explicit `mlx` preference falls back to faster-whisper when MLX is unavailable. `large-v3-turbo` is supported by MLX or by faster-whisper 1.1.0 and newer. If the configuration selects turbo on an unsupported faster-whisper backend, startup loads `medium` instead and prints a warning pointing to Whisper settings or the setup wizard.
+**Whisper backend/model capability:** Auto mode prefers MLX on Apple Silicon only when `mlx-whisper` imports successfully. An explicit `faster-whisper` preference disables MLX, and an explicit `mlx` preference falls back to faster-whisper when MLX is unavailable. `large-v3-turbo` is supported by MLX or by faster-whisper 1.1.0 and newer. The listener and setup wizard use the same importability and version check from `whisper_capabilities.py`; an unavailable engine or unreadable version does not advertise Turbo support. If the configuration selects turbo on an unsupported faster-whisper backend, startup loads `medium` instead and prints a warning pointing to Whisper settings or the setup wizard.
 
 **Low-power mode:** When `cfg.low_power_mode` is true, the listener skips chat and intent-judge warmup threads and prints `🌱 Low power mode: LLM warmup skipped`. Whisper still warms because speech recognition needs to be ready before the listener can accept input. The first LLM-backed engagement after startup or idle loads models on demand.
 
@@ -258,13 +275,13 @@ notification time. Shutdown rejects further activation/reset scheduling and
 hot-window admission; manual expiry also cancels pending activation.
 
 
-**Behaviour:** Speech first passes through an early fuzzy echo check (rapidfuzz `partial_ratio`, threshold 70, with word-count guard to avoid catching mixed echo+speech). Pure echo is silently rejected **without calling the intent judge** — this keeps echo rejection instant and prevents it from blocking the audio loop. The hot window timer is **not** reset on echo rejection. Non-echo speech is sent to the intent judge, but if the judge rejects it, the rejection is overridden — all non-echo speech in the hot window is accepted as a follow-up query.
+**Behaviour:** Speech first passes through a shared hot-window echo check. When either the utterance or its TTS reference has at most four non-empty Unicode tokens, echo rejection requires a contiguous whole-token match of the complete utterance in TTS text, with canonical Unicode, casing and punctuation normalised. Unicode marks that distinguish words are retained. Straight and curly single apostrophes between Unicode letters or marks compare as the same internal apostrophe; they retain distinctions such as contractions and unpunctuated words. Surrounding quotation marks and numeric grouping apostrophes provide no word content. The same token comparison applies to literal prefix cleanup. Character substring overlap alone does not reject a short follow-up. Longer utterances use rapidfuzz `partial_ratio` at threshold 70 with a word-count guard to avoid catching mixed echo+speech. The early check, unavailable-judge fallback and directed-result safety check use this same policy. The early check applies after the captured TTS playback has ended, including queued transcripts captured during playback and while a thinking cue is active. Capture flags identify the source context; they do not keep a completed playback exempt from echo rejection. Active-playback stop commands retain their priority. Pure echo is silently rejected **without calling the intent judge** — this keeps echo rejection instant and prevents it from blocking the audio loop. The hot window timer is **not** reset on echo rejection. Non-echo speech is sent to the intent judge. A confident rejection is respected in every engagement mode; speech addressed to another person cannot become a follow-up merely because the window is active. Inconclusive or unavailable judgements retain the existing engagement fallback.
 
 **Mixed echo+speech handling:** The early fuzzy echo check and deterministic echo salvage distinguish pure echo from speech that includes a user follow-up. The judge classifies engagement in mixed speech. Accepted text stays separate from the full transcript and last TTS text so downstream models can ignore echo when composing tool arguments.
 
 **Accepted-speech source boundary:** Intent judgement supplies engagement and stop decisions. Query collection uses recognised speech after deterministic echo salvage; model output cannot replace it with earlier assistant speech. Current utterance quotes and non-echo semantic follow-ups remain eligible.
 
-**Early salvage for echo-prefixed follow-ups:** Before the early fuzzy check rejects a chunk as pure echo, the listener calls `cleanup_leading_echo` to strip any TTS-tail prefix. If exact-word cleanup fails (for example because Whisper mis-transcribed the first echo word — *"explores"* → *"laws"* — breaking the word-level comparison), the listener falls back to `salvage_after_echo_tail`, which scans heard-text word boundaries right-to-left looking for the rightmost 5-word window that fuzzy-matches the TTS tail (`partial_ratio >= 85`) and keeps everything after it. This preserves short follow-ups (*"Who made it?"*) when exact prefix matching cannot locate the boundary. If the surviving remainder has at least `EchoDetector.min_salvage_words` words (default 3), it replaces the transcript segment text and is treated as the user's follow-up. During-TTS fuzzy cleanup compares complete candidate prefixes with equally sized normalised TTS endings, chooses the strongest qualifying match, and preserves the shorter prefix on tied scores. It requires the shared minimum user-word count after the boundary and rejects suffixes that still resemble echo. The overlap and fuzzy-prefix checks read `EchoDetector.min_salvage_words` directly. The same minimum-word threshold is shared by the during-TTS and post-TTS merged-chunk salvage paths so the policy is consistent across all three sites.
+**Early salvage for echo-prefixed follow-ups:** Before the early fuzzy check rejects a chunk as pure echo, the listener calls `cleanup_leading_echo` to strip any TTS-tail prefix. Literal prefix cleanup requires at least two non-empty matching words. Fuzzy per-word alignment requires at least `EchoDetector.min_salvage_words` non-empty source words; shorter near-matches preserve recognised speech. Punctuation supplies no matching-word evidence. If supported prefix cleanup fails (for example because Whisper mis-transcribed the first echo word — *"explores"* → *"laws"* — breaking the word-level comparison), the listener falls back to `salvage_after_echo_tail`, which scans heard-text word boundaries right-to-left looking for the rightmost 5-word window that fuzzy-matches the TTS tail (`partial_ratio >= 85`) and keeps everything after it. This preserves short follow-ups (*"Who made it?"*) when exact prefix matching cannot locate the boundary. If the surviving remainder has at least `EchoDetector.min_salvage_words` words (default 3), it replaces the transcript segment text and is treated as the user's follow-up. During-TTS fuzzy cleanup compares complete candidate prefixes with equally sized normalised TTS endings, chooses the strongest qualifying match, and preserves the shorter prefix on tied scores. It requires the shared minimum user-word count after the boundary and rejects suffixes that still resemble echo. The overlap and fuzzy-prefix checks read `EchoDetector.min_salvage_words` directly. The same minimum-word threshold is shared by the during-TTS and post-TTS merged-chunk salvage paths so the policy is consistent across all three sites.
 
 **Timestamp-based detection:** `was_speech_during_hot_window(utterance_start_time, utterance_end_time)` compares the utterance's time range against the hot window's time span (from schedule to expiry). This eliminates race conditions between slow Whisper transcription and the expiry timer — if the user started speaking during the window, it counts as hot window input regardless of when the transcript arrives. Also handles **overlapping utterances** where VAD triggered during TTS (mic picking up echo) but the utterance extended into the hot window period.
 
@@ -277,7 +294,7 @@ hot-window admission; manual expiry also cancels pending activation.
 While TTS is playing, echo rejection and stop commands are handled with fast text-based checks (no LLM). This prevents self-loops where the mic picks up TTS output. After TTS finishes, the intent judge takes over.
 
 **Stop detection:**
-- Text-based: Check configured phrases such as "stop", "quiet" and "shut up". Ignore empty or whitespace-only entries; normalise Unicode composition, casing and surrounding configuration whitespace before exact or fuzzy comparison.
+- Text-based: Read `stop_commands` and `stop_command_fuzzy_ratio` from loaded settings. An empty phrase list disables this text-based interruption path. Apply the same configured fuzzy threshold to short-control detection and standalone-control echo priority. Check configured phrases such as "stop", "quiet" and "shut up". Ignore empty or whitespace-only entries; normalise Unicode composition, casing, punctuation and whitespace before comparison. Exact configured phrases match complete whitespace or punctuation-delimited tokens, including phrases inside longer speech. Approximation compares the complete short utterance with a configured phrase, never a single word inside unrelated speech. Combining marks remain part of their token; phrases in scripts without word separators remain eligible as standalone controls.
 - Intent judge can also detect stop commands
 - During active TTS, a standalone configured stop phrase (including a fuzzy transcription) retains immediate interruption priority. Longer literal echoes of the current TTS text are rejected even when they contain a configured stop phrase. Unicode punctuation and casing are normalised without language-specific patterns; an appended user command remains eligible for interruption.
 
@@ -285,6 +302,8 @@ While TTS is playing, echo rejection and stop commands are handled with fast tex
 - Exact prefix comparisons during and after TTS retain Unicode letters and numbers, normalise canonical composition and casing, and ignore surrounding punctuation. Unrelated non-Latin speech must not become an empty-token echo match.
 - Transcripts during TTS are flagged with `is_during_tts=true`
 - Intent judge uses this context to identify echo
+
+**Request locale:** Query collection stores accepted text and the detected language of its latest accepted segment as one immutable value. Clearing collection returns that snapshot and resets both fields. Rejected recognition, TTS echo, interruption-only controls and rejected intent decisions cannot replace a pending request's locale. An accepted segment with unknown language records `None`, which lets tools use their normal locale fallback. Dispatch carries the snapshot's language explicitly through the shared query lock to the reply engine.
 
 ## Rolling Transcript Buffer
 
@@ -321,7 +340,7 @@ class TranscriptBuffer:
 
 ### Intent Decisions and Speech References
 
-The listener selects a static wake-mode or hot-window classification prompt from its known engagement state. Inactive mode rules do not compete in the model input. The intent judge receives structured current-utterance, transcript, timing and TTS fields and decides `directed`, `stop`, `confidence` and `reasoning`. It never generates a replacement query. Declaratives addressing the assistant and hot-window follow-ups remain directed; quoted stop commands, narration and pure TTS echo are not cancellation requests.
+The listener selects a static wake-mode or hot-window classification prompt from its known engagement state. Inactive mode rules do not compete in the model input. The intent judge receives structured current-utterance, transcript, timing and TTS fields and decides `directed`, `stop`, `confidence` and `reasoning`. It never generates a replacement query. Declaratives addressing the assistant and genuine hot-window follow-ups remain directed. Clear other-person conversation remains undirected in the hot window; quoted stop commands, narration and pure TTS echo are not cancellation requests.
 
 A voice reply receives the original collected speech and an immutable `SpeechContext` snapshot, captured before waiting for the shared voice/text query lock. The snapshot copies retained speech, timing, TTS overlap, processed markers and last assistant speech. Rendering excludes the trailing current segment from prior references, includes only used wake aliases alongside the primary name, and omits context when no references or address metadata are needed. It is request-scoped reference data, redacted before model use, JSON-quoted with escaped fence delimiters, and is not persisted in dialogue or diary memory. Text-chat requests have no ambient transcript snapshot.
 
@@ -339,7 +358,7 @@ To minimise perceived latency, audio and visual feedback starts **immediately af
 - **Hot window:** If voice started during an active (or pending) hot window, start the thinking beep and set face state to LISTENING.
 - **No trigger:** If neither condition is met, no feedback is given.
 
-If the intent judge later rejects the query (and no hot window override applies), the beep is stopped and face state reverts to IDLE. This brief false-positive beep is acceptable — users prefer immediate acknowledgement over delayed but perfect accuracy.
+If the intent judge later rejects the query with high confidence, the beep is stopped and face state reverts to IDLE. This brief false-positive beep is acceptable — users prefer immediate acknowledgement over delayed but perfect accuracy.
 
 **Face state is not set during TTS** — the beep is suppressed while TTS is playing to avoid self-triggering.
 
@@ -370,8 +389,10 @@ events. Accepted segments and segments without confidence metadata retain their
 existing backend-specific filtering behaviour. The listener does not directly
 trigger TTS, update widgets, add transcript-buffer entries, or dispatch queries
 for these events. Accepted speech in a mixed utterance continues through the
-normal pipeline. Without a callback, the listener filters and logs rejected
-segments without notifying any consumer.
+normal pipeline. Only accepted query segments supply the pending request's
+language, as described in Request locale. Rejected recognition leaves that
+collected request unchanged. Without a callback, the listener filters and logs
+rejected segments without notifying any consumer.
 
 The daemon uses the listener's filtering and diagnostic logs without a
 low-confidence notification consumer. Rejected speech does not trigger desktop
@@ -442,7 +463,7 @@ Wake Detection Check:
     └→ Text contains wake word? → Start thinking beep + LISTENING face
     ↓
 If wake detected OR in hot window:
-    → Fuzzy echo check (partial_ratio ≥ 70 = echo → reject + reset timer)
+    → Shared hot-window echo check (short whole-token match or longer fuzzy echo → reject without extending timer)
     → Send buffer + context to Intent Judge
     ↓
 If judge.directed and a current engagement signal exists:
@@ -458,7 +479,7 @@ When components are unavailable, the system degrades gracefully:
 
 | Component | Unavailable Behaviour |
 |-----------|---------------------|
-| Intent Judge | Text-based wake detection with original speech; hot window override still applies |
+| Intent Judge | Text-based wake detection with original speech; non-echo hot-window fallback applies when the judge is unavailable |
 | Unsupported input format | Retry channel count and native sample rate on the selected device, then convert to 16 kHz mono for Whisper |
 | Transcript Buffer | Process each utterance independently |
 
@@ -486,6 +507,10 @@ replacement or a tokeniser.
 Network preparation runs in a multiprocessing spawn child, compatible with the
 desktop's frozen-process bootstrap. It has a five-minute timeout, is terminated
 and reaped on failure, and returns a validated local path or a classified error.
+HTTP and connection failures try the local cache without another network
+request. Complete cached files remain usable; incomplete files receive the
+incomplete-download category. If the cache cannot resolve the model, the original
+download failure remains available for classification.
 Child exit and timeout stop model loading without falling back to in-process
 network work. Visible rate-limit status is preserved through nested errors for bounded
 startup retries. Remote preparation that returns incomplete files also receives

@@ -38,8 +38,8 @@ def _make_fake_optimise(events):
 class TestDiaryOptimiseTopicsEndpoint:
     @pytest.fixture(autouse=True)
     def setup_app(self, tmp_path):
-        from src.desktop_app import memory_viewer
-        from src.jarvis.memory.db import Database
+        from desktop_app import memory_viewer
+        from jarvis.memory.db import Database
 
         self.db_path = str(tmp_path / "test.db")
         seed_db = Database(self.db_path)
@@ -74,11 +74,10 @@ class TestDiaryOptimiseTopicsEndpoint:
         cfg.ollama_embed_model = None
         cfg.sqlite_vss_path = None
 
-        # Patch at both import paths that the endpoint may resolve to.
+        # Use the runtime endpoint and optimiser directly.
         with (
-            patch("src.desktop_app.memory_viewer._get_db_path", return_value=self.db_path),
-            patch("src.desktop_app.memory_viewer.load_settings", return_value=cfg),
-            patch("src.jarvis.memory.conversation.optimise_diary_topics", _make_fake_optimise(fake_events)),
+            patch("desktop_app.memory_viewer._get_db_path", return_value=self.db_path),
+            patch("desktop_app.memory_viewer.load_settings", return_value=cfg),
             patch("jarvis.memory.conversation.optimise_diary_topics", _make_fake_optimise(fake_events)),
         ):
             resp = self.client.post("/api/diary/optimise-topics")

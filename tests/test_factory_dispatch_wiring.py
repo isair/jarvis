@@ -11,6 +11,8 @@ from unittest.mock import patch
 
 import pytest
 
+pytestmark = pytest.mark.unit
+
 
 @dataclass
 class _Cfg:
@@ -63,8 +65,8 @@ def test_call_llm_direct_wrapper_dispatches_via_factory(
     from jarvis.llm.ollama import OllamaBackend
     from jarvis.llm.openai_compatible import OpenAICompatibleBackend
 
-    with patch.object(OllamaBackend, "direct", return_value="ollama-result") as ollama_direct, \
-         patch.object(OpenAICompatibleBackend, "direct", return_value="openai-result") as openai_direct:
+    with patch.object(OllamaBackend, "direct", return_value="ollama-result"), \
+         patch.object(OpenAICompatibleBackend, "direct", return_value="openai-result"):
         result = wrapper(
             cfg=cfg,
             chat_model=cfg.llm_chat_model,
@@ -73,14 +75,7 @@ def test_call_llm_direct_wrapper_dispatches_via_factory(
             timeout_sec=1.0,
         )
 
-    if cfg.llm_provider == "ollama":
-        assert ollama_direct.called, "expected OllamaBackend.direct to be invoked"
-        assert not openai_direct.called, "OpenAICompatibleBackend.direct must not be called for llm_provider=ollama"
-        assert result == "ollama-result"
-    else:
-        assert openai_direct.called, "expected OpenAICompatibleBackend.direct to be invoked"
-        assert not ollama_direct.called, "OllamaBackend.direct must not be called for llm_provider=openai_compatible"
-        assert result == "openai-result"
+    assert result == {"ollama": "ollama-result", "openai_compatible": "openai-result"}[cfg.llm_provider]
 
 
 # ── chat() wrapper (engine) ────────────────────────────────────────────────
@@ -94,16 +89,12 @@ def test_engine_chat_with_messages_dispatches_via_factory(provider_config):
 
     cfg = provider_config
 
-    with patch.object(OllamaBackend, "chat", return_value={"message": {"content": "ollama"}}) as ollama_chat, \
-         patch.object(OpenAICompatibleBackend, "chat", return_value={"message": {"content": "openai"}}) as openai_chat:
-        engine_mod.chat_with_messages(cfg, [{"role": "user", "content": "hi"}], timeout_sec=1.0)
+    with patch.object(OllamaBackend, "chat", return_value={"message": {"content": "ollama"}}), \
+         patch.object(OpenAICompatibleBackend, "chat", return_value={"message": {"content": "openai"}}):
+        result = engine_mod.chat_with_messages(cfg, [{"role": "user", "content": "hi"}], timeout_sec=1.0)
 
-    if cfg.llm_provider == "ollama":
-        assert ollama_chat.called
-        assert not openai_chat.called
-    else:
-        assert openai_chat.called
-        assert not ollama_chat.called
+    expected = {"ollama": "ollama", "openai_compatible": "openai"}[cfg.llm_provider]
+    assert result == {"message": {"content": expected}}
 
 
 # ── weather extractor (uses get_llm_backend directly, no local wrapper) ────
@@ -115,13 +106,8 @@ def test_weather_place_extractor_dispatches_via_factory(provider_config):
 
     cfg = provider_config
 
-    with patch.object(OllamaBackend, "direct", return_value="London") as ollama_direct, \
-         patch.object(OpenAICompatibleBackend, "direct", return_value="London") as openai_direct:
-        weather_mod._extract_place_from_user_text("weather in london please", cfg)
+    with patch.object(OllamaBackend, "direct", return_value="Paris"), \
+         patch.object(OpenAICompatibleBackend, "direct", return_value="London"):
+        result = weather_mod._extract_place_from_user_text("weather in london please", cfg)
 
-    if cfg.llm_provider == "ollama":
-        assert ollama_direct.called
-        assert not openai_direct.called
-    else:
-        assert openai_direct.called
-        assert not ollama_direct.called
+    assert result == {"ollama": "Paris", "openai_compatible": "London"}[cfg.llm_provider]

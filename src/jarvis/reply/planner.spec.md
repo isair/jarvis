@@ -253,7 +253,11 @@ The engine consumes the plan in two phases.
   values stay literal; declared booleans, integers, finite numbers and null
   values use their JSON types, including values in the planner's quote syntax.
   Primitive type unions use the same conversion rules. Invalid primitive
-  values and complex types use the LLM resolver.
+  values and complex types use the LLM resolver. Declared `date`, `date-time`
+  and `time` strings must parse as ISO literals, following inline alternatives
+  and local schema references. Relative labels, invalid dates and calendar
+  references use the clock-grounded resolver. Ordinary string arguments stay
+  literal; valid ISO values retain the no-inference path.
   Each property appears once and all argument text must be consumed, apart
   from whitespace, commas between pairs and an optional final full stop.
   Unmatched quotes or unparsed text use the LLM resolver rather than dispatching
@@ -268,7 +272,20 @@ The engine consumes the plan in two phases.
   argument names alone do not define the contract.
 - When a named step tool declares a standard `date`, `date-time` or `time`
   format, including in nested schemas, model resolution receives UTC and
-  system-local ISO clock values from one current instant. Relative temporal arguments use this reference and the
+  system-local ISO clock values from one current instant. The clock includes
+  an explicit system-local current date and current/next/previous calendar dates and their precomputed UTC
+  start, inclusive end and exclusive end bounds. Each midnight uses the
+  operating system’s offset at that date, so daylight-saving days retain
+  their actual duration. Midnight gaps start at the first valid local instant;
+  repeated midnights use their earliest valid instant. UTC boundaries are supplied ready to use, without
+  another offset conversion. Nearby day bounds are supplied to the model as
+  request-scoped `@calendar` references. The resolver expands these only in
+  declared `date-time` fields before dispatch, following nested properties,
+  array items, inline alternatives and local JSON pointers (including array
+  indices) without network
+  access. Unknown references fail open to the normal chat turn; ordinary
+  string fields remain literal. References are intermediate arguments, never
+  persisted or passed to a tool. Relative temporal arguments use this reference and the
   schema's required format. The system-local calendar is the default;
   explicit step or prior-result timezones take precedence. Concrete literal
   calls retain their no-inference path and supplied timestamps. Other tool

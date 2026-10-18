@@ -12,6 +12,7 @@ from ...debug import debug_log
 from ..base import Tool, ToolContext
 from ..types import ToolExecutionResult
 from ..http_response import discard_redirect_body
+from ..search_http import download_search_html
 
 
 # Per-fetch deadline — tight enough that a worst-case 3-way cascade fits the
@@ -652,58 +653,55 @@ class WebSearchTool(Tool):
                 from bs4 import BeautifulSoup
                 encoded_query = urllib.parse.quote_plus(search_query)
                 ddg_lite_url = f"https://lite.duckduckgo.com/lite/?q={encoded_query}"
-                headers = { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' }
-                ddg_response = requests.get(ddg_lite_url, headers=headers, timeout=10)
-                body_bytes = ddg_response.content or b""
+                status, body_bytes = download_search_html(
+                    ddg_lite_url, min(10.0, _budget_left()), _MAX_FETCH_BYTES,
+                )
                 # Challenge detection: HTTP 202/400/429 is the strongest signal,
                 # but DDG has also been observed serving 200 with the anomaly
                 # modal embedded. Check the body for the stable structural
                 # markers (CSS class / form action) rather than human-readable
                 # copy — those are English-only and CLAUDE.md asks us to avoid
                 # hardcoded language patterns.
-                if (ddg_response.status_code in (202, 400, 429)
+                if (status in (202, 400, 429)
                         or b"anomaly-modal" in body_bytes
                         or b"anomaly.js" in body_bytes):
                     ddg_rate_limited = True
                     debug_log(
                         f"DuckDuckGo bot-challenge detected (status "
-                        f"{ddg_response.status_code}); skipping result parse",
+                        f"{status}); skipping result parse",
                         "web",
                     )
-                elif ddg_response.status_code == 200:
+                elif status == 200:
                     soup = BeautifulSoup(body_bytes, 'html.parser')
-                    links = soup.find_all('a', href=True)
+                    links = soup.select('a.result-link[href], a.result__a[href]')
                     result_count = 0
-                    debug_log(f"Found {len(links)} total links on DDG page", "web")
-                    for i, link in enumerate(links):
+                    for link in links:
                         if result_count >= 5:
                             break
-                        href = link.get('href', '')
                         title = link.get_text().strip()
-                        if i < 10:
-                            debug_log(f"Link {i}: href='{href[:50]}...', title='{title[:50]}...'", "web")
-                        actual_url = href
-                        if href.startswith('//duckduckgo.com/l/') and 'uddg=' in href:
-                            try:
-                                import urllib.parse
-                                parsed = urllib.parse.urlparse(href)
-                                qs = urllib.parse.parse_qs(parsed.query)
-                                if 'uddg' in qs:
-                                    actual_url = urllib.parse.unquote(qs['uddg'][0])
-                            except Exception:
-                                actual_url = href
-                        if ((href.startswith('http') or href.startswith('//duckduckgo.com/l/')) and
-                            len(title) > 10 and
-                            not any(skip in title.lower() for skip in ['settings', 'privacy', 'about', 'help'])):
-                            result_count += 1
-                            search_results.append(f"{result_count}. **{title}**")
-                            search_results.append(f"   Link: {actual_url}")
-                            search_results.append("")
-                            result_urls.append((title, actual_url))
-                            debug_log(f"Accepted result {result_count}: '{title[:50]}...'", "web")
+                        if not title:
+                            continue
+                        actual_url = link['href']
+                        try:
+                            parsed = urllib.parse.urlparse(actual_url)
+                            if parsed.hostname == 'duckduckgo.com' and parsed.path == '/l/':
+                                # parse_qs decodes the redirect parameter once;
+                                # encoded characters inside the destination stay intact.
+                                actual_url = urllib.parse.parse_qs(parsed.query).get('uddg', [''])[0]
+                                parsed = urllib.parse.urlparse(actual_url)
+                            if parsed.scheme not in ('http', 'https') or not parsed.hostname:
+                                continue
+                        except ValueError:
+                            debug_log("Skipping malformed DuckDuckGo result URL", "web")
+                            continue
+                        result_count += 1
+                        search_results.append(f"{result_count}. **{title}**")
+                        search_results.append(f"   Link: {actual_url}")
+                        search_results.append("")
+                        result_urls.append((title, actual_url))
                     debug_log(f"DuckDuckGo found {result_count} results", "web")
                 else:
-                    debug_log(f"DuckDuckGo returned status {ddg_response.status_code}", "web")
+                    debug_log(f"DuckDuckGo returned status {status}", "web")
             except ImportError:
                 debug_log("BeautifulSoup not available", "web")
             except Exception as ddg_error:

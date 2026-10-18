@@ -10,6 +10,7 @@ but use real StateManager and EchoDetector instances to avoid coupling to intern
 """
 
 import time
+import sys
 from unittest.mock import patch, MagicMock
 
 import pytest
@@ -51,6 +52,8 @@ def _create_listener(**kwargs):
     mock_cfg.wake_aliases = []
     mock_cfg.wake_fuzzy_ratio = 0.78
     mock_cfg.stop_commands = ["stop", "quiet"]
+    from jarvis.config import get_default_config
+    mock_cfg.stop_command_fuzzy_ratio = get_default_config()["stop_command_fuzzy_ratio"]
     mock_cfg.tts_rate = 200
     mock_cfg.transcript_buffer_duration_sec = 120.0
     mock_cfg.fast_model = "gemma4:e2b"
@@ -72,6 +75,25 @@ def _create_listener(**kwargs):
     return listener, mock_tts
 
 
+
+@pytest.fixture(autouse=True)
+def owned_listener_effects(monkeypatch, silent_thinking_tunes):
+    """Stop every synthetic listener before its cue output fixture is restored."""
+    original_factory = _create_listener
+    listeners = []
+
+    def create(*args, **kwargs):
+        listener, tts = original_factory(*args, **kwargs)
+        listeners.append(listener)
+        return listener, tts
+
+    monkeypatch.setattr(sys.modules[__name__], '_create_listener', create)
+    try:
+        yield
+    finally:
+        for listener in listeners:
+            listener.stop()
+
 def _make_judgment(directed=True, stop=False, confidence="high", reasoning="test"):
     """Build an IntentJudgment."""
     return IntentJudgment(
@@ -87,6 +109,13 @@ def _install_intent_judge(listener, judgment):
     mock_judge.judge.return_value = judgment
     listener._intent_judge = mock_judge
     return mock_judge
+
+
+def _install_silent_thinking_tune(listener):
+    """Simulate an active cue without opening an audio output device."""
+    player = MagicMock()
+    player.is_playing.return_value = True
+    listener._tune_player = player
 
 
 def _simulate_tts_finish(listener):
@@ -120,6 +149,7 @@ def _process_transcript(listener, text, **kwargs):
         captured_tts_start_time=listener.echo_detector._tts_start_time,
         generation=listener._capture_generation,
         **kwargs,
+        language=None,
     )
 
 
@@ -148,14 +178,8 @@ class TestUserSpeaksDuringHotWindow:
         listener.state_manager.stop()
 
     @patch("builtins.print")
-    def test_undirected_background_speech_is_accepted_in_hot_window(self, _print):
-        """Non-echo speech during hot window is accepted even if judge says not directed.
-
-        The 3s hot window is short enough that false positives (accepting
-        background speech) are preferable to false negatives (ignoring genuine
-        follow-ups like 'don't you already know that?'). Small LLMs sometimes
-        reject valid follow-ups, so we override in hot window mode.
-        """
+    def test_undirected_background_speech_is_rejected_in_hot_window(self, _print):
+        """A confident other-person verdict rejects non-echo background speech."""
         listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=3.0)
 
         listener.echo_detector.track_tts_start("Here is your answer.")
@@ -168,8 +192,8 @@ class TestUserSpeaksDuringHotWindow:
 
         _process_transcript(listener, "did you see the game last night", utterance_energy=0.01)
 
-        # In hot window, non-echo speech is always accepted
-        assert _accepted_query(listener) == "did you see the game last night"
+        # A hot window does not change the addressee verdict
+        assert _accepted_query(listener) == ""
         listener.state_manager.stop()
 
     @patch("builtins.print")
@@ -468,18 +492,10 @@ class TestEchoAndUserSpeechInSameChunk:
         assert "tomorrow" in query
         listener.state_manager.stop()
 
+    @pytest.mark.parametrize("reasoning", ["echo of TTS output", "background conversation", "başka biriyle konuşuyor"] )
     @patch("builtins.print")
-    def test_judge_echo_reasoning_overridden_for_mixed_content_in_hot_window(self, _print):
-        """When the intent judge says 'not directed' with echo reasoning but the
-        utterance overlaps the hot window and text is longer than TTS (mixed
-        echo+speech), the rejection should be overridden.
-
-        Real scenario: TTS plays, mic picks up echo + user speaks during hot window,
-        hot window expires, Whisper delivers mixed transcript. Intent judge sees TTS
-        text in transcript and says 'echo, not directed'. But the word-count guard
-        shows it's mixed content and could_be_hot_window is True, so the override
-        should kick in.
-        """
+    def test_confident_rejection_of_mixed_content_does_not_depend_on_reasoning(self, _print, reasoning):
+        """Neither mixed content nor reasoning language overrides a confident verdict."""
         listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=3.0)
 
         tts_text = "You are currently in Tbilisi, Georgia."
@@ -493,12 +509,12 @@ class TestEchoAndUserSpeechInSameChunk:
         listener.state_manager.expire_hot_window()
         assert not listener.state_manager.is_hot_window_active()
 
-        # Intent judge incorrectly classifies as echo (sees TTS text in transcript)
+        # The verdict is authoritative regardless of its free-form explanation.
         _install_intent_judge(listener, _make_judgment(
             directed=False,
 
             confidence="high",
-            reasoning="echo of TTS output"))
+            reasoning=reasoning))
 
         mixed_text = (
             "you are currently in T-Ballista Georgia and what do you think "
@@ -511,12 +527,7 @@ class TestEchoAndUserSpeechInSameChunk:
             utterance_end_time=span_start + 0.05,
         )
 
-        query = _accepted_query(listener)
-        assert query != "", (
-            "Mixed echo+speech should be accepted in hot window even when "
-            "intent judge says 'echo, not directed' — word count shows mixed content"
-        )
-        assert "stalin" in query.lower() or "communism" in query.lower()
+        assert _accepted_query(listener) == ""
         listener.state_manager.stop()
 
     @patch("builtins.print")
@@ -921,6 +932,7 @@ class TestEarlyBeepFeedback:
         _process_transcript(listener, "jarvis what time is it", utterance_energy=0.01)
 
         assert _accepted_query(listener) != ""
+        assert _is_beeping(listener)
         listener.state_manager.stop()
 
     @patch("builtins.print")
@@ -933,10 +945,21 @@ class TestEarlyBeepFeedback:
         _simulate_tts_finish(listener)
         _wait_for_hot_window_state(listener)
 
-        _install_intent_judge(listener, _make_judgment(directed=True))
+        judgment = _make_judgment(directed=True)
+        judge = _install_intent_judge(listener, judgment)
+
+        feedback_at_judgment = []
+
+        def judge_after_feedback(**kwargs):
+            feedback_at_judgment.append(_is_beeping(listener))
+            return judgment
+
+        judge.judge.side_effect = judge_after_feedback
         _process_transcript(listener, "tell me more", utterance_energy=0.01)
 
         assert _accepted_query(listener) == "tell me more"
+        assert feedback_at_judgment and all(feedback_at_judgment), 'Intent judging began before feedback'
+        assert _is_beeping(listener)
         listener.state_manager.stop()
 
     @patch("builtins.print")
@@ -1043,12 +1066,8 @@ class TestEchoRejectionInHotWindow:
         listener.state_manager.stop()
 
     @patch("builtins.print")
-    def test_non_echo_speech_accepted_via_override(self, _print):
-        """Non-echo speech in hot window is accepted even if judge rejects.
-
-        In hot window, non-echo speech is always accepted (override), since
-        small LLMs sometimes reject valid follow-ups.
-        """
+    def test_non_echo_speech_rejected_when_not_directed(self, _print):
+        """Rejected background speech cannot start a new assistant query."""
         listener, _ = _create_listener(echo_tolerance=0.02, hot_window_seconds=3.0)
         tts_text = "The weather will be sunny tomorrow."
 
@@ -1065,8 +1084,8 @@ class TestEchoRejectionInHotWindow:
             "did you see the game last night",
             utterance_energy=0.01)
 
-        # Non-echo speech in hot window is accepted via override
-        assert _accepted_query(listener) == "did you see the game last night"
+        # Confident rejection takes priority over the follow-up window
+        assert _accepted_query(listener) == ""
         listener.state_manager.stop()
 
 
@@ -1224,6 +1243,7 @@ class TestEchoCaughtBeforeBeepAndIntentJudge:
         _process_transcript(listener, "what about tomorrow", utterance_energy=0.01)
 
         assert _accepted_query(listener) == "what about tomorrow"
+        assert _is_beeping(listener)
         listener.state_manager.stop()
 
     @patch("builtins.print")

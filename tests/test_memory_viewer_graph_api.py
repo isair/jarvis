@@ -11,7 +11,7 @@ try:
 except ImportError:
     _HAS_FLASK = False
 
-from src.jarvis.memory.graph import FIXED_BRANCH_IDS, GraphMemoryStore
+from jarvis.memory.graph import FIXED_BRANCH_IDS, GraphMemoryStore
 
 
 @pytest.mark.unit
@@ -21,7 +21,7 @@ class TestGraphPresetProtection:
 
     @pytest.fixture(autouse=True)
     def setup_app(self, tmp_path):
-        from src.desktop_app import memory_viewer
+        from desktop_app import memory_viewer
 
         db_path = str(tmp_path / "test.db")
         store = GraphMemoryStore(db_path)
@@ -37,6 +37,17 @@ class TestGraphPresetProtection:
 
         store.close()
         memory_viewer._graph_store = None
+
+    def test_runtime_viewer_serves_the_fixture_graph(self, monkeypatch):
+        from desktop_app import memory_viewer as runtime
+        node = self.store.create_node('Runtime marker', 'Synthetic fixture', data='A supplied fact', parent_id='user')
+        def unexpected_store(*args, **kwargs):
+            raise AssertionError('Runtime viewer ignored the supplied synthetic graph')
+        monkeypatch.setattr(runtime, '_get_db_path', lambda: ':memory:')
+        monkeypatch.setattr(runtime, 'GraphMemoryStore', unexpected_store)
+        response = runtime.app.test_client().get(f'/api/graph/node/{node.id}')
+        assert response.status_code == 200
+        assert response.get_json()['node']['data'] == 'A supplied fact'
 
     def test_presets_endpoint_lists_root_and_fixed_branches(self):
         resp = self.client.get("/api/graph/presets")

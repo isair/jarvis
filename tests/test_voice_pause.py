@@ -43,7 +43,7 @@ def test_resuming_user_pause_does_not_resume_active_dictation(voice):
 
 
 def test_resume_discards_old_follow_up_context(voice):
-    voice.state_manager.start_collection('a query before the pause')
+    voice.state_manager.start_collection('a query before the pause', language=None)
     now = time.time()
     voice._transcript_buffer.add('words before the pause', now, now + .1, .1, False)
     assert voice._transcript_buffer.get_all()
@@ -134,7 +134,7 @@ def test_typed_reply_remains_available_while_voice_is_paused(running_voice, mock
 @pytest.mark.parametrize('entry', ['timer', 'empty_transcript'])
 def test_pause_resume_during_collection_timeout_discards_old_query(voice, monkeypatch, entry):
     from jarvis.reply import engine
-    voice.state_manager.start_collection('old query')
+    voice.state_manager.start_collection('old query', language=None)
     original_clear = voice.state_manager.clear_collection
     def clear_with_pause():
         query = original_clear()
@@ -149,7 +149,7 @@ def test_pause_resume_during_collection_timeout_discards_old_query(voice, monkey
         voice._check_query_timeout()
     else:
         voice._process_transcript('', generation=voice._capture_generation,
-                                  captured_during_tts=False, captured_tts_start_time=0)
+                                  captured_during_tts=False, captured_tts_start_time=0, language=None)
     assert not engine_run.called
 
 
@@ -160,7 +160,7 @@ def test_old_speech_completion_cannot_reopen_follow_up_after_resume(voice, monke
     voice.cfg.hot_window_enabled = True
     voice.tts = SimpleNamespace(enabled=True, speak=lambda text, **kw: callbacks.append(kw['completion_callback']))
     monkeypatch.setattr(engine, 'run_reply_engine', lambda *args, **kw: 'An answer')
-    voice._dispatch_query('question', generation=voice._capture_generation)
+    voice._dispatch_query('question', generation=voice._capture_generation, language=None)
     assert len(callbacks) == 1
     voice.set_capture_paused('user', True)
     voice.set_capture_paused('user', False)

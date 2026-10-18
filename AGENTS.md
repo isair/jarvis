@@ -12,6 +12,8 @@ Any code change must either adhere to our spec files perfectly or you should ask
 
 | Spec file | Covers | Key principles |
 |-----------|--------|----------------|
+| `src/jarvis/config.spec.md` | Shared configuration file selection | One resolver for runtime and desktop reads, writes and navigation |
+| `website/website.spec.md` | Public product site, static build, discovery metadata and GitHub Pages publication | Crawlable content, truthful claims, no user stores or third-party tracking |
 | `src/desktop_app/desktop_app.spec.md` | System tray app, startup flow, daemon integration, windows, theme, updates | Desktop is separate from core; jarvis has no knowledge of desktop_app |
 | `src/desktop_app/settings_window.spec.md` | Auto-generated settings UI from config metadata | Metadata-driven; only non-default values written; preserves unknown keys |
 | `src/desktop_app/setup_wizard.spec.md` | First-run wizard (Ollama, models, Whisper, location) | Minimal friction; only shown when user action required; doesn't configure everything |
@@ -33,7 +35,7 @@ Any code change must either adhere to our spec files perfectly or you should ask
 | `src/jarvis/memory/graph.spec.md` | Node graph memory (v2), self-organising tree, UI explorer | Dynamic structure; access-aware; auto-split/merge (future) |
 | `src/jarvis/memory/summariser.spec.md` | Diary summariser prompt contract, hygiene rules (deflection, attribution, topic separation), post-process scrub, and bulk-sweep clean button | Two-layer defence: prompt + deterministic scrub; corrupted summaries poison every downstream consumer |
 | `src/jarvis/memory/recall_gate.spec.md` | Deterministic skip-enrichment heuristic when the hot window covers a follow-up | Fail-open; language-agnostic via `\w{3,}` + `re.UNICODE`; planner intent always wins |
-| `src/jarvis/llm/llm.spec.md` | Pluggable LLM backend abstraction: `LLMBackend` ABC, `OllamaBackend`, `OpenAICompatibleBackend`, factory dispatch on `llm_provider`, `get_embedding_backend` override, config migrations, the two-tier model system (`Tier.FAST` / `Tier.CHAT` via `resolve_model`), function-style helpers | Provider-agnostic interface so Jarvis can run on Ollama, OpenAI-compatible (LM Studio / oMLX / llama.cpp / vLLM / LocalAI), or Anthropic-compatible servers; every context states its tier instead of defining a model fallback chain |
+| `src/jarvis/llm/llm.spec.md` | Pluggable LLM backend abstraction: `LLMBackend` ABC, `OllamaBackend`, `OpenAICompatibleBackend`, factory dispatch on `llm_provider`, `get_embedding_backend` override, config migrations, the two-tier model system (`Tier.FAST` / `Tier.CHAT` via `resolve_model`), function-style helpers | Provider-agnostic interface so Jarvis can run on Ollama or OpenAI-compatible servers (LM Studio / oMLX / llama.cpp / vLLM / LocalAI); every context states its tier instead of defining a model fallback chain |
 
 The LLM contexts graph at `docs/llm_contexts.md` maps every LLM call in the app (model, gating, inputs, outputs, limits, flow). Keep it up-to-date at all times: any change that adds, removes, or alters an LLM context (model resolution, timeout, cap, prompt source, gating flag, data-flow edge) must update `docs/llm_contexts.md` in the same PR.
 
@@ -46,6 +48,8 @@ Tools define when/how to be used and return raw data without LLM processing. The
 The default branch is `develop`. All PRs and feature branches must target `develop`, not `main`.
 
 Use [Conventional Commits](https://www.conventionalcommits.org/) for all commit messages and PR titles (e.g. `fix:`, `feat:`, `refactor:`, `docs:`, `test:`, `chore:`).
+
+Reserve `feat:` and `fix:` for the Jarvis CLI and desktop product. Website-only changes use `docs:` for content or `chore:` for build and deployment work. GitHub Pages deploys only from `main`, including manual dispatch; website PRs still target `develop`.
 
 When pushing commits to a PR, always update the PR title and body to cover the entire changeset.
 
@@ -72,6 +76,8 @@ The project uses a micromamba environment at `.mamba_env/`. Always activate it b
 ```bash
 eval "$(micromamba.exe shell hook --shell bash)" && micromamba activate "C:/Users/baris/projects/jarvis/.mamba_env"
 ```
+
+Frontend rendering tests require Node.js 22 or later to execute the viewer JavaScript. Node.js is a development test dependency; Jarvis does not require it at runtime.
 
 ## README Maintenance
 
@@ -107,9 +113,16 @@ Run your changes and test them manually, iterate until everything is good.
 
 Always use TDD: write failing tests first, then implement the fix. Tests should verify **behaviours**, not implementation details. Test what the system does (observable outcomes), not how it does it (internal state, mock call counts, etc.).
 
+Tests must isolate user stores across the whole suite, including default dictation history. Fake transcriptions belong in temporary test storage and must never reach a user's saved history.
+
+Automated tests use owned audio fakes and never open microphones or play sound. Pytest keeps native audio entry points blocked through teardown and rejects even caught attempts. Physical hardware checks require an explicitly authorised manual run outside pytest.
+
 Ensure all your changes are covered by all appropriate form of automated tests - unit, integration, visual regression, evals, etc.
 
 Tests should verify mechanisms, not current values. Assert against config-driven or computed references rather than hardcoding specifics that change between migrations.
+
+Tests and patch targets use the runtime package names (`jarvis.*` and `desktop_app.*`).
+Do not add `src.` to imports, which creates separate module state and bypasses runtime subscribers or patches.
 
 Run evals after finalising a change that can affect agent accuracy.
 
@@ -135,6 +148,8 @@ The codebase is ours and releases are versioned. Git carries the history; the co
 Commit messages and PR descriptions are the right place for "what changed and why" — they exist to be read in sequence. Files under `src/`, `docs/`, and `*.spec.md` are read as the present-day reference; historical narrative there ages badly and confuses future readers.
 
 ## Refactor completely or not at all
+
+Use one canonical source for shared model catalogues and capability rules. Consumers derive their choices and decisions from it instead of maintaining separate copies.
 
 If you're touching every legacy call site, finish the job. Don't leave compat shims, fallback parameters, `SimpleNamespace` defaults, or `TODO(PR X)` markers for paths you are also rewriting in the same change. The whole point of doing the refactor is that the legacy shape goes away — keeping a half-converted state means future readers have to figure out which version of the contract is canonical, and the reasoning behind the old shape sits in the codebase as dead weight.
 

@@ -4,6 +4,7 @@ import unicodedata
 from unittest.mock import MagicMock
 import pytest
 from jarvis.listening.listener import VoiceListener
+from jarvis.config import get_default_config
 
 pytestmark=pytest.mark.unit
 
@@ -22,6 +23,7 @@ def process(text, spoken, commands):
     cfg=SimpleNamespace(sample_rate=16000,vad_enabled=False,echo_tolerance=0.3,
                         echo_energy_threshold=2,hot_window_seconds=3,tune_enabled=False,
                         whisper_model='small',stop_commands=commands,tts_rate=200,
+                        stop_command_fuzzy_ratio=get_default_config()['stop_command_fuzzy_ratio'],
                         voice_debug=False,hot_window_enabled=False)
     tts=SpeakingTTS()
     listener=VoiceListener(MagicMock(),cfg,tts,MagicMock())
@@ -29,7 +31,7 @@ def process(text, spoken, commands):
     start=listener.echo_detector._tts_start_time
     listener._process_transcript(text,utterance_energy=0.005,
                                  utterance_start_time=start+0.2,utterance_end_time=start+1,
-                                 captured_during_tts=True,captured_tts_start_time=start, generation=listener._capture_generation)
+                                 captured_during_tts=True,captured_tts_start_time=start, generation=listener._capture_generation, language=None)
     listener.state_manager.stop()
     return tts.speaking
 
@@ -90,3 +92,32 @@ def test_blank_stop_entries_cannot_interrupt_unrelated_speech(commands):
 ])
 def test_normalised_configured_controls_interrupt(heard, command):
     assert not process(heard, 'The forecast is sunny today.', [command])
+
+
+@pytest.mark.parametrize('heard,command', [
+    ('The performer is unstoppable today.', 'stop'),
+    ('We should walk quietly through the museum.', 'quiet'),
+    ('quite nice', 'quiet'),
+    ('not quiet', 'quietly'),
+    ('Das ist unruhig heute.', 'ruhig'),
+    ('preκαλάpost', 'καλά'),
+    ('پیشتوقفپس', 'توقف'),
+    ('不是停止指令', '停止'),
+    ('cab\u0301 tail', 'cab'),
+])
+def test_word_fragments_do_not_interrupt(heard, command):
+    assert process(heard, 'A separate answer is playing.', [command])
+
+
+@pytest.mark.parametrize('heard,command', [
+    ('Please, STOP! Talking.', 'stop'),
+    ('shut, up!', 'shut up'),
+    ('  SHUT   UP  ', ' shut up '),
+    ('σιωπή!', 'σιωπή'),
+    ('توقف!', 'توقف'),
+    ('停止！', '停止'),
+    ('stopp!', 'stop'),
+    ('shut upp', 'shut up'),
+])
+def test_complete_controls_keep_interruption_priority(heard, command):
+    assert not process(heard, 'A separate answer is playing.', [command])

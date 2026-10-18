@@ -11,9 +11,18 @@ from rapidfuzz import fuzz
 
 
 def _normalise_echo_token(token: str) -> str:
-    """Retain Unicode letters and numbers when comparing echo words."""
+    """Retain Unicode word content and canonical internal apostrophes."""
     normalised = unicodedata.normalize("NFC", token).casefold()
-    return "".join(char for char in normalised if char.isalnum() or char == "'")
+    kept = []
+    for index, char in enumerate(normalised):
+        if char in "'‘’":
+            if (0 < index < len(normalised) - 1
+                    and all(unicodedata.category(normalised[neighbour])[0] in "LM"
+                            for neighbour in (index - 1, index + 1))):
+                kept.append("'")
+        elif char.isalnum() or unicodedata.category(char).startswith('M'):
+            kept.append(char)
+    return "".join(kept)
 
 
 class EchoDetector:
@@ -137,6 +146,21 @@ class EchoDetector:
             debug_log(f"text similarity match: score={best_score:.1f} (threshold={threshold}), heard='{heard_lower}', tts='{tts_lower[:100]}...'", "echo")
 
         return is_similar
+
+    def is_hot_window_echo(self, heard_text: str, tts_text: str) -> bool:
+        """Require complete token matches for short possible TTS fragments."""
+        heard_words = [token for word in heard_text.split()
+                       if (token := _normalise_echo_token(word))]
+        tts_words = [token for word in tts_text.split()
+                     if (token := _normalise_echo_token(word))]
+        if not heard_words or not tts_words:
+            return False
+        if min(len(heard_words), len(tts_words)) <= 4:
+            return any(tts_words[start:start+len(heard_words)] == heard_words
+                       for start in range(len(tts_words)-len(heard_words)+1))
+        heard_count, tts_count = len(heard_text.split()), len(tts_text.split())
+        return (heard_count <= max(tts_count*1.3, tts_count+3)
+                and fuzz.partial_ratio(heard_text.lower(), tts_text.lower()) >= 70)
     
     def _matches_tts_segment(self, heard_text: str, tts_rate: float, utterance_start_time: float) -> bool:
         """Checks if heard text matches the likely TTS segment playing at a given time.
@@ -424,12 +448,14 @@ class EchoDetector:
             """Check if two word lists match, allowing fuzzy per-word comparison."""
             if len(a) != len(b):
                 return False
+            fuzzy_allowed = (min(sum(bool(word) for word in a), sum(bool(word) for word in b))
+                             >= self.min_salvage_words)
             for wa, wb in zip(a, b):
                 if wa == wb:
                     continue
                 # Allow fuzzy match for words Whisper may transcribe differently
                 # (e.g. "tbilisi" vs "tvalisi")
-                if fuzz.ratio(wa, wb) >= 70:
+                if fuzzy_allowed and fuzz.ratio(wa, wb) >= 70:
                     continue
                 return False
             return True
@@ -441,7 +467,8 @@ class EchoDetector:
                 break
 
         # Only cleanup if there's a remainder and the overlap is at least 2 words.
-        if 0 < max_overlap < len(heard_words) and max_overlap >= 2:
+        if (0 < max_overlap < len(heard_words)
+                and sum(bool(word) for word in heard_clean[:max_overlap]) >= 2):
             # Use original words for output (preserving capitalization etc.)
             # But we need to map normalized word count to original word count
             # This is approximate - normalized may have different word count
@@ -456,6 +483,7 @@ class EchoDetector:
             debug_log(f"cleaned leading echo. Overlap: '{overlap_text}'. Cleaned: '{cleaned_text}'", "echo")
             return cleaned_text
 
+        debug_log("🗣️ Echo prefix not established; retaining recognised speech", "echo")
         return heard_text
     
     def should_reject_as_echo(self, heard_text: str, current_energy: float,

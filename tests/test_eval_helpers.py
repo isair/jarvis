@@ -9,16 +9,12 @@ LLM eval.
 """
 
 from pathlib import Path
-import sys
 
 import pytest
 
 _ROOT = Path(__file__).resolve().parent.parent
-_EVALS = _ROOT / "evals"
-if str(_EVALS) not in sys.path:
-    sys.path.insert(0, str(_EVALS))
 
-from helpers import (  # noqa: E402
+from evals.helpers import (
     FALLBACK_REPLY_PHRASES,
     MAX_TURNS_DIGEST_PHRASES,
     assert_not_fallback_reply,
@@ -26,6 +22,8 @@ from helpers import (  # noqa: E402
     is_fallback_reply,
     is_max_turns_digest,
 )
+
+pytestmark = [pytest.mark.unit, pytest.mark.usefixtures('no_network')]
 
 
 class TestIsFallbackReply:
@@ -93,9 +91,7 @@ class TestAssertNotFallbackReply:
         assert_not_fallback_reply("Today is sunny in Hackney.", context="weather")
 
     def test_fails_on_canned_fallback(self):
-        # pytest.fail raises _pytest.outcomes.Failed, which inherits from
-        # BaseException (not Exception), so catch the broader type.
-        with pytest.raises(BaseException) as exc_info:
+        with pytest.raises(pytest.fail.Exception) as exc_info:
             assert_not_fallback_reply(
                 "I had trouble understanding that request. Could you try rephrasing it?",
                 context="weather-warm-memory",
@@ -188,7 +184,7 @@ class TestAssertNotMaxTurnsDigest:
         )
 
     def test_fails_on_digest_caveat(self):
-        with pytest.raises(BaseException) as exc_info:
+        with pytest.raises(pytest.fail.Exception) as exc_info:
             assert_not_max_turns_digest(
                 "I could not fully finish your request. I found the weather is 8°C.",
                 context="single-weather-terminal",

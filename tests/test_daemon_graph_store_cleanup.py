@@ -1,4 +1,4 @@
-"""Startup migration releases its graph connection without blocking startup."""
+"""Startup graph inspection releases its graph connection without blocking startup."""
 import sqlite3
 from contextlib import closing
 from types import SimpleNamespace
@@ -12,8 +12,8 @@ from jarvis.memory.db import Database
 pytestmark = pytest.mark.unit
 
 
-@pytest.mark.parametrize('outcome', ['unchanged', 'migrated', 'read-error', 'write-error'])
-def test_startup_releases_graph_store_after_migration(tmp_path, mock_config, monkeypatch, capsys, outcome):
+@pytest.mark.parametrize('outcome', ['unchanged', 'root-child', 'root-data', 'read-error', 'write-error'])
+def test_startup_releases_graph_store_after_inspection(tmp_path, mock_config, monkeypatch, capsys, outcome):
     path = str(tmp_path / 'synthetic.db')
     mock_config.db_path = path
     mock_config.location_enabled = False
@@ -24,16 +24,19 @@ def test_startup_releases_graph_store_after_migration(tmp_path, mock_config, mon
     original_store = graph.GraphMemoryStore
     with closing(original_store(path)) as seed:
         retained = seed.create_node('Retained', 'Synthetic world fact', data='Keep this fact', parent_id='world')
-        if outcome == 'migrated':
-            seed.create_node('Legacy', 'Synthetic legacy node', parent_id='root')
+        if outcome == 'root-child':
+            seed.create_node('Manual note', 'User-created note', data='Keep this note too', parent_id='root')
+        elif outcome == 'root-data':
+            seed.update_node('root', data='A manually saved root fact')
+        saved_nodes = [tuple(row) for row in seed.conn.execute('SELECT * FROM memory_nodes ORDER BY id')]
 
     if outcome.endswith('error'):
         def unavailable(store):
             if outcome == 'write-error':
                 store.conn.execute('BEGIN IMMEDIATE')
                 store.conn.execute('UPDATE memory_nodes SET data = ? WHERE id = ?', ('Uncommitted change', retained.id))
-            raise RuntimeError('Synthetic migration failure')
-        monkeypatch.setattr(original_store, 'migrate_legacy_shape', unavailable)
+            raise RuntimeError('Synthetic inspection failure')
+        monkeypatch.setattr(original_store, 'has_unclassified_root_content', unavailable)
 
     opened = []
     def open_graph(*args, **kwargs):
@@ -59,8 +62,7 @@ def test_startup_releases_graph_store_after_migration(tmp_path, mock_config, mon
         with closing(sqlite3.connect(path, timeout=0.1)) as check:
             check.execute('BEGIN IMMEDIATE')
             assert check.execute('SELECT summary FROM conversation_summaries').fetchall() == [('Synthetic retained diary.',)]
-            row = check.execute('SELECT data FROM memory_nodes WHERE id = ?', (retained.id,)).fetchone()
-            assert row == (None if outcome == 'migrated' else ('Keep this fact',))
+            assert check.execute('SELECT * FROM memory_nodes ORDER BY id').fetchall() == saved_nodes
             check.rollback()
     finally:
         for store in opened:

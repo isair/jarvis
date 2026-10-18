@@ -512,6 +512,8 @@ class UpdateProgressDialog(QDialog):
         self.download_signals = DownloadSignals()
         self.download_path: Optional[Path] = None
         self._temp_dir: Optional[Path] = None
+        self._cancelled = False
+        self._installer_handoff_complete = False
         self._setup_ui()
         self._connect_signals()
 
@@ -571,6 +573,7 @@ class UpdateProgressDialog(QDialog):
             self.download_path,
             self.download_signals,
         )
+        self.download_worker.finished.connect(self._on_download_finished)
         self.download_worker.start()
 
     def _cleanup_temp_dir(self):
@@ -582,6 +585,8 @@ class UpdateProgressDialog(QDialog):
             self._temp_dir = None
 
     def _on_progress(self, downloaded: int, total: int):
+        if self._cancelled:
+            return
         if total > 0:
             percent = int((downloaded / total) * 100)
             self.progress_bar.setValue(percent)
@@ -592,6 +597,8 @@ class UpdateProgressDialog(QDialog):
             )
 
     def _on_completed(self, path: str):
+        if self._cancelled:
+            return
         self.cancel_btn.setEnabled(False)
 
         if self._pre_install_callback:
@@ -601,6 +608,8 @@ class UpdateProgressDialog(QDialog):
 
             from PyQt6.QtWidgets import QApplication
             QApplication.processEvents()
+            if self._cancelled:
+                return
 
             try:
                 self._pre_install_callback()
@@ -608,6 +617,8 @@ class UpdateProgressDialog(QDialog):
                 from jarvis.debug import debug_log
                 debug_log(f"Pre-install callback failed: {e}", "updater")
 
+        if self._cancelled:
+            return
         self.title_label.setText("Installing Update")
         self.status_label.setText("Installing update...")
         self.progress_bar.setRange(0, 0)
@@ -615,7 +626,11 @@ class UpdateProgressDialog(QDialog):
         QTimer.singleShot(500, lambda: self._install(Path(path)))
 
     def _install(self, download_path: Path):
+        if self._cancelled:
+            return
         if install_update(download_path):
+            self._installer_handoff_complete = True
+            self._cleanup_temp_dir()
             save_installed_asset_id(self.release.asset_id)
 
             self.title_label.setText("Update Complete")
@@ -629,6 +644,8 @@ class UpdateProgressDialog(QDialog):
             self._on_error("Installation failed. Please try again or update manually.")
 
     def _on_error(self, error: str):
+        if self._cancelled:
+            return
         self.title_label.setText("Update Failed")
         self.status_label.setText(f"Error: {error}")
         self.status_label.setStyleSheet(f"color: {COLORS['error']};")
@@ -639,15 +656,33 @@ class UpdateProgressDialog(QDialog):
         self._cleanup_temp_dir()
 
     def _cancel_download(self):
+        if self._installer_handoff_complete:
+            return
+        if not self._cancelled:
+            from jarvis.debug import debug_log
+            debug_log("Update download cancellation requested", "updater")
+        self._cancelled = True
         if self.download_worker and self.download_worker.isRunning():
             self.download_worker.cancel()
-            self.download_worker.wait()
-        self._cleanup_temp_dir()
-        self.reject()
+            self.cancel_btn.setEnabled(False)
+            self.status_label.setText("Cancelling download...")
+            return
+        self._on_download_finished()
+
+    def _on_download_finished(self):
+        if self._cancelled:
+            self._cleanup_temp_dir()
+            super().reject()
+
+    def reject(self):
+        self._cancel_download()
 
     def closeEvent(self, event):
         self._cancel_download()
-        event.accept()
+        if self._installer_handoff_complete or (self.download_worker and self.download_worker.isRunning()):
+            event.ignore()
+        else:
+            event.accept()
 
 
 # ---------------------------------------------------------------------------

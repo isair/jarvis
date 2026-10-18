@@ -9,9 +9,9 @@ from unittest.mock import patch
 
 import pytest
 
-from src.jarvis.memory.graph import GraphMemoryStore, SPLIT_THRESHOLD
-from src.jarvis.memory.graph import BRANCH_USER, BRANCH_DIRECTIVES, BRANCH_WORLD
-from src.jarvis.memory.graph_ops import (
+from jarvis.memory.graph import GraphMemoryStore, SPLIT_THRESHOLD
+from jarvis.memory.graph import BRANCH_USER, BRANCH_DIRECTIVES, BRANCH_WORLD
+from jarvis.memory.graph_ops import (
     extract_graph_memories,
     _llm_pick_best_child,
     find_best_node,
@@ -30,7 +30,7 @@ from src.jarvis.memory.graph_ops import (
 @pytest.fixture(autouse=True)
 def accept_candidate_facts():
     """Isolate parsing and storage from the separately tested semantic review."""
-    with patch("src.jarvis.memory.graph_ops._review_graph_facts", side_effect=lambda facts, *args: facts):
+    with patch("jarvis.memory.graph_ops._review_graph_facts", side_effect=lambda facts, *args: facts):
         yield
 
 
@@ -79,7 +79,7 @@ class TestExtractGraphMemories:
     knowledge graph.
     """
 
-    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    @patch("jarvis.memory.graph_ops.call_llm_direct")
     def test_extracts_facts(self, mock_llm, mock_config):
         mock_llm.return_value = (
             '[{"branch": "USER", "fact": "Prefers dark roast coffee"},'
@@ -90,7 +90,7 @@ class TestExtractGraphMemories:
         assert facts[0] == ("user", "Prefers dark roast coffee")
         assert facts[1] == ("world", "Acme Corp is based in London")
 
-    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    @patch("jarvis.memory.graph_ops.call_llm_direct")
     def test_classifies_directive_branch(self, mock_llm, mock_config):
         """A user-issued behavioural rule must land in the DIRECTIVES
         branch so it survives verbatim into the warm system-prompt
@@ -102,28 +102,28 @@ class TestExtractGraphMemories:
         facts = extract_graph_memories("summary", mock_config, "model")
         assert facts == [("directives", "Always answer in British English")]
 
-    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    @patch("jarvis.memory.graph_ops.call_llm_direct")
     def test_returns_empty_when_nothing_worth_storing(self, mock_llm, mock_config):
 
         mock_llm.return_value = "[]"
         facts = extract_graph_memories("just small talk", mock_config, "model")
         assert facts == []
 
-    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    @patch("jarvis.memory.graph_ops.call_llm_direct")
     def test_handles_llm_returning_none(self, mock_llm, mock_config):
 
         mock_llm.return_value = None
         facts = extract_graph_memories("summary", mock_config, "model")
         assert facts == []
 
-    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    @patch("jarvis.memory.graph_ops.call_llm_direct")
     def test_handles_malformed_json(self, mock_llm, mock_config):
 
         mock_llm.return_value = "Here are some facts: not valid json"
         facts = extract_graph_memories("summary", mock_config, "model")
         assert facts == []
 
-    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    @patch("jarvis.memory.graph_ops.call_llm_direct")
     def test_handles_json_embedded_in_text(self, mock_llm, mock_config):
 
         mock_llm.return_value = (
@@ -135,7 +135,7 @@ class TestExtractGraphMemories:
         facts = extract_graph_memories("summary", mock_config, "model")
         assert len(facts) == 2
 
-    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    @patch("jarvis.memory.graph_ops.call_llm_direct")
     def test_filters_empty_strings(self, mock_llm, mock_config):
 
         mock_llm.return_value = (
@@ -147,7 +147,7 @@ class TestExtractGraphMemories:
         facts = extract_graph_memories("summary", mock_config, "model")
         assert len(facts) == 2
 
-    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    @patch("jarvis.memory.graph_ops.call_llm_direct")
     def test_unknown_branch_defaults_to_user(self, mock_llm, mock_config):
         """When the model emits a branch label we don't recognise, the
         fact still gets stored — under USER — rather than silently
@@ -168,7 +168,7 @@ class TestExtractGraphMemories:
 class TestLLMPickBestChild:
     """Tests for the LLM child-picking logic."""
 
-    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    @patch("jarvis.memory.graph_ops.call_llm_direct")
     def test_picks_numbered_child(self, mock_llm, populated_store, mock_config):
 
         children = populated_store.get_children("root")
@@ -177,7 +177,7 @@ class TestLLMPickBestChild:
         result = _llm_pick_best_child("fact", children, mock_config, "model")
         assert result == children[1].id
 
-    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    @patch("jarvis.memory.graph_ops.call_llm_direct")
     def test_returns_none_for_NONE(self, mock_llm, populated_store, mock_config):
 
         children = populated_store.get_children("root")
@@ -186,14 +186,14 @@ class TestLLMPickBestChild:
         result = _llm_pick_best_child("unrelated fact", children, mock_config, "model")
         assert result is None
 
-    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    @patch("jarvis.memory.graph_ops.call_llm_direct")
     def test_returns_none_for_empty_children(self, mock_llm, mock_config):
 
         result = _llm_pick_best_child("fact", [], mock_config, "model")
         assert result is None
         mock_llm.assert_not_called()
 
-    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    @patch("jarvis.memory.graph_ops.call_llm_direct")
     def test_returns_none_for_llm_failure(self, mock_llm, populated_store, mock_config):
 
         children = populated_store.get_children("root")
@@ -202,7 +202,7 @@ class TestLLMPickBestChild:
         result = _llm_pick_best_child("fact", children, mock_config, "model")
         assert result is None
 
-    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    @patch("jarvis.memory.graph_ops.call_llm_direct")
     def test_handles_number_in_text(self, mock_llm, populated_store, mock_config):
 
         children = populated_store.get_children("root")
@@ -211,7 +211,7 @@ class TestLLMPickBestChild:
         result = _llm_pick_best_child("fact", children, mock_config, "model")
         assert result == children[0].id
 
-    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    @patch("jarvis.memory.graph_ops.call_llm_direct")
     def test_handles_out_of_range_number(self, mock_llm, populated_store, mock_config):
 
         children = populated_store.get_children("root")
@@ -220,7 +220,7 @@ class TestLLMPickBestChild:
         result = _llm_pick_best_child("fact", children, mock_config, "model")
         assert result is None
 
-    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    @patch("jarvis.memory.graph_ops.call_llm_direct")
     def test_uses_picker_model_when_provided(self, mock_llm, populated_store, mock_config):
         # Behaviour: picker_model overrides the chat model for this classification-
         # shaped call, so placement runs on the small model without paging in the
@@ -244,6 +244,33 @@ class TestLLMPickBestChild:
 class TestAutoSplitNode:
     """Tests for the auto-split logic."""
 
+    @pytest.mark.parametrize('prefix', ['Private equipment', 'Özel cihaz kaydı'])
+    def test_large_split_can_return_all_independent_facts(self, store, mock_config, monkeypatch, prefix):
+        facts = [f'{prefix} ZX{i:03d} has private calibration QN{i * 137 + 9713}: '
+                 'this is a distinct personal record, with an independently assigned value.'
+                 for i in range(60)]
+        node = store.create_node('Inventory', 'Personal records', data='\n'.join(facts), parent_id='user')
+        assert node.data_token_count > SPLIT_THRESHOLD
+        response = json.dumps({'categories': [
+            {'name': 'First group', 'facts': facts[:30]},
+            {'name': 'Second group', 'facts': facts[30:]},
+        ], 'summary': 'Personal inventory'}, ensure_ascii=False)
+
+        def bounded_backend(**kwargs):
+            # Model the transport's finite generation and shared context window.
+            response_tokens = (len(response) + 3) // 4
+            input_tokens = (len(kwargs['system_prompt']) + len(kwargs['user_content']) + 3) // 4
+            if response_tokens > kwargs['max_tokens']:
+                return None
+            if input_tokens + response_tokens > kwargs.get('num_ctx', 4096):
+                return None
+            return response
+
+        monkeypatch.setattr('jarvis.memory.graph_ops.call_llm_direct', bounded_backend)
+        assert auto_split_node(store, node.id, mock_config, 'model')
+        assert store.get_node(node.id).data == ''
+        assert sorted(line for child in store.get_children(node.id) for line in child.data.splitlines()) == sorted(facts)
+
     def _make_large_node(self, store, token_count=2000):
         """Create a node with data exceeding the split threshold."""
         # ~4 chars per token, so token_count * 4 chars
@@ -256,18 +283,17 @@ class TestAutoSplitNode:
         )
         return node
 
-    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
-    def test_successful_split(self, mock_llm, store, mock_config):
+    @pytest.mark.parametrize('category_count', [2, 5])
+    @patch("jarvis.memory.graph_ops.call_llm_direct")
+    def test_successful_split(self, mock_llm, store, mock_config, category_count):
 
         node = self._make_large_node(store)
         assert node.data_token_count > SPLIT_THRESHOLD
 
         mock_llm.return_value = json.dumps({
-            "categories": [
-                {"name": "Category A", "description": "First category", "facts": ["Fact 1", "Fact 2"]},
-                {"name": "Category B", "description": "Second category", "facts": ["Fact 3", "Fact 4"]},
-            ],
-            "summary": "A topic covering categories A and B"
+            "categories": [{"name": f"Category {index}", "description": f"Group {index}",
+                            "facts": [f"Independent fact {index}"]} for index in range(category_count)],
+            "summary": "A topic covering independent facts"
         })
 
         result = auto_split_node(store, node.id, mock_config, "model")
@@ -275,25 +301,24 @@ class TestAutoSplitNode:
 
         # Verify children were created
         children = store.get_children(node.id)
-        assert len(children) == 2
-        names = {c.name for c in children}
-        assert "Category A" in names
-        assert "Category B" in names
+        assert len(children) == category_count
+        assert {c.name for c in children} == {f"Category {index}" for index in range(category_count)}
+        assert {c.data for c in children} == {f"Independent fact {index}" for index in range(category_count)}
 
         # Verify parent data was cleared and description updated
         updated_parent = store.get_node(node.id)
         assert updated_parent.data == ""
-        assert "categories A and B" in updated_parent.description
+        assert updated_parent.description == "A topic covering independent facts"
 
-    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
-    def test_split_aborts_with_fewer_than_2_categories(self, mock_llm, store, mock_config):
+    @pytest.mark.parametrize('category_count', [0, 1, 6])
+    @patch("jarvis.memory.graph_ops.call_llm_direct")
+    def test_split_aborts_outside_category_bounds(self, mock_llm, store, mock_config, category_count):
 
         node = self._make_large_node(store)
 
         mock_llm.return_value = json.dumps({
-            "categories": [
-                {"name": "Only One", "description": "Just one", "facts": ["All the facts"]},
-            ],
+            "categories": [{"name": f"Category {index}", "description": f"Group {index}",
+                            "facts": [f"Independent fact {index}"]} for index in range(category_count)],
             "summary": "Everything"
         })
 
@@ -302,9 +327,11 @@ class TestAutoSplitNode:
 
         # Data should still be on the parent
         parent = store.get_node(node.id)
-        assert parent.data != ""
+        assert parent.data == node.data
+        assert parent.description == node.description
+        assert store.get_children(node.id) == []
 
-    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    @patch("jarvis.memory.graph_ops.call_llm_direct")
     def test_split_aborts_on_llm_failure(self, mock_llm, store, mock_config):
 
         node = self._make_large_node(store)
@@ -313,7 +340,7 @@ class TestAutoSplitNode:
         result = auto_split_node(store, node.id, mock_config, "model")
         assert result is False
 
-    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    @patch("jarvis.memory.graph_ops.call_llm_direct")
     def test_split_aborts_on_malformed_json(self, mock_llm, store, mock_config):
 
         node = self._make_large_node(store)
@@ -338,7 +365,7 @@ class TestAutoSplitNode:
         {'name': True, 'facts': ['One fact']},
         {'name': '   ', 'facts': ['One fact']},
     ])
-    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    @patch("jarvis.memory.graph_ops.call_llm_direct")
     def test_split_aborts_on_invalid_category(self, mock_llm, store, mock_config, invalid_category):
 
         node = self._make_large_node(store)
@@ -432,7 +459,7 @@ class TestBranchFactKeys:
 class TestUpdateGraphFromDialogue:
     """End-to-end tests for the orchestrator function."""
 
-    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    @patch("jarvis.memory.graph_ops.call_llm_direct")
     def test_full_flow_extracts_and_stores(self, mock_llm, store):
         """End-to-end: extraction emits branch-tagged facts, the
         orchestrator pins traversal to each fact's branch, and the
@@ -471,7 +498,7 @@ class TestUpdateGraphFromDialogue:
         assert "jazz" not in root.data
         assert "Acme" not in root.data
 
-    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    @patch("jarvis.memory.graph_ops.call_llm_direct")
     def test_no_facts_extracted(self, mock_llm, store):
 
         mock_llm.return_value = "[]"
@@ -486,7 +513,7 @@ class TestUpdateGraphFromDialogue:
         assert result.stored == []
         assert result.skipped == 0
 
-    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    @patch("jarvis.memory.graph_ops.call_llm_direct")
     def test_extraction_failure_returns_zero(self, mock_llm, store):
 
         mock_llm.return_value = None
@@ -501,7 +528,7 @@ class TestUpdateGraphFromDialogue:
         assert result.stored == []
         assert result.skipped == 0
 
-    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    @patch("jarvis.memory.graph_ops.call_llm_direct")
     def test_skips_duplicate_facts_on_second_flush(self, mock_llm, store):
         """Re-extracting the same fact from a growing daily summary must
         not duplicate it in the graph.
@@ -540,7 +567,7 @@ class TestUpdateGraphFromDialogue:
         world = store.get_node("world")
         assert world.data.count("Justin Bieber") == 1
 
-    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    @patch("jarvis.memory.graph_ops.call_llm_direct")
     def test_dedupe_handles_non_latin_case_folding(self, mock_llm, store):
         """Locale-safe folding: Turkish İ/i̇ and German ß/ss collapse to the
         same dedupe key. Python's ``str.lower`` would miss these cases —
@@ -589,8 +616,8 @@ class TestUpdateGraphFromDialogue:
         assert result.stored == [], "German ß should casefold to ss for dedupe"
         assert result.skipped == 1
 
-    @patch("src.jarvis.memory.graph_ops._llm_pick_best_child")
-    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    @patch("jarvis.memory.graph_ops._llm_pick_best_child")
+    @patch("jarvis.memory.graph_ops.call_llm_direct")
     def test_dedupe_on_child_after_split(self, mock_llm, mock_pick, store):
         """Dedupe must trigger on whichever node traversal lands on, not
         only on the branch root. Pre-populate a child of ``world`` with a
@@ -629,7 +656,7 @@ class TestUpdateGraphFromDialogue:
 class TestMergeNodeData:
     """merge_node_data rewrites a node's data via an LLM consolidation pass."""
 
-    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    @patch("jarvis.memory.graph_ops.call_llm_direct")
     def test_rewrites_node_with_consolidated_facts(self, mock_llm, store):
         node = store.create_node(
             name="Test",
@@ -657,7 +684,7 @@ class TestMergeNodeData:
         assert "User likes coffee." not in refreshed.data
         assert "User is from Hackney." in refreshed.data
 
-    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    @patch("jarvis.memory.graph_ops.call_llm_direct")
     def test_empty_node_skips_llm(self, mock_llm, store):
         node = store.create_node(name="T", description="d", data="", parent_id="user")
 
@@ -672,7 +699,7 @@ class TestMergeNodeData:
         assert result.success is False
         mock_llm.assert_not_called()
 
-    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    @patch("jarvis.memory.graph_ops.call_llm_direct")
     def test_llm_failure_leaves_node_untouched(self, mock_llm, store):
         node = store.create_node(
             name="T", description="d", data="Existing fact.", parent_id="user",
@@ -690,7 +717,7 @@ class TestMergeNodeData:
         assert result.success is False
         assert store.get_node(node.id).data == "Existing fact."
 
-    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    @patch("jarvis.memory.graph_ops.call_llm_direct")
     def test_unparseable_response_leaves_node_untouched(self, mock_llm, store):
         node = store.create_node(
             name="T", description="d", data="Existing fact.", parent_id="user",
@@ -708,7 +735,7 @@ class TestMergeNodeData:
         assert result.success is False
         assert store.get_node(node.id).data == "Existing fact."
 
-    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    @patch("jarvis.memory.graph_ops.call_llm_direct")
     def test_empty_rewrite_treated_as_failure(self, mock_llm, store):
         """A non-empty existing payload should never collapse to nothing.
         Treat empty-list rewrites as suspect and refuse to wipe the node."""
@@ -728,8 +755,8 @@ class TestMergeNodeData:
         assert result.success is False
         assert store.get_node(node.id).data == "A.\nB."
 
-    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
-    def test_non_string_facts_filtered(self, mock_llm, store):
+    @patch("jarvis.memory.graph_ops.call_llm_direct")
+    def test_non_string_facts_reject_the_entire_rewrite(self, mock_llm, store):
         node = store.create_node(
             name="T", description="d", data="A.", parent_id="user",
         )
@@ -745,10 +772,10 @@ class TestMergeNodeData:
             chat_model="model",
         )
 
-        assert result.success is True
-        assert store.get_node(node.id).data == "Kept fact.\nAnother kept."
+        assert result.success is False
+        assert store.get_node(node.id).data == "A."
 
-    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    @patch("jarvis.memory.graph_ops.call_llm_direct")
     def test_hallucination_guard_rejects_oversized_rewrite(self, mock_llm, store):
         """Consolidation rules can shrink or hold but should never grow
         the node beyond `existing + new + small slack`. Reject rewrites
@@ -771,7 +798,7 @@ class TestMergeNodeData:
         assert result.success is False
         assert store.get_node(node.id).data == "One existing fact."
 
-    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    @patch("jarvis.memory.graph_ops.call_llm_direct")
     def test_incorporated_indices_track_each_new_fact(self, mock_llm, store):
         """When a batch contains multiple new facts and the rewrite
         consolidates one of them out, the result should list only the
@@ -794,7 +821,7 @@ class TestMergeNodeData:
         assert result.success is True
         assert result.incorporated_indices == [0]
 
-    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    @patch("jarvis.memory.graph_ops.call_llm_direct")
     def test_empty_new_facts_runs_self_consolidation(self, mock_llm, store):
         """Calling with new_facts=[] should still hit the LLM and run a
         consolidation pass over the existing data alone — the migration
@@ -820,7 +847,7 @@ class TestMergeNodeData:
         assert result.incorporated_indices == []
         assert store.get_node(node.id).data == "User does not have a need for X."
 
-    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    @patch("jarvis.memory.graph_ops.call_llm_direct")
     def test_extracts_facts_object_from_markdown_fenced_response(self, mock_llm, store):
         """Tighter regex must still pull the object out when the model
         wraps it in a markdown code fence."""
@@ -842,12 +869,12 @@ class TestMergeNodeData:
         assert result.success is True
         assert "New." in store.get_node(node.id).data
 
-    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    @patch("jarvis.memory.graph_ops.call_llm_direct")
     def test_hallucination_guard_boundary_pins_to_slack_constant(self, mock_llm, store):
         """The guard's cap is `existing + new + _MERGE_GROWTH_SLACK`.
         Pin both sides of the boundary against the named constant so a
         future tweak to the slack can't silently drift the guard."""
-        from src.jarvis.memory.graph_ops import (
+        from jarvis.memory.graph_ops import (
             _MERGE_GROWTH_SLACK,
             _split_data_lines,
         )
@@ -883,7 +910,7 @@ class TestMergeNodeData:
         )
         assert result.success is False
 
-    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    @patch("jarvis.memory.graph_ops.call_llm_direct")
     def test_incorporated_indices_tolerant_to_trailing_punctuation(self, mock_llm, store):
         """Picker models routinely drop the trailing full stop when
         rewriting facts ("X." → "X"). A strict normalise_fact match
@@ -910,7 +937,7 @@ class TestMergeNodeData:
             "Trailing-period rephrasing must still count as incorporation."
         )
 
-    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    @patch("jarvis.memory.graph_ops.call_llm_direct")
     def test_prompt_body_matches_parsed_line_count(self, mock_llm, store):
         """The CURRENT facts block sent to the picker must contain
         exactly the lines `_split_data_lines` produced — blank lines
@@ -943,7 +970,7 @@ class TestMergeNodeData:
         assert "A.\n\n" not in sent_user_content
         assert "  \n" not in sent_user_content
 
-    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    @patch("jarvis.memory.graph_ops.call_llm_direct")
     def test_extracts_object_with_braces_inside_fact_strings(self, mock_llm, store):
         """A fact whose text contains literal `{` or `}` must still
         parse — `raw_decode` handles balanced nesting that a
@@ -975,23 +1002,23 @@ class TestMergeSystemPromptInvariants:
     prompt's text. Each rule is referenced at least once below."""
 
     def test_prompt_lists_supersession_rule(self):
-        from src.jarvis.memory.graph_ops import _MERGE_SYSTEM_PROMPT
+        from jarvis.memory.graph_ops import _MERGE_SYSTEM_PROMPT
         assert "CONTRADICTION" in _MERGE_SYSTEM_PROMPT
 
     def test_prompt_lists_dedupe_rule(self):
-        from src.jarvis.memory.graph_ops import _MERGE_SYSTEM_PROMPT
+        from jarvis.memory.graph_ops import _MERGE_SYSTEM_PROMPT
         assert "DUPLICATION" in _MERGE_SYSTEM_PROMPT
 
     def test_prompt_lists_consolidation_rule(self):
-        from src.jarvis.memory.graph_ops import _MERGE_SYSTEM_PROMPT
+        from jarvis.memory.graph_ops import _MERGE_SYSTEM_PROMPT
         assert "CONSOLIDATION" in _MERGE_SYSTEM_PROMPT
 
     def test_prompt_lists_independence_rule(self):
-        from src.jarvis.memory.graph_ops import _MERGE_SYSTEM_PROMPT
+        from jarvis.memory.graph_ops import _MERGE_SYSTEM_PROMPT
         assert "INDEPENDENCE" in _MERGE_SYSTEM_PROMPT
 
     def test_prompt_lists_pruning_rule(self):
-        from src.jarvis.memory.graph_ops import _MERGE_SYSTEM_PROMPT
+        from jarvis.memory.graph_ops import _MERGE_SYSTEM_PROMPT
         assert "PRUNING" in _MERGE_SYSTEM_PROMPT
 
     def test_prompt_lists_meta_narrative_rule_with_assistant_examples(self):
@@ -1004,7 +1031,7 @@ class TestMergeSystemPromptInvariants:
         section (META-NARRATIVE up to the next numbered rule) so the
         assertions can't be satisfied by unrelated text elsewhere in
         the prompt."""
-        from src.jarvis.memory.graph_ops import _MERGE_SYSTEM_PROMPT
+        from jarvis.memory.graph_ops import _MERGE_SYSTEM_PROMPT
         assert "META-NARRATIVE" in _MERGE_SYSTEM_PROMPT
         rule_start = _MERGE_SYSTEM_PROMPT.index("META-NARRATIVE")
         # Bound the section by the next numbered rule (e.g. '\n7. ')
@@ -1037,7 +1064,7 @@ class TestConsolidateAllPopulatedNodes:
     """consolidate_all_populated_nodes runs a self-merge pass on every
     populated node. Migration path for the contradiction backlog."""
 
-    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    @patch("jarvis.memory.graph_ops.call_llm_direct")
     def test_walks_only_populated_nodes(self, mock_llm, store):
         # Two populated nodes + one empty node + the seeded branch roots.
         store.create_node(
@@ -1071,7 +1098,7 @@ class TestConsolidateAllPopulatedNodes:
             assert before == 2
             assert after == 1
 
-    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    @patch("jarvis.memory.graph_ops.call_llm_direct")
     def test_failure_per_node_does_not_abort_the_rest(self, mock_llm, store):
         store.create_node(name="A", description="d", data="X.", parent_id="user")
         store.create_node(name="B", description="d", data="Y.", parent_id="world")
@@ -1090,7 +1117,7 @@ class TestConsolidateAllPopulatedNodes:
         names = {n for n, _, _ in results}
         assert names == {"A", "B"}
 
-    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    @patch("jarvis.memory.graph_ops.call_llm_direct")
     def test_yields_per_node_for_streaming(self, mock_llm, store):
         """The op must be a generator that yields each result as the
         walk progresses — buffering the whole sweep before yielding
@@ -1121,7 +1148,7 @@ class TestConsolidateAllPopulatedNodes:
 class TestUpdateGraphMerge:
     """update_graph_from_dialogue runs the merge pass on populated nodes."""
 
-    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    @patch("jarvis.memory.graph_ops.call_llm_direct")
     def test_contradiction_replaces_old_fact_via_merge(self, mock_llm, store):
         """Regression: 'user does not need a daily check-in' should
         replace the prior 'user has a need for a daily check-in' line
@@ -1150,7 +1177,7 @@ class TestUpdateGraphMerge:
         assert "does not need" in user_data
         assert "has a need for" not in user_data
 
-    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    @patch("jarvis.memory.graph_ops.call_llm_direct")
     def test_merge_failure_falls_back_to_append(self, mock_llm, store):
         """A flaky merge LLM must not block the write — the fact still
         lands via plain append so we never lose data on transient
@@ -1175,7 +1202,7 @@ class TestUpdateGraphMerge:
         assert "Existing line." in data
         assert "Brand new fact." in data
 
-    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
+    @patch("jarvis.memory.graph_ops.call_llm_direct")
     def test_cold_start_skips_merge_llm_call(self, mock_llm, store):
         """When the chosen node has no data, the merge pass should
         short-circuit (no LLM call) and the fact lands via plain
@@ -1306,7 +1333,7 @@ class TestBranchPlacement:
 
     @pytest.mark.parametrize('branch', [BRANCH_USER, BRANCH_DIRECTIVES, BRANCH_WORLD])
     @pytest.mark.parametrize('match', [True, False])
-    @patch('src.jarvis.memory.graph_ops.call_llm_direct')
+    @patch('jarvis.memory.graph_ops.call_llm_direct')
     def test_popular_other_branches_cannot_capture_a_fact(self, mock_llm, store, mock_config, branch, match):
         category = store.create_node('Category', 'Relevant category', parent_id=branch)
         leaf = store.create_node('Leaf', 'Relevant leaf', parent_id=category.id)

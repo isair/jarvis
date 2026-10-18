@@ -1,5 +1,7 @@
 # Settings Window Specification
 
+[Configuration file selection](../jarvis/config.spec.md) is shared with the daemon. Desktop configuration reads, writes and directory navigation use the selected file.
+
 Auto-generated settings UI that dynamically builds its interface from config field metadata.
 
 ## Overview
@@ -10,8 +12,9 @@ The Settings Window provides a graphical interface for editing `config.json` wit
 
 1. **Metadata-driven**: All fields are defined in a `FIELD_METADATA` registry. Adding a new config parameter to the settings UI requires only adding a `FieldMeta` entry — no widget code changes.
 2. **Minimal config files**: Only non-default values are written to `config.json`. Removing a field from the config reverts it to the default.
-3. **Preserves unknown keys**: Keys not managed by the UI (e.g. `mcps`, `_config_version`, future additions) are preserved when saving.
+3. **Preserves unknown keys**: Keys not managed by the UI (e.g. `mcps`, `_config_version`, future additions) are preserved when saving. Unrecognised values stay opaque and are not interpreted as runtime controls.
 4. **Theme-consistent**: Uses the shared Jarvis theme from `themes.py`.
+5. **Active controls**: Speech detection is configured by `vad_enabled` in Voice Activity Detection. The Speech Recognition category has no separate VAD filter toggle; settings expose controls that the runtime applies.
 
 ## Architecture
 
@@ -42,6 +45,17 @@ FieldMeta (dataclass)
 | `choice` | QComboBox | Pre-defined options |
 | `device` | QComboBox | Dynamically populated from sounddevice |
 | `list` | QListWidget + Add/Edit/Remove buttons | Stores as JSON array in config |
+
+Choice and device dropdowns retain the configured value when it is absent from
+their option list, including local model references and unavailable microphones.
+They display that value as an additional selected option. Saving another field
+preserves it; choosing an alternative or resetting to defaults replaces it.
+Whisper choices come from the shared `whisper_models.py` catalogue, including
+`large-v3-turbo` and English-only variants. Settings and the setup wizard offer
+the same catalogue entries; non-Turbo `large-v3` is excluded from both lists.
+The wizard filters these entries for the selected language and usable backend.
+Memory labels and estimates derive from the catalogue, including retained
+records for saved models that are not offered as choices.
 
 ## Layout
 
@@ -167,11 +181,9 @@ On save, the `mcps` dict is written to config.json if non-empty, or removed enti
 These fields are managed elsewhere or are too complex for a simple form:
 
 - `db_path` / `sqlite_vss_path` — internal storage paths
-- `active_profiles` — list managed by setup wizard
-- `allowlist_bundles` — list of bundle IDs
 - `wake_aliases` — list of strings (complex editing)
 - `stop_commands` / `stop_command_fuzzy_ratio` — list of strings
 - `use_stdin` — developer/CLI flag
 - `voice_debug` — environment variable only
-- `whisper_min_audio_duration` / `whisper_min_word_length` — rarely changed advanced params
+- `whisper_min_audio_duration` — rarely changed advanced params
 - `vad_frame_ms` / `vad_pre_roll_ms` — low-level VAD timing

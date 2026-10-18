@@ -688,6 +688,33 @@ class TestMentionVersusAddress:
         assert not hasattr(result, 'query'), 'Intent classification cannot rewrite speech'
 
 
+class TestHotWindowAddressee:
+    @pytest.mark.parametrize('text,directed', [
+        ("I'm talking to Jarvis, not you.", False),
+        ("Sarah, can you pass me your phone?", False),
+        ("Estoy hablando con mi pareja, no contigo, Jarvis.", False),
+        ("Jarvis, seninle değil eşimle konuşuyorum.", False),
+        ("And tomorrow?", True),
+        ("Don't you already know where I live?", True),
+        ("I think absurdism is better.", True),
+        ("Thanks.", True),
+        ("You are currently in T-Ballista Georgia and what do you think about Joseph Stalin and communism in general?", True),
+    ])
+    def test_current_addressee_in_hot_window(self, text, directed):
+        if not is_intent_judge_available():
+            pytest.skip('🎤 Selected voice evaluation model is unavailable')
+        case = MultiSegmentTestCase(name='hot_window_addressee', segments=[(text, False)],
+            last_tts_text='Tomorrow in London is forecast to be cloudy.',
+            in_hot_window=True, wake_timestamp=None, expected_directed=directed)
+        result = run_intent_judge_multi_segment(case)
+        assert result is not None, 'Intent judge did not return a usable decision'
+        assert result.directed is directed, result
+        assert result.stop is False, result
+
+        if not directed:
+            assert result.confidence == 'high', 'A clear other-person verdict must prevent fallback admission'
+
+
 class TestIntentJudgeAccuracy:
     """Evals for intent judge accuracy."""
 

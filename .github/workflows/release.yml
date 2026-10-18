@@ -44,16 +44,24 @@ jobs:
             @semantic-release/github@9 \
             conventional-changelog-conventionalcommits@7
 
+      - name: 🧪 Verify staged release publication
+        run: node tests/release_publication.mjs "$(npm root -g)/@semantic-release/github"
+
       - name: 🏷️ Semantic Release
         id: semantic
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          npx semantic-release --debug > release_output.log 2>&1 || true
+          release_status=0
+          npx semantic-release --debug > release_output.log 2>&1 || release_status=$?
+          cat release_output.log
+          if [ "$release_status" -ne 0 ]; then
+            exit "$release_status"
+          fi
 
           if grep -q "Published release" release_output.log; then
             echo "new_release_published=true" >> $GITHUB_OUTPUT
-            VERSION=$(grep "Published release" release_output.log | sed -n 's/.*Published release \([0-9]\+\.[0-9]\+\.[0-9]\+\).*/\1/p')
+            VERSION=$(grep "Published release" release_output.log | sed -nE 's/.*Published release ([0-9]+\.[0-9]+\.[0-9]+).*/\1/p')
             echo "new_release_version=$VERSION" >> $GITHUB_OUTPUT
             echo "new_release_git_tag=v$VERSION" >> $GITHUB_OUTPUT
             echo "✅ Released version $VERSION"
@@ -61,8 +69,6 @@ jobs:
             echo "new_release_published=false" >> $GITHUB_OUTPUT
             echo "ℹ️ No release created (no releasable changes found)"
           fi
-
-          cat release_output.log
 
   desktop-changes:
     if: github.ref == 'refs/heads/develop'

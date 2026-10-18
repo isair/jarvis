@@ -21,6 +21,7 @@ leave in the repo. Use ``-s`` to see the report table.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import json
 import os
 import time
@@ -29,6 +30,7 @@ from pathlib import Path
 import pytest
 import requests
 
+from jarvis.llm.model_names import missing_ollama_models
 from tests.performance.timing_recorder import TimingRecorder
 
 
@@ -59,18 +61,19 @@ def _ollama_reachable() -> bool:
         if resp.status_code != 200:
             return False
         models = [m.get("name", "") for m in resp.json().get("models", [])]
-        return any(PERF_MODEL.split(":")[0] in m for m in models)
+        return not missing_ollama_models([PERF_MODEL], models)
     except Exception:
         return False
 
 
-pytestmark = [
-    pytest.mark.performance,
-    pytest.mark.skipif(
-        not _ollama_reachable(),
-        reason=f"Ollama at {OLLAMA_URL} with {PERF_MODEL} not available",
-    ),
-]
+pytestmark = pytest.mark.performance
+
+
+@pytest.fixture(scope="module", autouse=True)
+def require_performance_model():
+    """Probe the selected local model only when benchmarks actually run."""
+    if not _ollama_reachable():
+        pytest.skip(f"🔌 Model {PERF_MODEL} is unavailable on the selected Ollama server")
 
 
 def _make_cfg():
@@ -88,7 +91,7 @@ def _make_cfg():
     return cfg
 
 
-def _write_report(rec: TimingRecorder, name: str) -> Path:
+def _write_report(rec: TimingRecorder, name: str, *, failure_type: str | None) -> Path:
     PERF_REPORT_DIR.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M%S")
     path = PERF_REPORT_DIR / f"{name}-{stamp}.json"
@@ -97,6 +100,8 @@ def _write_report(rec: TimingRecorder, name: str) -> Path:
         "timestamp": stamp,
         "model": PERF_MODEL,
         "runs": PERF_RUNS,
+        "status": "failed" if failure_type else "completed",
+        "failure_type": failure_type,
         "summary": rec.to_dict(),
         "raw": [
             {
@@ -105,6 +110,8 @@ def _write_report(rec: TimingRecorder, name: str) -> Path:
                 "model": c.model,
                 "prompt_chars": c.prompt_chars,
                 "response_chars": c.response_chars,
+                "provider": c.provider,
+                "outcome": c.outcome,
             }
             for c in rec.calls
         ],
@@ -113,12 +120,40 @@ def _write_report(rec: TimingRecorder, name: str) -> Path:
     return path
 
 
+@contextmanager
+def _record_benchmark(name: str, title: str):
+    """Write observed call metadata even when a benchmark request raises."""
+    recorder = TimingRecorder()
+    failure_type = None
+    try:
+        with recorder:
+            yield recorder
+    except BaseException as error:
+        failure_type = type(error).__name__
+        raise
+    finally:
+        try:
+            recorder.print_report(title=title)
+            path = _write_report(recorder, name, failure_type=failure_type)
+            print(f"   📄 saved: {path}")
+        except Exception as report_error:
+            if failure_type is None:
+                raise
+            print(f"   ⚠️ Benchmark report could not be saved ({type(report_error).__name__})")
+
+
+def _assert_usable_samples(recorder: TimingRecorder):
+    assert recorder.calls, "⚠️ No LLM calls recorded, pipeline did not invoke the LLM"
+    assert all(call.outcome == "response" for call in recorder.calls), (
+        "⚠️ Benchmark contains empty or failed model samples; see the saved report"
+    )
+
+
 # =============================================================================
 # Micro-benchmark: tiny fixed prompt per configured model
 # =============================================================================
 
 
-@pytest.mark.performance
 def test_micro_benchmark_tiny_prompt():
     """Baseline: how long does a single tiny round-trip to Ollama take?
 
@@ -126,11 +161,10 @@ def test_micro_benchmark_tiny_prompt():
     every context's total moves with it. Reported separately from the
     pipeline test so hardware drift is obvious in the numbers.
     """
-    # Import the module (not the function) so the recorder's patch on
-    # jarvis.llm is visible at call time.
     from jarvis import llm as _llm
 
-    with TimingRecorder() as rec:
+    title = f"Micro-benchmark: tiny prompt × {PERF_RUNS + 1} on {PERF_MODEL}"
+    with _record_benchmark("micro", title) as rec:
         # Warmup (first call pays weight-loading cost)
         _llm.call_llm_direct(
             base_url=OLLAMA_URL,
@@ -149,13 +183,8 @@ def test_micro_benchmark_tiny_prompt():
                 timeout_sec=30.0,
             )
 
-    rec.print_report(title=f"Micro-benchmark — tiny prompt × {PERF_RUNS + 1} on {PERF_MODEL}")
-    path = _write_report(rec, "micro")
-    print(f"   📄 saved: {path}")
-
-    # Shape check: warm calls should be noticeably faster than cold.
-    # Not a strict assertion (too noisy) — just make sure we got calls.
-    assert len(rec.calls) == PERF_RUNS + 1
+        assert len(rec.calls) == PERF_RUNS + 1
+        _assert_usable_samples(rec)
 
 
 # =============================================================================
@@ -163,7 +192,6 @@ def test_micro_benchmark_tiny_prompt():
 # =============================================================================
 
 
-@pytest.mark.performance
 def test_pipeline_timings_by_context():
     """Run the full reply pipeline N times, record per-context timings.
 
@@ -176,45 +204,46 @@ def test_pipeline_timings_by_context():
 
     cfg = _make_cfg()
 
-    with TimingRecorder() as rec:
+    replies = []
+    title = f"Pipeline timings: {len(PIPELINE_QUERIES)} queries × {PERF_RUNS} runs on {PERF_MODEL}"
+    with _record_benchmark("pipeline", title) as rec:
         for query in PIPELINE_QUERIES:
             db = Database(":memory:", sqlite_vss_path=None)
             dlg = DialogueMemory(inactivity_timeout=300, max_interactions=20)
             try:
                 for _ in range(PERF_RUNS):
-                    run_reply_engine(db, cfg, None, query, dlg)
+                    replies.append(run_reply_engine(db, cfg, None, query, dlg))
             finally:
                 db.close()
 
-    rec.print_report(title=f"Pipeline timings — {len(PIPELINE_QUERIES)} queries × {PERF_RUNS} runs on {PERF_MODEL}")
-    path = _write_report(rec, "pipeline")
-    print(f"   📄 saved: {path}")
-
-    assert rec.calls, "no LLM calls recorded — pipeline did not invoke the LLM"
-
-    # Surface unmapped callers so new contexts show up in review.
-    other = [c for c in rec.calls if c.context.startswith("other:")]
-    if other:
-        unmapped = sorted({c.context for c in other})
-        print(f"   ⚠️  unmapped callers (add to _CALLER_TO_CONTEXT): {unmapped}")
-
-    # Shape invariants
-    main_p50 = rec.p50("main_chat_turn")
-    if main_p50 > 0:
-        router_p50 = rec.p50("tool_router")
-        if router_p50 > 0:
-            assert router_p50 <= main_p50 * 1.5, (
-                f"tool router p50 ({router_p50:.2f}s) exceeds main chat turn p50 "
-                f"({main_p50:.2f}s) by >50% — router should be cheaper"
-            )
-
-    # Locking in the demotion: enrichment extractor must use the router chain.
-    enrich_calls = [c for c in rec.calls if c.context == "enrichment_extract"]
-    router_calls = [c for c in rec.calls if c.context == "tool_router"]
-    if enrich_calls and router_calls:
-        enrich_models = {c.model for c in enrich_calls}
-        router_models = {c.model for c in router_calls}
-        assert enrich_models == router_models, (
-            f"enrichment extractor should share the router model chain "
-            f"(enrichment={enrich_models}, router={router_models})"
+        _assert_usable_samples(rec)
+        assert replies and all(isinstance(reply, str) and reply.strip() for reply in replies), (
+            "⚠️ Benchmark pipeline produced an empty answer; see the saved report"
         )
+
+        # Surface unmapped callers so new contexts show up in review.
+        other = [c for c in rec.calls if c.context.startswith("other:")]
+        if other:
+            unmapped = sorted({c.context for c in other})
+            print(f"   ⚠️  unmapped callers (add to _CALLER_TO_CONTEXT): {unmapped}")
+
+        # Shape invariants
+        main_p50 = rec.p50("main_chat_turn")
+        if main_p50 > 0:
+            router_p50 = rec.p50("tool_router")
+            if router_p50 > 0:
+                assert router_p50 <= main_p50 * 1.5, (
+                    f"tool router p50 ({router_p50:.2f}s) exceeds main chat turn p50 "
+                    f"({main_p50:.2f}s) by >50%, router should be cheaper"
+                )
+
+        # Locking in the demotion: enrichment extractor must use the router chain.
+        enrich_calls = [c for c in rec.calls if c.context == "enrichment_extract"]
+        router_calls = [c for c in rec.calls if c.context == "tool_router"]
+        if enrich_calls and router_calls:
+            enrich_models = {c.model for c in enrich_calls}
+            router_models = {c.model for c in router_calls}
+            assert enrich_models == router_models, (
+                f"enrichment extractor should share the router model chain "
+                f"(enrichment={enrich_models}, router={router_models})"
+            )

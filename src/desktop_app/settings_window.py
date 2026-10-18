@@ -24,12 +24,13 @@ from PyQt6.QtGui import QFont
 
 from jarvis.config import (
     get_default_config, load_config,
-    default_config_path, _save_json, _load_json,
+    get_config_path, _save_json, _load_json,
     SUPPORTED_CHAT_MODELS,
 )
 from jarvis.debug import debug_log
 from desktop_app.themes import apply_theme
 from desktop_app.mcp_catalogue import CATALOGUE, CATALOGUE_BY_NAME, MCPEntry
+from desktop_app.whisper_models import settings_model_choices
 
 
 # ---------------------------------------------------------------------------
@@ -125,9 +126,6 @@ def _build_field_metadata() -> List[FieldMeta]:
       "llm", "float", min_val=10, max_val=600, step=10, suffix="s")
     f("llm_embedding_timeout_sec", "Embedding Timeout", "Max seconds for embeddings",
       "llm", "float", min_val=5, max_val=300, step=5, suffix="s")
-    f("llm_profile_select_timeout_sec", "Profile Select Timeout",
-      "Max seconds for profile selection",
-      "llm", "float", min_val=5, max_val=120, step=5, suffix="s")
     f("fast_model", "Fast Model",
       "Small, quick model for real-time work: voice intent, tool routing, "
       "quick classifications. Automatic picks the right default for your provider",
@@ -243,10 +241,9 @@ def _build_field_metadata() -> List[FieldMeta]:
       "wake", "float", min_val=0.5, max_val=1.0, step=0.01)
     # --- Whisper ---
     f("whisper_model", "Model Size",
-      "Whisper model size (tiny/base/small/medium/large)",
+      "Whisper model size or local model reference",
       "whisper", "choice",
-      choices=[("tiny", "Tiny"), ("base", "Base"), ("small", "Small"),
-               ("medium", "Medium"), ("large-v3", "Large v3")])
+      choices=settings_model_choices())
     f("whisper_backend", "Backend",
       "Speech recognition backend",
       "whisper", "choice",
@@ -260,9 +257,6 @@ def _build_field_metadata() -> List[FieldMeta]:
       "Quantisation level for inference",
       "whisper", "choice",
       choices=[("int8", "INT8 (Fast)"), ("float16", "Float16"), ("float32", "Float32")])
-    f("whisper_vad", "Use VAD Filter",
-      "Filter audio with VAD before transcription",
-      "whisper", "bool")
     f("whisper_min_confidence", "Min Confidence",
       "Filter low-confidence segments (hallucination guard)",
       "whisper", "float", min_val=0.0, max_val=1.0, step=0.05)
@@ -288,9 +282,6 @@ def _build_field_metadata() -> List[FieldMeta]:
       "vad", "int", min_val=500, max_val=10000, step=500, suffix="ms")
 
     # --- Timing & Windows ---
-    f("voice_block_seconds", "Block Duration",
-      "Audio block size for processing",
-      "timing", "float", min_val=0.5, max_val=10.0, step=0.5, suffix="s")
     f("voice_collect_seconds", "Collect Window",
       "Time to collect speech after wake word",
       "timing", "float", min_val=1.0, max_val=30.0, step=0.5, suffix="s")
@@ -430,7 +421,7 @@ class SettingsWindow(QDialog):
         self.setMinimumSize(780, 560)
         self.resize(840, 620)
         self._widgets: Dict[str, Any] = {}  # key -> widget
-        self._config_path = default_config_path()
+        self._config_path = get_config_path()
         self._current_config = _load_json(self._config_path)
         self._defaults = get_default_config()
         self._merged = {**self._defaults, **self._current_config}
@@ -584,27 +575,18 @@ class SettingsWindow(QDialog):
             w.setToolTip(fm.description)
             return w
 
-        if fm.field_type == "choice":
+        if fm.field_type in ("choice", "device"):
             w = QComboBox()
-            for val, display in (fm.choices or []):
+            choices = get_input_devices() if fm.field_type == "device" else (fm.choices or [])
+            for val, display in choices:
                 w.addItem(display, val)
-            # Set current value
             cur_str = str(current) if current is not None else ""
             idx = w.findData(cur_str)
-            if idx >= 0:
-                w.setCurrentIndex(idx)
-            w.setToolTip(fm.description)
-            return w
-
-        if fm.field_type == "device":
-            w = QComboBox()
-            devices = get_input_devices()
-            for val, display in devices:
-                w.addItem(display, val)
-            cur_str = str(current) if current not in (None, "") else ""
-            idx = w.findData(cur_str)
-            if idx >= 0:
-                w.setCurrentIndex(idx)
+            if idx < 0:
+                w.addItem(cur_str, cur_str)
+                idx = w.count() - 1
+                debug_log(f"preserving unlisted selection for {fm.key}", "settings")
+            w.setCurrentIndex(idx)
             w.setToolTip(fm.description)
             return w
 
@@ -948,7 +930,7 @@ class SettingsWindow(QDialog):
             config.pop("mcps", None)
 
         if _save_json(self._config_path, config):
-            debug_log("settings saved to config.json", "settings")
+            debug_log(f"settings saved to {self._config_path}", "settings")
             QMessageBox.information(
                 self, "✅ Saved",
                 "Settings saved. Restart Jarvis for changes to take effect."

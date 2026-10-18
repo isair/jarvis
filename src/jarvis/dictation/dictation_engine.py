@@ -17,12 +17,13 @@ import struct
 import sys
 import threading
 import time
+import wave
 from typing import Any, Callable, Optional
 
 from ..debug import debug_log
 from ..utils.audio_lock import portaudio_lock
 from ..utils.audio_capture import mono_capture, open_input_stream, resolve_input_device
-from .history import DictationHistory
+from .history import DictationHistory, HistoryUpdateError
 
 # Optional imports — graceful degradation when dependencies are missing.
 # sounddevice raises OSError (not ImportError) when the PortAudio shared
@@ -82,27 +83,11 @@ def _generate_beep_wav(freq: float = 520, duration: float = 0.10) -> bytes:
         samples.append(max(-32768, min(32767, sample_int)))
 
     buf = io.BytesIO()
-    num_channels = 1
-    bits = 16
-    byte_rate = sample_rate * num_channels * bits // 8
-    block_align = num_channels * bits // 8
-    data_size = num_samples * block_align
-
-    buf.write(b"RIFF")
-    buf.write(struct.pack("<I", 36 + data_size))
-    buf.write(b"WAVE")
-    buf.write(b"fmt ")
-    buf.write(struct.pack("<I", 16))
-    buf.write(struct.pack("<H", 1))
-    buf.write(struct.pack("<H", num_channels))
-    buf.write(struct.pack("<I", sample_rate))
-    buf.write(struct.pack("<I", byte_rate))
-    buf.write(struct.pack("<H", block_align))
-    buf.write(struct.pack("<H", bits))
-    buf.write(b"data")
-    buf.write(struct.pack("<I", data_size))
-    for s in samples:
-        buf.write(struct.pack("<h", s))
+    with wave.open(buf, 'wb') as audio:
+        audio.setnchannels(1)
+        audio.setsampwidth(2)
+        audio.setframerate(sample_rate)
+        audio.writeframes(struct.pack(f'<{len(samples)}h', *samples))
 
     return buf.getvalue()
 
@@ -177,7 +162,8 @@ def _clipboard_paste(text: str) -> None:
             _clipboard_linux(text)
         debug_log(f"clipboard set ({len(text)} chars)", "dictation")
     except Exception as exc:
-        debug_log(f"clipboard write failed: {exc}", "dictation")
+        debug_log(f"clipboard write failed: {type(exc).__name__}", "dictation")
+        print("  ⚠️ Dictation could not be copied to the clipboard.", flush=True)
         return
 
     # --- simulate paste keystroke ---
@@ -195,41 +181,45 @@ def _clipboard_paste(text: str) -> None:
               "clipboard; paste it manually with Cmd+V.", flush=True)
         return
 
-    if pynput_keyboard is None:
-        debug_log("pynput unavailable — cannot simulate paste", "dictation")
-        return
+    if pynput_keyboard is not None:
+        try:
+            ctrl = pynput_keyboard.Controller()
+            mod = pynput_keyboard.Key.ctrl
 
-    ctrl = pynput_keyboard.Controller()
-    mod = pynput_keyboard.Key.cmd if system == "darwin" else pynput_keyboard.Key.ctrl
-
-    # Explicitly release common modifiers so the OS doesn't see e.g.
-    # Ctrl+Alt+Cmd+V instead of just Cmd+V.
-    try:
-        for release_key in (
-            pynput_keyboard.Key.ctrl_l,
-            pynput_keyboard.Key.ctrl_r,
-            pynput_keyboard.Key.alt_l,
-            pynput_keyboard.Key.alt_r,
-            pynput_keyboard.Key.shift_l,
-            pynput_keyboard.Key.shift_r,
-            pynput_keyboard.Key.cmd,
-            pynput_keyboard.Key.cmd_r,
-        ):
+            # Release held hotkey modifiers before sending the paste shortcut.
             try:
-                ctrl.release(release_key)
+                for release_key in (
+                    pynput_keyboard.Key.ctrl_l,
+                    pynput_keyboard.Key.ctrl_r,
+                    pynput_keyboard.Key.alt_l,
+                    pynput_keyboard.Key.alt_r,
+                    pynput_keyboard.Key.shift_l,
+                    pynput_keyboard.Key.shift_r,
+                    pynput_keyboard.Key.cmd,
+                    pynput_keyboard.Key.cmd_r,
+                ):
+                    try:
+                        ctrl.release(release_key)
+                    except Exception:
+                        pass
             except Exception:
                 pass
-    except Exception:
-        pass
 
-    time.sleep(0.05)
-    try:
-        ctrl.press(mod)
-        ctrl.tap("v")
-        ctrl.release(mod)
-        debug_log("paste keystroke sent via pynput", "dictation")
-    except Exception as exc:
-        debug_log(f"paste keystroke failed: {exc}", "dictation")
+            time.sleep(0.05)
+            try:
+                ctrl.press(mod)
+                ctrl.tap("v")
+            finally:
+                ctrl.release(mod)
+            debug_log("paste keystroke sent via pynput", "dictation")
+            return
+        except Exception as exc:
+            debug_log(f"automatic paste failed: {type(exc).__name__}", "dictation")
+    else:
+        debug_log("pynput unavailable, cannot simulate paste", "dictation")
+
+    print("  ⚠️ Dictation could not complete automatic paste. The text is on your "
+          "clipboard; use Ctrl+V if needed.", flush=True)
 
 
 def _clipboard_windows(text: str) -> None:
@@ -682,6 +672,7 @@ class DictationEngine:
         self._audio_frames: list = []
         self._stream: Optional[Any] = None
         self._listener: Optional[Any] = None
+        self._listener_generation = 0
         self._pressed_modifiers: set = set()
         self._record_start_time: float = 0.0
         self._lock = threading.RLock()
@@ -695,7 +686,7 @@ class DictationEngine:
         self._session = 0
 
         # Double-tap detection for hands-free mode
-        self._last_hotkey_release_time: float = 0.0
+        self._last_hotkey_release_time: Optional[float] = None
         self._double_tap_window: float = 0.4  # seconds
 
         # Suppress recording activation during clipboard paste (the pynput
@@ -740,11 +731,15 @@ class DictationEngine:
                 return
 
         with self._lock:
+            self._listener_generation += 1
+            generation = self._listener_generation
+            self._pressed_modifiers.clear()
+            self._last_hotkey_release_time = None
             self._stopped = False
 
         self._listener = _create_keyboard_listener(
-            on_press=self._on_key_press,
-            on_release=self._on_key_release,
+            on_press=partial(self._handle_listener_key, generation, True),
+            on_release=partial(self._handle_listener_key, generation, False),
         )
         self._listener.start()
         self._started = True
@@ -756,6 +751,9 @@ class DictationEngine:
             if not self._stopped:
                 self._stopped = True
                 self._session += 1
+                self._listener_generation += 1
+            self._pressed_modifiers.clear()
+            self._last_hotkey_release_time = None
             token = self._session
         self._stop_recording(discard=True)
         with self._lock:
@@ -779,6 +777,15 @@ class DictationEngine:
     # Key event handlers
     # ------------------------------------------------------------------
 
+    def _handle_listener_key(self, generation: int, pressed: bool, key) -> None:
+        with self._lock:
+            if self._stopped or generation != self._listener_generation:
+                return
+            if pressed:
+                self._on_key_press(key)
+            else:
+                self._on_key_release(key)
+
     def _normalise_key(self, key) -> Any:
         """Normalise a key event to compare against our parsed trigger/modifiers."""
         # pynput sometimes gives KeyCode with vk but char=None for modified combos
@@ -792,8 +799,12 @@ class DictationEngine:
             return False
         if nkey == target or key == target:
             return True
-        if getattr(key, "name", None) == getattr(target, "name", None):
-            return True
+        target_name = getattr(target, "name", None)
+        key_name = getattr(key, "name", None)
+        if target_name is not None and key_name is not None:
+            if (key_name.removesuffix('_l').removesuffix('_r')
+                    == target_name.removesuffix('_l').removesuffix('_r')):
+                return True
         if hasattr(key, "char") and key.char:
             if pynput_keyboard.KeyCode.from_char(key.char.lower()) == target:
                 return True
@@ -802,8 +813,8 @@ class DictationEngine:
     def _all_modifiers_held(self) -> bool:
         """Return True when every required modifier is currently pressed."""
         return all(
-            m in self._pressed_modifiers or any(
-                getattr(p, "name", None) == getattr(m, "name", None)
+            any(
+                self._key_matches(p, self._normalise_key(p), m)
                 for p in self._pressed_modifiers
             )
             for m in self._modifiers
@@ -862,28 +873,28 @@ class DictationEngine:
         if self._hands_free:
             return
 
-        # Normal hold-to-dictate: any required key released → stop
+        # Hold-to-dictate ends when the trigger or a required modifier is released.
         if self._recording:
             trigger_released = self._key_matches(key, nkey, self._trigger)
             modifier_released = any(
                 self._key_matches(key, nkey, m) for m in self._modifiers
             )
-            if trigger_released or modifier_released:
+            if trigger_released or (modifier_released and not self._all_modifiers_held()):
                 # Check for double-tap: if released quickly, transition to hands-free
-                now = time.time()
+                now = time.monotonic()
                 hold_duration = now - self._record_start_time
                 if hold_duration < self._double_tap_window:
-                    time_since_last = now - self._last_hotkey_release_time
-                    if time_since_last < self._double_tap_window:
+                    last_release = self._last_hotkey_release_time
+                    if last_release is not None and now - last_release < self._double_tap_window:
                         # Double-tap detected → switch to hands-free
                         self._hands_free = True
                         debug_log("hands-free mode activated (double-tap)", "dictation")
-                        self._last_hotkey_release_time = 0.0
+                        self._last_hotkey_release_time = None
                         return
                     # First quick tap — stop recording but remember the time
                     self._last_hotkey_release_time = now
                 else:
-                    self._last_hotkey_release_time = 0.0
+                    self._last_hotkey_release_time = None
                 self._stop_recording()
 
     # ------------------------------------------------------------------
@@ -955,7 +966,7 @@ class DictationEngine:
             if self._session != token or not self._recording:
                 return
             self._audio_frames = []
-            self._record_start_time = time.time()
+            self._record_start_time = time.monotonic()
 
         debug_log("dictation recording started", "dictation")
 
@@ -1093,7 +1104,7 @@ class DictationEngine:
         try:
             _close_stream(stream)
             _play_beep(_get_stop_beep())
-            duration = time.time() - start_time
+            duration = time.monotonic() - start_time
             debug_log(f"dictation recording stopped ({duration:.1f}s)", "dictation")
             self._notify_session(token, 'processing')
             self._transcribe_and_paste(audio_frames, stream_sample_rate)
@@ -1142,7 +1153,12 @@ class DictationEngine:
                 finally:
                     self._paste_in_progress = False
                 # Persist to history
-                entry = self.history.add(text, duration=duration)
+                try:
+                    entry = self.history.add(text, duration=duration)
+                except HistoryUpdateError:
+                    debug_log("dictation history save failed; result not recorded", "dictation")
+                    print("  ⚠️ Dictation could not be saved to history.", flush=True)
+                    return
                 if self._on_dictation_result:
                     try:
                         self._on_dictation_result(entry)

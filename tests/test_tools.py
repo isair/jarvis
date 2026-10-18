@@ -196,6 +196,8 @@ def test_fetch_web_page_success(monkeypatch):
             '''
             self.text = self.content.decode()
             self.encoding = 'utf-8'
+            self.url = 'https://example.com'
+            self.headers = {'Content-Type': 'text/html; charset=utf-8'}
 
         def iter_content(self, chunk_size):
             for offset in range(0, len(self.content), chunk_size):

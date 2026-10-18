@@ -1,10 +1,10 @@
+from contextlib import nullcontext
 """Tool-digest evals reject missing facts and injected replacement values."""
 from pathlib import Path
 import runpy
 from types import SimpleNamespace
 
 import pytest
-import requests
 
 from jarvis.reply import enrichment
 
@@ -12,13 +12,13 @@ pytestmark = pytest.mark.unit
 
 
 def run_case(monkeypatch, index, result):
-    monkeypatch.setattr(requests, 'get', lambda *args, **kwargs: SimpleNamespace(status_code=404))
+    monkeypatch.setattr('jarvis.llm.http.get', lambda *args, **kwargs: nullcontext(SimpleNamespace(status_code=404)))
     monkeypatch.setattr(enrichment, 'digest_tool_result_for_query', lambda *args, **kwargs: result)
 
     def unexpected_post(*args, **kwargs):
         pytest.fail('🌐 Eval guard checks must not contact a live model')
 
-    monkeypatch.setattr(requests, 'post', unexpected_post)
+    monkeypatch.setattr('jarvis.llm.http.post', unexpected_post)
     path = Path(__file__).resolve().parents[1] / 'evals' / 'test_tool_digest_facts.py'
     scope = runpy.run_path(str(path))
     scope['test_tool_digest_retains_grounded_facts'](*scope['CASES'][index])

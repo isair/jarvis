@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 
 from jarvis.listening import listener as listener_module
+from jarvis.config import get_default_config
 
 
 pytestmark = pytest.mark.unit
@@ -22,6 +23,7 @@ def make_listener(monkeypatch):
 
     def make(**kwargs):
         cfg = SimpleNamespace(
+            voice_min_energy=get_default_config()["voice_min_energy"],
             vad_enabled=False,
             voice_debug=False,
             whisper_min_confidence=0.5,
@@ -48,7 +50,7 @@ def transcribe(request, monkeypatch):
                 iter(SimpleNamespace(**seg) for seg in segments),
                 SimpleNamespace(language="en"),
             ))
-        listener._utterance_frames = [np.zeros(listener._samplerate, dtype=np.float32)]
+        listener._utterance_frames = [np.full(listener._samplerate, listener.cfg.voice_min_energy * 2, dtype=np.float32)]
         listener.echo_detector._utterance_start_time = time.time() - 1
         listener._process_transcript = Mock()
         listener._finalize_utterance()
@@ -152,7 +154,7 @@ def test_faster_whisper_confidence_fallback(make_listener):
     listener.model = SimpleNamespace(transcribe=lambda *args, **kwargs: (
         iter([rejected, unknown]), SimpleNamespace(language="en"),
     ))
-    listener._utterance_frames = [np.zeros(listener._samplerate, dtype=np.float32)]
+    listener._utterance_frames = [np.full(listener._samplerate, listener.cfg.voice_min_energy * 2, dtype=np.float32)]
     listener.echo_detector._utterance_start_time = time.time() - 1
     listener._process_transcript = Mock()
 
@@ -192,7 +194,7 @@ def test_invalidated_transcription_does_not_emit_events(
     else:
         listener.model = SimpleNamespace(transcribe=recognise)
 
-    listener._utterance_frames = [np.zeros(listener._samplerate, dtype=np.float32)]
+    listener._utterance_frames = [np.full(listener._samplerate, listener.cfg.voice_min_energy * 2, dtype=np.float32)]
     listener.echo_detector._utterance_start_time = time.time() - 1
     listener._finalize_utterance()
     listener._transcription_jobs_q.put(None)

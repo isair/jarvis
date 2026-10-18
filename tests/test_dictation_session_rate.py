@@ -36,7 +36,7 @@ def test_released_audio_uses_its_recorded_rate(recorded_rate, next_rate, monkeyp
     engine._recording = True
     engine._stream = Stream()
     engine._stream_sample_rate = recorded_rate
-    engine._record_start_time = time.time()
+    engine._record_start_time = time.monotonic()
     engine._audio_frames = [np.full(recorded_rate, 0.25, dtype=np.float32)]
     monkeypatch.setattr(dictation, '_play_beep', lambda *args: None)
     monkeypatch.setattr(engine, '_transcribe', lambda audio: captured.append(audio.copy()) or '')
