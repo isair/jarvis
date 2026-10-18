@@ -110,3 +110,31 @@ def test_previous_crash_includes_the_native_crashed_thread(crash_log, tmp_path, 
     assert content is not None
     assert "Fatal Python error: Aborted" in content and "Native crash report" in content
     assert "__pthread_kill" in content and "idle_worker" not in content
+
+
+@pytest.mark.parametrize("unusable", ["malformed", "metadata-only", "non-object", "unreadable", "no-threads"])
+def test_newer_unusable_report_does_not_hide_native_stack(crash_log, tmp_path, monkeypatch, unusable):
+    fresh = crash_log.stat().st_mtime + 10
+    usable = tmp_path / "Jarvis-usable.ips"
+    newer = tmp_path / "Jarvis-incomplete.ips"
+    _write_ips(usable, fresh, [{"symbol": "native_abort_source"}])
+    contents = {
+        "malformed": '{"threads": [',
+        "metadata-only": json.dumps({"app_name": "Jarvis"}),
+        "non-object": '[]',
+        "unreadable": '{}',
+        "no-threads": json.dumps({"threads": []}),
+    }
+    newer.write_text(contents[unusable])
+    os.utime(newer, (fresh + 10, fresh + 10))
+    if unusable == "unreadable":
+        read_text = type(newer).read_text
+        def read_owned_report(path, *args, **kwargs):
+            if path == newer:
+                raise OSError("Owned crash file became unavailable")
+            return read_text(path, *args, **kwargs)
+        monkeypatch.setattr(type(newer), "read_text", read_owned_report)
+    result = desktop.collect_macos_crash_report(crash_log, diagnostics_dir=tmp_path)
+    assert result is not None
+    assert usable.name in result and "native_abort_source" in result
+    assert newer.name not in result

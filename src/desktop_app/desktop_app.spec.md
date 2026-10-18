@@ -468,8 +468,9 @@ stack faulthandler cannot capture — it only dumps Python frames, which for
 the abort family (#584/#575/#576) shows nothing but the main thread parked
 in `app.exec()`. On macOS the OS still writes a full report with native
 frames to `~/Library/Logs/DiagnosticReports/Jarvis-*.ips`. On the next
-launch, `collect_macos_crash_report()` finds the newest report newer than
-the previous crash log and appends its exception type, termination
+launch, `collect_macos_crash_report()` finds the newest readable report with
+a valid thread payload newer than the previous crash log, skipping incomplete
+or unusable files, and appends its exception type, termination
 indicator and the crashed thread's top native frames to the crash-dialog
 content and the report-issue body, so these aborts become diagnosable.
 
