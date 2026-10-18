@@ -8,7 +8,7 @@ from pathlib import Path
 
 _GENERIC_READ = 0x80000000
 _SHARE_READ = 0x1
-_SHARE_READ_WRITE = _SHARE_READ | 0x2
+_LIST_DIRECTORY = 0x1
 _OPEN_EXISTING = 3
 _OPEN_REPARSE_POINT = 0x00200000
 _BACKUP_SEMANTICS = 0x02000000
@@ -54,9 +54,9 @@ def _close(kernel, handle):
 
 
 def _open_checked(kernel, path, *, directory):
-    access = 0 if directory else _GENERIC_READ
+    access = _LIST_DIRECTORY if directory else _GENERIC_READ
     flags = _OPEN_REPARSE_POINT | (_BACKUP_SEMANTICS if directory else 0)
-    sharing = _SHARE_READ_WRITE if directory else _SHARE_READ
+    sharing = _SHARE_READ
     handle = kernel.CreateFileW(str(path), access, sharing, None,
                                 _OPEN_EXISTING, flags, None)
     if handle in (None, -1, ctypes.c_void_p(-1).value):
@@ -79,7 +79,8 @@ def _open_checked(kernel, path, *, directory):
 def open_readonly_no_links(path: Path) -> int:
     """Return an owned descriptor after checking and retaining every ancestor.
 
-    Parents deny delete sharing while later components are opened. Opening each
+    Parents request directory-list access and deny write/delete sharing while
+    later components are opened. Opening each
     component's reparse point itself prevents junction and link substitution.
     The leaf denies write/delete sharing until the caller closes its descriptor.
     All native parent handles close before ownership transfers.

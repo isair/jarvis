@@ -17,7 +17,8 @@ Jarvis without contacting another service or running model inference.
   bounded and reports incomplete inventories. Source selection precedes reading.
   Files are regular, bounded UTF-8 text. POSIX directory-relative opens retain the checked ancestry while selecting the file.
   Windows opens inspect native directory/file handles without following reparse
-  points; retained parents deny delete sharing while later components are selected.
+  points; retained parents request directory-list access and deny write/delete
+  sharing while later components are selected.
   The selected Windows file denies write and delete sharing until its read closes.
   File identity, size and timestamps are checked against the
   open descriptor and current path after reading. Symlinks, special files, malformed text
