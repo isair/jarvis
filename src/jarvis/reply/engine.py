@@ -1201,7 +1201,7 @@ def _run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     "memory",
                 )
             if dialogue_memory and hasattr(dialogue_memory, "hot_cache_put"):
-                dialogue_memory.hot_cache_put(_wp_cache_key, (db.memory_revision(), warm_profile_block))
+                dialogue_memory.hot_cache_put(_wp_cache_key, (_memory_revision, warm_profile_block))
         except Exception as e:
             debug_log(f"warm profile load failed (non-fatal): {e}", "memory")
 

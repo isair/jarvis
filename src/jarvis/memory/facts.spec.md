@@ -67,7 +67,9 @@ successors for the same predecessor.
 Fact mutations advance a SQLite revision and call registered listeners with
 `action`, `fact_id`, `kind` and `ownership`. Listener failures are logged and
 cannot prevent a committed write. The reply layer invalidates its warm profile
-cache when relevant facts are added, corrected or retracted.
+cache when relevant facts are added, corrected or retracted. A cached profile
+is tagged with the database revision observed before its reads, never a newer
+revision observed after a concurrent write.
 
 ## Retrieval
 
