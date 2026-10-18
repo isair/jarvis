@@ -782,9 +782,11 @@ def merge_node_data(
     # beyond `existing + new + small slack` — anything larger means
     # the model invented content not present in either input.
     max_kept = len(existing_lines) + len(sanitised_new) + _MERGE_GROWTH_SLACK
-    if len(cleaned) > max_kept:
+    new_data = "\n".join(cleaned)
+    saved_line_count = len(_split_data_lines(new_data))
+    if saved_line_count > max_kept:
         debug_log(
-            f"merge: rejected rewrite — {len(cleaned)} lines exceeds "
+            f"merge: rejected rewrite, {saved_line_count} lines exceeds "
             f"guard cap of {max_kept}",
             "memory",
         )
@@ -811,7 +813,6 @@ def merge_node_data(
         if key and key in cleaned_keys:
             incorporated_indices.append(idx)
 
-    new_data = "\n".join(cleaned)
     committed = store.update_node(node_id, data=new_data, expected_data=node.data)
     if committed is None:
         debug_log(f"merge: source node changed or disappeared for {node_id}", "memory")
