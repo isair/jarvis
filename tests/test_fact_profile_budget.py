@@ -302,19 +302,43 @@ def test_blob_text_stays_bound_to_node_during_viewer_replacement(profile_path):
 @pytest.mark.parametrize('outer_transaction', [False, True])
 def test_cancelled_node_snapshot_releases_only_its_own_transaction(profile_path, outer_transaction):
     with closing(GraphMemoryStore(profile_path)) as reader:
+        original = reader.get_node('user').data
         if outer_transaction:
             reader.conn.execute("UPDATE memory_nodes SET data='Uncommitted owned text' WHERE id='user'")
         cancelled = threading.Event()
         control = ExecutionControl(cancelled, timeout_sec=10)
-        def active():
-            if reader.conn.in_transaction:
+        def cancel_after_identity_lookup(cursor, values):
+            if cursor.description[0][0] == 'rowid':
                 cancelled.set()
-            control.check()
+            return sqlite3.Row(cursor, values)
+        reader.conn.row_factory = cancel_after_identity_lookup
         with pytest.raises(ExecutionCancelled):
-            reader.read_node_text('user', max_chars=128, check_active=active)
+            reader.read_node_text('user', max_chars=128, check_active=control.check)
+        assert cancelled.is_set(), 'Cancellation must follow the actual node identity read'
         assert reader.conn.in_transaction is outer_transaction
         if outer_transaction:
+            assert reader.get_node('user').data == 'Uncommitted owned text'
+            with sqlite3.connect(profile_path) as observer:
+                assert observer.execute("SELECT data FROM memory_nodes WHERE id='user'").fetchone()[0] == original
             reader.conn.rollback()
+            assert reader.get_node('user').data == original
+        # An abandoned query's progress handler must not affect a later caller.
+        assert reader.conn.execute(
+            "WITH RECURSIVE numbers(n) AS (VALUES(0) UNION ALL SELECT n+1 FROM numbers WHERE n<999) "
+            "SELECT count(*) FROM numbers"
+        ).fetchone()[0] == 1000
         reader.conn.execute("UPDATE memory_nodes SET data='Subsequent write works' WHERE id='user'")
         reader.conn.commit()
         assert reader.get_node('user').data == 'Subsequent write works'
+
+
+def test_successful_node_snapshot_leaves_caller_changes_uncommitted(profile_path):
+    with closing(GraphMemoryStore(profile_path)) as reader:
+        original = reader.get_node('user').data
+        reader.conn.execute("UPDATE memory_nodes SET data='Pending caller edit' WHERE id='user'")
+        assert reader.read_node_text('user', max_chars=128, check_active=lambda: None) == 'Pending caller edit'
+        assert reader.conn.in_transaction
+        with sqlite3.connect(profile_path) as observer:
+            assert observer.execute("SELECT data FROM memory_nodes WHERE id='user'").fetchone()[0] == original
+        reader.conn.rollback()
+        assert reader.get_node('user').data == original
