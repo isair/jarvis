@@ -609,36 +609,40 @@ def collect_macos_crash_report(
         candidates = []
         for report in diagnostics_dir.glob(f"{app_name}-*.ips"):
             try:
-                if report.stat().st_mtime >= since:
-                    candidates.append(report)
+                modified = report.stat().st_mtime
+                if modified >= since:
+                    candidates.append((modified, report))
             except OSError:
                 continue
         if not candidates:
             return None
-        newest = max(candidates, key=lambda p: p.stat().st_mtime)
-
-        raw_text = newest.read_text(encoding="utf-8", errors="replace")
-        # .ips files are usually two lines (metadata dict, then the JSON
-        # payload), but the payload can also span multiple lines when the
-        # system pretty-prints it. Try the whole file, then everything after
-        # the first (metadata) line, then the last line alone.
         import json as _json
-        lines = raw_text.splitlines()
-        candidates = [raw_text]
-        if lines:
-            candidates.append("\n".join(lines[1:]))
-            candidates.append(lines[-1])
         data = None
-        for candidate in candidates:
-            stripped = candidate.strip()
-            if not stripped.startswith("{"):
-                continue
+        for _, newest in sorted(candidates, key=lambda item: item[0], reverse=True):
             try:
-                data = _json.loads(stripped)
-                break
-            except Exception:
+                raw_text = newest.read_text(encoding="utf-8", errors="replace")
+            except OSError:
                 continue
-        if not isinstance(data, dict):
+            # Reports contain a metadata line followed by a JSON payload;
+            # the payload can be compact or pretty-printed.
+            lines = raw_text.splitlines()
+            payloads = [raw_text]
+            if lines:
+                payloads.extend(("\n".join(lines[1:]), lines[-1]))
+            for payload in payloads:
+                try:
+                    parsed = _json.loads(payload)
+                except ValueError:
+                    continue
+                if (isinstance(parsed, dict)
+                        and isinstance(parsed.get("threads"), list)
+                        and parsed["threads"]
+                        and all(isinstance(thread, dict) for thread in parsed["threads"])):
+                    data = parsed
+                    break
+            if data is not None:
+                break
+        if data is None:
             return None
 
         parts = [f"🧵 Native crash report: {newest.name}"]
