@@ -195,3 +195,30 @@ def qapp(_qapplication):
             widget.deleteLater()
     # Flush deferred destruction, not unrelated timers or application callbacks.
     QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+
+@pytest.fixture
+def no_network(monkeypatch):
+    """Opt-in guard for tests that require every dependency to stay in-process."""
+    import socket
+
+    attempts = []
+
+    def blocked(sock, address):
+        attempts.append(address)
+        raise AssertionError("Offline test attempted a network connection")
+
+    from importlib.util import find_spec
+
+    def blocked_native(*args, **kwargs):
+        attempts.append("native HTTP request")
+        raise AssertionError("Offline test attempted a native network connection")
+
+    # Minimal dependency jobs cannot load the optional native client.
+    if find_spec("curl_cffi") is not None:
+        from curl_cffi.requests import Session
+        monkeypatch.setattr(Session, "request", blocked_native)
+    monkeypatch.setattr(socket.socket, "connect", blocked)
+    monkeypatch.setattr(socket.socket, "connect_ex", blocked)
+    yield
+    assert not attempts, f"Unmocked network attempts: {attempts}"

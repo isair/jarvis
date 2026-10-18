@@ -147,10 +147,10 @@ def test_warm_profile_keeps_directives_whole_and_legacy_label(store):
     graph = GraphMemoryStore(store.db_path)
     graph.append_to_node("user", "The user is probably a painter")
     graph.close()
-    profile = build_fact_warm_profile(store.db_path, directives_max_chars=10)
+    profile = build_fact_warm_profile(store.db_path, check_active=lambda: None, directives_max_chars=10)
     assert "British" not in profile["directives"]
     assert "Unverified legacy" in profile["legacy"]
-    profile = build_fact_warm_profile(store.db_path, directives_max_chars=100)
+    profile = build_fact_warm_profile(store.db_path, check_active=lambda: None, directives_max_chars=100)
     assert profile["directives"] == "Always answer in British English"
 
 

@@ -96,7 +96,12 @@ continues.
 
 `build_fact_warm_profile()` prioritises active user-owned facts and direct user
 instructions. It adds whole lines that fit each budget and never cuts a rule
-mid-string. Existing User, Directives and Legacy graph node text is surfaced
+mid-string. Collection stops when the whole-line output budget is exhausted;
+a zero legacy budget does not open the graph. The caller supplies an active-query
+check before store reads and between nodes and lines. Optional legacy-read
+failures preserve already collected reference text; cancellation and deadline
+expiry propagate. Graph readers close on completion, abandonment and errors.
+Existing User, Directives and Legacy graph node text is surfaced
 separately as unverified reference material, read live from the editable graph.
 `format_fact_warm_profile_block()` keeps verified facts, standing instructions
 and unverified legacy material under distinct headings.

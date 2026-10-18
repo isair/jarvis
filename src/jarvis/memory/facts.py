@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import hashlib
+from collections import deque
+from contextlib import closing
 import json
 import math
 import re
@@ -10,7 +12,7 @@ import sqlite3
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Iterable, Iterator, Optional
 
 from ..debug import debug_log
 from ..utils.redact import scrub_secrets
@@ -428,51 +430,72 @@ class FactStore:
             return result[:top_k]
 
 
-def _whole_lines(lines: list[str], cap: int) -> str:
+def _whole_lines(lines: Iterable[str], cap: int, *, check_active: Callable[[], None]) -> str:
     chosen = []
     remaining = max(0, cap)
+    if not remaining:
+        return ""
     for line in lines:
+        check_active()
         if len(line) <= remaining:
             chosen.append(line)
             remaining -= len(line) + 1
+            if remaining <= 0:
+                break
     return "\n".join(chosen)
 
 
-def build_fact_warm_profile(db_path: str, *, user_max_chars: int = 1200,
-                            directives_max_chars: int = 600) -> dict[str, str]:
-    store = FactStore(db_path)
+def _legacy_profile_lines(db_path: str, check_active: Callable[[], None]) -> Iterator[str]:
     try:
-        rows = store.list_facts(limit=500)
-        user = [row["text"] for row in rows if row["kind"] == "user" and row["owner"] == "user"]
-        directives = [row["text"] for row in rows if row["kind"] == "directive" and row["owner"] == "user"]
-    finally:
-        store.close()
-    legacy = []
-    try:
+        check_active()
         from .graph import GraphMemoryStore
-        graph = GraphMemoryStore(db_path)
-        try:
+        with closing(GraphMemoryStore(db_path)) as graph:
             for branch in ("user", "directives", "legacy"):
-                queue = [branch]
+                queue = deque([branch])
                 seen = set()
                 while queue:
-                    node_id = queue.pop(0)
+                    check_active()
+                    node_id = queue.popleft()
                     if node_id in seen:
                         continue
                     seen.add(node_id)
                     node = graph.get_node(node_id)
                     if node and node.data:
-                        legacy.extend(line.strip() for line in node.data.splitlines() if line.strip())
-                    queue.extend(child.id for child in graph.get_children(node_id))
-        finally:
-            graph.close()
+                        for line in node.data.splitlines():
+                            check_active()
+                            if line.strip():
+                                yield line.strip()
+                    check_active()
+                    children = graph.get_children(node_id)
+                    check_active()
+                    queue.extend(child.id for child in children)
     except Exception as exc:
+        # Cancellation and deadline expiry cannot become an optional-read fallback.
+        check_active()
         debug_log(f"legacy profile read failed: {exc}", "memory")
+
+
+def build_fact_warm_profile(db_path: str, *, check_active: Callable[[], None],
+                            user_max_chars: int = 1200,
+                            directives_max_chars: int = 600) -> dict[str, str]:
+    check_active()
+    with closing(FactStore(db_path)) as store:
+        rows = store.list_facts(limit=500)
+    check_active()
+    user = _whole_lines(
+        (row["text"] for row in rows if row["kind"] == "user" and row["owner"] == "user"),
+        user_max_chars, check_active=check_active,
+    )
+    directives = _whole_lines(
+        (row["text"] for row in rows if row["kind"] == "directive" and row["owner"] == "user"),
+        directives_max_chars, check_active=check_active,
+    )
+    with closing(_legacy_profile_lines(db_path, check_active)) as lines:
+        legacy = _whole_lines(lines, user_max_chars, check_active=check_active)
     return {
-        "user": _whole_lines(user, user_max_chars),
-        "directives": _whole_lines(directives, directives_max_chars),
-        "legacy": "Unverified legacy memory (reference only):\n" + _whole_lines(legacy, user_max_chars)
-        if legacy else "",
+        "user": user,
+        "directives": directives,
+        "legacy": "Unverified legacy memory (reference only):\n" + legacy if legacy else "",
     }
 
 

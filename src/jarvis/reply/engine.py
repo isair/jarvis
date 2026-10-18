@@ -1186,7 +1186,9 @@ def _run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     else:
         try:
             from ..memory.facts import build_fact_warm_profile, format_fact_warm_profile_block
-            _warm_profile = build_fact_warm_profile(cfg.db_path)
+            _warm_profile = control.call(
+                build_fact_warm_profile, cfg.db_path, check_active=control.check,
+            )
             warm_profile_block = format_fact_warm_profile_block(_warm_profile)
             if warm_profile_block:
                 _user_len = len(_warm_profile.get("user", ""))
@@ -1202,6 +1204,8 @@ def _run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 )
             if dialogue_memory and hasattr(dialogue_memory, "hot_cache_put"):
                 dialogue_memory.hot_cache_put(_wp_cache_key, (_memory_revision, warm_profile_block))
+        except (ExecutionCancelled, ExecutionDeadlineExceeded):
+            raise
         except Exception as e:
             debug_log(f"warm profile load failed (non-fatal): {e}", "memory")
 
