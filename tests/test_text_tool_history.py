@@ -109,7 +109,8 @@ def test_invalid_textual_arguments_remain_failed_history_without_execution(mock_
     ])
     assert reply == "Please correct the supplied arguments."
     assert executed == []
-    assert _assert_paired_results(snapshots[-1])
+    outcomes = _assert_paired_results(snapshots[-1])
+    assert outcomes and all(result["tool_failed"] for _, result in outcomes)
 
 
 def test_textual_non_string_id_is_normalised_for_native_result_pairing(mock_config, db, dialogue_memory):
@@ -187,7 +188,6 @@ def test_reused_textual_ids_do_not_alias_distinct_requests(mock_config, db, dial
     identities = [call["id"] for message in snapshots[-1] if message.get("role") == "assistant"
                   for call in message.get("tool_calls", [])]
     assert len(set(identities)) == len(identities), "Distinct requests share a result identity"
-
 
 
 def test_duplicate_feedback_does_not_mark_an_unanswered_query_part_complete(mock_config, db, dialogue_memory):
