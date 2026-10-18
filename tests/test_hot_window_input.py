@@ -18,6 +18,26 @@ from jarvis.listening.state_manager import StateManager, ListeningState
 from jarvis.listening.intent_judge import IntentJudgment
 
 
+@pytest.fixture(autouse=True)
+def silent_thinking_cue(monkeypatch):
+    """Exercise cue state without creating an audio stream or worker."""
+    class SilentTunePlayer:
+        def __init__(self, enabled):
+            self.enabled = enabled
+            self.active = False
+
+        def start_tune(self):
+            self.active = self.enabled
+
+        def stop_tune(self):
+            self.active = False
+
+        def is_playing(self):
+            return self.active
+
+    monkeypatch.setattr("jarvis.output.tune_player.TunePlayer", SilentTunePlayer)
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -944,9 +964,18 @@ class TestEarlyBeepFeedback:
         _simulate_tts_finish(listener)
         _wait_for_hot_window_active(listener)
 
-        _install_intent_judge(listener, _make_judgment(directed=True, query="tell me more"))
+        judgment = _make_judgment(directed=True, query="tell me more")
+        judge = _install_intent_judge(listener, judgment)
+        cue_states_during_judgment = []
+
+        def judge_with_cue_state(*args, **kwargs):
+            cue_states_during_judgment.append(_is_beeping(listener))
+            return judgment
+
+        judge.judge.side_effect = judge_with_cue_state
         _process_transcript(listener, "tell me more", utterance_energy=0.01)
 
+        assert cue_states_during_judgment and all(cue_states_during_judgment)
         assert _accepted_query(listener) == "tell me more"
         listener.state_manager.stop()
 
