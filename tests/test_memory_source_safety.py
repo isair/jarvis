@@ -94,3 +94,92 @@ def test_windows_selected_file_stays_readonly_until_its_descriptor_closes(tmp_pa
         assert source.read()==b'Owned original memory.'
     path.write_text('Owned later version.')
     assert path.read_text()=='Owned later version.'
+
+
+@pytest.mark.skipif(sys.platform!='win32',reason='Requires the Windows filesystem')
+@pytest.mark.parametrize('mutation',['rename','reparse'])
+def test_windows_checked_parent_cannot_change_before_leaf_selection(tmp_path,monkeypatch,mutation):
+    """Race the native selection boundary using only owned directories."""
+    import ctypes
+    from ctypes import wintypes
+    import struct
+    from jarvis.utils import windows_files
+    selected=tmp_path/'selected';selected.mkdir()
+    alternate=tmp_path/'alternate';alternate.mkdir()
+    (alternate/'memory.md').write_text('Unselected memory.')
+    path=selected/'memory.md'
+    checked=windows_files._open_checked
+    attempted=[]
+
+    def mutate(kernel,parent,*,directory):
+        handle=checked(kernel,parent,directory=directory)
+        if directory and parent==selected:
+            try:
+                if mutation=='rename':
+                    moved=tmp_path/'moved'
+                    try:selected.rename(moved)
+                    except PermissionError:attempted.append('blocked')
+                    else:
+                        moved.rename(selected)
+                        attempted.append('allowed')
+                else:
+                    writer=kernel.CreateFileW(str(selected),0x40000000,0x7,None,3,
+                                              0x02200000,None)
+                    if writer in (None,-1,ctypes.c_void_p(-1).value):
+                        error=ctypes.get_last_error()
+                        assert error==32, f'Expected a sharing violation, got {error}'
+                        attempted.append('blocked')
+                    else:
+                        ioctl=kernel.DeviceIoControl
+                        ioctl.argtypes=[wintypes.HANDLE,wintypes.DWORD,wintypes.LPVOID,
+                                        wintypes.DWORD,wintypes.LPVOID,wintypes.DWORD,
+                                        ctypes.POINTER(wintypes.DWORD),wintypes.LPVOID]
+                        ioctl.restype=wintypes.BOOL
+                        substitute=('\\??\\'+str(alternate)).encode('utf-16-le')
+                        display=str(alternate).encode('utf-16-le')
+                        names=substitute+b'\0\0'+display+b'\0\0'
+                        mount=struct.pack('<HHHH',0,len(substitute),len(substitute)+2,len(display))+names
+                        data=struct.pack('<IHH',0xa0000003,len(mount),0)+mount
+                        returned=wintypes.DWORD()
+                        try:
+                            buffer=ctypes.create_string_buffer(data)
+                            if not ioctl(writer,0x000900a4,buffer,len(data),None,0,
+                                         ctypes.byref(returned),None):
+                                raise ctypes.WinError()
+                            attempted.append('allowed')
+                            delete=ctypes.create_string_buffer(struct.pack('<IHH',0xa0000003,0,0))
+                            if not ioctl(writer,0x000900ac,delete,8,None,0,
+                                         ctypes.byref(returned),None):
+                                raise ctypes.WinError()
+                        finally:kernel.CloseHandle(writer)
+                assert attempted==['blocked'], 'Checked ancestry must resist mutation until leaf selection.'
+                path.write_text('Selected memory.')
+            except BaseException:
+                windows_files._close(kernel,handle)
+                raise
+        return handle
+    monkeypatch.setattr(windows_files,'_open_checked',mutate)
+    with os.fdopen(windows_files.open_readonly_no_links(path),'rb') as source:
+        assert source.read()==b'Selected memory.'
+    assert attempted==['blocked']
+    assert (alternate/'memory.md').read_text()=='Unselected memory.'
+    # Parent handles are temporary and do not block later source changes.
+    selected.rename(tmp_path/'after-read')
+
+
+@pytest.mark.skipif(sys.platform!='win32',reason='Requires the Windows filesystem')
+@pytest.mark.parametrize('access',[0x40000000,0x00010000],ids=['writer','deleter'])
+def test_windows_existing_parent_mutator_prevents_source_selection(tmp_path,access):
+    import ctypes
+    from jarvis.utils import windows_files
+    selected=tmp_path/'selected';selected.mkdir()
+    path=selected/'memory.md';path.write_text('Owned selected memory.')
+    kernel=windows_files._kernel32()
+    competing=kernel.CreateFileW(str(selected),access,0x7,None,3,0x02200000,None)
+    if competing in (None,-1,ctypes.c_void_p(-1).value):raise ctypes.WinError()
+    try:
+        with pytest.raises(OSError):
+            with os.fdopen(windows_files.open_readonly_no_links(path),'rb'):
+                pass
+    finally:kernel.CloseHandle(competing)
+    assert path.read_text()=='Owned selected memory.'
