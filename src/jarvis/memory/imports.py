@@ -284,6 +284,11 @@ def preview_text(provider: str, text: str, *, label: str) -> ImportPreview:
     return _preview(MemorySource(provider, label, 'personal'), text)
 
 
+def source_identity(source: MemorySource) -> str:
+    """Stable identity shared by manual imports and exact-path consent."""
+    return _digest(source.provider + '\0' + (str(source.path) if source.path else source.label))
+
+
 def commit_import(store: GraphMemoryStore, preview: ImportPreview, choices: Sequence[ImportChoice]) -> ImportResult:
     """Validate the complete reviewed selection before the atomic graph write."""
     originals = {item.id: item.text for item in preview.items}
@@ -295,7 +300,7 @@ def commit_import(store: GraphMemoryStore, preview: ImportPreview, choices: Sequ
         raise MemoryImportError('Select less than 256 KB of memory text at a time.')
     records = []
     source = preview.source
-    identity = _digest(source.provider + '\0' + (str(source.path) if source.path else source.label))
+    identity = source_identity(source)
     for choice in choices:
         if choice.item_id not in originals or choice.branch not in DESTINATIONS or not isinstance(choice.text, str):
             raise MemoryImportError('The selection is invalid. Review the memories again.')

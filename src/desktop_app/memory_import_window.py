@@ -4,11 +4,12 @@ import os
 from pathlib import Path
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QFrame, QHBoxLayout,
-    QLabel, QLineEdit, QPlainTextEdit, QPushButton, QScrollArea, QStackedWidget,
+    QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea, QStackedWidget,
     QVBoxLayout, QWidget)
 from desktop_app.qt_worker import KeepAliveWorker
 from desktop_app.themes import JARVIS_THEME_STYLESHEET
 from jarvis.debug import debug_log
+from jarvis.memory import auto_import
 from jarvis.memory.graph import GraphMemoryStore
 from jarvis.memory.imports import (DESTINATIONS, PROVIDERS, ImportChoice, MemoryImportError,
     MemorySource, commit_import, discover_codex_sources, discover_sources, preview_text, read_source)
@@ -60,9 +61,10 @@ class ImportRow(QFrame):
 
 
 class MemoryImportWindow(QWidget):
-    def __init__(self, *, db_path: str, home: Path):
+    def __init__(self, *, db_path: str, home: Path, auto_service=None):
         super().__init__()
         self.db_path, self.home = db_path, home
+        self.auto_service = auto_service
         self.preview = None
         self.rows = []
         self.workers = set()
@@ -135,6 +137,24 @@ class MemoryImportWindow(QWidget):
         self.status.setTextFormat(Qt.TextFormat.PlainText)
         self.status.setWordWrap(True)
         outer.addWidget(self.status)
+        self.automatic_sources = QComboBox()
+        self.automatic_sources.setAccessibleName('Automatic memory imports')
+        outer.addWidget(self.automatic_sources)
+        automatic_actions = QHBoxLayout()
+        self.disable_auto = QPushButton('Disable automatic import')
+        self.disable_auto.clicked.connect(self.disable_automatic)
+        self.review_auto = QPushButton('Review source again')
+        self.review_auto.clicked.connect(self.review_automatic)
+        self.setup_auto = QPushButton('Set up automatic import')
+        self.setup_auto.clicked.connect(self.setup_automatic)
+        automatic_actions.addWidget(self.setup_auto)
+        automatic_actions.addWidget(self.disable_auto)
+        automatic_actions.addWidget(self.review_auto)
+        outer.addLayout(automatic_actions)
+        if self.auto_service is not None:
+            self.auto_service.status_changed.connect(self.show_automatic_sources)
+            self.auto_service.refresh()
+
         footer = QHBoxLayout()
         self.back_button = QPushButton('Choose another source')
         self.back_button.clicked.connect(self.back)
@@ -145,7 +165,8 @@ class MemoryImportWindow(QWidget):
         footer.addWidget(self.save_button)
         outer.addLayout(footer)
         self.controls = [self.provider, self.find_button, self.codex_button, self.local_sources, self.read_button,
-                         self.file_button, self.pasted, self.paste_button, self.back_button, self.save_button]
+                         self.file_button, self.pasted, self.paste_button, self.back_button, self.save_button,
+                         self.automatic_sources, self.disable_auto, self.review_auto, self.setup_auto]
         self._update_buttons()
 
     @staticmethod
@@ -263,9 +284,95 @@ class MemoryImportWindow(QWidget):
         db_path = self.db_path
         def save():
             with closing(GraphMemoryStore(db_path)) as store:
-                return commit_import(store, preview, choices)
+                result = commit_import(store, preview, choices)
+                offer = auto_import.record_success(store, preview, choices, result)
+                return result, offer
         self._run(save, self._saved)
 
-    def _saved(self, result):
+    def _saved(self, saved):
+        result, offer = saved
         self.status.setText(f'Imported {result.created} new memories. {result.skipped} already saved. '
                             'You can view and edit them in Memory Viewer.')
+
+        if offer is None or not self.isVisible():
+            return
+        setup = not offer.can_enable
+        message = ('Would you like to set up automatic import from this source?\n\n'
+                   'Choose a local file and review its complete contents with one destination.' if setup else
+                   'Would you like to enable automatic import from this source?\n\n'
+                   'Jarvis will keep this file in sync locally, using the destination you selected. '
+                   'Future entries are imported without another review. Changes overlapping memories '
+                   'edited inside Jarvis pause for review. You can disable this here at any time.')
+        answer = QMessageBox.question(self, 'Automatic memory import', message,
+                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                     QMessageBox.StandardButton.No)
+        if answer == QMessageBox.StandardButton.Yes and setup:
+            if offer.source.path is None:
+                self.choose_file()
+            else:
+                self._run(lambda: read_source(offer.source), self.show_preview)
+            return
+        enabled = answer == QMessageBox.StandardButton.Yes
+        def decide():
+            with closing(GraphMemoryStore(self.db_path)) as store:
+                return auto_import.decide(store, offer.source_id, enabled)
+        self._run(decide, self._automatic_decided)
+
+    def _automatic_decided(self, grant):
+        if self.auto_service is None and grant.state == 'enabled':
+            from desktop_app.memory_auto_import import AutoImportService
+            self.auto_service = AutoImportService(db_path=self.db_path)
+            self.auto_service.status_changed.connect(self.show_automatic_sources)
+            self.auto_service.start()
+        if self.auto_service is not None:
+            self.auto_service.refresh()
+        self.status.setText('Automatic import enabled for this file.' if grant.state == 'enabled'
+                            else 'Automatic import is off for this source.')
+
+    def show_automatic_sources(self, snapshot):
+        sources, errors = snapshot
+        if 'service' in errors:
+            self.status.setText(errors['service'])
+            return
+        current = self.automatic_sources.currentData()
+        selected = current.source_id if current is not None else None
+        self.automatic_sources.clear()
+        for grant in sources:
+            states = {'enabled': 'Automatic import on', 'disabled': 'Automatic import off', 'pending': 'Setup required', 'review': 'Review needed'}
+            self.automatic_sources.addItem(f'{grant.source.label}: {states[grant.state]}', grant)
+            index = self.automatic_sources.count()-1
+            self.automatic_sources.setItemData(index, errors.get(grant.source_id, grant.error), Qt.ItemDataRole.ToolTipRole)
+            if grant.source_id == selected:
+                self.automatic_sources.setCurrentIndex(index)
+
+    def disable_automatic(self):
+        grant = self.automatic_sources.currentData()
+        if grant is None:
+            return
+        def disable():
+            with closing(GraphMemoryStore(self.db_path)) as store:
+                return auto_import.decide(store, grant.source_id, False)
+        self._run(disable, self._automatic_decided)
+
+    def review_automatic(self):
+        grant = self.automatic_sources.currentData()
+        if grant is not None and grant.source.path is not None:
+            self._run(lambda: read_source(grant.source), self.show_preview)
+
+    def setup_automatic(self):
+        grant = self.automatic_sources.currentData()
+        source = self.preview.source if self.pages.currentIndex() == 1 and self.preview else (grant.source if grant else None)
+        if source is None:
+            return
+        def prepare():
+            with closing(GraphMemoryStore(self.db_path)) as store:
+                auto_import.begin_setup(store, auto_import.source_identity(source))
+            return read_source(source) if source.path is not None else None
+        def ready(preview):
+            if self.auto_service is not None:
+                self.auto_service.refresh()
+            if preview is None:
+                self.choose_file()
+            else:
+                self.show_preview(preview)
+        self._run(prepare, ready)

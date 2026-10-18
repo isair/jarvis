@@ -267,6 +267,35 @@ AFTER UPDATE OF data ON memory_nodes BEGIN
     UPDATE memory_import_node_sources SET current_binding = 0 WHERE node_id = NEW.id;
 END;
 
+CREATE INDEX IF NOT EXISTS idx_imports_live_content
+    ON memory_imports(branch, content_key, source_date, imported_at, node_id)
+    WHERE node_id IS NOT NULL;
+CREATE TABLE IF NOT EXISTS memory_import_retired (
+    import_id TEXT PRIMARY KEY REFERENCES memory_imports(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS memory_import_replacements (
+    original_id TEXT PRIMARY KEY REFERENCES memory_imports(id) ON DELETE CASCADE,
+    current_id TEXT NOT NULL REFERENCES memory_imports(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS memory_import_owned (
+    node_id TEXT PRIMARY KEY REFERENCES memory_nodes(id) ON DELETE CASCADE,
+    source_id TEXT NOT NULL,
+    fingerprint TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS memory_auto_sources (
+    source_id TEXT PRIMARY KEY,
+    source_json TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN ('pending', 'enabled', 'disabled', 'review')),
+    generation INTEGER NOT NULL DEFAULT 0,
+    digest TEXT NOT NULL,
+    branch TEXT,
+    bindings TEXT NOT NULL,
+    can_enable INTEGER NOT NULL,
+    error TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_auto_sources_state ON memory_auto_sources(state);
+
 CREATE TABLE IF NOT EXISTS memory_graph_revisions (
     name TEXT PRIMARY KEY,
     revision INTEGER NOT NULL DEFAULT 0
@@ -539,62 +568,82 @@ class GraphMemoryStore:
                               not isinstance(record.reviewed_text, str) or
                               not record.reviewed_text.strip() for record in records):
             raise ValueError('Invalid reviewed memory batch')
-        created, node_ids = [], []
-        imported_at = datetime.now().astimezone().isoformat()
         with self._lock, self.conn:
             self.conn.execute('BEGIN IMMEDIATE')
-            known = {}
-            for branch in {record.branch for record in records}:
-                rows = self.conn.execute('''WITH RECURSIVE subtree(id) AS (
-                    SELECT id FROM memory_nodes WHERE id = ?
-                    UNION SELECT child.id FROM memory_nodes child
-                    JOIN subtree ON child.parent_id = subtree.id
-                ) SELECT id, data FROM memory_nodes WHERE id IN (SELECT id FROM subtree)
-                  AND NOT EXISTS (SELECT 1 FROM memory_import_node_sources source
-                                  WHERE source.node_id = memory_nodes.id)''', (branch,))
-                for row in rows:
-                    text = row['data'] or ''
-                    if text.strip():
-                        known.setdefault((branch, text), row['id'])
-            for record in records:
-                key = record.reviewed_text
-                identity = _digest('\0'.join((record.source_id, record.source_digest,
-                                   record.item_id, record.branch, key, record.source_date or '')))
-                previous = self.conn.execute('SELECT node_id FROM memory_imports WHERE id = ?', (identity,)).fetchone()
-                if previous is not None:
-                    node_ids.append(previous['node_id'])
-                    continue
-                candidates = self.conn.execute('SELECT DISTINCT node_id FROM memory_imports WHERE branch = ? AND content_key = ? AND source_date IS ? ORDER BY imported_at',
-                                               (record.branch, key, record.source_date))
-                shared = next((row for row in candidates
-                               if self._resolve_branch(row['node_id']) == record.branch), None)
-                if shared is not None:
-                    node_id = shared['node_id']
-                elif record.source_date is None and (record.branch, key) in known:
-                    node_id = known[(record.branch, key)]
-                else:
-                    node = self._insert_node(f'{record.provider} memory {record.item_id[:8]}',
-                           f'Reviewed import from {record.provider}. Scope: {record.source_scope}.',
-                           record.reviewed_text, record.branch)
-                    created.append((node, record.branch))
-                    node_id = node.id
-                    if record.source_date is None:
-                        known[(record.branch, key)] = node_id
-                self.conn.execute('''INSERT INTO memory_imports
-                    (id, branch, content_key, node_id, provider, source_id, source_digest,
-                     source_label, source_scope, source_date, source_metadata, original_text, reviewed_text, imported_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                    (identity, record.branch, key, node_id, record.provider, record.source_id,
-                     record.source_digest, record.source_label, record.source_scope,
-                     record.source_date, record.source_metadata, record.original_text, record.reviewed_text, imported_at))
-                if node_id is not None:
-                    self.conn.execute('INSERT INTO memory_import_node_sources VALUES (?, ?, 1)', (identity, node_id))
-                    if self._resolve_branch(node_id) in (BRANCH_USER, BRANCH_DIRECTIVES):
-                        self.conn.execute("UPDATE memory_graph_revisions SET revision = revision + 1 WHERE name = 'warm_profile'")
-                node_ids.append(node_id)
+            result, created = self._import_memories_locked(records, match_unimported=True)
         for node, branch in created:
             _notify_graph_mutation('create', node.id, branch)
-        return ImportResult(len(created), len(records) - len(created), tuple(node_ids))
+        return result
+
+    def _import_memories_locked(self, records, *, match_unimported):
+        """Import validated records inside the caller's writer transaction."""
+        from .imports import ImportResult, _digest
+        created, node_ids = [], []
+        imported_at = datetime.now().astimezone().isoformat()
+        known = {}
+        for branch in ({record.branch for record in records} if match_unimported else ()):
+            rows = self.conn.execute('''WITH RECURSIVE subtree(id) AS (
+                SELECT id FROM memory_nodes WHERE id = ?
+                UNION SELECT child.id FROM memory_nodes child
+                JOIN subtree ON child.parent_id = subtree.id
+            ) SELECT id, data FROM memory_nodes WHERE id IN (SELECT id FROM subtree)
+              AND NOT EXISTS (SELECT 1 FROM memory_import_node_sources source
+                              WHERE source.node_id = memory_nodes.id)''', (branch,))
+            for row in rows:
+                text = row['data'] or ''
+                if text.strip():
+                    known.setdefault((branch, text), row['id'])
+        for record in records:
+            key = record.reviewed_text
+            identity = _digest('\0'.join((record.source_id, record.source_digest,
+                               record.item_id, record.branch, key, record.source_date or '')))
+            original_id = identity
+            replacement = self.conn.execute('SELECT current_id FROM memory_import_replacements WHERE original_id=?', (original_id,)).fetchone()
+            if replacement is not None:
+                identity = replacement['current_id']
+            previous = self.conn.execute('SELECT node_id FROM memory_imports WHERE id = ?', (identity,)).fetchone()
+            if previous is not None and previous['node_id'] is None and self.conn.execute(
+                    'SELECT 1 FROM memory_import_retired WHERE import_id=?', (identity,)).fetchone():
+                identity = uuid.uuid4().hex
+                previous = None
+            if previous is not None:
+                node_ids.append(previous['node_id'])
+                continue
+            candidates = self.conn.execute('SELECT DISTINCT node_id FROM memory_imports WHERE node_id IS NOT NULL AND branch = ? AND content_key = ? AND source_date IS ? ORDER BY imported_at',
+                                           (record.branch, key, record.source_date))
+            shared = next((row for row in candidates
+                           if self._resolve_branch(row['node_id']) == record.branch and
+                           (match_unimported or self.get_node(row['node_id']).data == key)), None)
+            if shared is not None:
+                node_id = shared['node_id']
+            elif record.source_date is None and (record.branch, key) in known:
+                node_id = known[(record.branch, key)]
+            else:
+                node = self._insert_node(f'{record.provider} memory {record.item_id[:8]}',
+                       f'Reviewed import from {record.provider}. Scope: {record.source_scope}.',
+                       record.reviewed_text, record.branch)
+                created.append((node, record.branch))
+                from .auto_import import node_fingerprint
+                self.conn.execute('INSERT INTO memory_import_owned VALUES (?, ?, ?)',
+                                  (node.id, record.source_id, node_fingerprint(node)))
+                node_id = node.id
+                if record.source_date is None:
+                    known[(record.branch, key)] = node_id
+            self.conn.execute('''INSERT INTO memory_imports
+                (id, branch, content_key, node_id, provider, source_id, source_digest,
+                 source_label, source_scope, source_date, source_metadata, original_text, reviewed_text, imported_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                (identity, record.branch, key, node_id, record.provider, record.source_id,
+                 record.source_digest, record.source_label, record.source_scope,
+                 record.source_date, record.source_metadata, record.original_text, record.reviewed_text, imported_at))
+            if identity != original_id:
+                self.conn.execute('INSERT INTO memory_import_replacements VALUES (?, ?) ON CONFLICT(original_id) DO UPDATE SET current_id=excluded.current_id', (original_id, identity))
+            if node_id is not None:
+                self.conn.execute('INSERT INTO memory_import_node_sources VALUES (?, ?, 1)', (identity, node_id))
+                if self._resolve_branch(node_id) in (BRANCH_USER, BRANCH_DIRECTIVES):
+                    self.conn.execute("UPDATE memory_graph_revisions SET revision = revision + 1 WHERE name = 'warm_profile'")
+            node_ids.append(node_id)
+        return ImportResult(len(created), len(records) - len(created), tuple(node_ids)), created
 
     def get_import_provenance(self, node_id: Optional[str] = None, *, limit: int = 100) -> list[dict]:
         """Read import sources, including ancestor sources after a split."""

@@ -21,7 +21,7 @@ Jarvis without contacting another service or running model inference.
 ## Review
 
 The desktop provides source, scope, editable plain-text entries and an explicit
-import action. Nothing is saved before that action. Imported secrets are scrubbed
+import action. Nothing is saved before that action or a source-specific automatic-import grant. Imported secrets are scrubbed
 before preview and persistence; source text cannot introduce rich content.
 
 Each selected entry has an explicit destination:
@@ -81,3 +81,52 @@ existing edits, concurrent writers, rollback and provenance after edits/splits.
 Desktop checks cover keyboard navigation, resizing, stale worker results and the
 actual saved-memory outcome. Live local checks verify imported personal facts
 and standing preferences remain usable alongside existing memory.
+
+## Automatic local imports
+
+After a successful manual import, the active import window offers a Yes/No choice
+for that source. No persists across restarts. Closing the window before the offer
+does not enable anything. Setup remains available in the import window. Pasted
+text requires choosing and reviewing a local file; private application caches and
+account memories are not automatic sources.
+
+A grant covers one exact selected file, its reviewed scope and one destination.
+Enabling requires a complete, unedited review of that file in a single destination.
+Partial or edited selections open setup rather than approving omitted text. Future
+entries use the granted destination without another review. Dates are not inferred.
+Disabling or starting another setup increments a durable generation; a refresh
+rechecks the generation inside its SQLite writer transaction.
+
+The desktop watches only granted files and their parent directories, including
+atomic-save replacements. One worker coalesces event bursts, with a 400 ms quiet
+period and a two-second maximum delay. At most 32 sources are enabled at once. Declined decisions do not consume watch
+capacity. Management prioritises enabled sources and shows up to 64 recent
+source decisions; a reviewed file can enter setup directly.
+A once-per-minute metadata reconciliation covers restarts and lost watcher events.
+File events force a content check even if size and timestamps match. Existing
+256 KiB and 128-entry limits apply; refreshes require no inference or network.
+Unchanged metadata avoids content reads; unchanged content avoids graph,
+provenance and source-checkpoint writes. Missing or unsafe sources preserve saved
+memories and retry with exponential backoff from one minute to one hour.
+
+Source versions reconcile exact complete entries without semantic guessing.
+Unchanged entries retain their nodes and explicit statement dates. New entries
+have unknown statement dates. Retired entries may be deleted only when their
+nodes were created by that source, remain exactly as imported, have no children
+and are not shared with another source. Edited, moved, shared, deleted or otherwise
+protected entries pause that source for review before any graph change. Human
+edits are never overwritten or silently resurrected. Returning to an earlier file
+version imports the appropriate current entries, retaining historical provenance.
+The changed nodes, new source records and successful digest commit atomically.
+Background refreshes use indexed import records, without scanning unrelated graph
+subtrees. Import ownership excludes access bookkeeping from edit detection. Source-owned
+retirement is distinguished from human deletion, so a complete manual review can
+restore a retired file version without resurrecting human-deleted entries.
+
+The import window lists source state and permits disabling, setup and review.
+The desktop owns the watcher independently of the window. Explicit Quit and
+direct Qt quit events keep the GUI alive until the worker has released its
+source/database resources. Repeated quit requests share that completion barrier;
+fallback teardown joins the stopped worker before destroying the application.
+Worker failures preserve consent and show a retryable status; reopening the import
+window retries a stopped worker. Closing a review window never creates consent.

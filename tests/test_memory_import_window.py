@@ -97,6 +97,7 @@ def test_real_menu_action_opens_the_import_window_with_configured_database(tmp_p
     app=QApplication.instance() or QApplication([])
     tray=object.__new__(JarvisSystemTray)
     tray.memory_import_window=None
+    tray.memory_auto_import=Mock()
     tray.tray_icon=Mock();tray.face_window=Mock()
     for name in ('show_log_viewer','show_memory_viewer','show_dictation_history','show_chat',
                  'show_setup_wizard','show_settings','show_runtime_status','show_face_window',
@@ -118,3 +119,85 @@ def test_real_menu_action_opens_the_import_window_with_configured_database(tmp_p
     finally:
         if tray.memory_import_window is not None:tray.memory_import_window.close()
         tray._voice_pause_timer.stop();tray.menu.close();tray.menu.deleteLater()
+
+
+def test_first_success_offers_auto_import_once_and_no_is_persistent(window,tmp_path,monkeypatch):
+    from PyQt6.QtWidgets import QMessageBox
+    from jarvis.memory.imports import MemorySource,read_source
+    offers=[]
+    def decline(*args):
+        offers.append(args)
+        return QMessageBox.StandardButton.No
+    monkeypatch.setattr(QMessageBox,'question',decline)
+    path=tmp_path/'source.md';path.write_text('Use concise replies.')
+    preview=read_source(MemorySource('Codex','Instructions','instructions',path))
+    window.show();window.show_preview(preview)
+    for _ in range(2):
+        window.import_selected()
+        wait(QApplication.instance(),lambda:not window.busy)
+    assert len(offers)==1
+    assert 'automatic' in str(offers[0]).lower()
+    from jarvis.memory.auto_import import load_sources
+    with closing(GraphMemoryStore(window.db_path)) as store:
+        assert load_sources(store)==[]
+
+
+def test_yes_enables_real_source_refresh_without_a_second_manual_import(window,tmp_path,monkeypatch):
+    from PyQt6.QtWidgets import QMessageBox
+    from desktop_app.memory_auto_import import AutoImportService
+    from jarvis.memory.imports import MemorySource,read_source
+    service=AutoImportService(db_path=window.db_path,debounce=.03,reconcile=.2)
+    window.auto_service=service
+    service.start()
+    monkeypatch.setattr(QMessageBox,'question',lambda *args:QMessageBox.StandardButton.Yes)
+    path=tmp_path/'source.md';path.write_text('Use concise replies.')
+    preview=read_source(MemorySource('Codex','Instructions','instructions',path))
+    window.show();window.show_preview(preview);window.import_selected()
+    try:
+        wait(QApplication.instance(),lambda:not window.busy)
+        wait(QApplication.instance(),lambda:str(path) in service.watcher.files())
+        path.write_text('Use detailed replies.')
+        def changed():
+            with closing(GraphMemoryStore(window.db_path,read_only=True)) as store:
+                return {n.data for n in store.get_children('directives')}=={'Use detailed replies.'}
+        wait(QApplication.instance(),changed)
+    finally:
+        service.stop();assert service.worker.wait(5000)
+
+def test_stopped_service_error_is_visible_and_retains_source_management(tmp_path):
+    app=QApplication.instance() or QApplication([])
+    view=MemoryImportWindow(db_path=str(tmp_path/'graph.db'),home=tmp_path)
+    try:
+        view.show_automatic_sources(([],{'service':'Automatic import is unavailable. Reopen Import Memories to retry.'}))
+        assert 'unavailable' in view.status.text()
+        assert 'retry' in view.status.text()
+    finally:view.close();app.processEvents()
+
+
+def test_explicit_setup_uses_reviewed_old_source_instead_of_recent_list(window,tmp_path,monkeypatch):
+    from PyQt6.QtWidgets import QMessageBox
+    from jarvis.memory.imports import MemorySource,ImportChoice,read_source,commit_import
+    from jarvis.memory import auto_import
+    old=None
+    with closing(GraphMemoryStore(window.db_path)) as store:
+        for index in range(auto_import.MAX_AUTO_SOURCES+2):
+            path=tmp_path/f'{index}.md';path.write_text(f'Selected source {index}.')
+            p=read_source(MemorySource('Claude','Selected source','personal',path))
+            choices=[ImportChoice(i.id,i.text,'world',None) for i in p.items]
+            result=commit_import(store,p,choices)
+            grant=auto_import.record_success(store,p,choices,result)
+            auto_import.decide(store,grant.source_id,False)
+            if old is None:old=p
+        recent=auto_import.load_sources(store,include_disabled=True)
+        assert auto_import.source_identity(old.source) not in {g.source_id for g in recent}
+    window.show_automatic_sources((recent,{}));window.show_preview(old);window.show()
+    offers=[]
+    def decline(*args):
+        offers.append(args);return QMessageBox.StandardButton.No
+    monkeypatch.setattr(QMessageBox,'question',decline)
+    window.setup_automatic()
+    wait(QApplication.instance(),lambda:not window.busy)
+    assert window.preview.source==old.source
+    window.import_selected()
+    wait(QApplication.instance(),lambda:not window.busy)
+    assert len(offers)==1

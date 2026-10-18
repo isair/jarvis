@@ -522,3 +522,10 @@ the stream can continue processing later entries.
 ## Local memory import
 
 The shared tray/face menu opens a lazy `MemoryImportWindow`. It reviews selected Claude Code or Codex instruction files, or pasted/chosen ChatGPT and Claude text, without reading private app caches or contacting those providers. Source and editable entry pages scroll, with navigation outside the viewport. Discovery, reads and atomic persistence use `KeepAliveWorker`; queued completion slots are generation-scoped. Closing hides the window without destroying an authorised writer. The memory viewer displays import quotations and dates alongside current node data. See `src/jarvis/memory/imports.spec.md`.
+
+Automatic local memory import is desktop-owned and remains active when the import
+window is hidden. Its exact-file grants, bounded watcher/worker, per-source
+Yes/No consent, pause-for-review protection and shutdown contract are defined in
+`src/jarvis/memory/imports.spec.md`. Source reads and database operations remain
+outside the GUI thread; watch registration and plain-text status updates run on
+that thread. The import window offers setup, review and disable actions.

@@ -1798,6 +1798,12 @@ class JarvisSystemTray:
         # Create memory viewer window (hidden by default)
         self.memory_viewer = MemoryViewerWindow()
         self.memory_import_window = None
+        from desktop_app.memory_auto_import import AutoImportService
+        from jarvis.config import load_settings
+        self.memory_auto_import = AutoImportService(db_path=load_settings().db_path)
+        self.memory_auto_import.guard_application_exit(self.app)
+        self.memory_auto_import.start()
+        self._quitting = False
 
         # Create face window (hidden by default)
         # Note: Creating the face window also initializes the SpeakingState singleton
@@ -1889,6 +1895,8 @@ class JarvisSystemTray:
         debug_log("cleaning up on exit", "desktop")
         if self.is_listening:
             self.stop_daemon()
+        self.memory_auto_import.stop()
+        self.memory_auto_import.worker.wait()
         # Stop memory viewer server
         if hasattr(self, 'memory_viewer'):
             self.memory_viewer.stop_server()
@@ -2246,8 +2254,9 @@ class JarvisSystemTray:
             from desktop_app.memory_import_window import MemoryImportWindow
             from jarvis.config import load_settings
             self.memory_import_window = MemoryImportWindow(
-                db_path=load_settings().db_path, home=Path.home(),
+                db_path=load_settings().db_path, home=Path.home(), auto_service=self.memory_auto_import,
             )
+        self.memory_auto_import.refresh()
         self.memory_import_window.show()
         self.memory_import_window.raise_()
         self.memory_import_window.activateWindow()
@@ -3096,11 +3105,17 @@ class JarvisSystemTray:
             skip_diary: If True, skips the diary dialog during shutdown.
                        Used when quitting for an update to allow faster exit.
         """
+        if self._quitting:
+            return
+        self._quitting = True
         # Stop daemon if running
         if self.is_listening:
             self.stop_daemon(show_diary_dialog=not skip_diary)
 
         debug_log("desktop app shutting down", "desktop")
+        self.memory_auto_import.shutdown(self._finish_quit)
+
+    def _finish_quit(self):
         self.tray_icon.hide()
         self.app.quit()
 
