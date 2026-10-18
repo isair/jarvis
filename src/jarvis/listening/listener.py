@@ -2593,15 +2593,16 @@ class VoiceListener(threading.Thread):
     def _decode_faster_whisper_locked(self, audio):
         """Consume lazy segments before releasing the shared model lock."""
         cpu_mode = self._whisper_device == "cpu"
-        try:
-            segments, info = self.model.transcribe(
-                audio, language=None, vad_filter=False,
-                condition_on_previous_text=not cpu_mode,
-                without_timestamps=cpu_mode,
-            )
-        except TypeError:
-            segments, info = self.model.transcribe(audio, language=None)
-        return list(segments), info
+        segments, info = self.model.transcribe(
+            audio, language=None, vad_filter=True,
+            no_speech_threshold=self.cfg.whisper_no_speech_threshold,
+            condition_on_previous_text=False,
+            without_timestamps=cpu_mode,
+        )
+        decoded = list(segments)
+        if not decoded:
+            debug_log("Whisper speech guard returned no segments", "voice")
+        return decoded, info
 
     def _transcribe_audio(self, audio) -> tuple[str, Optional[str], tuple[LowConfidenceEvent, ...]]:
         """Run Whisper and return filtered text, language and rejection events."""
