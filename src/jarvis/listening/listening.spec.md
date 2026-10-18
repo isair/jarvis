@@ -51,6 +51,16 @@ language or recognised words. Accepted captures retain all assembled samples,
 including pre-roll and softer speech; the energy floor does not clip syllables.
 A zero energy floor disables this additional rejection gate.
 
+Faster-whisper applies its bundled local Silero VAD to each assembled utterance
+before decoding. This speech guard is independent of the optional capture-frame
+VAD and rejects non-speech without relying on language or recognised phrases.
+The decoder uses the configured `whisper_no_speech_threshold`, and segment
+filtering independently enforces that threshold regardless of text confidence.
+Previous-text conditioning is disabled on CPU and CUDA to avoid propagating
+hallucinated text between decoding windows. CPU decoding retains its
+without-timestamps optimisation. Decoder errors do not retry with speech guards
+removed; CUDA recovery retains the same guarded options on CPU.
+
 Utterance assembly enforces `max_utterance_ms` during continuous speech as
 well as at silent endpoints. While TTS is speaking, `tts_max_utterance_ms`
 applies so interruption audio reaches Whisper promptly. Limits count complete
