@@ -111,9 +111,9 @@ def main():
                     nested.mkdir()
                     mutated = False
 
-                    def mutate_after_open(path, parent, *, directory):
+                    def mutate_after_open(path, parent, *, directory, list_directory=False):
                         nonlocal mutated
-                        handle = original(path, parent, directory=directory)
+                        handle = original(path, parent, directory=directory, list_directory=list_directory)
                         if directory and path == nested:
                             try:
                                 try:

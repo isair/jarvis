@@ -26,8 +26,6 @@ if os.name == 'nt':
     _kernel.GetFileInformationByHandleEx.restype = wintypes.BOOL
     _kernel.GetFileType.argtypes = [wintypes.HANDLE]
     _kernel.GetFileType.restype = wintypes.DWORD
-    _kernel.ReOpenFile.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD]
-    _kernel.ReOpenFile.restype = wintypes.HANDLE
 
     class _AttributeTag(ctypes.Structure):
         _fields_ = [('attributes', wintypes.DWORD), ('tag', wintypes.DWORD)]
@@ -63,7 +61,7 @@ if os.name == 'nt':
     _nt.RtlNtStatusToDosError.argtypes = [ctypes.c_long]
     _nt.RtlNtStatusToDosError.restype = wintypes.ULONG
 
-    def _windows_handle(name: str, parent, *, directory: bool):
+    def _windows_handle(name: str, parent, *, directory: bool, list_directory: bool):
         # RootDirectory binds a single child name to the already pinned object.
         # OBJ_DONT_REPARSE rejects traversal at the kernel boundary.
         encoded = name.encode('utf-16-le')
@@ -77,6 +75,8 @@ if os.name == 'nt':
         handle = wintypes.HANDLE()
         status_block = _IoStatus()
         access = 0x80 | 0x100000 | (0x20 if directory else 0x1)
+        if list_directory:
+            access |= 0x1
         status = _nt.NtCreateFile(ctypes.byref(handle), access, ctypes.byref(attributes),
                                   ctypes.byref(status_block), None, 0, 0x1 | 0x2, 1,
                                   0x200000 | 0x20 | (0x1 if directory else 0x40), None, 0)
@@ -85,40 +85,33 @@ if os.name == 'nt':
         return handle.value
 
     def _windows_entries(directory):
-        # Reopen the same object with list permission, without resolving a pathname.
-        handle = _kernel.ReOpenFile(directory, 0x1 | 0x80, 0x1 | 0x2, 0x02200000)
-        if handle == ctypes.c_void_p(-1).value:
-            raise ctypes.WinError(ctypes.get_last_error())
-        try:
-            # Fixed-size batches retain the index's per-entry cancellation/budget checks.
-            buffer = ctypes.create_string_buffer(65536)
+        # Fixed-size batches retain the index's per-entry cancellation/budget checks.
+        buffer = ctypes.create_string_buffer(65536)
+        while True:
+            if not _kernel.GetFileInformationByHandleEx(handle, 10, buffer, len(buffer)):
+                error = ctypes.get_last_error()
+                if error == 18:  # ERROR_NO_MORE_FILES
+                    return
+                raise ctypes.WinError(error)
+            offset = 0
             while True:
-                if not _kernel.GetFileInformationByHandleEx(handle, 10, buffer, len(buffer)):
-                    error = ctypes.get_last_error()
-                    if error == 18:  # ERROR_NO_MORE_FILES
-                        return
-                    raise ctypes.WinError(error)
-                offset = 0
-                while True:
-                    info = _DirectoryInfo.from_buffer(buffer, offset)
-                    start = offset + _DirectoryInfo.name.offset
-                    end = start + info.name_bytes
-                    if (info.name_bytes % 2 or end > len(buffer)
-                            or (info.next and (info.next < end - offset
-                                               or info.next % 8 or offset + info.next >= len(buffer)))):
-                        raise OSError('Invalid document directory information')
-                    name = ctypes.string_at(ctypes.addressof(buffer) + start, info.name_bytes).decode('utf-16-le')
-                    if name not in ('.', '..'):
-                        yield DocumentEntry(name, bool(info.attributes & 0x10)
-                                            and not bool(info.attributes & 0x400))
-                    if not info.next:
-                        break
-                    offset += info.next
-        finally:
-            _kernel.CloseHandle(handle)
+                info = _DirectoryInfo.from_buffer(buffer, offset)
+                start = offset + _DirectoryInfo.name.offset
+                end = start + info.name_bytes
+                if (info.name_bytes % 2 or end > len(buffer)
+                        or (info.next and (info.next < end - offset
+                                           or info.next % 8 or offset + info.next >= len(buffer)))):
+                    raise OSError('Invalid document directory information')
+                name = ctypes.string_at(ctypes.addressof(buffer) + start, info.name_bytes).decode('utf-16-le')
+                if name not in ('.', '..'):
+                    yield DocumentEntry(name, bool(info.attributes & 0x10)
+                                        and not bool(info.attributes & 0x400))
+                if not info.next:
+                    break
+                offset += info.next
 
 
-def _open_entry(path: Path, parent, *, directory: bool):
+def _open_entry(path: Path, parent, *, directory: bool, list_directory=False):
     """Open one entry without following a reparse point or symbolic link."""
     if os.name != 'nt':
         flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
@@ -134,7 +127,7 @@ def _open_entry(path: Path, parent, *, directory: bool):
         name = path.name
         if not name or name in ('.', '..') or any(char in name for char in ('/', '\\', ':')):
             raise ValueError('Document capabilities require a single child name')
-    handle = _windows_handle(name, parent, directory=directory)
+    handle = _windows_handle(name, parent, directory=directory, list_directory=list_directory)
     try:
         attributes = _AttributeTag()
         if not _kernel.GetFileInformationByHandleEx(handle, 9, ctypes.byref(attributes),
@@ -157,19 +150,21 @@ def _open_entry(path: Path, parent, *, directory: bool):
 
 
 @contextmanager
-def _directory(path: Path, parent=None):
+def _directory(path: Path, parent=None, *, list_directory=False):
     """Pin a child of an owned parent, or walk canonical ancestors from the anchor."""
     if not path.is_absolute():
         raise ValueError('Document capabilities require absolute paths')
     with ExitStack() as stack:
         parts = path.parts[1:] if parent is None else ()
         current = Path(path.anchor) if parent is None else path
-        parent = _open_entry(current, parent, directory=True)
+        parent = _open_entry(current, parent, directory=True,
+                             list_directory=list_directory and not parts)
         close = _kernel.CloseHandle if os.name == 'nt' else os.close
         stack.callback(close, parent)
-        for part in parts:
+        for index, part in enumerate(parts):
             current = current / part
-            parent = _open_entry(current, parent, directory=True)
+            parent = _open_entry(current, parent, directory=True,
+                                 list_directory=list_directory and index == len(parts) - 1)
             stack.callback(close, parent)
         yield parent
 
@@ -193,7 +188,7 @@ def open_document_file(path: Path):
 @contextmanager
 def scan_document_directory(path: Path, parent=None):
     """Enumerate a pinned directory, never a substituted ancestor target."""
-    with _directory(path, parent) as directory:
+    with _directory(path, parent, list_directory=True) as directory:
         if os.name == 'nt':
             entries = _windows_entries(directory)
             try:
