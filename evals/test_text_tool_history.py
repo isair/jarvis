@@ -6,7 +6,7 @@ from unittest.mock import patch
 import pytest
 
 from evals.conftest import requires_judge_llm
-from evals.helpers import voice_config
+from evals.helpers import MockConfig, JUDGE_BASE_URL, JUDGE_MODEL
 from jarvis.memory.conversation import DialogueMemory
 from jarvis.memory.db import Database
 from jarvis.reply import engine
@@ -17,7 +17,12 @@ pytestmark = [pytest.mark.eval, requires_judge_llm]
 
 @pytest.mark.parametrize("location", ["Port Aster-Q7", "Gümüş-K4"])
 def test_followup_recovers_exact_text_tool_arguments(tmp_path, location):
-    cfg = voice_config()
+    cfg = MockConfig(
+        llm_provider="ollama", llm_base_url=JUDGE_BASE_URL,
+        ollama_base_url=JUDGE_BASE_URL, llm_chat_model=JUDGE_MODEL,
+        ollama_chat_model=JUDGE_MODEL,
+    )
+    cfg.fast_model = JUDGE_MODEL
     cfg.db_path = str(tmp_path / "memory.db")
     cfg.location_enabled = False
     cfg.memory_enrichment_source = "none"
