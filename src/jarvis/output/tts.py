@@ -482,11 +482,13 @@ class ChatterboxTTS:
 
     def start(self) -> None:
         with self._lifecycle_lock:
-            if not self.enabled:
+            if not self.enabled or (self._thread is not None and self._thread.is_alive()):
                 return
-            if self._thread is not None and self._thread.is_alive():
+        available = self._ensure_model()
+        with self._lifecycle_lock:
+            if not self.enabled or (self._thread is not None and self._thread.is_alive()):
                 return
-            if not self._ensure_model():
+            if not available:
                 self.enabled = False
                 message = f"Chatterbox speech output unavailable: {self._model_error}"
                 print(f"  ⚠️ {message}", flush=True)
@@ -510,9 +512,9 @@ class ChatterboxTTS:
             if worker is None:
                 return
             self._stop.set()
+            self.interrupt()
             self._discard_pending_speech()
             self._q.put_nowait(None)
-            self.interrupt()
         if worker is not threading.current_thread():
             worker.join(timeout=2.0)
         with self._lifecycle_lock:
@@ -607,11 +609,11 @@ class ChatterboxTTS:
                 ta.save(tmp_path, wav, self._model.sr)
 
                 # Play audio using pygame (cross-platform)
+                pygame.mixer.init(frequency=self._model.sr, size=-16, channels=1, buffer=1024)
+                pygame.mixer.music.load(tmp_path)
                 with self._lifecycle_lock:
                     if self._stop.is_set() or self._should_interrupt.is_set():
                         return
-                    pygame.mixer.init(frequency=self._model.sr, size=-16, channels=1, buffer=1024)
-                    pygame.mixer.music.load(tmp_path)
                     pygame.mixer.music.play()
 
                 # Wait for playback to complete or interruption
@@ -640,7 +642,7 @@ class ChatterboxTTS:
             
             # Call completion callback if set and not interrupted
             if (request.completion_callback is not None and not interrupted
-                    and not self._should_interrupt.is_set()):
+                    and not self._should_interrupt.is_set() and not self._stop.is_set()):
                 try:
                     request.completion_callback()
                 except Exception:
@@ -808,11 +810,13 @@ class PiperTTS:
 
     def start(self) -> None:
         with self._lifecycle_lock:
-            if not self.enabled:
+            if not self.enabled or (self._thread is not None and self._thread.is_alive()):
                 return
-            if self._thread is not None and self._thread.is_alive():
+        available = self._ensure_initialized()
+        with self._lifecycle_lock:
+            if not self.enabled or (self._thread is not None and self._thread.is_alive()):
                 return
-            if not self._ensure_initialized():
+            if not available:
                 self.enabled = False
                 message = f"Piper speech output unavailable: {self._init_error}"
                 print(f"  ⚠️ {message}", flush=True)
@@ -836,9 +840,9 @@ class PiperTTS:
             if worker is None:
                 return
             self._stop.set()
+            self.interrupt()
             self._discard_pending_speech()
             self._q.put_nowait(None)
-            self.interrupt()
         if worker is not threading.current_thread():
             worker.join(timeout=2.0)
         with self._lifecycle_lock:
@@ -1026,7 +1030,7 @@ class PiperTTS:
 
             # Call completion callback if set and not interrupted
             if (request.completion_callback is not None and not interrupted
-                    and not self._should_interrupt.is_set()):
+                    and not self._should_interrupt.is_set() and not self._stop.is_set()):
                 try:
                     request.completion_callback()
                 except Exception as e:
