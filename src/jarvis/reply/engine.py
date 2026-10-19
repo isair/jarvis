@@ -1902,36 +1902,46 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         except Exception as exc:  # noqa: BLE001
             debug_log(f"tool-carryover record failed: {exc}", "reply")
 
-    def _extract_structured_tool_call(resp: dict):
+    def _extract_structured_tool_calls(resp: dict):
         try:
             if isinstance(resp, dict) and isinstance(resp.get("message"), dict):
                 msg = resp["message"]
-
-                # First try: native tool_calls array from Ollama
-                tc = msg.get("tool_calls")
-                if isinstance(tc, list) and len(tc) > 0:
-                    first = tc[0]
-                    if isinstance(first, dict) and isinstance(first.get("function"), dict):
-                        func = first["function"]
-                        name = str(func.get("name", "")).strip()
-                        args = _decode_tool_arguments(func.get("arguments", {}))
-                        tool_call_id = first.get("id")  # Extract tool_call_id
-                        if not tool_call_id:
-                            # Generate a shorthand ID if LLM didn't provide one
-                            tool_call_id = f"call_{uuid.uuid4().hex[:8]}"
-
-                        # Handle malformed arguments where LLM nests tool info inside arguments
-                        if isinstance(args, dict) and "tool" in args:
-                            # Extract from nested structure: {'tool': {'args': {...}, 'name': ...}}
-                            tool_info = args.get("tool", {})
-                            if isinstance(tool_info, dict):
-                                actual_args = _decode_tool_arguments(tool_info.get("args", {}))
-                                actual_name = tool_info.get("name", name)
-                                if actual_name:
-                                    return actual_name, actual_args, tool_call_id, False
-
-                        if name:
-                            return name, args, tool_call_id, False
+                native_calls = msg.get("tool_calls")
+                if isinstance(native_calls, list) and native_calls:
+                    requests, retained = [], []
+                    used_ids = {
+                        call.get("id")
+                        for message in messages
+                        for call in (message.get("tool_calls") or [])
+                        if isinstance(call, dict) and isinstance(call.get("id"), str)
+                    }
+                    for call in native_calls:
+                        function = call.get("function") if isinstance(call, dict) else None
+                        name = function.get("name") if isinstance(function, dict) else None
+                        if not isinstance(name, str) or not name.strip():
+                            debug_log("Malformed native tool request has no function name; request omitted", "planning")
+                            continue
+                        name = name.strip()
+                        raw_args = function.get("arguments", {})
+                        args = _decode_tool_arguments(raw_args)
+                        # Some servers wrap the function inside its arguments.
+                        nested = args.get("tool") if isinstance(args, dict) else None
+                        if isinstance(nested, dict):
+                            nested_name = nested.get("name", name)
+                            if isinstance(nested_name, str) and nested_name.strip():
+                                name = nested_name.strip()
+                                raw_args = nested.get("args", {})
+                                args = _decode_tool_arguments(raw_args)
+                        call_id = call.get("id")
+                        if not isinstance(call_id, str) or not call_id.strip() or call_id in used_ids:
+                            call_id = f"call_{uuid.uuid4().hex}"
+                        used_ids.add(call_id)
+                        requests.append((name, args, call_id))
+                        retained.append({"id": call_id, "type": "function", "function": {
+                            "name": name, "arguments": raw_args,
+                        }})
+                    if requests:
+                        return requests, False, retained
 
                 # Content-mode tool-call parsing: the model returned prose that may
                 # encode a tool call in one of several shapes (markdown fence,
@@ -1942,7 +1952,11 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 known_names = known_tool_names
                 name, args, tool_call_id = _extract_text_tool_call(content_field, known_names)
                 if name:
-                    return name, args, tool_call_id, True
+                    tool_call_id = f"call_{uuid.uuid4().hex}"
+                    return [(name, args, tool_call_id)], True, [{
+                        "id": tool_call_id, "type": "function",
+                        "function": {"name": name, "arguments": args},
+                    }]
 
                 # Diagnostic: if the content LOOKS like a botched tool call (starts
                 # with a known tool name, or contains `tool_calls:`, or is suspiciously
@@ -1970,7 +1984,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
         except Exception:
             pass
-        return None, None, None, False
+        return [], False, []
 
     def _get_context_string() -> str:
         """Get current time and location context as a string.
@@ -2419,7 +2433,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             debug_log(f"  💭 LLM thinking: '{thinking[:300]}{'...' if len(thinking) > 300 else ''}'", "planning")
 
         # Extract tool call if present
-        t_name, t_args, t_call_id, text_tool_request = _extract_structured_tool_call(llm_resp)
+        tool_requests, text_tool_request, retained_calls = _extract_structured_tool_calls(llm_resp)
 
         # Keep the assistant's content and the identity of its recognised request.
         assistant_msg = {"role": "assistant", "content": content}
@@ -2430,21 +2444,15 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             if isinstance(msg, dict):
                 if "thinking" in msg and msg["thinking"]:
                     assistant_msg["thinking"] = msg["thinking"]
-                if "tool_calls" in msg and msg["tool_calls"]:
-                    assistant_msg["tool_calls"] = msg["tool_calls"]
-
+        if retained_calls:
+            assistant_msg["tool_calls"] = retained_calls
         if text_tool_request:
-            t_call_id = f"call_{uuid.uuid4().hex}"
-            assistant_msg["tool_calls"] = [{
-                "id": t_call_id, "type": "function",
-                "function": {"name": t_name, "arguments": t_args},
-            }]
             debug_log("Text tool request retained with its result identity", "planning")
 
         messages.append(assistant_msg)
 
         # Check if we're stuck (no content, no tool call)
-        if not content and not t_name:
+        if not content and not tool_requests:
             # Thinking-only turn: let the model continue reasoning
             if thinking:
                 debug_log("  🧠 Thinking step (no action needed)", "planning")
@@ -2466,8 +2474,27 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             debug_log("no usable assistant output; empty-response recovery unavailable or exhausted", "planning")
             break
 
-        if t_name:
-            tool_name, tool_args, tool_call_id = t_name, t_args, t_call_id
+        # Every native request consumes a slot in the existing reply budget.
+        # Reject oversized work before actions; stop remains a terminal control.
+        # The model can retry smaller work while a response slot remains.
+        batch_over_budget = len(tool_requests) > max_turns - turn + 1
+        batch_allowed_tools = frozenset(allowed_tools)
+        if batch_over_budget:
+            debug_log(f"native batch exceeds reply budget ({len(tool_requests)} requests, "
+                      f"{max_turns - turn + 1} slots); only dismissal can execute", "planning")
+        if tool_requests and not batch_over_budget:
+            turn += len(tool_requests) - 1
+        for tool_name, tool_args, tool_call_id in tool_requests:
+            if cancel_event is not None and cancel_event.is_set():
+                debug_log("reply cancelled between native tool requests", "planning")
+                return None
+            if batch_over_budget and tool_name != "stop":
+                _append_tool_feedback(
+                    tool_name, tool_call_id,
+                    "This batch exceeds the remaining reply budget. No action in this batch was performed. "
+                    "Request fewer actions or report the unfinished work.", failed=True,
+                )
+                continue
             debug_log(f"🛠️ tool requested: {tool_name}", "planning")
             try:
                 _args_preview = json.dumps(tool_args, ensure_ascii=False)
@@ -2478,7 +2505,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             print(f"    🛠️ Agent → {tool_name} {_args_preview}", flush=True)
 
             # Check if tool is not allowed - respond with tool error
-            if tool_name not in allowed_tools:
+            if tool_name not in batch_allowed_tools:
                 debug_log(f"  ⚠️ tool not allowed: {tool_name}", "planning")
                 print(f"    ⚠️ Tool '{tool_name}' not in allow-list", flush=True)
                 # Use tool response instead of system message to maintain native tool calling compatibility
@@ -2782,6 +2809,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             # Reuse outcomes for identical calls, including error-only results.
             _remember_tool_outcome(signature, bool(result.success))
             # Loop continues to let the agent produce the next step/final reply
+            continue
+
+        if tool_requests:
             continue
 
         # Plans and prior errors cannot establish a current completed result.
