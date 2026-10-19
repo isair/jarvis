@@ -410,6 +410,7 @@ class ChatterboxTTS:
         # Threading and queue setup (same as TextToSpeech)
         self._q: queue.Queue[Optional[_SpeechRequest]] = queue.Queue()
         self._thread: Optional[threading.Thread] = None
+        self._lifecycle_lock = threading.RLock()
         self._stop = threading.Event()
         self._is_speaking = threading.Event()
         self._last_spoken_text: str = ""
@@ -480,49 +481,58 @@ class ChatterboxTTS:
         return False
 
     def start(self) -> None:
-        if not self.enabled or self._thread is not None:
-            return
-        if not self._ensure_model():
-            self.enabled = False
-            message = f"Chatterbox speech output unavailable: {self._model_error}"
-            print(f"  ⚠️ {message}", flush=True)
-            debug_log(message, "tts")
-            return
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
+        with self._lifecycle_lock:
+            if not self.enabled or (self._thread is not None and self._thread.is_alive()):
+                return
+        available = self._ensure_model()
+        with self._lifecycle_lock:
+            if not self.enabled or (self._thread is not None and self._thread.is_alive()):
+                return
+            if not available:
+                self.enabled = False
+                message = f"Chatterbox speech output unavailable: {self._model_error}"
+                print(f"  ⚠️ {message}", flush=True)
+                debug_log(message, "tts")
+                return
+            self._discard_pending_speech()
+            self._stop.clear()
+            self._thread = threading.Thread(target=self._run, daemon=True)
+            self._thread.start()
+
+    def _discard_pending_speech(self) -> None:
+        while True:
+            try:
+                self._q.get_nowait()
+            except queue.Empty:
+                return
 
     def stop(self) -> None:
-        if self._thread is None:
-            return
-        # Ensure any active speech is interrupted immediately
-        try:
+        with self._lifecycle_lock:
+            worker = self._thread
+            if worker is None:
+                return
+            self._stop.set()
             self.interrupt()
-        except Exception:
-            pass
-        self._stop.set()
-        try:
+            self._discard_pending_speech()
             self._q.put_nowait(None)
-        except Exception:
-            pass
-        self._thread.join(timeout=2.0)
-        self._thread = None
-        self._stop.clear()
+        if worker is not threading.current_thread():
+            worker.join(timeout=2.0)
+        with self._lifecycle_lock:
+            if self._thread is worker and not worker.is_alive():
+                self._thread = None
+            elif worker.is_alive():
+                debug_log("Chatterbox speech worker is draining after stop", "tts")
 
     def speak(self, text: str, completion_callback: Optional[Callable[[], None]] = None,
               duration_callback: Optional[Callable[[float], None]] = None) -> None:
         if not self.enabled or not text.strip():
             return
-        # Lazy start the worker thread and lazy init on first speak
-        if self._thread is None:
-            self.start()
-        if not self.enabled:
-            return
-        # Preprocess text for speech (convert links to readable descriptions)
-        processed_text = _preprocess_for_speech(text)
-        try:
+        self.start()
+        with self._lifecycle_lock:
+            if not self.enabled or self._stop.is_set():
+                return
+            processed_text = _preprocess_for_speech(text)
             self._q.put_nowait(_SpeechRequest(processed_text, completion_callback, duration_callback))
-        except Exception:
-            pass
 
     def interrupt(self) -> None:
         """Stop current speech immediately"""
@@ -535,7 +545,7 @@ class ChatterboxTTS:
             except queue.Empty:
                 continue
             try:
-                if request is not None and request.text:
+                if not self._stop.is_set() and request is not None and request.text:
                     self._speak_once(request)
             except Exception:
                 continue
@@ -544,9 +554,12 @@ class ChatterboxTTS:
 
     def _speak_once(self, request: _SpeechRequest) -> None:
         text = request.text
-        self._is_speaking.set()
-        self._last_spoken_text = text
-        self._should_interrupt.clear()
+        with self._lifecycle_lock:
+            if self._stop.is_set():
+                return
+            self._is_speaking.set()
+            self._last_spoken_text = text
+            self._should_interrupt.clear()
         interrupted = False
         
         # Signal speaking state to face widget
@@ -572,6 +585,9 @@ class ChatterboxTTS:
                 cfg_weight=self.cfg_weight
             )
 
+            if self._stop.is_set() or self._should_interrupt.is_set():
+                return
+
             # Calculate exact duration from audio samples
             exact_duration = wav.shape[-1] / self._model.sr
             debug_log(f"Chatterbox TTS synthesis complete: {exact_duration:.2f}s", "tts")
@@ -595,7 +611,10 @@ class ChatterboxTTS:
                 # Play audio using pygame (cross-platform)
                 pygame.mixer.init(frequency=self._model.sr, size=-16, channels=1, buffer=1024)
                 pygame.mixer.music.load(tmp_path)
-                pygame.mixer.music.play()
+                with self._lifecycle_lock:
+                    if self._stop.is_set() or self._should_interrupt.is_set():
+                        return
+                    pygame.mixer.music.play()
 
                 # Wait for playback to complete or interruption
                 while pygame.mixer.music.get_busy():
@@ -623,7 +642,7 @@ class ChatterboxTTS:
             
             # Call completion callback if set and not interrupted
             if (request.completion_callback is not None and not interrupted
-                    and not self._should_interrupt.is_set()):
+                    and not self._should_interrupt.is_set() and not self._stop.is_set()):
                 try:
                     request.completion_callback()
                 except Exception:
@@ -691,6 +710,7 @@ class PiperTTS:
         # Threading and queue setup (same pattern as other TTS engines)
         self._q: queue.Queue[Optional[_SpeechRequest]] = queue.Queue()
         self._thread: Optional[threading.Thread] = None
+        self._lifecycle_lock = threading.RLock()
         self._stop = threading.Event()
         self._is_speaking = threading.Event()
         self._last_spoken_text: str = ""
@@ -789,49 +809,58 @@ class PiperTTS:
             return self._voice is not None
 
     def start(self) -> None:
-        if not self.enabled or self._thread is not None:
-            return
-        # Load the local voice before accepting speech work.
-        if not self._ensure_initialized():
-            self.enabled = False
-            message = f"Piper speech output unavailable: {self._init_error}"
-            print(f"  ⚠️ {message}", flush=True)
-            debug_log(message, "tts")
-            return
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
+        with self._lifecycle_lock:
+            if not self.enabled or (self._thread is not None and self._thread.is_alive()):
+                return
+        available = self._ensure_initialized()
+        with self._lifecycle_lock:
+            if not self.enabled or (self._thread is not None and self._thread.is_alive()):
+                return
+            if not available:
+                self.enabled = False
+                message = f"Piper speech output unavailable: {self._init_error}"
+                print(f"  ⚠️ {message}", flush=True)
+                debug_log(message, "tts")
+                return
+            self._discard_pending_speech()
+            self._stop.clear()
+            self._thread = threading.Thread(target=self._run, daemon=True)
+            self._thread.start()
+
+    def _discard_pending_speech(self) -> None:
+        while True:
+            try:
+                self._q.get_nowait()
+            except queue.Empty:
+                return
 
     def stop(self) -> None:
-        if self._thread is None:
-            return
-        try:
+        with self._lifecycle_lock:
+            worker = self._thread
+            if worker is None:
+                return
+            self._stop.set()
             self.interrupt()
-        except Exception:
-            pass
-        self._stop.set()
-        try:
+            self._discard_pending_speech()
             self._q.put_nowait(None)
-        except Exception:
-            pass
-        self._thread.join(timeout=2.0)
-        self._thread = None
-        self._stop.clear()
+        if worker is not threading.current_thread():
+            worker.join(timeout=2.0)
+        with self._lifecycle_lock:
+            if self._thread is worker and not worker.is_alive():
+                self._thread = None
+            elif worker.is_alive():
+                debug_log("Piper speech worker is draining after stop", "tts")
 
     def speak(self, text: str, completion_callback: Optional[Callable[[], None]] = None,
               duration_callback: Optional[Callable[[float], None]] = None) -> None:
         if not self.enabled or not text.strip():
             return
-        # Lazy start the worker thread
-        if self._thread is None:
-            self.start()
-        if not self.enabled:
-            return
-        # Preprocess text for speech
-        processed_text = _preprocess_for_speech(text)
-        try:
+        self.start()
+        with self._lifecycle_lock:
+            if not self.enabled or self._stop.is_set():
+                return
+            processed_text = _preprocess_for_speech(text)
             self._q.put_nowait(_SpeechRequest(processed_text, completion_callback, duration_callback))
-        except Exception:
-            pass
 
     def interrupt(self) -> None:
         """Stop current speech immediately."""
@@ -851,7 +880,7 @@ class PiperTTS:
             except queue.Empty:
                 continue
             try:
-                if request is not None and request.text:
+                if not self._stop.is_set() and request is not None and request.text:
                     self._speak_once(request)
             except Exception as e:
                 debug_log(f"Piper TTS error in _speak_once: {e}", "tts")
@@ -861,9 +890,12 @@ class PiperTTS:
 
     def _speak_once(self, request: _SpeechRequest) -> None:
         text = request.text
-        self._is_speaking.set()
-        self._last_spoken_text = text
-        self._should_interrupt.clear()
+        with self._lifecycle_lock:
+            if self._stop.is_set():
+                return
+            self._is_speaking.set()
+            self._last_spoken_text = text
+            self._should_interrupt.clear()
         interrupted = False
 
         # Signal speaking state to face widget
@@ -952,7 +984,9 @@ class PiperTTS:
 
                 play_position[0] = end
 
-            with self._audio_lock:
+            with self._lifecycle_lock, self._audio_lock:
+                if self._stop.is_set() or self._should_interrupt.is_set():
+                    return
                 with portaudio_lock:
                     self._audio_stream = sd.OutputStream(
                         samplerate=self._sample_rate,
@@ -996,7 +1030,7 @@ class PiperTTS:
 
             # Call completion callback if set and not interrupted
             if (request.completion_callback is not None and not interrupted
-                    and not self._should_interrupt.is_set()):
+                    and not self._should_interrupt.is_set() and not self._stop.is_set()):
                 try:
                     request.completion_callback()
                 except Exception as e:

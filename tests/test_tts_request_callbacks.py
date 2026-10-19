@@ -206,3 +206,259 @@ def test_idle_worker_releases_its_completed_callback(voice, monkeypatch):
     finally:
         voice.stop()
     assert worker is not None and not worker.is_alive()
+
+
+@pytest.mark.parametrize('submit_while_draining', [False, True])
+def test_stopped_synthesis_discards_pending_speech_and_restarts_cleanly(voice, monkeypatch, submit_while_draining):
+    import threading
+
+    entered = threading.Event()
+    release = threading.Event()
+    import gc
+    import weakref
+
+    completed = []
+    durations = []
+    synthesised = []
+    voice._q = queue.Queue()
+    monkeypatch.setattr(voice, 'start', type(voice).start.__get__(voice))
+
+    def wait_for_release(text):
+        synthesised.append(text)
+        if text == 'first':
+            entered.set()
+            assert release.wait(timeout=6)
+
+    if isinstance(voice, speech.PiperTTS):
+        original = voice._voice.synthesize
+        def synthesise(text, cfg):
+            wait_for_release(text)
+            return original(text, cfg)
+        voice._voice.synthesize = synthesise
+    else:
+        original = voice._model.generate
+        def generate(text, **kwargs):
+            wait_for_release(text)
+            return original(text, **kwargs)
+        voice._model.generate = generate
+
+    voice.speak('first', completion_callback=lambda: completed.append('first'),
+                duration_callback=durations.append)
+    worker = voice._thread
+    restarted = threading.Event()
+    try:
+        assert entered.wait(timeout=3)
+        class PendingCallback:
+            def __call__(self):
+                completed.append('stale')
+        callback = PendingCallback()
+        reference = weakref.ref(callback)
+        voice.speak('second', completion_callback=callback)
+        del callback
+        voice.stop()
+        gc.collect()
+        assert reference() is None, 'Stopping retains a pending callback'
+        if submit_while_draining:
+            voice.speak('second', completion_callback=lambda: completed.append('during shutdown'))
+        release.set()
+        worker.join(timeout=3)
+        assert not worker.is_alive()
+        assert synthesised == ['first']
+        assert completed == []
+        assert durations == []
+        voice.speak('second', completion_callback=restarted.set)
+        assert restarted.wait(timeout=3), 'A drained engine cannot restart'
+        assert synthesised == ['first', 'second']
+    finally:
+        release.set()
+        voice.stop()
+        voice._stop.set()
+        voice._q.put_nowait(None)
+        worker.join(timeout=3)
+        assert not worker.is_alive()
+
+
+def test_completion_callback_can_stop_the_engine_without_joining_itself(voice, monkeypatch):
+    import threading
+
+    stopped = threading.Event()
+    restarted = threading.Event()
+    voice._q = queue.Queue()
+    monkeypatch.setattr(voice, 'start', type(voice).start.__get__(voice))
+
+    def complete():
+        voice.stop()
+        stopped.set()
+
+    voice.speak('first', completion_callback=complete)
+    worker = voice._thread
+    try:
+        assert stopped.wait(timeout=3), 'Stopping in a callback raised or deadlocked'
+        worker.join(timeout=3)
+        assert not worker.is_alive()
+        voice.speak('second', completion_callback=restarted.set)
+        assert restarted.wait(timeout=3)
+    finally:
+        voice.stop()
+        voice._stop.set()
+        voice._q.put_nowait(None)
+        worker.join(timeout=3)
+        assert not worker.is_alive()
+
+
+def test_stopping_from_duration_callback_does_not_start_playback(voice, monkeypatch):
+    import threading
+
+    stopped = threading.Event()
+    playback = []
+    completed = []
+    voice._q = queue.Queue()
+    monkeypatch.setattr(voice, 'start', type(voice).start.__get__(voice))
+    monkeypatch.setattr(sys.modules['sounddevice'].OutputStream, 'start',
+                        lambda self: playback.append('piper'))
+    monkeypatch.setattr(sys.modules['pygame'].mixer.music, 'play',
+                        lambda: playback.append('chatterbox'))
+
+    def duration(seconds):
+        voice.stop()
+        stopped.set()
+
+    voice.speak('first', duration_callback=duration, completion_callback=lambda: completed.append('first'))
+    worker = voice._thread
+    try:
+        assert stopped.wait(timeout=3)
+        worker.join(timeout=3)
+        assert not worker.is_alive()
+        assert playback == []
+        assert completed == []
+    finally:
+        voice.stop()
+        voice._stop.set()
+        voice._q.put_nowait(None)
+        worker.join(timeout=3)
+        assert not worker.is_alive()
+
+
+def test_shutdown_cannot_complete_speech_while_discarding_pending_requests(voice, monkeypatch):
+    import threading
+
+    synthesising = threading.Event()
+    release_synthesis = threading.Event()
+    discarding = threading.Event()
+    release_discard = threading.Event()
+    completed = []
+
+    class PausedDiscardQueue(queue.Queue):
+        def get_nowait(self):
+            if voice._stop.is_set():
+                discarding.set()
+                assert release_discard.wait(timeout=5)
+            return super().get_nowait()
+
+    voice._q = PausedDiscardQueue()
+    monkeypatch.setattr(voice, 'start', type(voice).start.__get__(voice))
+    if isinstance(voice, speech.PiperTTS):
+        original = voice._voice.synthesize
+        def synthesise(text, cfg):
+            synthesising.set()
+            assert release_synthesis.wait(timeout=5)
+            return original(text, cfg)
+        voice._voice.synthesize = synthesise
+    else:
+        original = voice._model.generate
+        def generate(text, **kwargs):
+            synthesising.set()
+            assert release_synthesis.wait(timeout=5)
+            return original(text, **kwargs)
+        voice._model.generate = generate
+    voice.speak('first', completion_callback=lambda: completed.append('first'))
+    worker = voice._thread
+    stopper = threading.Thread(target=voice.stop)
+    try:
+        assert synthesising.wait(timeout=3)
+        stopper.start()
+        assert discarding.wait(timeout=3)
+        release_synthesis.set()
+        worker.join(timeout=3)
+        assert not worker.is_alive()
+        assert completed == []
+    finally:
+        release_synthesis.set()
+        release_discard.set()
+        stopper.join(timeout=3)
+        voice.stop()
+        worker.join(timeout=3)
+        assert not stopper.is_alive() and not worker.is_alive()
+
+
+@pytest.mark.parametrize('voice', [speech.ChatterboxTTS], indirect=True)
+def test_slow_audio_preparation_does_not_block_shutdown(voice, monkeypatch):
+    import threading
+
+    preparing = threading.Event()
+    release = threading.Event()
+    stopped = threading.Event()
+    playback = []
+    completed = []
+    voice._q = queue.Queue()
+    monkeypatch.setattr(voice, 'start', type(voice).start.__get__(voice))
+
+    def prepare(**kwargs):
+        preparing.set()
+        assert release.wait(timeout=6)
+
+    monkeypatch.setattr(sys.modules['pygame'].mixer, 'init', prepare)
+    monkeypatch.setattr(sys.modules['pygame'].mixer.music, 'play', lambda: playback.append('started'))
+    voice.speak('first', completion_callback=lambda: completed.append('first'))
+    worker = voice._thread
+    def stop():
+        voice.stop()
+        stopped.set()
+    stopper = threading.Thread(target=stop)
+    try:
+        assert preparing.wait(timeout=3)
+        stopper.start()
+        assert stopped.wait(timeout=3), 'Native audio preparation blocks shutdown'
+        release.set()
+        worker.join(timeout=3)
+        assert not worker.is_alive()
+        assert playback == []
+        assert completed == []
+    finally:
+        release.set()
+        stopper.join(timeout=3)
+        voice.stop()
+        worker.join(timeout=3)
+        assert not stopper.is_alive() and not worker.is_alive()
+
+
+def test_model_preparation_does_not_hold_the_shutdown_lock(voice, monkeypatch):
+    import threading
+
+    loading = threading.Event()
+    release = threading.Event()
+    stopped = threading.Event()
+    monkeypatch.setattr(voice, 'start', type(voice).start.__get__(voice))
+    voice._q = queue.Queue()
+    def load():
+        loading.set()
+        assert release.wait(timeout=6)
+        return True
+    loader = '_ensure_initialized' if isinstance(voice, speech.PiperTTS) else '_ensure_model'
+    monkeypatch.setattr(voice, loader, load)
+    starter = threading.Thread(target=voice.start)
+    def stop():
+        voice.stop()
+        stopped.set()
+    stopper = threading.Thread(target=stop)
+    try:
+        starter.start()
+        assert loading.wait(timeout=3)
+        stopper.start()
+        assert stopped.wait(timeout=3), 'Model preparation holds the shutdown lock'
+    finally:
+        release.set()
+        starter.join(timeout=3)
+        stopper.join(timeout=3)
+        voice.stop()
+        assert not starter.is_alive() and not stopper.is_alive()
