@@ -2,6 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, Tuple, List
 import threading
+import json
 import sys
 
 if sys.version_info < (3, 11):
@@ -244,48 +245,16 @@ def generate_tools_json_schema(allowed_tools: Optional[List[str]] = None, mcp_to
 
 def generate_tools_description(allowed_tools: Optional[List[str]] = None, mcp_tools: Optional[Dict[str, ToolSpec]] = None) -> str:
     """Produce a compact tool help string for the system prompt using OpenAI standard format."""
-    names = list(allowed_tools or list(BUILTIN_TOOLS.keys()))
     lines: List[str] = []
     lines.append("Tool-use protocol: Use the tool_calls field in your response:")
     lines.append('tool_calls: [{"id": "call_<id>", "type": "function", "function": {"name": "<toolName>", "arguments": {"<argument_name>": "<value>"}}}]')
     lines.append("\nAvailable tools and when to use them:")
 
-    # Add built-in tools
-    for tool_name in names:
-        tool = BUILTIN_TOOLS.get(tool_name)
-        if not tool:
-            continue
-        lines.append(f"\n{tool.name}: {tool.description}")
-        if tool.inputSchema:
-            # Extract a simple parameter summary from the JSON schema
-            props = tool.inputSchema.get("properties", {})
-            required = tool.inputSchema.get("required", [])
-            param_descriptions = []
-            for prop_name, prop_def in props.items():
-                prop_type = prop_def.get("type", "any")
-                is_required = prop_name in required
-                req_marker = " (required)" if is_required else ""
-                param_descriptions.append(f"{prop_name}: {prop_type}{req_marker}")
-            if param_descriptions:
-                lines.append(f"Input: {', '.join(param_descriptions)}")
-
-    # Add discovered MCP tools
-    if mcp_tools:
-        for tool_name, spec in mcp_tools.items():
-            if tool_name in names:  # Only include if allowed
-                lines.append(f"\n{spec.name}: {spec.description}")
-                if spec.inputSchema:
-                    # Extract a simple parameter summary from the JSON schema
-                    props = spec.inputSchema.get("properties", {})
-                    required = spec.inputSchema.get("required", [])
-                    param_descriptions = []
-                    for prop_name, prop_def in props.items():
-                        prop_type = prop_def.get("type", "any")
-                        is_required = prop_name in required
-                        req_marker = " (required)" if is_required else ""
-                        param_descriptions.append(f"{prop_name}: {prop_type}{req_marker}")
-                    if param_descriptions:
-                        lines.append(f"Input: {', '.join(param_descriptions)}")
+    for definition in generate_tools_json_schema(allowed_tools, mcp_tools):
+        function = definition['function']
+        lines.append(f"\n{function['name']}: {function['description']}")
+        schema = json.dumps(function['parameters'], ensure_ascii=False, separators=(',', ':'))
+        lines.append(f"Input schema: {schema}")
 
     return "\n".join(lines)
 

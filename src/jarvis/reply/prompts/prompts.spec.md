@@ -125,3 +125,10 @@ unknown live location from unavailable personal memory. Tool-requested context
 resolution can supply a remembered default; replies explicitly qualify its use
 rather than treating it as detected current state. Unresolved personal inputs
 permit clarification after tool/context resolution has failed.
+
+### Text tool input contracts
+
+Text tool help uses the registry's complete canonical JSON input schemas, including
+parameter descriptions, allowed values, nesting and constraints. It shares
+selection and schema construction with native function calling. The presentation
+contract is defined in `../../tools/registry.spec.md`.
