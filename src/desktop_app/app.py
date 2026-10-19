@@ -1814,6 +1814,7 @@ class JarvisSystemTray:
 
         # Create memory viewer window (hidden by default)
         self.memory_viewer = MemoryViewerWindow()
+        self.memory_import_window = None
 
         # Create face window (hidden by default)
         # Note: Creating the face window also initializes the SpeakingState singleton
@@ -1941,6 +1942,10 @@ class JarvisSystemTray:
         self.memory_action = QAction("🧠 Memory Viewer")
         self.memory_action.triggered.connect(self.show_memory_viewer)
         self.menu.addAction(self.memory_action)
+
+        self.memory_import_action = QAction("📥 Import Memories")
+        self.memory_import_action.triggered.connect(self.show_memory_import)
+        self.menu.addAction(self.memory_import_action)
 
         # Dictation history action
         self.dictation_history_action = QAction("🎙️ Dictation History")
@@ -2290,6 +2295,18 @@ class JarvisSystemTray:
     def show_memory_viewer(self) -> None:
         """Open memory in the embedded viewer or system browser."""
         self.memory_viewer.open_viewer()
+
+    def show_memory_import(self) -> None:
+        """Show the local memory review window."""
+        if self.memory_import_window is None:
+            from desktop_app.memory_import_window import MemoryImportWindow
+            from jarvis.config import load_settings
+            self.memory_import_window = MemoryImportWindow(
+                db_path=load_settings().db_path, home=Path.home(),
+            )
+        self.memory_import_window.show()
+        self.memory_import_window.raise_()
+        self.memory_import_window.activateWindow()
 
     def show_dictation_history(self) -> None:
         """Show the dictation history window and bring it to front."""
