@@ -44,6 +44,7 @@ def verify_publication(data):
 
 
 if __name__ == '__main__':
+    sys.stdout.reconfigure(encoding='utf-8')
     with tempfile.TemporaryDirectory(prefix='jarvis-activity-publication-') as owned:
         verify_publication(Path(owned) / 'data')
     print('✅ Activity ownership survives metadata finalised when its writer closes')
