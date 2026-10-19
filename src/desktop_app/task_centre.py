@@ -69,15 +69,17 @@ class TaskCentreWindow(QDialog):
         layout.addWidget(subtitle)
 
         self.task_list = QListWidget()
-        self.task_list.setAlternatingRowColors(True)
         self.task_list.currentItemChanged.connect(self._show_task_details)
         layout.addWidget(self.task_list, 1)
 
-        self.details = QLabel("Select a task to view its result.")
-        self.details.setWordWrap(True)
-        self.details.setTextFormat(Qt.TextFormat.PlainText)
-        self.details.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        layout.addWidget(self.details)
+        self.details = QTextEdit()
+        self.details.setReadOnly(True)
+        self.details.setAcceptRichText(False)
+        self.details.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextSelectableByKeyboard
+        )
+        self.details.setPlainText("Select a task to view its result.")
+        layout.addWidget(self.details, 1)
 
         input_row = QHBoxLayout()
         self.prompt = QTextEdit()
@@ -166,7 +168,7 @@ class TaskCentreWindow(QDialog):
         if accepted:
             self.prompt.clear()
         else:
-            self.details.setText(f"⚠️ {redact(error)}")
+            self.details.setPlainText(f"⚠️ {redact(error)}")
 
     def _submission_timed_out(self) -> None:
         if self._pending_request is not None:
@@ -180,7 +182,7 @@ class TaskCentreWindow(QDialog):
             return
         prompt = self.prompt.toPlainText().strip()
         if not prompt:
-            self.details.setText("⚠️ Enter a task before running it.")
+            self.details.setPlainText("⚠️ Enter a task before running it.")
             return
         identity = uuid.uuid4().hex
         self._pending_request = identity
@@ -205,11 +207,11 @@ class TaskCentreWindow(QDialog):
         try:
             self._cancel_callback(str(task_id))
         except Exception as exc:
-            self.details.setText(f"❌ Could not cancel task: {redact(str(exc))}")
+            self.details.setPlainText(f"❌ Could not cancel task: {redact(str(exc))}")
 
     def _show_task_details(self, current, _previous) -> None:
         if current is None:
-            self.details.setText("Select a task to view its result.")
+            self.details.setPlainText("Select a task to view its result.")
             return
         task = self._tasks.get(str(current.data(Qt.ItemDataRole.UserRole)), {})
         status = _STATUS_LABELS.get(task.get("status"), "❔ Unknown")
@@ -217,4 +219,4 @@ class TaskCentreWindow(QDialog):
         result = task.get("result") or task.get("error")
         if result:
             text += f"\n\n{result}"
-        self.details.setText(text)
+        self.details.setPlainText(text)

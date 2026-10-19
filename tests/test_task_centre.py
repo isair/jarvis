@@ -84,7 +84,7 @@ def test_source_submission_waits_for_correlated_admission(qapp, monkeypatch, cap
             assert view.prompt.toPlainText() == ''
         else:
             assert view.prompt.toPlainText() == draft
-            assert 'not ready' in view.details.text().lower()
+            assert 'not ready' in view.details.toPlainText().lower()
     finally:
         view.close()
         view.deleteLater()
@@ -103,7 +103,7 @@ def test_submission_timeout_retains_the_draft_and_late_ack_cannot_clear_a_retry(
         QTest.qWait(20)
         assert view.prompt.toPlainText() == 'Original draft'
         assert view.submit_button.isEnabled()
-        assert 'No confirmation' in view.details.text()
+        assert 'No confirmation' in view.details.toPlainText()
         view.prompt.setPlainText('Revised draft')
         view._submit()
         late = {'type': 'submission', 'request_id': sent[0],
@@ -161,7 +161,75 @@ def test_bundled_admission_is_immediate_and_errors_preserve_the_draft(qapp):
         view._submit()
         assert view.prompt.toPlainText() == 'Reject this'
         assert view.submit_button.isEnabled()
-        assert 'queue is full' in view.details.text()
+        assert 'queue is full' in view.details.toPlainText()
+    finally:
+        view.close()
+        view.deleteLater()
+        qapp.processEvents()
+
+
+def test_large_results_keep_the_window_and_actions_within_the_screen(qapp):
+    view = TaskCentreWindow(lambda *args, **kwargs: None, lambda task: None)
+    try:
+        view.resize(760, 540)
+        view.show()
+        view.add_or_update_task(dict(task_event(), result='A long result with useful detail.\n' * 300))
+        qapp.processEvents()
+        assert view.height() <= view.screen().availableGeometry().height()
+        assert view.submit_button.mapTo(view, view.submit_button.rect().bottomRight()).y() < view.height()
+        assert view.cancel_button.mapTo(view, view.cancel_button.rect().bottomRight()).y() < view.height()
+    finally:
+        view.close()
+        view.deleteLater()
+        qapp.processEvents()
+
+
+def test_a_user_can_scroll_to_the_end_of_a_long_result(qapp):
+    from PyQt6.QtGui import QKeySequence
+    from PyQt6.QtTest import QTest
+    from jarvis.utils.redact import redact
+    result = 'Useful detail for a task result. ' * 250
+    view = TaskCentreWindow(lambda *args, **kwargs: None, lambda task: None)
+    try:
+        view.resize(760, 540)
+        view.show()
+        view.add_or_update_task(dict(task_event(), result=result))
+        qapp.processEvents()
+        assert redact(result) in view.details.toPlainText()
+        view.details.setFocus()
+        QTest.keySequence(view.details, QKeySequence.StandardKey.MoveToEndOfDocument)
+        qapp.processEvents()
+        scroll = view.details.verticalScrollBar()
+        assert scroll.maximum() > 0
+        assert scroll.value() > 0
+        assert view.details.textCursor().atEnd()
+        assert view.details.cursorRect().bottom() <= view.details.viewport().height()
+    finally:
+        view.close()
+        view.deleteLater()
+        qapp.processEvents()
+
+
+def test_unselected_task_rows_keep_readable_text_contrast(qapp):
+    from PyQt6.QtGui import QPalette
+    view = TaskCentreWindow(lambda *args, **kwargs: None, lambda task: None)
+    try:
+        view.add_or_update_task(task_event('first'))
+        view.add_or_update_task(task_event('second', 'running'))
+        view.show()
+        qapp.processEvents()
+        area = view.task_list.visualItemRect(view.task_list.item(1))
+        image = view.task_list.viewport().grab().toImage()
+        background = image.pixelColor(image.width() - 12, area.center().y())
+        foreground = view.task_list.palette().color(QPalette.ColorRole.Text)
+
+        def luminance(colour):
+            channels = [colour.redF(), colour.greenF(), colour.blueF()]
+            linear = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in channels]
+            return sum(channel * weight for channel, weight in zip(linear, [0.2126, 0.7152, 0.0722]))
+
+        light, dark = sorted([luminance(background), luminance(foreground)], reverse=True)
+        assert (light + 0.05) / (dark + 0.05) >= 4.5
     finally:
         view.close()
         view.deleteLater()
