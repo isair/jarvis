@@ -6,6 +6,8 @@ Tests model size detection and prompt component selection.
 
 import pytest
 
+pytestmark = pytest.mark.unit
+
 
 class TestModelSizeDetection:
     """Tests for detect_model_size function."""

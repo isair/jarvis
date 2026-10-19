@@ -1,0 +1,58 @@
+name: public-site
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'website/**'
+      - 'docs/img/face.png'
+      - 'docs/img/chat-window.png'
+      - 'docs/img/setup-provider.png'
+      - '.github/workflows/public-site.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jarvis-public-site
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: 🌐 Read the configured public URL
+        id: pages
+        uses: actions/configure-pages@v5
+      - name: 🏗️ Build the reviewed public pages
+        env:
+          JARVIS_SITE_BASE_URL: ${{ steps.pages.outputs.base_url }}
+        run: python website/build.py --base-url "$JARVIS_SITE_BASE_URL" --output _site
+      - name: 📦 Package the static site
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: 🚀 Publish the reviewed artifact
+        id: deployment
+        uses: actions/deploy-pages@v4

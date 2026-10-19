@@ -5,12 +5,15 @@ from typing import Sequence, Optional
 from pathlib import Path
 import threading
 from datetime import datetime, timezone
-
 from ..debug import debug_log
 
 _SCHEMA_SQL = """
 PRAGMA journal_mode=WAL;
 PRAGMA synchronous=NORMAL;
+
+CREATE TABLE IF NOT EXISTS diary_index_migrations (
+  name TEXT PRIMARY KEY
+);
 
 -- Structured meals log (optional feature)
 CREATE TABLE IF NOT EXISTS meals (
@@ -29,6 +32,7 @@ CREATE TABLE IF NOT EXISTS meals (
   micros_json   TEXT,
   confidence    REAL
 );
+CREATE INDEX IF NOT EXISTS idx_meals_ts_utc ON meals(ts_utc);
 
 -- Conversation summaries for diary/memory system
 CREATE TABLE IF NOT EXISTS conversation_summaries (
@@ -76,13 +80,12 @@ END;
 
 _VSS_SCHEMA_SQL = """
 CREATE VIRTUAL TABLE IF NOT EXISTS embeddings USING vss0(
-  id INTEGER PRIMARY KEY,
-  vec FLOAT[768]
+  vec(768) factory="Flat,IDMap2"
 );
 
 CREATE TABLE IF NOT EXISTS summary_vec (
   summary_id INTEGER PRIMARY KEY REFERENCES conversation_summaries(id) ON DELETE CASCADE,
-  emb_id     INTEGER NOT NULL REFERENCES embeddings(id)
+  emb_id     INTEGER NOT NULL
 );
 """
 
@@ -97,9 +100,23 @@ def _normalize_fts_query(raw: str) -> str:
     except ImportError:
         pass
     
-    # Fallback: Extract alphanumeric tokens and join them with spaces (logical AND)
-    tokens = re.findall(r"[A-Za-z0-9_]+", raw)
+    # Fallback: Retain Unicode word characters and the generated FTS operators.
+    tokens = re.findall(r"\w+", raw, flags=re.UNICODE)
     return " ".join(tokens)
+
+
+def _reciprocal_rank_fusion(vector_rows, fts_rows):
+    """Weighted RRF, with equal scores sharing a rank and absent hits scoring zero."""
+    scores = {}
+    for rows, weight in ((vector_rows, 0.6), (fts_rows, 0.4)):
+        previous = None
+        rank = 0
+        for position, (summary_id, value) in enumerate(sorted(rows, key=lambda row: (row[1], row[0])), 1):
+            if previous is None or value != previous:
+                rank = position
+            previous = value
+            scores[summary_id] = scores.get(summary_id, 0.0) + weight / (60 + rank)
+    return scores
 
 
 class Database:
@@ -107,33 +124,42 @@ class Database:
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self.db_path = db_path
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
-        self.conn.row_factory = sqlite3.Row
-        self._lock = threading.RLock()
-        self.is_vss_enabled = False
-        self._python_vector_store = None
+        try:
+            self.conn.row_factory = sqlite3.Row
+            self._lock = threading.RLock()
+            self.is_vss_enabled = False
+            self._python_vector_store = None
         
-        if sqlite_vss_path:
-            try:
-                self.conn.enable_load_extension(True)
-                self.conn.load_extension(sqlite_vss_path)
-                self.is_vss_enabled = True
-            except Exception:
-                self.is_vss_enabled = False
+            if sqlite_vss_path:
+                try:
+                    self.conn.enable_load_extension(True)
+                    self.conn.load_extension(sqlite_vss_path)
+                    self.is_vss_enabled = True
+                except Exception:
+                    self.is_vss_enabled = False
         
-        # If sqlite-vss is not available, use best available vector store (FAISS or Python fallback)
-        if not self.is_vss_enabled:
-            from ..utils.vector_store import get_best_vector_store
-            self._python_vector_store = get_best_vector_store(db_path, dimension=768)
+            # If sqlite-vss is not available, use best available vector store (FAISS or Python fallback)
+            if not self.is_vss_enabled:
+                from ..utils.vector_store import get_best_vector_store
+                self._python_vector_store = get_best_vector_store(db_path, dimension=768)
             
-            # Log which vector store implementation is being used
-            import sys
-            store_type = type(self._python_vector_store).__name__
-            if store_type == "FAISSVectorStore":
-                debug_log("Using FAISS vector store for fast search", "jarvis")
-            else:
-                debug_log("Using Python fallback vector store", "jarvis")
+                # Log which vector store implementation is being used
+                store_type = type(self._python_vector_store).__name__
+                if store_type == "FAISSVectorStore":
+                    debug_log("Using FAISS vector store for fast search", "jarvis")
+                else:
+                    debug_log("Using Python fallback vector store", "jarvis")
         
-        self._init_schema()
+            self._init_schema()
+        except BaseException:
+            self.conn.close()
+            debug_log('Diary initialisation failed: connection released', 'memory')
+            raise
+
+    @property
+    def has_vector_store(self) -> bool:
+        """Whether sqlite-vss or a local fallback index is available."""
+        return bool(self.is_vss_enabled or self._python_vector_store)
 
     def _init_schema(self) -> None:
         with self._lock:
@@ -141,7 +167,20 @@ class Database:
             cur.executescript(_SCHEMA_SQL)
             if self.is_vss_enabled:
                 cur.executescript(_VSS_SCHEMA_SQL)
-            self.conn.commit()
+            migration = 'summary_fts_content_consistency'
+            if cur.execute('SELECT 1 FROM diary_index_migrations WHERE name=?', (migration,)).fetchone():
+                return
+            try:
+                # Recheck under the writer lock when a rebuild is required.
+                cur.execute('BEGIN IMMEDIATE')
+                if not cur.execute('SELECT 1 FROM diary_index_migrations WHERE name=?', (migration,)).fetchone():
+                    cur.execute("INSERT INTO summaries_fts(summaries_fts) VALUES('rebuild')")
+                    cur.execute('INSERT INTO diary_index_migrations(name) VALUES (?)', (migration,))
+                    debug_log('Diary full-text index rebuilt from live summaries', 'memory')
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()
+                raise
 
     def upsert_task_record(self, task: dict) -> None:
         with self._lock:
@@ -179,106 +218,48 @@ class Database:
             cur = self.conn.cursor()
             safe_q = _normalize_fts_query(fts_query)
 
-            # Use Python vector store if sqlite-vss is not available
-            if not self.is_vss_enabled and self._python_vector_store and query_vec_json is not None and safe_q:
-                # Parse query vector
+            # Fuse ranked candidates rather than mixing BM25 and distance scales.
+            if query_vec_json is not None and safe_q and self.has_vector_store:
                 import json as _json
-                query_vec = _json.loads(query_vec_json)
-                
-                # Get vector search results (use max of top_k*3 and 50 for good hybrid scoring)
-                vector_search_limit = max(top_k * 3, 50)
-                vector_results = self._python_vector_store.search(query_vec, top_k=vector_search_limit)
-                
-                # Get FTS results (use max of top_k*3 and 50 for good hybrid scoring)
-                fts_search_limit = max(top_k * 3, 50)
-                fts_sql = f"""
-                SELECT s.id, bm25(summaries_fts) AS bm
-                FROM summaries_fts
-                JOIN conversation_summaries s ON s.id = summaries_fts.rowid
-                WHERE summaries_fts MATCH ?
-                ORDER BY bm
-                LIMIT {fts_search_limit}
-                """
-                fts_rows = cur.execute(fts_sql, (safe_q,)).fetchall()
-                fts_scores = {row['id']: row['bm'] for row in fts_rows}
-                
-                # Combine scores
-                combined_scores = {}
-                
-                # Add vector scores (60% weight)
-                for summary_id, distance in vector_results:
-                    combined_scores[summary_id] = (1.0 / (1.0 + distance)) * 0.6
-                
-                # Add FTS scores (40% weight)
-                for summary_id, bm_score in fts_scores.items():
-                    if summary_id in combined_scores:
-                        combined_scores[summary_id] += (1.0 / (1.0 + bm_score)) * 0.4
-                    else:
-                        combined_scores[summary_id] = (1.0 / (1.0 + bm_score)) * 0.4
-                
-                # Sort by combined score and fetch summaries
-                sorted_ids = sorted(combined_scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
-                
-                if sorted_ids:
-                    # Fetch summaries for top results
-                    placeholders = ','.join('?' * len(sorted_ids))
-                    summary_sql = f"""
-                    SELECT s.id, 
+
+                search_limit = max(top_k * 3, 50)
+                fts_rows = cur.execute("""
+                    SELECT s.id, bm25(summaries_fts) AS bm
+                    FROM summaries_fts
+                    JOIN conversation_summaries s ON s.id = summaries_fts.rowid
+                    WHERE summaries_fts MATCH ?
+                    ORDER BY bm, s.id LIMIT ?
+                """, (safe_q, search_limit)).fetchall()
+                if self.is_vss_enabled:
+                    vector_rows = cur.execute("""
+                        SELECT sv.summary_id, candidates.distance
+                        FROM (
+                            SELECT rowid, distance FROM embeddings
+                            WHERE vss_search(vec, vss_search_params(?, ?))
+                        ) AS candidates
+                        JOIN summary_vec sv ON sv.emb_id = candidates.rowid
+                        ORDER BY candidates.distance, sv.summary_id
+                    """, (query_vec_json, search_limit)).fetchall()
+                else:
+                    vector_rows = self._python_vector_store.search(
+                        _json.loads(query_vec_json), top_k=search_limit,
+                    )
+
+                scores = _reciprocal_rank_fusion(vector_rows, [(r['id'], r['bm']) for r in fts_rows])
+                # Fetch before limiting so stale embedding IDs cannot crowd out live memories.
+                if not scores:
+                    return []
+                placeholders = ','.join('?' for _ in scores)
+                rows = cur.execute(f"""
+                    SELECT s.id,
                            '[' || s.date_utc || '] ' || s.summary || ' (Topics: ' || COALESCE(s.topics, '') || ')' AS text,
                            'summary' AS result_type
-                    FROM conversation_summaries s
-                    WHERE s.id IN ({placeholders})
-                    """
-                    rows = cur.execute(summary_sql, [sid for sid, _ in sorted_ids]).fetchall()
-                    
-                    # Create result rows with scores
-                    results = []
-                    id_to_score = {sid: score for sid, score in sorted_ids}
-                    for row in rows:
-                        # Create a new row dict with score
-                        result = dict(row)
-                        result['score'] = id_to_score.get(row['id'], 0.0)
-                        results.append(result)
-                    
-                    # Sort by score again (in case DB returned in different order)
-                    results.sort(key=lambda x: x['score'], reverse=True)
-                    return results
-                else:
-                    return []
-                    
-            elif self.is_vss_enabled and query_vec_json is not None and safe_q:
-                # Hybrid search: 60% vector similarity (semantic) + 40% FTS (exact terms)
-                # This balances finding semantically related content with keyword matches
-                # Use dynamic limits for efficiency on large datasets
-                search_limit = max(top_k * 3, 50)
-                summary_sql = f"""
-                WITH fts_sum AS (
-                  SELECT s.id, bm25(summaries_fts) AS bm
-                  FROM summaries_fts
-                  JOIN conversation_summaries s ON s.id = summaries_fts.rowid
-                  WHERE summaries_fts MATCH ?
-                  ORDER BY bm LIMIT {search_limit}
-                ),
-                v_sum AS (
-                  SELECT sv.summary_id AS id, distance
-                  FROM vss_search(embeddings, 'vec', ?)
-                  JOIN summary_vec sv ON sv.emb_id = rowid
-                  LIMIT {search_limit}
-                )
-                SELECT s.id, (
-                    (1.0/(1.0+COALESCE(v_sum.distance, 1))) * 0.6 +
-                    (1.0/(1.0+COALESCE(fts_sum.bm, 10))) * 0.4
-                  ) AS score,
-                  '[' || s.date_utc || '] ' || s.summary || ' (Topics: ' || COALESCE(s.topics, '') || ')' AS text,
-                  'summary' AS result_type
-                FROM conversation_summaries s
-                LEFT JOIN v_sum     ON v_sum.id = s.id
-                LEFT JOIN fts_sum   ON fts_sum.id = s.id
-                WHERE v_sum.id IS NOT NULL OR fts_sum.id IS NOT NULL
-                ORDER BY score DESC
-                LIMIT {int(top_k)};
-                """
-                rows = cur.execute(summary_sql, (safe_q, query_vec_json)).fetchall()
+                    FROM conversation_summaries s WHERE s.id IN ({placeholders})
+                """, list(scores)).fetchall()
+                results = [dict(row, score=scores[row['id']]) for row in rows]
+                results.sort(key=lambda row: (-row['score'], row['id']))
+                debug_log(f"Hybrid memory search: {len(vector_rows)} vector, {len(fts_rows)} keyword candidates", "jarvis")
+                return results[:top_k]
 
             elif safe_q:
                 # FTS-only search over conversation summaries
@@ -307,13 +288,6 @@ class Database:
                 rows = cur.execute(summary_sql).fetchall()
 
             return rows
-
-    @staticmethod
-    def _pack_vector(vec: Sequence[float]) -> bytes:
-        # SQLite-vss expects a float array; packing via array('f') ensures binary blob layout.
-        import array
-        arr = array.array('f', [float(x) for x in vec])
-        return arr.tobytes()
 
     # --- Meals API ---
     def insert_meal(
@@ -378,6 +352,22 @@ class Database:
             self.conn.commit()
             return cur.rowcount > 0
 
+    def delete_meal_by_description(self, description: str) -> bool:
+        """Delete only a single exact description match, atomically."""
+        with self._lock:
+            cur = self.conn.cursor()
+            try:
+                cur.execute(
+                    """DELETE FROM meals WHERE description = ?
+                    AND (SELECT COUNT(*) FROM meals WHERE description = ?) = 1""",
+                    (description, description),
+                )
+                self.conn.commit()
+                return cur.rowcount == 1
+            except Exception:
+                self.conn.rollback()
+                raise
+
     # --- Conversation Summaries API ---
     def upsert_conversation_summary(
         self,
@@ -398,15 +388,25 @@ class Database:
             ts_utc = datetime.now(timezone.utc).isoformat()
         with self._lock:
             cur = self.conn.cursor()
-            cur.execute(
-                """
-                INSERT OR REPLACE INTO conversation_summaries(date_utc, ts_utc, summary, topics, source_app)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (date_utc, ts_utc, summary, topics, source_app),
-            )
-            self.conn.commit()
-            return int(cur.lastrowid)
+            try:
+                cur.execute(
+                    """
+                    INSERT INTO conversation_summaries(date_utc, ts_utc, summary, topics, source_app)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(date_utc, source_app) DO UPDATE SET
+                        ts_utc=excluded.ts_utc, summary=excluded.summary, topics=excluded.topics
+                    """,
+                    (date_utc, ts_utc, summary, topics, source_app),
+                )
+                summary_id = cur.execute(
+                    'SELECT id FROM conversation_summaries WHERE date_utc=? AND source_app=?',
+                    (date_utc, source_app),
+                ).fetchone()[0]
+                self.conn.commit()
+                return int(summary_id)
+            except Exception:
+                self.conn.rollback()
+                raise
 
     def get_conversation_summary(self, date_utc: str, source_app: str = "jarvis") -> Optional[sqlite3.Row]:
         """Get conversation summary for a specific date."""
@@ -420,6 +420,13 @@ class Database:
                 (date_utc, source_app),
             ).fetchone()
             return row
+
+    def get_conversation_summary_by_id(self, summary_id: int) -> Optional[sqlite3.Row]:
+        """Read a saved diary entry and its date by persistent row identity."""
+        with self._lock:
+            return self.conn.execute(
+                "SELECT * FROM conversation_summaries WHERE id = ?", (summary_id,),
+            ).fetchone()
 
     def get_recent_conversation_summaries(self, days: int = 7) -> list[sqlite3.Row]:
         """Get conversation summaries from the last N days."""
@@ -454,24 +461,48 @@ class Database:
             ).fetchall()
             return rows
 
-    def upsert_summary_embedding(self, summary_id: int, vec: Sequence[float]) -> Optional[int]:
-        """Store or update embedding for a conversation summary."""
+    def get_summary_embedding_text(self, summary_id: int) -> Optional[str]:
+        """Read the current diary text used to generate an embedding."""
+        with self._lock:
+            row = self.conn.execute('SELECT summary, topics FROM conversation_summaries WHERE id=?',
+                                    (summary_id,)).fetchone()
+            return f"{row['summary'] or ''} {row['topics'] or ''}" if row is not None else None
+
+    def upsert_summary_embedding(self, summary_id: int, vec: Sequence[float], source_text: str) -> Optional[int]:
+        """Refresh an embedding only while its captured diary text is current."""
+        if not isinstance(source_text, str):
+            raise ValueError('Embedding source must be a string')
         if self.is_vss_enabled:
             # Use sqlite-vss
+            import json
             with self._lock:
-                cur = self.conn.cursor()
-                cur.execute("INSERT INTO embeddings(vec) VALUES (?)", (sqlite3.Binary(self._pack_vector(vec)),))
-                emb_id = cur.lastrowid
-                cur.execute(
-                    "INSERT OR REPLACE INTO summary_vec(summary_id, emb_id) VALUES (?, ?)",
-                    (summary_id, emb_id),
-                )
-                self.conn.commit()
-                return int(emb_id)
+                try:
+                    cur = self.conn.cursor()
+                    cur.execute('BEGIN IMMEDIATE')
+                    if self.get_summary_embedding_text(summary_id) != source_text:
+                        self.conn.rollback()
+                        debug_log('Skipping a superseded sqlite-vss diary embedding', 'memory')
+                        return None
+                    emb_id = cur.execute("SELECT COALESCE(MAX(rowid), 0) + 1 FROM embeddings").fetchone()[0]
+                    cur.execute("INSERT INTO embeddings(rowid, vec) VALUES (?, ?)", (emb_id, json.dumps([float(x) for x in vec])))
+                    cur.execute(
+                        "INSERT OR REPLACE INTO summary_vec(summary_id, emb_id) VALUES (?, ?)",
+                        (summary_id, emb_id),
+                    )
+                    self.conn.commit()
+                    return int(emb_id)
+                except Exception:
+                    self.conn.rollback()
+                    raise
         elif self._python_vector_store:
-            # Use Python vector store
-            self._python_vector_store.add_vector(summary_id, list(vec))
-            return summary_id  # Return summary_id as a placeholder for emb_id
+            with self._lock:
+                if self.db_path == ':memory:':
+                    if self.get_summary_embedding_text(summary_id) != source_text:
+                        return None
+                    self._python_vector_store.add_vector(summary_id, list(vec))
+                    return summary_id
+                accepted = self._python_vector_store.add_summary_vector(summary_id, list(vec), source_text)
+                return summary_id if accepted else None
         else:
             return None
 

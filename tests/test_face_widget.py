@@ -247,7 +247,7 @@ class TestJarvisStateManager:
     """Tests for JarvisStateManager cross-process state sharing."""
 
     @pytest.fixture(autouse=True)
-    def cleanup_state_file(self):
+    def cleanup_state_file(self, tmp_path, monkeypatch):
         """Clean up state file and singleton before/after each test.
 
         Replaces get_jarvis_state with a headless factory so tests work
@@ -256,8 +256,9 @@ class TestJarvisStateManager:
         import tempfile
         import os
         from desktop_app import face_widget
+        monkeypatch.setattr(face_widget, '_get_jarvis_state_file', lambda: str(tmp_path / 'jarvis_state'))
 
-        state_file = os.path.join(tempfile.gettempdir(), "jarvis_state")
+        state_file = face_widget._get_jarvis_state_file()
 
         # Reset singleton before test
         face_widget._jarvis_state_instance = None
@@ -294,7 +295,7 @@ class TestJarvisStateManager:
         from desktop_app import face_widget
         from desktop_app.face_widget import JarvisState
 
-        state_file = os.path.join(tempfile.gettempdir(), "jarvis_state")
+        state_file = face_widget._get_jarvis_state_file()
 
         # File shouldn't exist before getting state manager
         assert not os.path.exists(state_file)
@@ -322,7 +323,7 @@ class TestJarvisStateManager:
         from desktop_app import face_widget
         from desktop_app.face_widget import JarvisState
 
-        state_file = os.path.join(tempfile.gettempdir(), "jarvis_state")
+        state_file = face_widget._get_jarvis_state_file()
 
         # Create file with SPEAKING state (leftover from previous session)
         with open(state_file, 'w') as f:
@@ -350,7 +351,7 @@ class TestJarvisStateManager:
         from desktop_app import face_widget
         from desktop_app.face_widget import JarvisState
 
-        state_file = os.path.join(tempfile.gettempdir(), "jarvis_state")
+        state_file = face_widget._get_jarvis_state_file()
 
         # Get state manager and set state
         sm = face_widget.get_jarvis_state()
@@ -379,7 +380,7 @@ class TestJarvisStateManager:
         from desktop_app import face_widget
         from desktop_app.face_widget import JarvisState
 
-        state_file = os.path.join(tempfile.gettempdir(), "jarvis_state")
+        state_file = face_widget._get_jarvis_state_file()
 
         # Create file with invalid content
         with open(state_file, 'w') as f:

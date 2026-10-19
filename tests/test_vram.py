@@ -11,97 +11,70 @@ import sys
 
 import pytest
 
-from jarvis.utils.vram import (
-    detect_total_vram_mb,
-    get_recommended_model_id,
-    format_vram_warning,
-    required_vram_mb,
-    _MODEL_VRAM_TABLE,
-    _LOW_VRAM_OPTION,
-)
+from jarvis import config
+from jarvis.utils import vram
+from jarvis.utils.vram import detect_total_vram_mb, _detect_via_nvidia_smi
+
+pytestmark = [pytest.mark.unit, pytest.mark.usefixtures('no_network')]
 
 
-class TestRecommendation:
-    """Model recommendation based on VRAM."""
-
-    def test_recommends_low_vram_below_8gb(self):
-        """6 GB VRAM should recommend the low-VRAM option (qwen3.5:0.8b)."""
-        rec = get_recommended_model_id(6000)
-        assert rec == _LOW_VRAM_OPTION[0]
-
-    def test_recommends_low_vram_at_4gb(self):
-        """Exactly 4 GB VRAM should still recommend the low-VRAM option."""
-        rec = get_recommended_model_id(4096)
-        assert rec == _LOW_VRAM_OPTION[0]
-
-    def test_recommends_default_at_8gb(self):
-        """8 GB VRAM should recommend gemma4:e2b (the default)."""
-        rec = get_recommended_model_id(8192)
-        assert rec == "gemma4:e2b"
-
-    def test_recommends_default_above_8gb(self):
-        """16 GB VRAM should recommend gemma4:e2b."""
-        rec = get_recommended_model_id(16000)
-        assert rec == "gemma4:e2b"
-
-    def test_recommends_default_when_unknown(self):
-        """Unknown VRAM (None) should recommend the default safely."""
-        rec = get_recommended_model_id(None)
-        assert rec == "gemma4:e2b"
+@pytest.fixture
+def catalogue(monkeypatch):
+    """A small catalogue exercises tier boundaries independently of model releases."""
+    monkeypatch.setattr(config, 'DEFAULT_CHAT_MODEL', 'balanced')
+    monkeypatch.setattr(config, 'DEFAULT_FAST_MODEL', 'balanced')
+    monkeypatch.setattr(config, 'SUPPORTED_CHAT_MODELS', {
+        'large': {'name': 'Large model', 'vram': '16GB+'},
+        'compact': {'name': 'Compact model', 'vram': '2GB+'},
+        'balanced': {'name': 'Balanced model', 'vram': '8GB+'},
+    })
+    table = vram._build_vram_table()
+    monkeypatch.setattr(vram, '_MODEL_VRAM_TABLE', table)
+    monkeypatch.setattr(vram, '_LOW_VRAM_OPTION', table[0])
+    return table
 
 
-class TestFormatWarning:
-    """Warning string generation."""
-
-    def test_no_warning_when_vram_unknown(self):
-        """Unknown VRAM should return None (no warning)."""
-        warn = format_vram_warning(None, "gemma4:e2b")
-        assert warn is None
-
-    def test_no_warning_when_vram_sufficient(self):
-        """Sufficient VRAM (16 GB) should return None."""
-        warn = format_vram_warning(16000, "gemma4:e2b")
-        assert warn is None
-
-    def test_warning_when_vram_insufficient(self):
-        """6 GB VRAM with gemma4:e2b (needs 8 GB) should return a warning string."""
-        warn = format_vram_warning(6000, "gemma4:e2b")
-        assert warn is not None
-        assert "6000 MB" in warn
-        assert "gemma4:e2b" in warn
-        assert _LOW_VRAM_OPTION[0] in warn
-
-    def test_no_warning_for_low_vram_model_on_low_gpu(self):
-        """6 GB VRAM with qwen3.5:0.8b (needs 2 GB) should NOT warn."""
-        warn = format_vram_warning(4096, _LOW_VRAM_OPTION[0])
-        assert warn is None
-
-    def test_warning_for_unknown_model_returns_none(self):
-        """An unknown model ID should return None (can't judge)."""
-        warn = format_vram_warning(4000, "nonexistent:model")
-        assert warn is None
-
-    def test_warning_mentions_alternative(self):
-        """The warning string should mention the low-VRAM alternative by name."""
-        warn = format_vram_warning(6000, "gemma4:e2b")
-        assert warn is not None
-        assert _LOW_VRAM_OPTION[1] in warn  # Low-VRAM display name
+def test_catalogue_derives_sorted_requirements_and_low_memory_flags(catalogue):
+    assert catalogue == [
+        ('compact', 'Compact model', 2 * 1024, True),
+        ('balanced', 'Balanced model', 8 * 1024, False),
+        ('large', 'Large model', 16 * 1024, False),
+    ]
 
 
-class TestRequiredVRAM:
-    """VRAM requirement lookup."""
+@pytest.mark.parametrize('budget, expected', [
+    (None, 'balanced'), (0, 'compact'), (2047, 'compact'),
+    (2048, 'compact'), (4096, 'compact'), (8191, 'compact'),
+    (8192, 'balanced'), (16000, 'balanced'), (16383, 'balanced'),
+    (16384, 'large'), (32768, 'large'),
+])
+def test_recommendation_selects_the_largest_fitting_tier(catalogue, budget, expected):
+    assert vram.get_recommended_model_id(budget) == expected
 
-    def test_required_vram_for_known_model(self):
-        """gemma4:e2b should require 8192 MB."""
-        assert required_vram_mb("gemma4:e2b") == 8192
 
-    def test_required_vram_for_low_vram_model(self):
-        """qwen3.5:0.8b should require 2048 MB."""
-        assert required_vram_mb(_LOW_VRAM_OPTION[0]) == 2048
+@pytest.mark.parametrize('budget, model', [
+    (None, 'balanced'), (8 * 1024, 'balanced'), (16 * 1024, 'balanced'),
+    (4 * 1024, 'compact'), (4 * 1024, 'unknown'),
+])
+def test_unknown_or_sufficient_memory_has_no_warning(catalogue, budget, model):
+    assert vram.format_vram_warning(budget, model) is None
 
-    def test_required_vram_for_unknown_model(self):
-        """Unknown model should return None."""
-        assert required_vram_mb("nonexistent:99b") is None
+
+def test_insufficient_memory_warning_describes_requirements_and_alternative(catalogue):
+    budget = 8 * 1024 - 1
+    warning = vram.format_vram_warning(budget, 'balanced')
+    assert warning is not None
+    for detail in (f'{budget} MB', 'balanced', '8192 MB',
+                   'compact', 'Compact model', '2048 MB'):
+        assert detail in warning
+
+
+@pytest.mark.parametrize('model, expected', [
+    ('compact', 2 * 1024), ('balanced', 8 * 1024),
+    ('large', 16 * 1024), ('unknown', None),
+])
+def test_requirement_lookup_uses_the_catalogue(catalogue, model, expected):
+    assert vram.required_vram_mb(model) == expected
 
 
 class TestDetectionMocked:
@@ -160,7 +133,7 @@ class TestNvidiaSmiDetection:
         mock_result.stdout = "12288\n"
         mock_run.return_value = mock_result
 
-        result = _detect_via_nvidia_smi_impl()
+        result = _detect_via_nvidia_smi()
         assert result == 12288
 
     @patch("jarvis.utils.vram.subprocess.run")
@@ -171,7 +144,7 @@ class TestNvidiaSmiDetection:
         mock_result.stdout = "8192\n16384\n"
         mock_run.return_value = mock_result
 
-        result = _detect_via_nvidia_smi_impl()
+        result = _detect_via_nvidia_smi()
         assert result == 8192
 
     @patch("jarvis.utils.vram.subprocess.run")
@@ -181,7 +154,7 @@ class TestNvidiaSmiDetection:
         mock_result.returncode = 1
         mock_run.return_value = mock_result
 
-        result = _detect_via_nvidia_smi_impl()
+        result = _detect_via_nvidia_smi()
         assert result is None
 
     @patch("jarvis.utils.vram.subprocess.run")
@@ -190,7 +163,7 @@ class TestNvidiaSmiDetection:
         from subprocess import TimeoutExpired
         mock_run.side_effect = TimeoutExpired("nvidia-smi", 10)
 
-        result = _detect_via_nvidia_smi_impl()
+        result = _detect_via_nvidia_smi()
         assert result is None
 
     @patch("jarvis.utils.vram.subprocess.run")
@@ -198,11 +171,5 @@ class TestNvidiaSmiDetection:
         """FileNotFoundError should return None."""
         mock_run.side_effect = FileNotFoundError()
 
-        result = _detect_via_nvidia_smi_impl()
+        result = _detect_via_nvidia_smi()
         assert result is None
-
-
-def _detect_via_nvidia_smi_impl():
-    """Inline copy of _detect_via_nvidia_smi for test isolation."""
-    from jarvis.utils.vram import _detect_via_nvidia_smi
-    return _detect_via_nvidia_smi()

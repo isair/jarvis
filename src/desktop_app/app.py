@@ -15,6 +15,9 @@ import time
 os.environ.setdefault('OPENBLAS_NUM_THREADS', '1')
 os.environ.setdefault('MKL_NUM_THREADS', '1')
 os.environ.setdefault('OMP_NUM_THREADS', '1')
+# Hugging Face uses this non-terminal mode to emit actual byte progress.
+# Set it before importing tqdm, including in the inherited daemon environment.
+os.environ.setdefault('TQDM_POSITION', '-1')
 
 # Suppress pkg_resources deprecation warning from webrtcvad
 import warnings
@@ -38,8 +41,8 @@ from typing import Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from desktop_app.cuda_recovery import CudaRecoveryAction
-from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QMainWindow, QTextEdit, QVBoxLayout, QHBoxLayout, QWidget, QLabel, QDialog, QPushButton
-from PyQt6.QtGui import QIcon, QAction, QFont, QTextCursor
+from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QMainWindow, QTextEdit, QVBoxLayout, QHBoxLayout, QWidget, QLabel, QDialog, QPushButton, QProgressBar, QScrollArea, QFrame
+from PyQt6.QtGui import QIcon, QAction, QFont, QTextCursor, QTextCharFormat, QColor
 from PyQt6.QtCore import QTimer, Qt, pyqtSignal, QObject, QThread, QUrl
 from desktop_app.qt_worker import KeepAliveWorker
 
@@ -61,9 +64,11 @@ except ImportError:
     QWebEngineView = None
 
 from jarvis.debug import debug_log
-from jarvis.config import default_config_path, _default_db_path, SUPPORTED_CHAT_MODELS, get_supported_model_ids
+from jarvis.llm.model_names import missing_ollama_models
+from jarvis.config import get_config_path, _default_db_path, get_model_recommendations, Settings
 from desktop_app.diary_dialog import DiaryUpdateDialog
-from desktop_app.themes import JARVIS_THEME_STYLESHEET
+from desktop_app.themes import JARVIS_THEME_STYLESHEET, COLORS, apply_theme
+from desktop_app.log_output import LogStream, clean_log, parse_progress
 from desktop_app.face_widget import FaceWindow
 
 
@@ -109,15 +114,13 @@ class RuntimeStatusSignals(QObject):
 def _should_emit_as_log(line: str) -> bool:
     """Whether a daemon output line belongs in the general log viewer.
 
-    Chat IPC is carved out. Its ``complete`` event carries the whole
-    assistant reply, which can echo back whatever the user typed, and the
-    log window is not covered by the redaction invariant the chat path
-    maintains. Diary IPC stays: it carries progress and token deltas the
-    log window exists to show.
+    Chat and voice-control IPC are excluded. The daemon supplies separate
+    redacted query and scrubbed reply activity lines for chat. Diary IPC
+    carries progress and token deltas for the log window.
     """
-    from jarvis.daemon import CHAT_IPC_PREFIX
+    from jarvis.daemon import CHAT_IPC_PREFIX, VOICE_STATUS_IPC_PREFIX
 
-    return not line.startswith(CHAT_IPC_PREFIX)
+    return not line.startswith((CHAT_IPC_PREFIX, VOICE_STATUS_IPC_PREFIX))
 
 
 def _collect_runtime_status_snapshot(
@@ -606,36 +609,40 @@ def collect_macos_crash_report(
         candidates = []
         for report in diagnostics_dir.glob(f"{app_name}-*.ips"):
             try:
-                if report.stat().st_mtime >= since:
-                    candidates.append(report)
+                modified = report.stat().st_mtime
+                if modified >= since:
+                    candidates.append((modified, report))
             except OSError:
                 continue
         if not candidates:
             return None
-        newest = max(candidates, key=lambda p: p.stat().st_mtime)
-
-        raw_text = newest.read_text(encoding="utf-8", errors="replace")
-        # .ips files are usually two lines (metadata dict, then the JSON
-        # payload), but the payload can also span multiple lines when the
-        # system pretty-prints it. Try the whole file, then everything after
-        # the first (metadata) line, then the last line alone.
         import json as _json
-        lines = raw_text.splitlines()
-        candidates = [raw_text]
-        if lines:
-            candidates.append("\n".join(lines[1:]))
-            candidates.append(lines[-1])
         data = None
-        for candidate in candidates:
-            stripped = candidate.strip()
-            if not stripped.startswith("{"):
-                continue
+        for _, newest in sorted(candidates, key=lambda item: item[0], reverse=True):
             try:
-                data = _json.loads(stripped)
-                break
-            except Exception:
+                raw_text = newest.read_text(encoding="utf-8", errors="replace")
+            except OSError:
                 continue
-        if not isinstance(data, dict):
+            # Reports contain a metadata line followed by a JSON payload;
+            # the payload can be compact or pretty-printed.
+            lines = raw_text.splitlines()
+            payloads = [raw_text]
+            if lines:
+                payloads.extend(("\n".join(lines[1:]), lines[-1]))
+            for payload in payloads:
+                try:
+                    parsed = _json.loads(payload)
+                except ValueError:
+                    continue
+                if (isinstance(parsed, dict)
+                        and isinstance(parsed.get("threads"), list)
+                        and parsed["threads"]
+                        and all(isinstance(thread, dict) for thread in parsed["threads"])):
+                    data = parsed
+                    break
+            if data is not None:
+                break
+        if data is None:
             return None
 
         parts = [f"🧵 Native crash report: {newest.name}"]
@@ -886,129 +893,93 @@ def show_crash_report_dialog(crash_content: str) -> None:
         debug_log(f"failed to show crash report dialog: {e}", "desktop")
 
 
-def check_model_support() -> Optional[str]:
-    """
-    Check if the configured chat model is officially supported.
+def _model_role_selections(settings: Settings) -> tuple[tuple[str, str, str], ...]:
+    """Resolved role, provider and model triples used by both advice and display."""
+    return (
+        ("Chat", settings.llm_provider, settings.llm_chat_model),
+        ("Fast", settings.llm_provider, settings.fast_model),
+        ("Embedding", settings.embedding_provider or settings.llm_provider,
+         settings.embedding_model),
+    )
 
-    Returns the model name if unsupported, None if supported.
-    """
+
+def check_model_support(settings: Settings) -> dict[str, str]:
+    """Return selections outside their provider's role recommendation names."""
+    unlisted = {}
+    for role, provider, model in _model_role_selections(settings):
+        recommended = get_model_recommendations(provider)[role]
+        is_unlisted = (
+            bool(missing_ollama_models([model], recommended))
+            if provider == "ollama" else model not in recommended
+        )
+        if is_unlisted:
+            unlisted[role] = model
+    return unlisted
+
+
+class UnsupportedModelDialog(QDialog):
+    """Optional recommendation advice with an explicit setup action."""
+
+    def __init__(self, models: dict[str, str], settings: Settings):
+        super().__init__()
+        self.open_wizard = False
+        self.setWindowTitle("Model recommendations")
+        self.setMinimumWidth(500)
+        self.setStyleSheet(JARVIS_THEME_STYLESHEET)
+        layout = QVBoxLayout(self)
+        layout.setSpacing(16)
+        layout.setContentsMargins(24, 24, 24, 24)
+        header = QLabel("Your models are outside Jarvis's recommended list")
+        header.setWordWrap(True)
+        layout.addWidget(header)
+        lines = [
+            "You can keep using these models, or open setup to choose recommended models.",
+            "",
+        ]
+        providers = {role: provider for role, provider, _ in _model_role_selections(settings)}
+        for role, model in models.items():
+            recommended = get_model_recommendations(providers[role])[role]
+            lines.extend((f"{role}: {model}",
+                          f"Recommended: {', '.join(recommended)}", ""))
+        if any(providers[role] == "openai_compatible" for role in models):
+            lines.append("External servers can use custom model names. A matching name does not "
+                         "verify the model or its runtime. Use Connect & load models in setup "
+                         "to check your server's models and capabilities.")
+        description = QLabel("\n".join(lines))
+        description.setTextFormat(Qt.TextFormat.PlainText)
+        description.setWordWrap(True)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        margins = layout.contentsMargins()
+        usable_width = (self.minimumWidth() - margins.left() - margins.right()
+                        - scroll.verticalScrollBar().sizeHint().width())
+        description.setMinimumSize(usable_width, description.heightForWidth(usable_width))
+        scroll.setWidget(description)
+        layout.addWidget(scroll)
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        keep = QPushButton("Continue Anyway")
+        keep.clicked.connect(self.accept)
+        buttons.addWidget(keep)
+        setup = QPushButton("🔧 Open Setup Wizard")
+        setup.clicked.connect(self._open_wizard)
+        buttons.addWidget(setup)
+        layout.addLayout(buttons)
+
+    def _open_wizard(self):
+        self.open_wizard = True
+        self.accept()
+
+
+def show_unsupported_model_dialog(models: dict[str, str], settings: Settings) -> bool:
+    """Return whether the user chose setup; advice never changes settings."""
     try:
-        from jarvis.config import load_config, DEFAULT_CHAT_MODEL
-        config = load_config()
-        model = config.get("ollama_chat_model", DEFAULT_CHAT_MODEL)
-
-        # Normalize model name (remove tag if it matches base)
-        base_model = model.split(":")[0] if ":" in model else model
-
-        # Check against supported models (also check base name)
-        supported_ids = get_supported_model_ids()
-        for supported in supported_ids:
-            supported_base = supported.split(":")[0]
-            if model == supported or base_model == supported_base:
-                return None
-
-        return model
-    except Exception:
-        return None
-
-
-def show_unsupported_model_dialog(model_name: str) -> bool:
-    """
-    Show a dialog warning about unsupported model.
-
-    Args:
-        model_name: The name of the unsupported model.
-
-    Returns:
-        True if user wants to open setup wizard, False to continue anyway.
-    """
-    try:
-        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton
-
-        class UnsupportedModelDialog(QDialog):
-            def __init__(self, model: str):
-                super().__init__()
-                self.model = model
-                self.open_wizard = False
-                self.setWindowTitle("⚠️ Unsupported Model")
-                self.setMinimumWidth(500)
-                self.setStyleSheet(JARVIS_THEME_STYLESHEET)
-                self._setup_ui()
-
-            def _setup_ui(self):
-                layout = QVBoxLayout(self)
-                layout.setSpacing(16)
-                layout.setContentsMargins(24, 24, 24, 24)
-
-                # Header
-                header = QLabel("⚠️ Using Unofficial Model")
-                header.setStyleSheet("font-size: 18px; font-weight: bold; color: #fbbf24;")
-                layout.addWidget(header)
-
-                # Description
-                supported_list = ", ".join(sorted(SUPPORTED_CHAT_MODELS))
-                desc = QLabel(
-                    f"You're using <b>{self.model}</b> which hasn't been tested with Jarvis.\n\n"
-                    f"Officially supported models: <b>{supported_list}</b>\n\n"
-                    "Other models may work but could have issues with tool calling, "
-                    "response formatting, or performance."
-                )
-                desc.setWordWrap(True)
-                desc.setStyleSheet("color: #a1a1aa; line-height: 1.5;")
-                desc.setTextFormat(desc.textFormat().RichText)
-                layout.addWidget(desc)
-
-                layout.addSpacing(8)
-
-                # Buttons
-                btn_layout = QHBoxLayout()
-                btn_layout.addStretch()
-
-                continue_btn = QPushButton("Continue Anyway")
-                continue_btn.setStyleSheet("""
-                    QPushButton {
-                        background-color: #27272a;
-                        color: #a1a1aa;
-                        border: none;
-                        padding: 10px 20px;
-                        border-radius: 4px;
-                    }
-                    QPushButton:hover {
-                        background-color: #3f3f46;
-                    }
-                """)
-                continue_btn.clicked.connect(self.accept)
-                btn_layout.addWidget(continue_btn)
-
-                wizard_btn = QPushButton("🔧 Open Setup Wizard")
-                wizard_btn.setStyleSheet("""
-                    QPushButton {
-                        background-color: #2563eb;
-                        color: white;
-                        border: none;
-                        padding: 10px 20px;
-                        border-radius: 4px;
-                        font-weight: bold;
-                    }
-                    QPushButton:hover {
-                        background-color: #3b82f6;
-                    }
-                """)
-                wizard_btn.clicked.connect(self._open_wizard)
-                btn_layout.addWidget(wizard_btn)
-
-                layout.addLayout(btn_layout)
-
-            def _open_wizard(self):
-                self.open_wizard = True
-                self.accept()
-
-        dialog = UnsupportedModelDialog(model_name)
+        dialog = UnsupportedModelDialog(models, settings)
         dialog.exec()
         return dialog.open_wizard
-
-    except Exception as e:
-        debug_log(f"failed to show unsupported model dialog: {e}", "desktop")
+    except Exception as exc:
+        debug_log(f"failed to show model recommendation dialog: {exc}", "desktop")
         return False
 
 
@@ -1173,6 +1144,7 @@ def acquire_single_instance_lock() -> bool:
 class LogSignals(QObject):
     """Signals for thread-safe log updates."""
     new_log = pyqtSignal(str)
+    voice_status = pyqtSignal(object, str)
 
 
 class LogViewerWindow(QMainWindow):
@@ -1210,7 +1182,7 @@ class LogViewerWindow(QMainWindow):
         title.setStyleSheet("font-size: 20px; font-weight: 600; color: #fbbf24;")
         title_layout.addWidget(title)
 
-        subtitle = QLabel("Real-time activity and debug output")
+        subtitle = QLabel("Activity timeline · downloads stay visible above the log")
         subtitle.setObjectName("subtitle")
         title_layout.addWidget(subtitle)
 
@@ -1259,6 +1231,31 @@ class LogViewerWindow(QMainWindow):
 
         layout.addWidget(header_row)
 
+        self.download_card = QWidget()
+        self.download_card.setObjectName("download_card")
+        download_layout = QVBoxLayout(self.download_card)
+        download_layout.setContentsMargins(20, 16, 20, 16)
+        self.download_title = QLabel()
+        self.download_title.setObjectName("section_title")
+        self.download_title.setTextFormat(Qt.TextFormat.PlainText)
+        self.download_title.setWordWrap(True)
+        self.download_detail = QLabel()
+        self.download_detail.setTextFormat(Qt.TextFormat.PlainText)
+        self.download_detail.setWordWrap(True)
+        self.download_bar = QProgressBar()
+        download_layout.addWidget(self.download_title)
+        download_layout.addWidget(self.download_bar)
+        download_layout.addWidget(self.download_detail)
+        layout.addWidget(self.download_card)
+        self.download_card.hide()
+        self._downloads = {}
+        self._download_times = {}
+        self._last_progress_at = 0.0
+        self._progress_detail = ""
+        self._progress_timer = QTimer(self)
+        self._progress_timer.setInterval(1000)
+        self._progress_timer.timeout.connect(self._refresh_download_status)
+
         # Create text display for logs with monospace font
         self.log_display = QTextEdit()
         self.log_display.setReadOnly(True)
@@ -1268,81 +1265,147 @@ class LogViewerWindow(QMainWindow):
         layout.addWidget(self.log_display)
 
         # Initial message
-        self.append_log("🚀 Jarvis Log Viewer Ready\n" + _LOG_SEPARATOR + "\n\n")
+        self.append_log("📝 Activity log ready\n")
 
     def append_log(self, text: str) -> None:
-        """Append text to the log display."""
-        self.log_display.moveCursor(QTextCursor.MoveOperation.End)
-        self.log_display.insertPlainText(text)
-        self.log_display.moveCursor(QTextCursor.MoveOperation.End)
+        """Keep transfer updates in a card and important events in the timeline."""
+        for line in clean_log(text).replace('\r', '\n').splitlines():
+            if not line.strip():
+                continue
+            progress = parse_progress(line)
+            if progress:
+                previous = self._downloads.get(progress.name)
+                self._downloads[progress.name] = progress
+                self._download_times[progress.name] = time.monotonic()
+                if progress.percent == 100:
+                    if previous is None or previous.percent != 100:
+                        self._append_event(f"✅ Downloaded {progress.name} · {progress.detail}")
+                    # A small metadata file can finish while model weights are
+                    # still transferring on another Hub worker.
+                    progress = next((p for p in self._downloads.values() if p.percent != 100), progress)
+                elif previous is None or previous.percent == 100:
+                    self._append_event(f"📥 Downloading {progress.name}")
+                self.download_card.show()
+                self.download_title.setText(f"📥 {progress.name}")
+                self.download_bar.setFormat('%p%')
+                self.download_bar.setRange(0, 0 if progress.percent is None else 100)
+                if progress.percent is not None:
+                    self.download_bar.setValue(progress.percent)
+                self._progress_detail = progress.detail
+                self.download_detail.setText(progress.detail)
+                self._last_progress_at = self._download_times[progress.name]
+                if progress.percent != 100:
+                    self._progress_timer.start()
+                else:
+                    self._progress_timer.stop()
+                    self.download_card.hide()
+                continue
+            if line.startswith('📥 Checking Whisper model files'):
+                self._downloads.clear()
+                self._download_times.clear()
+                self.download_card.show()
+                self.download_title.setText('📥 Preparing Whisper model files')
+                self.download_bar.setRange(0, 0)
+                self.download_bar.setFormat('%p%')
+                self._progress_detail = 'Checking the local cache and model server'
+                self.download_detail.setText(self._progress_detail)
+                self._last_progress_at = time.monotonic()
+                self._progress_timer.start()
+            elif line.startswith('🎤 Loading Whisper into memory'):
+                self._progress_timer.stop()
+                self.download_card.show()
+                self.download_title.setText('🎤 Preparing speech recognition')
+                self.download_bar.setFormat('%p%')
+                self.download_bar.setRange(0, 0)
+                self._progress_detail = 'Model files ready · loading into memory and warming up'
+                self.download_detail.setText(self._progress_detail)
+            elif ('MLX Whisper' in line and 'ready (Apple Silicon GPU)' in line
+                  or line.strip() == '🎙️  Listening! Try:'):
+                self._progress_timer.stop()
+                self.download_card.hide()
+            if any(message in line for message in (
+                'Download failed', 'Download error', 'Failed to initialise MLX Whisper',
+                'Daemon exited unexpectedly', 'Daemon stopped',
+            )):
+                self._progress_timer.stop()
+                self._downloads.clear()
+                self._download_times.clear()
+                if not self.download_card.isHidden():
+                    self.download_bar.setRange(0, 100)
+                    self.download_bar.setFormat('Interrupted')
+                    self.download_detail.setText(self._progress_detail + " · See details below")
+            self._append_event(line)
+
+    def _append_event(self, line):
+        cursor = self.log_display.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        style = QTextCharFormat()
+        style.setForeground(QColor(COLORS['text_muted']))
+        cursor.insertText(time.strftime('%H:%M:%S') + '  ', style)
+        colour = 'text_primary'
+        if '❌' in line or 'Traceback' in line:
+            colour = 'error_light'
+        elif '⚠' in line:
+            colour = 'warning_light'
+        elif line.lstrip().startswith(('✓', '✅')):
+            colour = 'success_light'
+        style.setForeground(QColor(COLORS[colour]))
+        cursor.insertText(line + '\n', style)
+        self.log_display.setTextCursor(cursor)
+        self.log_display.ensureCursorVisible()
+
+    def _refresh_download_status(self):
+        elapsed = int(time.monotonic() - self._last_progress_at)
+        if elapsed >= 15:
+            self.download_detail.setText(
+                self._progress_detail + f" · No new progress for {elapsed}s; waiting for the download server"
+            )
 
     def clear_logs(self) -> None:
         """Clear all logs."""
         self.log_display.clear()
-        self.append_log("🗑️ Logs Cleared\n" + _LOG_SEPARATOR + "\n\n")
+        self._downloads.clear()
+        self._download_times.clear()
+        self._progress_timer.stop()
+        self.download_card.hide()
+        self.append_log("🗑️ Logs cleared\n")
 
     def _report_issue(self) -> None:
-        """Open GitHub issue with redacted log contents."""
+        """Review a described, redacted report before opening GitHub."""
+        import platform
         from jarvis import get_version
-        from jarvis.utils.redact import _REDACTION_RULES
+        from jarvis.config import load_settings
+        from jarvis.utils.redact import scrub_secrets
+        from desktop_app.issue_report import IssueReportDialog
 
         try:
             version = get_version()
         except Exception:
-            version = "unknown"
-
-        # Get all log content and redact sensitive information (preserving line breaks)
+            version = ('unknown', 'unknown')
+        metadata = {'Platform': f'{sys.platform} ({platform.release()}, {platform.machine()})'}
+        try:
+            cfg = load_settings()
+            metadata.update({
+                'Configured provider': cfg.llm_provider,
+                'Configured chat model': cfg.llm_chat_model,
+                'Configured Whisper model': cfg.whisper_model,
+                'Configured Whisper backend': cfg.whisper_backend,
+                'Configured Whisper device': cfg.whisper_device,
+            })
+        except Exception as exc:
+            debug_log(f'Issue report settings unavailable: {type(exc).__name__}', 'desktop')
         log_content = self.log_display.toPlainText()
-        redacted_logs = log_content
-        for pattern, repl in _REDACTION_RULES:
-            redacted_logs = pattern.sub(repl, redacted_logs)
-
-        # Truncate if too long for URL (GitHub has ~8000 char limit for URLs)
-        # Keep init lines + recent tail (recent logs are most useful for debugging)
-        redacted_logs = _truncate_logs_for_report(redacted_logs, 5000)
-        # Escape backtick fences so log content can't break out of the code block
-        redacted_logs = redacted_logs.replace('```', '`` `')
-
-        title = "Bug Report"
-        body = f"""## Bug Report
-
-**Version:** {version}
-**Platform:** {sys.platform}
-
-### Description
-(Please describe what went wrong or what you expected to happen)
-
-
-
-### Steps to Reproduce
-1.
-2.
-3.
-
-<details>
-<summary>📋 Logs (click to expand)</summary>
-
-```
-{redacted_logs}
-```
-
-</details>
-
-### Additional Context
-(Any other relevant information)
-"""
-        params = urllib.parse.urlencode({
-            'title': title,
-            'body': body,
-            'labels': 'bug'
-        })
-        url = f"https://github.com/isair/jarvis/issues/new?{params}"
-
-        webbrowser.open(url)
+        if not self.download_card.isHidden():
+            percentage = f"{self.download_bar.value()}% · " if self.download_bar.maximum() else ''
+            log_content += f"\n{self.download_title.text()}: {percentage}{self.download_detail.text()}\n"
+        logs = _truncate_logs_for_report(scrub_secrets(log_content), 5000)
+        debug_log('Issue report composer opened for local review', 'desktop')
+        dialog = IssueReportDialog(logs, version=version, metadata=metadata, parent=self)
+        dialog.exec()
 
 
 class MemoryViewerWindow(QMainWindow):
-    """Window for viewing Jarvis memory using embedded web view."""
+    """Open local memory in an embedded view or the system browser."""
 
     MEMORY_VIEWER_PORT = 5050
 
@@ -1370,57 +1433,24 @@ class MemoryViewerWindow(QMainWindow):
         is_macos_bundle = sys.platform == 'darwin' and getattr(sys, 'frozen', False)
         use_webengine = HAS_WEBENGINE and not is_macos_bundle
 
-        web_view_created = False
+        self.web_view = None
         if use_webengine:
-            # Use embedded web view - URL will be set in showEvent when window is shown
             try:
                 self.web_view = QWebEngineView()
                 layout.addWidget(self.web_view)
-                web_view_created = True
             except Exception as e:
                 debug_log(f"failed to create QWebEngineView: {e}", "desktop")
                 self.web_view = None
 
-        if not web_view_created:
-            # Fallback: show message and open in browser
-            self.web_view = None
-
-            fallback_container = QWidget()
-            fallback_layout = QVBoxLayout(fallback_container)
-            fallback_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-            icon_label = QLabel("🧠")
-            icon_label.setStyleSheet("font-size: 64px; background: transparent;")
-            icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            fallback_layout.addWidget(icon_label)
-
-            title_label = QLabel("Memory Viewer")
-            title_label.setStyleSheet("""
-                font-size: 24px;
-                font-weight: 600;
-                color: #fbbf24;
-                background: transparent;
-                margin-top: 16px;
-            """)
-            title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            fallback_layout.addWidget(title_label)
-
-            if is_macos_bundle:
-                fallback_message = "Opening in your default browser..."
-            else:
-                fallback_message = "PyQt6-WebEngine not installed.\nOpening in your default browser..."
-
-            message_label = QLabel(fallback_message)
-            message_label.setStyleSheet("""
-                font-size: 14px;
-                color: #71717a;
-                background: transparent;
-                margin-top: 8px;
-            """)
-            message_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            fallback_layout.addWidget(message_label)
-
-            layout.addWidget(fallback_container)
+    def open_viewer(self) -> None:
+        """Open the usable viewer surface and focus it when embedded."""
+        if self.web_view is None:
+            debug_log("opening memory viewer in the system browser", "desktop")
+            self._load_viewer()
+        else:
+            self.show()
+            self.raise_()
+            self.activateWindow()
 
     def start_server(self) -> bool:
         """Start the memory viewer Flask server."""
@@ -1601,8 +1631,8 @@ class MemoryViewerWindow(QMainWindow):
             self.server_thread = None
             self.is_server_running = False
 
-    def _show_error_page(self, message: str) -> None:
-        """Show an error page in the web view."""
+    def _show_viewer_error(self, message: str) -> None:
+        """Show useful opening feedback in the selected viewer surface."""
         if self.web_view:
             error_html = f"""
             <html>
@@ -1623,31 +1653,44 @@ class MemoryViewerWindow(QMainWindow):
             </html>
             """
             self.web_view.setHtml(error_html)
+        else:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(None, "🧠 Jarvis Memory", message)
 
     def showEvent(self, event) -> None:
         """Called when window is shown."""
         super().showEvent(event)
 
+        self._load_viewer()
+
+    def _load_viewer(self) -> None:
+        """Start or reuse the local server and open its viewer."""
+        url = f"http://localhost:{self.MEMORY_VIEWER_PORT}"
         try:
             # Start server when window opens
             if self.start_server():
                 if self.web_view:
                     # Set URL and load (URL is set here, not in __init__, to avoid WebEngine crash)
-                    self.web_view.setUrl(QUrl(f"http://localhost:{self.MEMORY_VIEWER_PORT}"))
+                    self.web_view.setUrl(QUrl(url))
                 else:
                     # Open in system browser as fallback
                     import webbrowser
-                    webbrowser.open(f"http://localhost:{self.MEMORY_VIEWER_PORT}")
+                    if not webbrowser.open(url):
+                        self._show_viewer_error(
+                            f"Your browser could not be opened. Open {url} in your browser to view your memory."
+                        )
             else:
                 # Server failed to start - show error message
                 debug_log("memory viewer server failed to start", "desktop")
-                self._show_error_page(
+                self._show_viewer_error(
                     "The memory viewer server failed to start. "
                     "Check the console output for details."
                 )
         except Exception as e:
-            debug_log(f"error in memory viewer showEvent: {e}", "desktop")
-            self._show_error_page(f"Error: {e}")
+            debug_log(f"error opening memory viewer: {e}", "desktop")
+            self._show_viewer_error(
+                f"The memory viewer could not be opened. Try again, or open {url} in your browser."
+            )
 
     def closeEvent(self, event) -> None:
         """Called when window is closed."""
@@ -1679,30 +1722,7 @@ class DaemonThread(KeepAliveWorker):
 
         try:
             # Redirect stdout/stderr to capture logs
-            class LogWriter:
-                def __init__(self, emit_func):
-                    self.emit_func = emit_func
-                    self.buffer = ""
-
-                def write(self, text):
-                    if text:
-                        # Handle both bytes and str (Flask can send bytes)
-                        if isinstance(text, bytes):
-                            text = text.decode('utf-8', errors='replace')
-                        self.buffer += text
-                        if '\n' in self.buffer:
-                            lines = self.buffer.split('\n')
-                            self.buffer = lines[-1]
-                            for line in lines[:-1]:
-                                if line.strip():
-                                    self.emit_func(line + '\n')
-
-                def flush(self):
-                    if self.buffer.strip():
-                        self.emit_func(self.buffer)
-                        self.buffer = ""
-
-            log_writer = LogWriter(self.log_signals.new_log.emit)
+            log_writer = LogStream(self.log_signals.new_log.emit)
             sys_module.stdout = log_writer
             sys_module.stderr = log_writer
 
@@ -1773,6 +1793,7 @@ class JarvisSystemTray:
         self.log_viewer = LogViewerWindow()
         self.log_signals = LogSignals()
         self.log_signals.new_log.connect(self.log_viewer.append_log)
+        self.log_signals.voice_status.connect(self._on_voice_pause_status)
 
         from desktop_app.task_centre import TaskCentreWindow
         self.task_centre = TaskCentreWindow(
@@ -1803,6 +1824,7 @@ class JarvisSystemTray:
         self._chat_submit_fn = None
         self._chat_control_fn = None
         self._daemon_stop_expected = False
+        self._daemon_stuck = False
 
         # Main-thread signal bridge for chat IPC. The log reader thread emits
         # ``line_received`` (a queued connection) so the chat window is created
@@ -1822,11 +1844,14 @@ class JarvisSystemTray:
         self.log_reader_threads = []
 
         # Create system tray icon
+        from desktop_app.macos_tray import install_macos_tray_event_guard
+        install_macos_tray_event_guard()
         self.tray_icon = QSystemTrayIcon()
         self.update_icon()
 
         # Create context menu
         self.create_menu()
+        self.face_window.set_tray_menu(self.menu)
 
         # Set up status checking timer
         self.status_timer = QTimer()
@@ -1960,10 +1985,13 @@ class JarvisSystemTray:
 
         self.menu.addSeparator()
 
-        # Toggle listening action
-        self.toggle_action = QAction("▶️ Start Listening")
+        # Assistant power action
+        self.toggle_action = QAction("▶️ Turn On")
         self.toggle_action.triggered.connect(self.toggle_listening)
         self.menu.addAction(self.toggle_action)
+
+        self._initialise_voice_pause_controls()
+        self.menu.addAction(self.voice_pause_action)
 
         # Status action (non-clickable)
         self.status_action = QAction("⚪ Status: Stopped")
@@ -1977,6 +2005,7 @@ class JarvisSystemTray:
         self.quit_action.triggered.connect(self.quit_app)
         self.menu.addAction(self.quit_action)
 
+        apply_theme(self.menu)
         self.tray_icon.setContextMenu(self.menu)
 
     def _maybe_add_cuda_recovery_action(self) -> None:
@@ -2249,10 +2278,8 @@ class JarvisSystemTray:
         return True
 
     def show_memory_viewer(self) -> None:
-        """Show the memory viewer window and bring it to front."""
-        self.memory_viewer.show()
-        self.memory_viewer.raise_()
-        self.memory_viewer.activateWindow()
+        """Open memory in the embedded viewer or system browser."""
+        self.memory_viewer.open_viewer()
 
     def show_dictation_history(self) -> None:
         """Show the dictation history window and bring it to front."""
@@ -2325,7 +2352,6 @@ class JarvisSystemTray:
         """Show the face window and bring it to front."""
         self.face_window.show()
         self.face_window.raise_()
-        self.face_window.activateWindow()
 
     def open_directory(self, directory_path: Path, directory_name: str) -> None:
         """Open a directory in the system file manager."""
@@ -2355,7 +2381,7 @@ class JarvisSystemTray:
 
     def open_config_directory(self) -> None:
         """Open the configuration directory in the system file manager."""
-        config_path = default_config_path()
+        config_path = get_config_path()
         config_dir = config_path.parent
         self.open_directory(config_dir, "Config")
 
@@ -2422,6 +2448,114 @@ class JarvisSystemTray:
         except Exception:
             pass
 
+    def _initialise_voice_pause_controls(self) -> None:
+        self._voice_pause_state = False
+        self._voice_pause_request_id = None
+        self._voice_pause_owner = None
+        self._voice_pause_timer = QTimer()
+        self._voice_pause_timer.setSingleShot(True)
+        self._voice_pause_timer.setInterval(10000)
+        self._voice_pause_timer.timeout.connect(self._voice_pause_timed_out)
+        self.voice_pause_action = QAction("⏸️ Pause Voice Listening")
+        self.voice_pause_action.setToolTip("Keep text chat and dictation available while voice listening is paused")
+        self.voice_pause_action.setEnabled(False)
+        self.voice_pause_action.triggered.connect(self.toggle_voice_pause)
+
+    def _sync_voice_pause_controls(self) -> None:
+        owner = self.daemon_thread if self.is_bundled else self.daemon_process
+        active = self.is_listening and not self._daemon_stop_expected and owner is not None
+        if not active or owner is not self._voice_pause_owner:
+            self._voice_pause_timer.stop()
+            self._voice_pause_request_id = None
+            self._voice_pause_state = False
+            self._voice_pause_owner = owner if active else None
+            self.voice_pause_action.setText("⏸️ Pause Voice Listening")
+            if active:
+                self.status_action.setText("🟢 Status: Listening")
+            elif not self.is_listening:
+                self.status_action.setText("⚪ Status: Stopped")
+        self.voice_pause_action.setEnabled(active and self._voice_pause_request_id is None)
+
+    def toggle_voice_pause(self) -> None:
+        import json
+        import uuid
+        from jarvis.daemon import VOICE_PAUSE_IPC_PREFIX, set_voice_listening_paused
+        self._sync_voice_pause_controls()
+        if not self.voice_pause_action.isEnabled():
+            return
+        paused = not self._voice_pause_state
+        request_id = str(uuid.uuid4())
+        self._voice_pause_request_id = request_id
+        self.voice_pause_action.setEnabled(False)
+        self.voice_pause_action.setText("⏳ Pausing Voice Listening…" if paused else "⏳ Resuming Voice Listening…")
+        self._voice_pause_timer.start()
+        debug_log(f"requesting voice pause: {paused}", "desktop")
+        try:
+            if self.is_bundled:
+                result = set_voice_listening_paused(paused)
+                self._apply_voice_pause_status({
+                    'request_id': request_id, 'available': result is not None, 'paused': result,
+                })
+            else:
+                self.daemon_process.stdin.write(VOICE_PAUSE_IPC_PREFIX + json.dumps({
+                    'paused': paused, 'request_id': request_id,
+                }) + '\n')
+                self.daemon_process.stdin.flush()
+        except Exception as exc:
+            debug_log(f"voice pause control failed ({type(exc).__name__})", "desktop")
+            self._voice_pause_unknown("Voice listening could not confirm the change. Try again or restart Jarvis.")
+
+    def _on_voice_pause_status(self, owner, line: str) -> None:
+        import json
+        from jarvis.daemon import VOICE_STATUS_IPC_PREFIX
+        if (self.is_bundled or owner is not self.daemon_process
+                or not self.is_listening or self._daemon_stop_expected):
+            return
+        try:
+            if not line.startswith(VOICE_STATUS_IPC_PREFIX):
+                return
+            payload = json.loads(line[len(VOICE_STATUS_IPC_PREFIX):])
+            if not isinstance(payload, dict) or payload.get('type') != 'status':
+                return
+            self._apply_voice_pause_status(payload.get('data'))
+        except (ValueError, TypeError):
+            debug_log("invalid voice pause acknowledgement", "desktop")
+
+    def _apply_voice_pause_status(self, status) -> None:
+        if (not isinstance(status, dict) or self._voice_pause_request_id is None
+                or status.get('request_id') != self._voice_pause_request_id
+                or not isinstance(status.get('available'), bool)):
+            return
+        if not status['available']:
+            self._voice_pause_unknown("Voice listening is unavailable. Try again after startup or restart Jarvis.")
+            return
+        if not isinstance(status.get('paused'), bool):
+            return
+        self._voice_pause_timer.stop()
+        self._voice_pause_request_id = None
+        self._voice_pause_state = status['paused']
+        self.voice_pause_action.setText("▶️ Resume Voice Listening" if status['paused'] else "⏸️ Pause Voice Listening")
+        self.voice_pause_action.setEnabled(True)
+        self.status_action.setText("🟠 Status: Voice paused (chat available)" if status['paused'] else "🟢 Status: Listening")
+        self.tray_icon.setToolTip("Jarvis: voice paused" if status['paused'] else "Jarvis: listening")
+        self.log_signals.new_log.emit("⏸️ Voice listening paused. Text chat and dictation remain available.\n"
+                                      if status['paused'] else "🎤 Voice listening resumed.\n")
+        debug_log(f"voice pause confirmed: {status['paused']}", "desktop")
+
+    def _voice_pause_unknown(self, message: str) -> None:
+        self._voice_pause_timer.stop()
+        self._voice_pause_request_id = None
+        self._voice_pause_state = None
+        self.voice_pause_action.setText("⏸️ Pause Voice Listening")
+        self.voice_pause_action.setEnabled(self.is_listening and not self._daemon_stop_expected)
+        self.status_action.setText("⚠️ Status: Voice state unknown")
+        self.tray_icon.setToolTip("Jarvis: voice state unknown")
+        self.log_signals.new_log.emit(f"⚠️ {message}\n")
+
+    def _voice_pause_timed_out(self) -> None:
+        if self._voice_pause_request_id is not None:
+            self._voice_pause_unknown("Voice listening did not confirm the change. Try again or restart Jarvis.")
+
     def toggle_listening(self) -> None:
         """Toggle the Jarvis daemon on/off."""
         if self.is_listening:
@@ -2429,8 +2563,29 @@ class JarvisSystemTray:
         else:
             self.start_daemon()
 
+    def _daemon_alive(self) -> bool:
+        """True while a daemon this app started is still running (or stuck stopping)."""
+        if self._daemon_stop_expected:
+            return True
+        thread = getattr(self, "daemon_thread", None)
+        if thread is not None and not thread.isFinished():
+            return True
+        process = getattr(self, "daemon_process", None)
+        return process is not None and process.poll() is None
+
     def start_daemon(self) -> None:
         """Start the Jarvis daemon."""
+        # A retained owner or active shutdown blocks replacement.
+        if self._daemon_alive():
+            if getattr(self, "_daemon_stuck", False):
+                self.log_signals.new_log.emit(
+                    "⚠️ The previous daemon is still shutting down. Wait for it to finish before starting again.\n"
+                )
+            else:
+                self.log_signals.new_log.emit("ℹ️ Jarvis is already running.\n")
+            debug_log("start_daemon ignored: a daemon is still alive", "desktop")
+            return
+        self._daemon_stuck = False
         self._daemon_stop_expected = False
         self._set_chat_daemon_status("starting")
         try:
@@ -2441,8 +2596,9 @@ class JarvisSystemTray:
                 # slot runs on the main thread (the finished signal is emitted
                 # from the worker's OS thread) and the KeepAliveWorker registry
                 # keeps the object alive until that thread has fully exited.
+                worker = self.daemon_thread
                 self.daemon_thread.finished.connect(
-                    self._on_daemon_finished,
+                    lambda: self._on_daemon_finished(worker),
                     Qt.ConnectionType.QueuedConnection,
                 )
                 self.daemon_thread.start()
@@ -2565,7 +2721,7 @@ class JarvisSystemTray:
                 self.log_signals.new_log.emit("🚀 Jarvis daemon started\n")
 
             self.is_listening = True
-            self.toggle_action.setText("⏸️ Stop Listening")
+            self.toggle_action.setText("⏻ Turn Off")
             self.status_action.setText("🟢 Status: Listening")
             self.update_icon()
             self._set_chat_daemon_status("running")
@@ -2591,19 +2747,22 @@ class JarvisSystemTray:
                 3000
             )
 
-    def _on_daemon_finished(self) -> None:
-        """Called when daemon thread finishes."""
+    def _on_daemon_finished(self, worker: DaemonThread) -> None:
+        """Retire the owning worker without disturbing a replacement runtime."""
+        if worker is not self.daemon_thread or not worker.isFinished():
+            return
+        self.daemon_thread = None
+        self._daemon_stuck = False
+        # stop_daemon owns the UI transition while it processes Qt events.
+        if self._daemon_stop_expected:
+            return
         if self.is_listening:
-            status = "stopped" if self._daemon_stop_expected else "crashed"
             self.is_listening = False
             self._chat_submit_fn = None
-            self.toggle_action.setText("▶️ Start Listening")
+            self.toggle_action.setText("▶️ Turn On")
             self.status_action.setText("⚪ Status: Stopped")
             self.update_icon()
-            self.daemon_thread = None
-            self._set_chat_daemon_status(status)
-            self._daemon_stop_expected = False
-            # Reset face to asleep so it doesn't look ready while daemon is down
+            self._set_chat_daemon_status("crashed")
             self._set_face_asleep()
 
     def _read_daemon_logs(self) -> None:
@@ -2611,11 +2770,12 @@ class JarvisSystemTray:
         if not self.daemon_process or not self.daemon_process.stdout:
             return
 
-        from jarvis.daemon import CHAT_IPC_PREFIX
+        from jarvis.daemon import CHAT_IPC_PREFIX, VOICE_STATUS_IPC_PREFIX
+        process = self.daemon_process
 
         try:
             while True:
-                line = self.daemon_process.stdout.readline()
+                line = process.stdout.readline()
                 if not line:
                     # EOF - process has ended
                     debug_log("log reader: EOF reached, daemon stdout closed", "desktop")
@@ -2629,6 +2789,8 @@ class JarvisSystemTray:
                 # (Qt widgets must be created on the GUI thread).
                 if line.startswith(CHAT_IPC_PREFIX):
                     self._chat_ipc_signals.line_received.emit(line)
+                elif line.startswith(VOICE_STATUS_IPC_PREFIX):
+                    self.log_signals.voice_status.emit(process, line)
                 if _should_emit_as_log(line):
                     self.log_signals.new_log.emit(line)
         except Exception as e:
@@ -2659,6 +2821,10 @@ class JarvisSystemTray:
         Args:
             show_diary_dialog: If True (and bundled), shows a dialog with live diary update progress.
         """
+        if self._daemon_stop_expected:
+            return
+        worker = self.daemon_thread
+
         # Timeout must be longer than SHUTDOWN_DIARY_TIMEOUT_SEC (45s) in daemon.py
         # to allow the diary update LLM call to complete before force-killing
         shutdown_wait_timeout_sec = 60
@@ -2674,7 +2840,7 @@ class JarvisSystemTray:
         try:
             self._daemon_stop_expected = True
             self._set_chat_daemon_status("stopping")
-            if self.is_bundled and self.daemon_thread:
+            if self.is_bundled and worker:
                 # When running in a QThread, use the stop flag for graceful shutdown
                 # This ensures the daemon's finally block runs (for diary update)
                 self.log_signals.new_log.emit("⏸️ Stopping Jarvis daemon...\n")
@@ -2721,7 +2887,7 @@ class JarvisSystemTray:
                     # If the daemon doesn't stop gracefully, it will be killed on process exit
                     start_time = time.time()
                     warned = False
-                    while not self.daemon_thread.isFinished():
+                    while not worker.isFinished():
                         self.app.processEvents()
                         elapsed = time.time() - start_time
                         if elapsed > shutdown_wait_timeout_sec and not warned:
@@ -2749,13 +2915,21 @@ class JarvisSystemTray:
                     from jarvis.daemon import request_stop
                     request_stop()
 
-                    if not self.daemon_thread.wait(shutdown_wait_timeout_sec * 1000):
+                    if not worker.wait(shutdown_wait_timeout_sec * 1000):
                         self.log_signals.new_log.emit("⚠️ Daemon taking longer than expected...\n")
                         debug_log("daemon thread not responding to stop request", "desktop")
                         # Wait up to 3x timeout total before giving up
-                        self.daemon_thread.wait(shutdown_wait_timeout_sec * 2000)
+                        worker.wait(shutdown_wait_timeout_sec * 2000)
 
-                self.daemon_thread = None
+                if worker.isFinished():
+                    self.daemon_thread = None
+                else:
+                    # Retain the owner until its OS thread has finished.
+                    self._daemon_stuck = True
+                    self.log_signals.new_log.emit(
+                        "⚠️ The daemon is still shutting down. Starting is blocked until it finishes.\n"
+                    )
+                    debug_log("daemon thread still alive after give-up; marked stuck", "desktop")
             elif self.daemon_process:
                 # For subprocess mode, show diary dialog with IPC-based updates
                 # The existing log reader thread emits signals; we use a queue to collect lines
@@ -2876,7 +3050,7 @@ class JarvisSystemTray:
 
             self._daemon_stop_expected = False
             self.is_listening = False
-            self.toggle_action.setText("▶️ Start Listening")
+            self.toggle_action.setText("▶️ Turn On")
             self.status_action.setText("⚪ Status: Stopped")
             self.update_icon()
             self._set_chat_daemon_status("stopped")
@@ -2898,6 +3072,7 @@ class JarvisSystemTray:
             debug_log(f"failed to stop daemon: {e}", "desktop")
             self.log_signals.new_log.emit(f"❌ Failed to stop: {str(e)}\n")
         finally:
+            self._daemon_stop_expected = False
             # Ensure dialog is closed
             if diary_dialog:
                 diary_dialog.close()
@@ -2905,17 +3080,18 @@ class JarvisSystemTray:
     def check_daemon_status(self) -> None:
         """Check if the daemon process/thread is still running."""
         if self.is_bundled and self.daemon_thread:
-            # Check if QThread is still running
-            if self.daemon_thread.isFinished() and self.is_listening:
-                # Thread has terminated
-                self._on_daemon_finished()
-                self.tray_icon.showMessage(
-                    "Jarvis Stopped",
-                    "Voice assistant process ended unexpectedly",
-                    QSystemTrayIcon.MessageIcon.Warning,
-                    3000
-                )
-                debug_log("daemon thread ended unexpectedly", "desktop")
+            worker = self.daemon_thread
+            if worker.isFinished():
+                unexpected = self.is_listening and not self._daemon_stop_expected
+                self._on_daemon_finished(worker)
+                if unexpected:
+                    self.tray_icon.showMessage(
+                        "Jarvis Stopped",
+                        "Voice assistant process ended unexpectedly",
+                        QSystemTrayIcon.MessageIcon.Warning,
+                        3000
+                    )
+                    debug_log("daemon thread ended unexpectedly", "desktop")
         elif self.daemon_process:
             # Check if process is still alive
             poll = self.daemon_process.poll()
@@ -2925,7 +3101,7 @@ class JarvisSystemTray:
                 self._chat_submit_fn = None
                 if self.is_listening:
                     self.is_listening = False
-                    self.toggle_action.setText("▶️ Start Listening")
+                    self.toggle_action.setText("▶️ Turn On")
                     self.status_action.setText("⚪ Status: Stopped")
                     self.update_icon()
                     self._set_chat_daemon_status("crashed")
@@ -2940,6 +3116,8 @@ class JarvisSystemTray:
                     )
 
                     debug_log("daemon process ended unexpectedly", "desktop")
+
+        self._sync_voice_pause_controls()
 
     def quit_app(self, skip_diary: bool = False) -> None:
         """Quit the desktop app.
@@ -3009,8 +3187,8 @@ def _build_unreachable_message(cfg) -> str:
     )
 
 
-def _show_openai_unreachable_dialog(cfg) -> None:
-    """Show a warning dialog with an option to open the Setup Wizard."""
+def _show_openai_unreachable_dialog(cfg, splash: QWidget) -> None:
+    """Suspend the startup splash while the warning or setup wizard is open."""
     from PyQt6.QtWidgets import QMessageBox
 
     dialog = QMessageBox()
@@ -3019,10 +3197,16 @@ def _show_openai_unreachable_dialog(cfg) -> None:
     dialog.setIcon(QMessageBox.Icon.Warning)
     open_wizard_btn = dialog.addButton("🔧 Open Setup Wizard", QMessageBox.ButtonRole.ActionRole)
     dialog.addButton("Close", QMessageBox.ButtonRole.RejectRole)
-    dialog.exec()
-
-    if dialog.clickedButton() == open_wizard_btn:
-        _run_setup_wizard()
+    splash_was_visible = splash.isVisible()
+    splash.hide()
+    QApplication.processEvents()
+    debug_log("startup splash hidden for server recovery dialog", "startup")
+    try:
+        dialog.exec()
+        if dialog.clickedButton() == open_wizard_btn:
+            _run_setup_wizard()
+    finally:
+        splash.setVisible(splash_was_visible)
 
 
 def _run_setup_wizard() -> bool:
@@ -3372,7 +3556,7 @@ def main() -> int:
 
             if not _reach[0]:
                 print("⚠️ LLM server not reachable at startup", flush=True)
-                _show_openai_unreachable_dialog(_provider_cfg)
+                _show_openai_unreachable_dialog(_provider_cfg, splash)
 
         # Default ownership: not started by us. Re-assigned below if Jarvis
         # launches its own Ollama server process.
@@ -3545,15 +3729,7 @@ def main() -> int:
             required_models = get_required_models()
             installed_models = check_installed_models(resolve_ollama_path())
 
-            # Normalize model names for comparison (remove :latest suffix)
-            def normalize_model(name: str) -> str:
-                return name.split(":")[0] if ":" in name and name.endswith(":latest") else name
-
-            installed_normalized = {normalize_model(m) for m in installed_models}
-            missing_models = [
-                m for m in required_models
-                if normalize_model(m) not in installed_normalized and m not in installed_models
-            ]
+            missing_models = missing_ollama_models(required_models, installed_models)
 
             if missing_models and _chat_on_ollama:
                 splash.hide()
@@ -3600,19 +3776,24 @@ def main() -> int:
             except Exception as exc:
                 debug_log(f"Startup VRAM check failed: {exc}", "vram")
 
-        if _chat_on_ollama:
-            # Check if the user is on an unsupported chat model. Only meaningful
-            # on the Ollama path — an OpenAI-compatible model name is not in the
-            # Ollama catalogue and must not be flagged here.
-            splash.set_status("Checking model compatibility...")
-            unsupported_model = check_model_support()
-            if unsupported_model:
+        try:
+            _provider_cfg = _load_provider_settings()
+        except Exception as exc:
+            _provider_cfg = None
+            debug_log(f"Model recommendation settings unavailable: {exc}", "desktop")
+
+        if _provider_cfg is not None:
+            splash.set_status("Checking model recommendations...")
+            unlisted_models = check_model_support(_provider_cfg)
+            if unlisted_models:
                 splash.hide()
-                print(f"⚠️ Unsupported model detected: {unsupported_model}", flush=True)
-                if show_unsupported_model_dialog(unsupported_model):
-                    print("🔧 Opening setup wizard to change model...", flush=True)
+                roles = ", ".join(unlisted_models)
+                print(f"⚠️ Models outside the recommended list: {roles}", flush=True)
+                debug_log(f"Model recommendation advice shown for {roles}", "desktop")
+                if show_unsupported_model_dialog(unlisted_models, _provider_cfg):
+                    print("🔧 Opening setup wizard to change models...", flush=True)
                     if not _run_setup_wizard():
-                        print("Setup wizard cancelled - exiting", flush=True)
+                        print("⚠️ Setup wizard cancelled, exiting", flush=True)
                         return 0
                 splash.show()
                 splash.set_status("Model check complete!")

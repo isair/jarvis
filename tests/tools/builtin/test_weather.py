@@ -4,13 +4,15 @@ import pytest
 from unittest.mock import Mock, patch
 import requests
 
-from src.jarvis.tools.builtin.weather import (
+from jarvis.tools.builtin.weather import (
     WeatherTool,
     WMO_CODES,
     _extract_place_from_user_text,
 )
-from src.jarvis.tools.base import ToolContext
-from src.jarvis.tools.types import ToolExecutionResult
+from jarvis.tools.base import ToolContext
+from jarvis.tools.types import ToolExecutionResult
+
+pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("no_network")]
 
 
 class TestWeatherTool:
@@ -117,51 +119,25 @@ class TestWeatherTool:
         assert result.success is False
         assert "could not find" in result.reply_text.lower()
 
-    @patch('src.jarvis.tools.builtin.weather.get_location_info')
-    def test_run_empty_location_uses_fallback(self, mock_location):
-        """Test weather with empty location uses user's detected location as fallback."""
-        # When location detection fails, should return error
+    @pytest.mark.parametrize("args", [None, {}, {"location": None}, {"location": ""}],
+                             ids=["no-args", "omitted", "null", "empty"])
+    @patch('jarvis.tools.builtin.weather.get_location_info')
+    def test_missing_location_uses_fallback(self, mock_location, args):
+        """Missing locations use detection, never geocoding null or empty text."""
         mock_location.return_value = {"error": "Location not available"}
-
-        args = {"location": ""}
         result = self.tool.run(args, self.context)
-
         assert isinstance(result, ToolExecutionResult)
         assert result.success is False
-        assert result.reply_text and any(kw in result.reply_text.lower() for kw in ("location", "city"))
-
-    @patch('src.jarvis.tools.builtin.weather.get_location_info')
-    def test_run_none_location_uses_fallback(self, mock_location):
-        """Test weather with location=None uses user's detected location (not geocode 'None')."""
-        # When location detection fails, should return error - NOT try to geocode "None"
-        mock_location.return_value = {"error": "Location not available"}
-
-        # LLM may pass location: null/None instead of omitting the field
-        args = {"location": None}
-        result = self.tool.run(args, self.context)
-
-        assert isinstance(result, ToolExecutionResult)
-        assert result.success is False
-        # Should use fallback, not geocode the string "None"
-        assert result.reply_text and any(kw in result.reply_text.lower() for kw in ("location", "city"))
-        # Verify location detection was called (fallback was attempted)
         mock_location.assert_called_once()
+        assert result.reply_text and any(
+            keyword in result.reply_text.lower() for keyword in ("location", "city")
+        )
 
-    @patch('src.jarvis.tools.builtin.weather.get_location_info')
-    def test_run_no_args_uses_fallback(self, mock_location):
-        """Test weather with no arguments uses user's detected location as fallback."""
-        # When location detection fails, should return error
-        mock_location.return_value = {"error": "Location not available"}
-
-        result = self.tool.run(None, self.context)
-
-        assert isinstance(result, ToolExecutionResult)
-        assert result.success is False
-        assert result.reply_text and any(kw in result.reply_text.lower() for kw in ("location", "city"))
-
+    @pytest.mark.parametrize("args", [None, {}, {"location": None}, {"location": ""}],
+                             ids=["no-args", "omitted", "null", "empty"])
     @patch('requests.get')
-    @patch('src.jarvis.tools.builtin.weather.get_location_info')
-    def test_run_no_location_with_successful_fallback(self, mock_location, mock_get):
+    @patch('jarvis.tools.builtin.weather.get_location_info')
+    def test_run_no_location_with_successful_fallback(self, mock_location, mock_get, args):
         """Test weather with no location but successful user location detection."""
         # Mock successful location detection with coordinates (no geocoding needed)
         mock_location.return_value = {
@@ -190,7 +166,7 @@ class TestWeatherTool:
         mock_get.return_value = weather_response
 
         # Call with no location - should use fallback coordinates directly
-        result = self.tool.run({}, self.context)
+        result = self.tool.run(args, self.context)
 
         assert isinstance(result, ToolExecutionResult)
         assert result.success is True
@@ -201,8 +177,8 @@ class TestWeatherTool:
         assert mock_get.call_count == 1
 
     @patch('requests.get')
-    @patch('src.jarvis.tools.builtin.weather._extract_place_from_user_text')
-    @patch('src.jarvis.tools.builtin.weather.get_location_info')
+    @patch('jarvis.tools.builtin.weather._extract_place_from_user_text')
+    @patch('jarvis.tools.builtin.weather.get_location_info')
     def test_auto_detect_fail_falls_back_to_user_text(
         self, mock_location, mock_extract, mock_get,
     ):
@@ -256,8 +232,8 @@ class TestWeatherTool:
         called_text = mock_extract.call_args[0][0]
         assert "London" in called_text
 
-    @patch('src.jarvis.tools.builtin.weather._extract_place_from_user_text')
-    @patch('src.jarvis.tools.builtin.weather.get_location_info')
+    @patch('jarvis.tools.builtin.weather._extract_place_from_user_text')
+    @patch('jarvis.tools.builtin.weather.get_location_info')
     def test_auto_detect_fail_and_no_place_in_text_asks_user(
         self, mock_location, mock_extract,
     ):
@@ -276,29 +252,18 @@ class TestWeatherTool:
             kw in result.reply_text.lower() for kw in ("location", "city")
         )
 
+    @pytest.mark.parametrize("failure,expected", [
+        (requests.exceptions.Timeout("Connection timed out"), ("timeout", "taking too long")),
+        (requests.exceptions.ConnectionError("Network error"), ("unavailable",)),
+    ], ids=["timeout", "connection"])
     @patch('requests.get')
-    def test_run_network_timeout(self, mock_get):
-        """Test weather with network timeout."""
-        mock_get.side_effect = requests.exceptions.Timeout("Connection timed out")
-
-        args = {"location": "London"}
-        result = self.tool.run(args, self.context)
-
+    def test_run_network_failure(self, mock_get, failure, expected):
+        """Weather failures return an honest explanation without crashing."""
+        mock_get.side_effect = failure
+        result = self.tool.run({"location": "London"}, self.context)
         assert isinstance(result, ToolExecutionResult)
         assert result.success is False
-        assert "timeout" in result.reply_text.lower() or "taking too long" in result.reply_text.lower()
-
-    @patch('requests.get')
-    def test_run_network_error(self, mock_get):
-        """Test weather with network error."""
-        mock_get.side_effect = requests.exceptions.ConnectionError("Network error")
-
-        args = {"location": "London"}
-        result = self.tool.run(args, self.context)
-
-        assert isinstance(result, ToolExecutionResult)
-        assert result.success is False
-        assert "unavailable" in result.reply_text.lower()
+        assert any(message in result.reply_text.lower() for message in expected)
 
     def test_wmo_codes_coverage(self):
         """Test that WMO codes dictionary has expected entries."""
@@ -443,7 +408,7 @@ class TestExtractPlaceFromUserText:
         backend = Mock()
         backend.direct.return_value = return_value
         return patch(
-            "src.jarvis.tools.builtin.weather.get_llm_backend",
+            "jarvis.tools.builtin.weather.get_llm_backend",
             return_value=backend,
         )
 
@@ -457,12 +422,10 @@ class TestExtractPlaceFromUserText:
             got = _extract_place_from_user_text("weather paris?", self._cfg())
         assert got == "Paris"
 
-    def test_none_sentinel_returns_none(self):
-        for sentinel in ("none", "None", "NONE", "n/a", "unknown"):
-            with self._patched_backend(sentinel):
-                assert _extract_place_from_user_text(
-                    "what's the weather", self._cfg()
-                ) is None
+    @pytest.mark.parametrize("sentinel", ["none", "None", "NONE", "n/a", "unknown"])
+    def test_none_sentinel_returns_none(self, sentinel):
+        with self._patched_backend(sentinel):
+            assert _extract_place_from_user_text("what's the weather", self._cfg()) is None
 
     def test_sentence_response_rejected(self):
         """If the model explains instead of answering, treat it as no-place."""

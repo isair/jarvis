@@ -17,27 +17,15 @@ if ROOT is None:
     ROOT = _this_file.parent.parent
 
 SRC = ROOT / "src"
-# Both ROOT and SRC are on sys.path so tests can write either
-#   ``from src.jarvis.x import ...``  (older style, ``src.`` prefix)
-# or
-#   ``from jarvis.x import ...``      (newer style, no prefix)
-# CAUTION: those two import paths resolve to *distinct module instances*.
-# A monkeypatch on ``src.jarvis.memory.conversation.X`` does NOT take
-# effect on ``jarvis.memory.conversation.X`` and vice versa. When a test
-# stubs out a symbol the production code calls, you MUST patch the same
-# module instance the production code resolves at runtime. Production code
-# in ``src/`` imports without the ``src.`` prefix (e.g. inside endpoint
-# handlers it's ``from jarvis.memory.conversation import ...``), so a test
-# that monkeypatches a symbol used by production should also import
-# without the prefix. This is the convention going forward; the older
-# ``from src.X`` style is left in place to avoid a churn-only sweep, but
-# do not adopt it for new tests that monkeypatch.
-# Add repository root so that 'src' is a package prefix.
+# Repository imports expose test helpers; SRC matches the installed package layout.
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-# Also add the src directory (optional, for backwards compatibility with direct 'jarvis' imports)
+# Import Jarvis through its production package name.
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
+
+
+from jarvis.config import get_default_config
 
 
 @dataclass
@@ -53,6 +41,8 @@ class MockConfig:
     # branch get the legacy alias promoted into ``llm_chat_model`` by
     # ``__post_init__`` — same shape ``load_settings()`` produces.
     llm_chat_model: str = ""
+    wake_word: str = "jarvis"
+    wake_aliases: list = field(default_factory=list)
     whisper_model: str = "small"
     embedding_provider: str = ""
     embedding_base_url: str = ""
@@ -89,7 +79,7 @@ class MockConfig:
     fast_model: str = ""
     memory_enrichment_max_results: int = 5
     memory_enrichment_source: str = "diary"
-    location_enabled: bool = True
+    location_enabled: bool = False
     location_ip_address: Optional[str] = None
     location_auto_detect: bool = False
     location_cgnat_resolve_public_ip: bool = False
@@ -98,6 +88,8 @@ class MockConfig:
     llm_thinking_enabled: bool = False
     intent_judge_thinking_enabled: bool = False
     dictation_thinking_enabled: bool = False
+    stop_commands: list = field(default_factory=lambda: get_default_config()["stop_commands"])
+    stop_command_fuzzy_ratio: float = field(default_factory=lambda: get_default_config()["stop_command_fuzzy_ratio"])
     dictation_hotkey: str = "ctrl+alt+space"
     mcps: Dict[str, Any] = field(default_factory=dict)
     use_stdin: bool = True
@@ -116,19 +108,8 @@ class MockConfig:
 
 @pytest.fixture(autouse=True)
 def _isolate_user_config_path(tmp_path_factory, monkeypatch):
-    """Redirect ``default_config_path`` to a per-session tempfile so a test
-    that calls ``load_settings`` (or any other code path that resolves the
-    user's config) cannot read or overwrite ``~/.config/jarvis/config.json``.
-
-    Tests that need to exercise the loader against specific JSON should
-    monkey-patch ``_load_json`` (and ``_save_json`` if the migration would
-    trigger a write) directly. This fixture is a belt-and-braces guard so
-    a half-mocked test cannot reach the real config file.
-    """
+    """Select a temporary configuration for every runtime and desktop reader."""
     sandbox = tmp_path_factory.mktemp("jarvis_config_sandbox")
-    monkeypatch.setattr(
-        "jarvis.config.default_config_path", lambda: sandbox / "config.json"
-    )
     monkeypatch.setenv("JARVIS_CONFIG_PATH", str(sandbox / "config.json"))
 
 
@@ -136,6 +117,40 @@ def _isolate_user_config_path(tmp_path_factory, monkeypatch):
 def mock_config():
     """Provide a mock configuration for unit tests."""
     return MockConfig()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_dictation_history_path(tmp_path, monkeypatch):
+    """Default-history consumers share this test's private storage boundary."""
+    from jarvis.dictation import paths
+
+    monkeypatch.setattr(paths, "default_history_path", lambda: tmp_path / "default-history.json")
+
+
+@pytest.fixture(scope="session")
+def runtime_temp_root(tmp_path_factory):
+    return tmp_path_factory.mktemp("jarvis_runtime_sandbox")
+
+
+@pytest.fixture(autouse=True)
+def _isolate_runtime_tempfiles(runtime_temp_root, monkeypatch):
+    """Keep temporary IPC state separate from a running user's Jarvis instance."""
+    import tempfile
+    monkeypatch.setattr(tempfile, "tempdir", str(runtime_temp_root))
+    for variable in ("TMPDIR", "TEMP", "TMP"):
+        monkeypatch.setenv(variable, str(runtime_temp_root))
+
+
+@pytest.fixture
+def desktop_log_home(tmp_path, monkeypatch):
+    """Resolve desktop diagnostics inside this test's temporary home."""
+    from unittest.mock import MagicMock
+    from desktop_app import paths
+
+    owned_path = MagicMock(wraps=Path)
+    owned_path.home.return_value = tmp_path
+    monkeypatch.setattr(paths, "Path", owned_path)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "appdata"))
 
 
 @pytest.fixture
@@ -154,9 +169,9 @@ def dialogue_memory():
     return DialogueMemory(inactivity_timeout=300, max_interactions=20)
 
 
-@pytest.fixture
-def qapp():
-    """Provide a shared QApplication for Qt-based UI tests.
+@pytest.fixture(scope="session")
+def _qapplication():
+    """Keep one QApplication alive for the entire test process.
 
     Qt requires exactly one QApplication per process.  Re-uses an existing
     instance when present so repeated test runs inside a single session
@@ -172,5 +187,191 @@ def qapp():
     app = QApplication.instance()
     if app is None:
         app = QApplication([])
+    app.setQuitOnLastWindowClosed(False)
     yield app
 
+
+@pytest.fixture
+def qapp(_qapplication):
+    """Dispose each test's widgets while the shared application is still alive."""
+    from PyQt6 import sip
+    from PyQt6.QtCore import QCoreApplication, QEvent
+
+    existing = set(_qapplication.topLevelWidgets())
+    yield _qapplication
+    for widget in _qapplication.topLevelWidgets():
+        if widget not in existing and not sip.isdeleted(widget):
+            widget.deleteLater()
+    # Flush deferred destruction, not unrelated timers or application callbacks.
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_daemon_lock(tmp_path, monkeypatch):
+    """Daemon entry-point tests must not contend with the user's runtime."""
+    monkeypatch.setenv("JARVIS_DAEMON_LOCK", str(tmp_path / "jarvis_daemon.lock"))
+
+
+@pytest.fixture
+def no_network(monkeypatch):
+    """Opt-in guard for tests that require every dependency to stay in-process."""
+    import socket
+
+    attempts = []
+
+    def blocked(sock, address):
+        attempts.append(address)
+        raise AssertionError("Offline test attempted a network connection")
+
+    from importlib.util import find_spec
+
+    def blocked_native(*args, **kwargs):
+        attempts.append("native HTTP request")
+        raise AssertionError("Offline test attempted a native network connection")
+
+    # Minimal dependency jobs cannot load the optional native client.
+    if find_spec("curl_cffi") is not None:
+        from curl_cffi.requests import Session
+        monkeypatch.setattr(Session, "request", blocked_native)
+    monkeypatch.setattr(socket.socket, "connect", blocked)
+    monkeypatch.setattr(socket.socket, "connect_ex", blocked)
+    yield
+    assert not attempts, f"Unmocked network attempts: {attempts}"
+
+
+@pytest.fixture
+def owned_loopback_network(monkeypatch):
+    """Permit HTTP and socket connections only to endpoints owned by this test."""
+    import ipaddress
+    import socket
+    from urllib.parse import urlsplit
+    import requests
+
+    bound_sockets = []
+    denied = []
+    real_bind = socket.socket.bind
+    real_connect = socket.socket.connect
+    real_connect_ex = socket.socket.connect_ex
+    real_send = requests.Session.send
+
+    def address(host):
+        try:
+            return ipaddress.ip_address(host)
+        except ValueError:
+            try:
+                return ipaddress.ip_address(socket.getaddrinfo(
+                    host, None, flags=socket.AI_NUMERICHOST,
+                )[0][4][0])
+            except (OSError, TypeError):
+                return None
+
+    def is_loopback(host):
+        selected = address(host)
+        return selected is not None and selected.is_loopback
+
+    def reject():
+        denied.append("unowned network operation")
+        raise AssertionError("Local provider tests require an owned loopback endpoint")
+
+    def owns(host, port):
+        return is_loopback(host) and any(
+            stream.fileno() >= 0 and stream.getsockname()[1] == port
+            and address(stream.getsockname()[0]) == address(host)
+            for stream in bound_sockets
+        )
+
+    def bind(stream, address):
+        if not isinstance(address, tuple) or not is_loopback(address[0]):
+            reject()
+        result = real_bind(stream, address)
+        bound_sockets.append(stream)
+        return result
+
+    def connect(stream, address, *, operation):
+        if not isinstance(address, tuple) or not owns(address[0], address[1]):
+            reject()
+        return operation(stream, address)
+
+    def send(session, request, **kwargs):
+        target = urlsplit(request.url)
+        if not owns(target.hostname, target.port):
+            reject()
+        return real_send(session, request, **kwargs)
+
+    monkeypatch.setattr(socket.socket, "bind", bind)
+    monkeypatch.setattr(socket.socket, "connect", lambda stream, address: connect(stream, address, operation=real_connect))
+    monkeypatch.setattr(socket.socket, "connect_ex", lambda stream, address: connect(stream, address, operation=real_connect_ex))
+    monkeypatch.setattr(socket, "getfqdn", lambda name="": "localhost")
+    monkeypatch.setattr(requests.Session, "send", send)
+    yield
+    for stream in bound_sockets:
+        stream.close()
+    assert not denied, "A local provider test attempted an unowned network operation"
+
+
+@pytest.fixture
+def owned_loopback_http(owned_loopback_network, monkeypatch):
+    """Keep owned HTTP tests independent of ambient proxies and credentials."""
+    import requests
+
+    real_init = requests.Session.__init__
+
+    def initialise(session, *args, **kwargs):
+        real_init(session, *args, **kwargs)
+        session.trust_env = False
+
+    monkeypatch.setattr(requests.Session, "__init__", initialise)
+
+
+@pytest.fixture
+def settings_config_path(qapp, tmp_path, monkeypatch):
+    """Isolate the settings dialogue from user configuration and audio devices."""
+    from desktop_app import settings_window as sw
+
+    path = tmp_path / "config.json"
+    path.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("JARVIS_CONFIG_PATH", str(path))
+    monkeypatch.setattr(sw, "get_input_devices", lambda: [("", "Default"), ("7", "Microphone")])
+    monkeypatch.setattr(sw.QMessageBox, "information", lambda *args: None)
+    return path
+
+
+@pytest.fixture
+def silent_thinking_tunes(monkeypatch):
+    """Exercise real cue workers against owned output streams and drain them."""
+    import sounddevice
+    from jarvis.output import tune_player
+
+    players = []
+    streams = []
+    real_player = tune_player.TunePlayer
+
+    class SilentStream:
+        def __init__(self, **kwargs):
+            self.closed = False
+            streams.append(self)
+
+        def start(self):
+            pass
+
+        def close(self):
+            self.closed = True
+
+    class OwnedPlayer(real_player):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            players.append(self)
+
+    monkeypatch.setattr(sounddevice, 'OutputStream', SilentStream)
+    monkeypatch.setattr(tune_player, 'TunePlayer', OwnedPlayer)
+    try:
+        yield
+    finally:
+        workers = [player._thread for player in players if player._thread is not None]
+        for player in players:
+            player.stop_tune()
+        for worker in workers:
+            worker.join(timeout=5)
+        assert all(not worker.is_alive() for worker in workers), 'Test left a thinking-cue worker running'
+        assert all(not player.is_playing() for player in players), 'Test left a thinking cue active'
+        assert all(stream.closed for stream in streams), 'Test left an output stream open'

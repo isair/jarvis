@@ -1,10 +1,4 @@
-"""Tests for the memory viewer graph HTTP API.
-
-Focused on the preset-protection contract: the seeded fixed branches and
-root must not be deletable through the public DELETE endpoint, and the
-``/api/graph/presets`` endpoint must surface the same set the backend
-guards (single source of truth for the JS UI).
-"""
+"""The graph HTTP API protects preset nodes and rejects invalid parent edits."""
 
 from __future__ import annotations
 
@@ -17,7 +11,7 @@ try:
 except ImportError:
     _HAS_FLASK = False
 
-from src.jarvis.memory.graph import FIXED_BRANCH_IDS, GraphMemoryStore
+from jarvis.memory.graph import FIXED_BRANCH_IDS, GraphMemoryStore
 
 
 @pytest.mark.unit
@@ -27,7 +21,7 @@ class TestGraphPresetProtection:
 
     @pytest.fixture(autouse=True)
     def setup_app(self, tmp_path):
-        from src.desktop_app import memory_viewer
+        from desktop_app import memory_viewer
 
         db_path = str(tmp_path / "test.db")
         store = GraphMemoryStore(db_path)
@@ -43,6 +37,17 @@ class TestGraphPresetProtection:
 
         store.close()
         memory_viewer._graph_store = None
+
+    def test_runtime_viewer_serves_the_fixture_graph(self, monkeypatch):
+        from desktop_app import memory_viewer as runtime
+        node = self.store.create_node('Runtime marker', 'Synthetic fixture', data='A supplied fact', parent_id='user')
+        def unexpected_store(*args, **kwargs):
+            raise AssertionError('Runtime viewer ignored the supplied synthetic graph')
+        monkeypatch.setattr(runtime, '_get_db_path', lambda: ':memory:')
+        monkeypatch.setattr(runtime, 'GraphMemoryStore', unexpected_store)
+        response = runtime.app.test_client().get(f'/api/graph/node/{node.id}')
+        assert response.status_code == 200
+        assert response.get_json()['node']['data'] == 'A supplied fact'
 
     def test_presets_endpoint_lists_root_and_fixed_branches(self):
         resp = self.client.get("/api/graph/presets")
@@ -73,3 +78,14 @@ class TestGraphPresetProtection:
         assert resp.status_code == 200
         assert resp.get_json() == {"success": True}
         assert self.store.get_node(node.id) is None
+
+    @pytest.mark.parametrize('target', ['descendant', 'missing'])
+    def test_invalid_parent_edit_returns_controlled_error_without_writing(self, target):
+        node = self.store.create_node('Category', 'Keep description', data='Keep facts', parent_id='user')
+        child = self.store.create_node('Child', 'Child', parent_id=node.id)
+        parent = child.id if target == 'descendant' else 'absent-node'
+        before = self.store.get_node(node.id).to_dict()
+        response = self.client.put(f'/api/graph/node/{node.id}', json={'parent_id': parent, 'data': 'Changed facts'})
+        assert response.status_code == 404
+        assert response.get_json()['error']
+        assert self.store.get_node(node.id).to_dict() == before

@@ -6,53 +6,15 @@ Covers:
 """
 
 import json
-import sqlite3
-import sys
-import types
+from contextlib import closing
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import Mock
 
 import pytest
 
-# Stub optional third-party modules that may be missing from the environment.
-# NOTE: this must NOT leak into other test files. Injecting MagicMock objects
-# into sys.modules at module level poisons the whole session: when a later
-# test imports a real package that was stubbed (e.g. PyQt6), the import
-# system reuses the stale mock entry and every Qt widget then subclasses a
-# MagicMock ("issubclass() arg 1 must be a class"). The fixture below
-# scopes the stubs to this file and only stubs modules that are genuinely
-# unavailable.
-_MOCK_MODULES = [
-    "PyQt6", "PyQt6.QtWidgets", "PyQt6.QtCore", "PyQt6.QtGui",
-    "PyQt6.QtWebEngineWidgets", "PyQt6.sip",
-    "requests", "requests.exceptions",
-    "psutil",
-]
+from jarvis.memory.db import Database
 
-
-@pytest.fixture(autouse=True)
-def _stub_missing_modules(monkeypatch):
-    """Stub optional modules that are missing, restoring sys.modules after
-    each test so later test files see the real packages."""
-    import importlib.util
-
-    for mod_name in _MOCK_MODULES:
-        if mod_name in sys.modules:
-            continue
-        try:
-            spec = importlib.util.find_spec(mod_name)
-        except (ImportError, ModuleNotFoundError, ValueError):
-            spec = None
-        if spec is not None:
-            continue  # Real package importable; no stubbing needed.
-        monkeypatch.setitem(sys.modules, mod_name, MagicMock())
-
-    # Ensure requests.exceptions.Timeout is a proper exception class
-    requests_mod = sys.modules.get("requests")
-    if requests_mod is not None:
-        requests_mod.exceptions.Timeout = type("Timeout", (Exception,), {})
-
-from src.jarvis.memory.db import Database
+pytestmark = pytest.mark.usefixtures("no_network")
 
 
 # ── Database method tests ─────────────────────────────────────────────
@@ -138,9 +100,12 @@ class TestImportDiaryEndpoint:
     """Tests for /api/graph/import-diary streaming endpoint."""
 
     @pytest.fixture(autouse=True)
-    def setup_app(self, tmp_path):
+    def setup_app(self, tmp_path, monkeypatch, mock_config):
         """Set up Flask test client with a temporary database."""
-        from src.desktop_app.memory_viewer import app, get_graph_store
+        from desktop_app import memory_viewer
+        from jarvis import config
+        from jarvis.memory import graph_ops
+        from jarvis.memory.graph import GraphMemoryStore
 
         self.db_path = str(tmp_path / "test.db")
 
@@ -158,39 +123,34 @@ class TestImportDiaryEndpoint:
         )
         self.db.conn.commit()
 
-        app.config["TESTING"] = True
-        self.client = app.test_client()
-
-        yield
-        self.db.close()
+        self.graph = GraphMemoryStore(self.db_path)
+        self.extract = Mock(return_value=[])
+        monkeypatch.setattr(graph_ops, "extract_graph_memories", self.extract)
+        # Model consolidation is independent of import streaming and persistence.
+        monkeypatch.setattr(
+            graph_ops, "merge_node_data",
+            lambda **kwargs: graph_ops.MergeResult(success=False),
+        )
+        monkeypatch.setattr(config, "load_settings", lambda: mock_config)
+        monkeypatch.setattr(memory_viewer, "_get_db_path", lambda: self.db_path)
+        monkeypatch.setattr(memory_viewer, "get_graph_store", lambda: self.graph)
+        monkeypatch.setitem(memory_viewer.app.config, "TESTING", True)
+        self.client = memory_viewer.app.test_client()
+        try:
+            yield
+        finally:
+            self.graph.close()
+            self.db.close()
 
     def _parse_ndjson(self, data: bytes) -> list[dict]:
         """Parse newline-delimited JSON from response data."""
         lines = data.decode("utf-8").strip().split("\n")
         return [json.loads(line) for line in lines if line.strip()]
 
-    @patch("src.desktop_app.memory_viewer._get_db_path")
-    @patch("src.desktop_app.memory_viewer.load_settings")
-    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
-    def test_import_streams_progress(self, mock_llm, mock_settings, mock_db_path):
-        """Should stream start, progress, and complete messages."""
-        mock_db_path.return_value = self.db_path
-
-        cfg = MagicMock()
-        cfg.ollama_base_url = "http://localhost:11434"
-        cfg.ollama_chat_model = "test-model"
-        cfg.llm_chat_model = "test-model"
-        cfg.llm_chat_timeout_sec = 10.0
-        cfg.llm_thinking_enabled = False
-        mock_settings.return_value = cfg
-
-        # LLM returns facts for extraction, NONE for placement (writes to root)
-        mock_llm.side_effect = [
-            '["Likes dark roast coffee"]',  # extract facts from summary 1
-            "NONE",                          # traverse for fact 1 (no children, goes to root)
-            '["Works at Acme Corp"]',        # extract facts from summary 2
-            "NONE",                          # traverse for fact 2
-        ]
+    def test_import_streams_progress(self):
+        """Stream progress while persisting every extracted fact."""
+        facts = ["Likes dark roast coffee", "Works at Acme Corp"]
+        self.extract.side_effect = [[("user", fact)] for fact in facts]
 
         resp = self.client.post("/api/graph/import-diary")
         assert resp.status_code == 200
@@ -207,48 +167,26 @@ class TestImportDiaryEndpoint:
 
         complete_msg = next(m for m in messages if m["type"] == "complete")
         assert complete_msg["processed"] == 2
+        assert complete_msg["total_facts"] == 2
+        assert set(self.graph.get_node("user").data.splitlines()) == set(facts)
 
-    @patch("src.desktop_app.memory_viewer._get_db_path")
-    @patch("src.desktop_app.memory_viewer.load_settings")
-    def test_import_empty_diary(self, mock_settings, mock_db_path, tmp_path):
+    def test_import_empty_diary(self, tmp_path, monkeypatch):
         """Should handle empty diary gracefully."""
-        empty_db_path = str(tmp_path / "empty.db")
-        empty_db = Database(empty_db_path, sqlite_vss_path=None)
-        mock_db_path.return_value = empty_db_path
+        from desktop_app import memory_viewer
 
-        cfg = MagicMock()
-        mock_settings.return_value = cfg
-
-        resp = self.client.post("/api/graph/import-diary")
-        messages = self._parse_ndjson(resp.data)
-
+        empty_path = str(tmp_path / "empty.db")
+        with closing(Database(empty_path, sqlite_vss_path=None)):
+            monkeypatch.setattr(memory_viewer, "_get_db_path", lambda: empty_path)
+            response = self.client.post("/api/graph/import-diary")
+            messages = self._parse_ndjson(response.data)
         assert len(messages) == 1
         assert messages[0]["type"] == "complete"
         assert messages[0]["processed"] == 0
 
-        empty_db.close()
-
-    @patch("src.desktop_app.memory_viewer._get_db_path")
-    @patch("src.desktop_app.memory_viewer.load_settings")
-    @patch("src.jarvis.memory.graph_ops.call_llm_direct")
-    def test_import_continues_on_per_summary_error(self, mock_llm, mock_settings, mock_db_path):
-        """If one summary fails, the import should continue with the rest."""
-        mock_db_path.return_value = self.db_path
-
-        cfg = MagicMock()
-        cfg.ollama_base_url = "http://localhost:11434"
-        cfg.ollama_chat_model = "test-model"
-        cfg.llm_chat_model = "test-model"
-        cfg.llm_chat_timeout_sec = 10.0
-        cfg.llm_thinking_enabled = False
-        mock_settings.return_value = cfg
-
-        # First summary extraction fails, second succeeds
-        mock_llm.side_effect = [
-            None,                       # extraction fails for summary 1
-            '["Works at Acme Corp"]',   # extract facts from summary 2
-            "NONE",                     # traverse
-        ]
+    def test_import_continues_on_per_summary_error(self):
+        """A failed entry must not prevent the next fact being persisted."""
+        fact = "Works at Acme Corp"
+        self.extract.side_effect = [RuntimeError("Synthetic extraction failure"), [("user", fact)]]
 
         resp = self.client.post("/api/graph/import-diary")
         messages = self._parse_ndjson(resp.data)
@@ -258,6 +196,10 @@ class TestImportDiaryEndpoint:
 
         complete_msg = next(m for m in messages if m["type"] == "complete")
         assert complete_msg["processed"] == 2
+        assert "error" in progress_msgs[0]
+        assert progress_msgs[1]["facts"] == 1
+        assert complete_msg["total_facts"] == 1
+        assert self.graph.get_node("user").data == fact
 
 
 @pytest.mark.unit
@@ -265,11 +207,11 @@ class TestImportDiaryEndpoint:
 class TestImportDialogueDismissal:
     """Regression: after diary import succeeds, loadStats must not re-show the modal."""
 
-    def test_html_contains_diary_import_done_guard(self):
+    def test_html_contains_diary_import_done_guard(self, monkeypatch):
         """The loadStats check should be gated by diaryImportDone flag."""
-        from src.desktop_app.memory_viewer import app
+        from desktop_app.memory_viewer import app
 
-        app.config["TESTING"] = True
+        monkeypatch.setitem(app.config, "TESTING", True)
         client = app.test_client()
         resp = client.get("/")
         html = resp.data.decode("utf-8")

@@ -1,117 +1,73 @@
-import types
-from unittest.mock import patch
-from jarvis.reply.engine import run_reply_engine
-from jarvis.utils.location import (
-    get_location_context,
-    _get_external_ip_automatically,
-)
+"""Location context honours user controls and the ordered IP fallback chain."""
+
+import pytest
+
+from jarvis.reply import engine
+from jarvis.utils import location
+
+pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("no_network")]
 
 
-class DummyDB:
-    pass
+def test_disabled_location_retains_time_without_looking_up_location(mock_config, monkeypatch):
+    mock_config.location_enabled = False
+    mock_config.location_ip_address = "93.184.216.34"
+
+    def forbidden_lookup(**kwargs):
+        raise AssertionError("Disabled location attempted a lookup")
+
+    monkeypatch.setattr(engine, "get_location_context_with_timezone", forbidden_lookup)
+    monkeypatch.setattr(engine, "format_time_context", lambda zone: "System time" if zone is None else "Unexpected timezone")
+    assert engine._live_time_location_string(mock_config) == "Current local time: System time. Saved event dates must match the requested calendar date. Location: Disabled"
 
 
-class DummyDialogueMemory:
-    def has_recent_messages(self):
-        return False
+@pytest.mark.parametrize("timezone", [None, "Europe/London"])
+def test_enabled_location_uses_configured_lookup_and_returned_timezone(mock_config, monkeypatch, timezone):
+    mock_config.location_enabled = True
+    mock_config.location_ip_address = "93.184.216.34"
+    mock_config.location_auto_detect = False
+    mock_config.location_cgnat_resolve_public_ip = False
+    mock_config.location_cache_minutes = 17
+    expected = dict(config_ip=mock_config.location_ip_address,
+                    auto_detect=mock_config.location_auto_detect,
+                    resolve_cgnat_public_ip=mock_config.location_cgnat_resolve_public_ip,
+                    location_cache_minutes=mock_config.location_cache_minutes)
 
-    def get_recent_messages(self):
-        return []
+    def configured_lookup(**kwargs):
+        assert kwargs == expected
+        return "Location: Synthetic city", timezone
 
-    def add_message(self, role, content):
-        pass
-
-
-class DummyTTS:
-    enabled = False
-
-
-def _make_cfg(**overrides):
-    # Minimal settings object with required attributes referenced in engine
-    base = {
-        'llm_provider': 'ollama',
-        'llm_base_url': 'http://127.0.0.1:11434',
-        'llm_chat_model': 'gemma4',
-        'embedding_model': 'nomic-embed-text',
-        'ollama_base_url': 'http://127.0.0.1:11434',
-        'ollama_chat_model': 'gemma4',
-        'ollama_embed_model': 'nomic-embed-text',
-        'llm_profile_select_timeout_sec': 0.1,
-        'llm_tools_timeout_sec': 0.1,
-        'llm_embedding_timeout_sec': 0.1,
-        'llm_chat_timeout_sec': 0.1,
-        'agentic_max_turns': 1,
-        'active_profiles': ['developer'],
-        'voice_debug': False,
-        'memory_enrichment_max_results': 0,
-        'mcps': {},
-        'location_enabled': True,
-        'location_auto_detect': False,
-        'location_ip_address': None,
-        'location_cgnat_resolve_public_ip': True,
-    }
-    base.update(overrides)
-    return types.SimpleNamespace(**base)
+    monkeypatch.setattr(engine, "get_location_context_with_timezone", configured_lookup)
+    monkeypatch.setattr(engine, "format_time_context", lambda zone: "Selected time" if zone == timezone else "Unexpected timezone")
+    assert engine._live_time_location_string(mock_config) == "Current local time: Selected time. Saved event dates must match the requested calendar date. Location: Synthetic city"
 
 
-def test_get_location_context_disabled_flag():
-    cfg = _make_cfg(location_enabled=False)
-    # Direct call should be 'Location: Unknown' since we bypass engine wrapper
-    direct = get_location_context(config_ip=None, auto_detect=False, resolve_cgnat_public_ip=True)
-    # But engine should inject a context message that explicitly shows disabled
-    # We can't fully run LLM chat here (would require external service), so instead
-    # we call the internal helper indirectly by simulating run_reply_engine with 0 turns.
-    # Set agentic_max_turns=0 to skip loop and ensure no network activity.
-    cfg.agentic_max_turns = 0
-    reply = run_reply_engine(DummyDB(), cfg, DummyTTS(), "test message", DummyDialogueMemory())
-    # Engine returns None because no turns executed, but we assert that our disabled
-    # logic produced 'Location: Disabled' rather than attempting lookup (cannot easily
-    # capture printed system messages without refactor, so just ensure direct value plausible)
-    assert direct in ("Location: Unknown", "Location: Disabled")
+def test_location_lookup_failure_omits_context_without_interrupting_reply(mock_config, monkeypatch):
+    mock_config.location_enabled = True
+
+    def unavailable_lookup(**kwargs):
+        raise OSError("Synthetic unavailable lookup")
+
+    monkeypatch.setattr(engine, "get_location_context_with_timezone", unavailable_lookup)
+    assert engine._live_time_location_string(mock_config) == ""
 
 
-def test_auto_detect_falls_back_to_opendns_when_upnp_and_socket_fail():
-    """OpenDNS DNS query is the final fallback in auto-detection (step 3)."""
-    with patch("jarvis.utils.location._get_external_ip_via_upnp", return_value=None), \
-         patch("jarvis.utils.location._get_external_ip_via_socket", return_value=None), \
-         patch("jarvis.utils.location._resolve_public_ip_via_opendns", return_value="93.184.216.34") as mock_dns:
-        result = _get_external_ip_automatically()
-        mock_dns.assert_called_once()
-        assert result == "93.184.216.34"
+@pytest.mark.parametrize("upnp,socket,dns,expected", [
+    ("93.184.216.34", None, None, "93.184.216.34"),
+    (None, "93.184.216.35", None, "93.184.216.35"),
+    (None, None, "93.184.216.36", "93.184.216.36"),
+    (None, None, None, None),
+    (None, None, "192.168.1.1", None),
+])
+def test_ip_detection_prefers_local_methods_and_rejects_private_dns_results(monkeypatch, upnp, socket, dns, expected):
+    def socket_lookup():
+        assert upnp is None, "UPnP success must bypass socket detection"
+        return socket
 
+    def dns_lookup():
+        assert upnp is None and socket is None, "Local success must bypass external DNS"
+        return dns
 
-def test_auto_detect_skips_opendns_when_upnp_succeeds():
-    """OpenDNS is not called when UPnP already returned a public IP."""
-    with patch("jarvis.utils.location._get_external_ip_via_upnp", return_value="203.0.113.1"), \
-         patch("jarvis.utils.location._resolve_public_ip_via_opendns") as mock_dns:
-        result = _get_external_ip_automatically()
-        mock_dns.assert_not_called()
-        assert result == "203.0.113.1"
-
-
-def test_auto_detect_skips_opendns_when_socket_succeeds():
-    """OpenDNS is not called when socket heuristic already returned a public IP."""
-    with patch("jarvis.utils.location._get_external_ip_via_upnp", return_value=None), \
-         patch("jarvis.utils.location._get_external_ip_via_socket", return_value="198.51.100.5"), \
-         patch("jarvis.utils.location._resolve_public_ip_via_opendns") as mock_dns:
-        result = _get_external_ip_automatically()
-        mock_dns.assert_not_called()
-        assert result == "198.51.100.5"
-
-
-def test_auto_detect_returns_none_when_all_methods_fail():
-    """Returns None when UPnP, socket, and OpenDNS all fail."""
-    with patch("jarvis.utils.location._get_external_ip_via_upnp", return_value=None), \
-         patch("jarvis.utils.location._get_external_ip_via_socket", return_value=None), \
-         patch("jarvis.utils.location._resolve_public_ip_via_opendns", return_value=None):
-        result = _get_external_ip_automatically()
-        assert result is None
-
-
-def test_auto_detect_rejects_private_ip_from_opendns():
-    """Private IPs from OpenDNS are rejected (not returned as valid)."""
-    with patch("jarvis.utils.location._get_external_ip_via_upnp", return_value=None), \
-         patch("jarvis.utils.location._get_external_ip_via_socket", return_value=None), \
-         patch("jarvis.utils.location._resolve_public_ip_via_opendns", return_value="192.168.1.1"):
-        result = _get_external_ip_automatically()
-        assert result is None
+    monkeypatch.setattr(location, "_get_external_ip_via_upnp", lambda: upnp)
+    monkeypatch.setattr(location, "_get_external_ip_via_socket", socket_lookup)
+    monkeypatch.setattr(location, "_resolve_public_ip_via_opendns", dns_lookup)
+    assert location._get_external_ip_automatically() == expected

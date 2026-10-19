@@ -9,13 +9,12 @@ since the warm profile does not include world facts.
 
 from __future__ import annotations
 
-import os
-import tempfile
+from contextlib import closing
 
 import pytest
 
-from src.jarvis.memory.conversation import DialogueMemory
-from src.jarvis.memory.graph import (
+from jarvis.memory.conversation import DialogueMemory
+from jarvis.memory.graph import (
     BRANCH_DIRECTIVES,
     BRANCH_USER,
     BRANCH_WORLD,
@@ -26,19 +25,25 @@ from src.jarvis.memory.graph import (
 
 
 @pytest.fixture
-def graph_store():
-    fd, path = tempfile.mkstemp(suffix=".db")
-    os.close(fd)
-    store = GraphMemoryStore(path)
-    yield store
-    try:
-        os.unlink(path)
-    except OSError:
-        pass
+def graph_store(tmp_path):
+    with closing(GraphMemoryStore(str(tmp_path / 'graph.db'))) as store:
+        yield store
 
 
 @pytest.mark.unit
 class TestMutationListenerRegistry:
+    def test_fixture_write_notifies_runtime_subscriber(self, graph_store):
+        from jarvis.memory import graph as runtime
+        events = []
+        def subscriber(**event):
+            events.append(event)
+        runtime.register_graph_mutation_listener(subscriber)
+        try:
+            node = graph_store.create_node('Source', 'Synthetic source', 'One fact.', BRANCH_USER)
+            assert events == [{'action': 'create', 'node_id': node.id, 'branch': BRANCH_USER}]
+        finally:
+            runtime.unregister_graph_mutation_listener(subscriber)
+
     def test_create_under_user_notifies_with_user_branch(self, graph_store):
         events: list[dict] = []
 
@@ -121,7 +126,7 @@ class TestMutationListenerRegistry:
         rather than spin. Returns ``None`` — listener treats that as
         "unknown branch" and skips invalidation.
         """
-        from src.jarvis.memory.graph import MAX_TRAVERSAL_DEPTH
+        from jarvis.memory.graph import MAX_TRAVERSAL_DEPTH
 
         # Build a chain of MAX_TRAVERSAL_DEPTH + 2 nodes under user; the
         # tail node should still resolve because the walk can finish

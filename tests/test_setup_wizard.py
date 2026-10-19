@@ -1,15 +1,22 @@
 """
-Tests for setup wizard detection functions.
+Setup detection, provider configuration and wizard controls.
 
-These tests verify the Ollama detection logic without touching the UI.
-They treat the detection functions as black boxes, verifying inputs produce correct outputs.
+Unit scenarios are offline. Server discovery and model-listing integration
+scenarios use owned loopback HTTP endpoints.
 """
 
 import subprocess
+import json
+import os
+import shutil
+import sys
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 import pytest
+import requests
 
+from desktop_app.whisper_models import wizard_model_options
 from desktop_app.setup_wizard import (
     check_ollama_cli,
     check_ollama_server,
@@ -25,7 +32,9 @@ from desktop_app.setup_wizard import (
     OpenAICompatiblePage,
 )
 from desktop_app.mcp_catalogue import get_wizard_entries
+from desktop_app import setup_wizard
 from jarvis.config import DEFAULT_CHAT_MODEL
+from jarvis.llm import ollama
 from jarvis.utils.location import (
     get_location_context,
     is_location_available,
@@ -34,7 +43,7 @@ from jarvis.utils.location import (
 
 
 @pytest.fixture
-def stub_openai_server():
+def stub_openai_server(owned_loopback_http):
     """A minimal in-process server answering GET /v1/models, for exercising
     the wizard's model-fetch against a real HTTP endpoint."""
     import json
@@ -66,76 +75,138 @@ def stub_openai_server():
     finally:
         httpd.shutdown()
         httpd.server_close()
+        thread.join(timeout=3)
+        assert not thread.is_alive()
 
 
+@pytest.fixture
+def unavailable_openai_endpoint(owned_loopback_http):
+    """Reserve an owned port without listening so failure cannot hit another service."""
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as stream:
+        stream.bind(("127.0.0.1", 0))
+        yield f"http://127.0.0.1:{stream.getsockname()[1]}/v1"
+
+
+@pytest.fixture
+def real_executable_probe(tmp_path):
+    """Observe independent filesystem probes while a detection scenario runs."""
+    executable = sys.executable
+    absent_file = str(tmp_path / 'absent-executable')
+
+    def probe():
+        return (shutil.which(executable), os.path.isfile(executable),
+                os.access(executable, os.X_OK), os.access(absent_file, os.X_OK))
+
+    expected = probe()
+    assert expected == (executable, True, True, False)
+    with ThreadPoolExecutor(max_workers=1) as worker:
+        yield lambda: (worker.submit(probe).result(timeout=5), expected)
+
+
+@pytest.mark.unit
+@pytest.mark.usefixtures('no_network')
 class TestCheckOllamaCli:
     """Tests for Ollama CLI detection."""
 
-    def test_detects_ollama_in_path(self):
+    @pytest.fixture(autouse=True)
+    def detection_modules(self, monkeypatch):
+        """Keep detection stubs local to the wizard's imported modules."""
+        monkeypatch.setattr(setup_wizard, 'shutil', SimpleNamespace(**vars(shutil)))
+        monkeypatch.setattr(setup_wizard, 'os', SimpleNamespace(**{
+            **vars(os), 'path': SimpleNamespace(**vars(os.path)),
+        }))
+
+    def test_detects_ollama_in_path(self, real_executable_probe):
         """When ollama is in PATH, returns True with path."""
-        with patch("shutil.which", return_value="/usr/local/bin/ollama"):
+        with patch.object(setup_wizard.shutil, 'which', return_value='/usr/local/bin/ollama'):
             is_installed, path = check_ollama_cli()
 
             assert is_installed is True
             assert path == "/usr/local/bin/ollama"
+            actual, expected = real_executable_probe()
+            assert actual == expected
 
-    def test_returns_false_when_not_installed(self):
+    def test_returns_false_when_not_installed(self, real_executable_probe):
         """When ollama is not installed anywhere, returns False."""
-        with patch("shutil.which", return_value=None):
-            with patch("os.path.isfile", return_value=False):
-                is_installed, path = check_ollama_cli()
+        with patch.object(setup_wizard.shutil, 'which', return_value=None), \
+                patch.object(setup_wizard.os.path, 'isfile', return_value=False):
+            is_installed, path = check_ollama_cli()
 
-                assert is_installed is False
-                assert path is None
+            assert is_installed is False
+            assert path is None
+            actual, expected = real_executable_probe()
+            assert actual == expected
 
-    def test_checks_macos_homebrew_path(self):
+    def test_checks_macos_homebrew_path(self, real_executable_probe):
         """On macOS, checks Homebrew installation path."""
-        with patch("shutil.which", return_value=None):
-            with patch("os.path.isfile") as mock_isfile:
-                with patch("os.access", return_value=True):
-                    # First call for /usr/local/bin/ollama returns False
-                    # Second call for /opt/homebrew/bin/ollama returns True
-                    mock_isfile.side_effect = lambda p: p == "/opt/homebrew/bin/ollama"
+        with patch.object(setup_wizard.shutil, 'which', return_value=None), \
+                patch.object(setup_wizard.os.path, 'isfile', side_effect=lambda p: p == '/opt/homebrew/bin/ollama'), \
+                patch.object(setup_wizard.os, 'access', return_value=True):
+            is_installed, path = check_ollama_cli()
 
-                    is_installed, path = check_ollama_cli()
-
-                    assert is_installed is True
-                    assert path == "/opt/homebrew/bin/ollama"
+            assert is_installed is True
+            assert path == "/opt/homebrew/bin/ollama"
+            actual, expected = real_executable_probe()
+            assert actual == expected
 
 
+@pytest.fixture
+def real_http_protocol_probe():
+    """Exercise independent HTTP protocol validation without opening a socket."""
+    with ThreadPoolExecutor(max_workers=1) as worker:
+        yield lambda: worker.submit(requests.get, 'jarvis-test://unsupported-transport', timeout=1).result(timeout=5)
+
+
+@pytest.mark.unit
+@pytest.mark.usefixtures('no_network')
 class TestCheckOllamaServer:
     """Tests for Ollama server detection."""
 
-    def test_detects_running_server(self):
-        """When server is running, returns True with version."""
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {"version": "0.1.23"}
+    @pytest.fixture(autouse=True)
+    def detection_transport(self, monkeypatch, mock_config):
+        """Use owned configuration and isolate the backend HTTP stub."""
+        mock_config.ollama_base_url = 'http://wizard-test.invalid:11434'
+        monkeypatch.setattr(setup_wizard, 'load_settings', lambda: mock_config)
 
-        with patch("requests.get", return_value=mock_response):
+    def test_detects_running_server(self, real_http_protocol_probe):
+        """When server is running, returns True with version."""
+        mock_response = requests.Response()
+        mock_response.status_code = 200
+        mock_response._content = json.dumps({'version': '0.1.23'}).encode()
+
+        with patch.object(ollama.http, 'get', return_value=mock_response):
             is_running, version = check_ollama_server()
 
             assert is_running is True
             assert version == "0.1.23"
+            with pytest.raises(requests.exceptions.InvalidSchema):
+                real_http_protocol_probe()
 
-    def test_returns_false_when_server_not_running(self):
+    def test_returns_false_when_server_not_running(self, real_http_protocol_probe):
         """When server is not responding, returns False."""
-        with patch("requests.get", side_effect=Exception("Connection refused")):
+        with patch.object(ollama.http, 'get', side_effect=requests.exceptions.ConnectionError('Connection refused')):
             is_running, version = check_ollama_server()
 
             assert is_running is False
             assert version is None
+            with pytest.raises(requests.exceptions.InvalidSchema):
+                real_http_protocol_probe()
 
-    def test_handles_timeout(self):
+    def test_handles_timeout(self, real_http_protocol_probe):
         """When request times out, returns False."""
-        import requests
-        with patch("requests.get", side_effect=requests.exceptions.Timeout):
+        with patch.object(ollama.http, 'get', side_effect=requests.exceptions.Timeout):
             is_running, version = check_ollama_server()
 
             assert is_running is False
             assert version is None
+            with pytest.raises(requests.exceptions.InvalidSchema):
+                real_http_protocol_probe()
 
 
+@pytest.mark.unit
+@pytest.mark.usefixtures("no_network")
 class TestGetRequiredModels:
     """Tests for getting required models from config."""
 
@@ -186,9 +257,8 @@ class TestGetRequiredModels:
         with patch("desktop_app.setup_wizard.load_settings", side_effect=Exception("Config error")):
             models = get_required_models()
 
-            assert len(models) == 2
-            assert "gemma4:e2b" in models
-            assert "nomic-embed-text" in models
+            from jarvis.config import DEFAULT_CHAT_MODEL, DEFAULT_FAST_MODEL
+            assert set(models) == {DEFAULT_CHAT_MODEL, DEFAULT_FAST_MODEL, "nomic-embed-text"}
 
     def _cfg(self, **over):
         from types import SimpleNamespace
@@ -243,62 +313,83 @@ class TestGetRequiredModels:
         assert models == ["gpt-oss:20b", "gemma4:e2b"]
 
 
+@pytest.fixture
+def real_child_process_probe():
+    """Run an independent Python child without site hooks or user imports."""
+    command = [sys.executable, '-I', '-S', '-c', "print('independent child')"]
+    with ThreadPoolExecutor(max_workers=1) as worker:
+        yield lambda: worker.submit(subprocess.run, command, capture_output=True, text=True, timeout=5).result(timeout=10)
+
+
+@pytest.mark.unit
+@pytest.mark.usefixtures('no_network')
 class TestCheckInstalledModels:
     """Tests for checking installed Ollama models."""
 
-    def test_parses_ollama_list_output(self):
+    @pytest.fixture(autouse=True)
+    def detection_processes(self, monkeypatch):
+        """Keep process and executable lookup stubs local to the wizard."""
+        monkeypatch.setattr(setup_wizard, 'subprocess', SimpleNamespace(**vars(subprocess)))
+        monkeypatch.setattr(setup_wizard, 'shutil', SimpleNamespace(**vars(shutil)))
+
+    def test_parses_ollama_list_output(self, real_child_process_probe):
         """Correctly parses 'ollama list' output."""
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = """NAME                       ID              SIZE      MODIFIED
+        mock_result = subprocess.CompletedProcess(['/usr/bin/ollama', 'list'], 0, stdout="""NAME                       ID              SIZE      MODIFIED
 llama2:7b                  abc123          3.8 GB    2 days ago
 nomic-embed-text:latest    def456          274 MB    1 week ago
-"""
+""")
 
-        with patch("subprocess.run", return_value=mock_result):
+        with patch.object(setup_wizard.subprocess, 'run', return_value=mock_result):
             models = check_installed_models("/usr/bin/ollama")
 
             assert "llama2:7b" in models
             assert "nomic-embed-text:latest" in models
+            child = real_child_process_probe()
+            assert (child.returncode, child.stdout) == (0, 'independent child\n')
 
-    def test_returns_empty_on_error(self):
+    def test_returns_empty_on_error(self, real_child_process_probe):
         """Returns empty list if ollama list fails."""
-        mock_result = MagicMock()
-        mock_result.returncode = 1
+        mock_result = subprocess.CompletedProcess(['/wizard/test/ollama', 'list'], 1, stdout='')
 
-        with patch("subprocess.run", return_value=mock_result):
-            models = check_installed_models()
+        with patch.object(setup_wizard.subprocess, 'run', return_value=mock_result):
+            models = check_installed_models('/wizard/test/ollama')
 
             assert models == []
+            child = real_child_process_probe()
+            assert (child.returncode, child.stdout) == (0, 'independent child\n')
 
-    def test_handles_subprocess_exception(self):
+    def test_handles_subprocess_exception(self, real_child_process_probe):
         """Returns empty list if subprocess raises exception."""
-        with patch("subprocess.run", side_effect=Exception("Command not found")):
-            models = check_installed_models()
+        with patch.object(setup_wizard.subprocess, 'run', side_effect=FileNotFoundError('Command not found')):
+            models = check_installed_models('/wizard/test/ollama')
 
             assert models == []
+            child = real_child_process_probe()
+            assert (child.returncode, child.stdout) == (0, 'independent child\n')
 
-    def test_falls_back_to_check_ollama_cli_when_path_unset(self):
+    def test_falls_back_to_check_ollama_cli_when_path_unset(self, real_child_process_probe, real_executable_probe):
         """When PATH does not contain ollama (e.g. frozen macOS .app launch),
         falls back to check_ollama_cli() so the resolved binary is invoked
         instead of plain "ollama" which would fail with FileNotFoundError."""
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = "NAME    ID    SIZE    MODIFIED\nllama2:7b    abc    3.8 GB    1d\n"
+        mock_result = subprocess.CompletedProcess(['/usr/local/bin/ollama', 'list'], 0,
+            stdout='NAME    ID    SIZE    MODIFIED\nllama2:7b    abc    3.8 GB    1d\n')
 
-        with patch("desktop_app.setup_wizard.shutil.which", return_value=None):
-            with patch(
-                "desktop_app.setup_wizard.check_ollama_cli",
-                return_value=(True, "/usr/local/bin/ollama"),
-            ):
-                with patch("subprocess.run", return_value=mock_result) as run:
-                    models = check_installed_models()
+        with patch.object(setup_wizard.shutil, 'which', return_value=None), \
+                patch.object(setup_wizard, 'check_ollama_cli', return_value=(True, '/usr/local/bin/ollama')), \
+                patch.object(setup_wizard.subprocess, 'run', return_value=mock_result) as run:
+            models = check_installed_models()
 
-                    assert "llama2:7b" in models
-                    args, _ = run.call_args
-                    assert args[0][0] == "/usr/local/bin/ollama"
+            assert "llama2:7b" in models
+            args, _ = run.call_args
+            assert args[0][0] == "/usr/local/bin/ollama"
+            actual, expected = real_executable_probe()
+            assert actual == expected
+            child = real_child_process_probe()
+            assert (child.returncode, child.stdout) == (0, 'independent child\n')
 
 
+@pytest.mark.unit
+@pytest.mark.usefixtures("no_network")
 class TestResolveOllamaPath:
     """Tests for the ollama CLI path resolver."""
 
@@ -323,6 +414,8 @@ class TestResolveOllamaPath:
                 assert resolve_ollama_path() == "ollama"
 
 
+@pytest.mark.unit
+@pytest.mark.usefixtures("no_network")
 class TestCheckOllamaStatus:
     """Tests for complete Ollama status check."""
 
@@ -364,6 +457,8 @@ class TestCheckOllamaStatus:
                         assert status.is_fully_setup is False
 
 
+@pytest.mark.unit
+@pytest.mark.usefixtures("no_network")
 class TestShouldShowSetupWizard:
     """Tests for wizard display logic."""
 
@@ -486,6 +581,8 @@ class TestShouldShowSetupWizard:
             assert should_show_setup_wizard(force_server_check=True) is False
 
 
+@pytest.mark.unit
+@pytest.mark.usefixtures("no_network")
 class TestProviderChoicePage:
     """The first real wizard decision: which runtime serves the LLM."""
 
@@ -499,7 +596,7 @@ class TestProviderChoicePage:
             f.write("{}")
             cfg_path = Path(f.name)
         try:
-            with patch("jarvis.config.default_config_path", return_value=cfg_path):
+            with patch("jarvis.config.get_config_path", return_value=cfg_path):
                 page._selected = "openai_compatible"
                 assert page.validatePage() is True
             saved = json.loads(cfg_path.read_text())
@@ -525,7 +622,7 @@ class TestProviderChoicePage:
             }, f)
             cfg_path = Path(f.name)
         try:
-            with patch("jarvis.config.default_config_path", return_value=cfg_path):
+            with patch("jarvis.config.get_config_path", return_value=cfg_path):
                 page._selected = "ollama"
                 assert page.validatePage() is True
             saved = json.loads(cfg_path.read_text())
@@ -555,7 +652,7 @@ class TestProviderChoicePage:
             json.dump({"llm_provider": "openai_compatible"}, f)
             cfg_path = Path(f.name)
         try:
-            with patch("jarvis.config.default_config_path", return_value=cfg_path):
+            with patch("jarvis.config.get_config_path", return_value=cfg_path):
                 page = ProviderChoicePage()  # __init__ calls _preselect_from_config
             assert page._selected == "openai_compatible"
             assert page._openai_radio.isChecked() is True
@@ -570,7 +667,7 @@ class TestProviderChoicePage:
             f.write("{}")
             cfg_path = Path(f.name)
         try:
-            with patch("jarvis.config.default_config_path", return_value=cfg_path):
+            with patch("jarvis.config.get_config_path", return_value=cfg_path):
                 page = ProviderChoicePage()
             assert page._selected == "ollama"
             assert page._ollama_radio.isChecked() is True
@@ -587,7 +684,7 @@ class TestProviderChoicePage:
             f.write("{}")
             cfg_path = Path(f.name)
         try:
-            with patch("jarvis.config.default_config_path", return_value=cfg_path):
+            with patch("jarvis.config.get_config_path", return_value=cfg_path):
                 page = ProviderChoicePage()
             # Default: Ollama selected, OpenAI not.
             assert page._ollama_radio.isChecked() and not page._openai_radio.isChecked()
@@ -611,7 +708,7 @@ class TestProviderChoicePage:
             f.write("{}")
             cfg_path = Path(f.name)
         try:
-            with patch("jarvis.config.default_config_path", return_value=cfg_path):
+            with patch("jarvis.config.get_config_path", return_value=cfg_path):
                 page = ProviderChoicePage()
             blob = " ".join(lbl.text().lower() for lbl in page.findChildren(QLabel))
             assert "local" in blob and "network" in blob, (
@@ -641,13 +738,15 @@ class TestProviderChoicePage:
             f.write("{}")
             cfg_path = Path(f.name)
         try:
-            with patch("jarvis.config.default_config_path", return_value=cfg_path):
+            with patch("jarvis.config.get_config_path", return_value=cfg_path):
                 wiz = SetupWizard()
             assert wiz.startId() == wiz.mlx_whisper_page_id
         finally:
             cfg_path.unlink(missing_ok=True)
 
 
+@pytest.mark.unit
+@pytest.mark.usefixtures("no_network")
 class TestWelcomePageFlow:
     """The Welcome/status page is reached only on the Ollama branch."""
 
@@ -661,6 +760,8 @@ class TestWelcomePageFlow:
             assert page.nextId() == 9
 
 
+@pytest.mark.unit
+@pytest.mark.usefixtures("no_network")
 class TestOpenAICompatiblePage:
     """Collects the OpenAI-compatible connection details."""
 
@@ -683,7 +784,7 @@ class TestOpenAICompatiblePage:
             json.dump({"llm_provider": "openai_compatible"}, f)
             cfg_path = Path(f.name)
         try:
-            with patch("jarvis.config.default_config_path", return_value=cfg_path):
+            with patch("jarvis.config.get_config_path", return_value=cfg_path):
                 page._read_inputs = MagicMock(return_value=(
                     "http://localhost:1234/v1", "sk-secret", "lmstudio/gemma", "text-embed-3", "",
                 ))
@@ -709,7 +810,7 @@ class TestOpenAICompatiblePage:
             f.write("{}")
             cfg_path = Path(f.name)
         try:
-            with patch("jarvis.config.default_config_path", return_value=cfg_path):
+            with patch("jarvis.config.get_config_path", return_value=cfg_path):
                 page._read_inputs = MagicMock(return_value=(
                     "http://localhost:1234/v1", "", "lmstudio/gemma", "", "",
                 ))
@@ -747,7 +848,7 @@ class TestOpenAICompatiblePage:
             cfg_path = Path(f.name)
         try:
             page = OpenAICompatiblePage()
-            with patch("jarvis.config.default_config_path", return_value=cfg_path):
+            with patch("jarvis.config.get_config_path", return_value=cfg_path):
                 page.initializePage()
             assert page._base_url_input.text() == "http://lmstudio:1234/v1"
             assert page._api_key_input.text() == "sk-saved"
@@ -756,23 +857,6 @@ class TestOpenAICompatiblePage:
             # The API key field stays masked even when pre-filled.
             from PyQt6.QtWidgets import QLineEdit
             assert page._api_key_input.echoMode() == QLineEdit.EchoMode.Password
-        finally:
-            cfg_path.unlink(missing_ok=True)
-
-    def test_initialize_page_defaults_base_url_for_first_run(self, qapp):
-        """A first-time user (empty config) gets the common LM Studio base
-        URL prefilled so they can just click Connect."""
-        import tempfile
-        from pathlib import Path
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-            f.write("{}")
-            cfg_path = Path(f.name)
-        try:
-            page = OpenAICompatiblePage()
-            with patch("jarvis.config.default_config_path", return_value=cfg_path):
-                page.initializePage()
-            assert page._base_url_input.text() == OpenAICompatiblePage._DEFAULT_BASE_URL
-            assert page._chat_model_combo.currentText() == ""
         finally:
             cfg_path.unlink(missing_ok=True)
 
@@ -785,18 +869,6 @@ class TestOpenAICompatiblePage:
         assert isinstance(page._embed_model_combo, QComboBox)
         assert page._chat_model_combo.isEditable()
         assert page._embed_model_combo.isEditable()
-
-    def test_fetch_models_returns_server_model_ids(self, stub_openai_server):
-        """_fetch_models hits /v1/models on the configured server."""
-        base, _ = stub_openai_server
-        models = OpenAICompatiblePage._fetch_models(base, "", timeout=3)
-        assert "stub-chat" in models and "stub-embed" in models
-
-    def test_fetch_models_failsoft_on_unreachable_server(self):
-        """An unreachable server yields an empty list (never raises), so the
-        user can still type a model id by hand."""
-        models = OpenAICompatiblePage._fetch_models("http://127.0.0.1:1/v1", "", timeout=1)
-        assert models == []
 
     def test_populate_models_fills_dropdowns_preserving_current(self, qapp):
         """Fetched models populate the dropdowns; a value the user already
@@ -865,13 +937,6 @@ class TestOpenAICompatiblePage:
         page._preset_combo.setCurrentIndex(1)
         assert page._base_url_input.text() == url
 
-    def test_discover_servers_finds_running_server(self, stub_openai_server):
-        """Discovery returns reachable loopback servers and skips dead ports."""
-        base, _ = stub_openai_server
-        found = OpenAICompatiblePage._discover_servers(
-            [("Stub", base), ("Dead", "http://127.0.0.1:1/v1")], timeout=2)
-        assert found == [("Stub", base)]
-
     def test_capability_summary_reports_each_feature(self):
         ok = SimpleNamespace(reachable=True, chat=True, tools=True, embeddings=True)
         summary = OpenAICompatiblePage._capability_summary(ok)
@@ -910,7 +975,7 @@ class TestOpenAICompatiblePage:
             f.write("{}")
             cfg_path = Path(f.name)
         try:
-            with patch("jarvis.config.default_config_path", return_value=cfg_path):
+            with patch("jarvis.config.get_config_path", return_value=cfg_path):
                 page._read_inputs = MagicMock(return_value=(
                     "http://localhost:9876/v1", "", "qwen-27b", "some-embed", "",
                 ))
@@ -950,12 +1015,12 @@ class TestOpenAICompatiblePage:
             saved_cfg = Path(f.name)
         try:
             page._start_discovery = MagicMock()
-            with patch("jarvis.config.default_config_path", return_value=empty_cfg):
+            with patch("jarvis.config.get_config_path", return_value=empty_cfg):
                 page.initializePage()
             assert page._start_discovery.call_count == 1
 
             page._start_discovery.reset_mock()
-            with patch("jarvis.config.default_config_path", return_value=saved_cfg):
+            with patch("jarvis.config.get_config_path", return_value=saved_cfg):
                 page.initializePage()
             assert page._start_discovery.call_count == 0
             assert page._base_url_input.text() == "http://saved:9/v1"
@@ -977,6 +1042,8 @@ class TestOpenAICompatiblePage:
         assert page._base_url_input.text() == "http://mine:5/v1"
 
 
+@pytest.mark.unit
+@pytest.mark.usefixtures("no_network")
 class TestOllamaStatusDataclass:
     """Tests for OllamaStatus dataclass behavior."""
 
@@ -1026,6 +1093,8 @@ class TestOllamaStatusDataclass:
         assert status.missing_models == []
 
 
+@pytest.mark.unit
+@pytest.mark.usefixtures("no_network")
 class TestLocationDetectionForWizard:
     """Tests for location detection utilities used in setup wizard."""
 
@@ -1055,22 +1124,22 @@ class TestLocationDetectionForWizard:
                 # Should return Unknown since 192.168.x.x can't be geolocated
                 assert "Unknown" in context or "error" in context.lower()
 
-    def test_location_availability_check(self):
-        """is_location_available checks for GeoIP2 and database."""
-        with patch("jarvis.utils.location.GEOIP2_AVAILABLE", False):
-            # When library not available, should return False
-            # Note: We can't easily patch the constant after import,
-            # so we test the behavior indirectly
-            pass
+    @pytest.mark.parametrize("library_available,database_exists,expected", [
+        (False, True, False),
+        (True, False, False),
+        (True, True, True),
+    ])
+    def test_location_availability_check(
+            self, monkeypatch, tmp_path, library_available, database_exists, expected):
+        """Location needs both the optional library and a local database."""
+        from jarvis.utils import location
 
-        # With patched database path
-        with patch("jarvis.utils.location._get_database_path") as mock_path:
-            mock_path_obj = MagicMock()
-            mock_path_obj.exists.return_value = False
-            mock_path.return_value = mock_path_obj
-
-            # Can't easily test due to import-time GEOIP2_AVAILABLE check
-            # but the function should return False if DB doesn't exist
+        database = tmp_path / "owned-geoip.mmdb"
+        if database_exists:
+            database.touch()
+        monkeypatch.setattr(location, "GEOIP2_AVAILABLE", library_available)
+        monkeypatch.setattr(location, "_get_database_path", lambda: database)
+        assert is_location_available() is expected
 
     def test_location_context_with_config_ip(self):
         """When config IP is provided and valid, uses it for location."""
@@ -1089,6 +1158,8 @@ class TestLocationDetectionForWizard:
             assert "United States" in context
 
 
+@pytest.mark.unit
+@pytest.mark.usefixtures("no_network")
 class TestModelOptions:
     """Tests for model selection options in setup wizard."""
 
@@ -1118,6 +1189,8 @@ class TestModelOptions:
         assert ModelsPage.MODEL_OPTIONS is SUPPORTED_CHAT_MODELS
 
 
+@pytest.mark.unit
+@pytest.mark.usefixtures("no_network")
 class TestModelsPageUI:
     """Tests for the dropdown-based model selection UI in ModelsPage."""
 
@@ -1151,7 +1224,10 @@ class TestModelsPageUI:
     def test_default_chat_model_is_default_config_model(self, qapp):
         from desktop_app.setup_wizard import ModelsPage
         from jarvis.config import DEFAULT_CHAT_MODEL
-        page = ModelsPage()
+        # Unknown VRAM keeps the default recommendation regardless of the
+        # machine running the tests.
+        with patch("desktop_app.setup_wizard.detect_total_vram_mb", return_value=None):
+            page = ModelsPage()
         assert page._chat_model == DEFAULT_CHAT_MODEL
         assert page._chat_combo.currentData() == DEFAULT_CHAT_MODEL
 
@@ -1175,7 +1251,8 @@ class TestModelsPageUI:
 
     def test_unlinked_mode_allows_independent_selection(self, qapp):
         from desktop_app.setup_wizard import ModelsPage
-        page = ModelsPage()
+        with patch("desktop_app.setup_wizard.detect_total_vram_mb", return_value=None):
+            page = ModelsPage()
         assert page._linked is False
         idx = page._fast_combo.findData("qwen3.5:0.8b")
         assert idx >= 0
@@ -1199,6 +1276,8 @@ class TestModelsPageUI:
             assert d in ModelsPage._FAST_MODEL_IDS
 
 
+@pytest.mark.unit
+@pytest.mark.usefixtures("no_network")
 class TestOpenAICompatiblePageDefaults:
     """Tests for default link state and fast model in OpenAI compatible page."""
 
@@ -1236,6 +1315,225 @@ class TestOpenAICompatiblePageDefaults:
         assert page._fast_model_combo.isHidden() is True
 
 
+@pytest.mark.unit
+@pytest.mark.usefixtures("no_network")
+class TestWizardMemoryBudget:
+    """Model-memory guidance stays useful on both provider paths."""
+
+    def test_ollama_still_shows_its_memory_budget(self, qapp):
+        from desktop_app.setup_wizard import ModelsPage
+
+        with patch("desktop_app.setup_wizard.detect_total_vram_mb", return_value=None):
+            page = ModelsPage()
+        assert "Total VRAM Required" in page._vram_label.text()
+        assert "Whisper" in page._vram_detail.text() or "whisper" in page._vram_detail.text()
+
+    def test_openai_known_models_prefill_editable_estimates(self, qapp):
+        from PyQt6.QtWidgets import QDoubleSpinBox, QLabel
+        from jarvis.config import SUPPORTED_CHAT_MODELS
+        from jarvis.utils.vram import required_vram_mb
+
+        known_model = next(iter(SUPPORTED_CHAT_MODELS))
+        page = OpenAICompatiblePage()
+        page._chat_model_combo.setCurrentText(known_model)
+        page._embed_model_combo.setCurrentText("nomic-embed-text")
+
+        chat = page.findChild(QDoubleSpinBox, "memory_chat")
+        embed = page.findChild(QDoubleSpinBox, "memory_embed")
+        summary = page.findChild(QLabel, "memory_summary")
+        assert chat.value() == required_vram_mb(known_model) / 1024
+        assert embed.value() == 1
+        assert "estimate" in summary.text().lower()
+
+        before = summary.text()
+        chat.setValue(chat.value() + 2)
+        assert summary.text() != before
+        assert f"{chat.value() + embed.value():.1f} GB" in summary.text()
+
+    def test_openai_unknown_model_needs_an_estimate_before_a_total(self, qapp):
+        from PyQt6.QtWidgets import QDoubleSpinBox, QLabel
+
+        page = OpenAICompatiblePage()
+        page._chat_model_combo.setCurrentText("custom-model")
+        chat = page.findChild(QDoubleSpinBox, "memory_chat")
+        summary = page.findChild(QLabel, "memory_summary")
+        assert chat.value() == 0
+        assert "add" in summary.text().lower()
+
+        chat.setValue(6.5)
+        assert "6.5 GB" in summary.text()
+
+    def test_openai_linked_model_is_not_counted_twice(self, qapp):
+        from PyQt6.QtWidgets import QDoubleSpinBox, QLabel
+
+        page = OpenAICompatiblePage()
+        page._chat_model_combo.setCurrentText("custom-model")
+        page.findChild(QDoubleSpinBox, "memory_chat").setValue(4)
+        page._fast_model_combo.setCurrentText("custom-model")
+        page.findChild(QDoubleSpinBox, "memory_fast").setValue(4)
+        summary = page.findChild(QLabel, "memory_summary")
+        assert "4.0 GB" in summary.text()
+        assert "8.0 GB" not in summary.text()
+
+    def test_remote_server_budget_does_not_compare_with_local_gpu(self, qapp):
+        from PyQt6.QtWidgets import QDoubleSpinBox, QLabel
+
+        with patch("desktop_app.setup_wizard.detect_total_vram_mb", return_value=1024):
+            page = OpenAICompatiblePage()
+        page._base_url_input.setText("http://model-host:8000/v1")
+        page._chat_model_combo.setCurrentText("custom-model")
+        page.findChild(QDoubleSpinBox, "memory_chat").setValue(8)
+        summary = page.findChild(QLabel, "memory_summary").text().lower()
+        assert "server" in summary
+        assert "locally" in summary
+        assert "over" not in summary
+
+    def test_local_server_warns_when_shared_gpu_budget_is_exceeded(self, qapp):
+        from PyQt6.QtWidgets import QDoubleSpinBox, QLabel
+
+        with patch("desktop_app.setup_wizard.detect_total_vram_mb", return_value=1024):
+            page = OpenAICompatiblePage()
+        page._base_url_input.setText("http://127.0.0.1:8000/v1")
+        page._chat_model_combo.setCurrentText("custom-model")
+        page.findChild(QDoubleSpinBox, "memory_chat").setValue(8)
+        summary = page.findChild(QLabel, "memory_summary").text().lower()
+        assert "share a gpu" in summary
+        assert "over" in summary
+
+    def test_fetched_models_refresh_known_estimates(self, qapp):
+        from PyQt6.QtWidgets import QDoubleSpinBox
+        from jarvis.config import SUPPORTED_CHAT_MODELS
+        from jarvis.utils.vram import required_vram_mb
+
+        model_id = next(iter(SUPPORTED_CHAT_MODELS))
+        page = OpenAICompatiblePage()
+        page._populate_models([model_id])
+        assert page.findChild(QDoubleSpinBox, "memory_chat").value() == (
+            required_vram_mb(model_id) / 1024
+        )
+
+    def test_remote_ollama_embedding_uses_local_budget(self, qapp):
+        from PyQt6.QtWidgets import QDoubleSpinBox, QLabel
+
+        settings = SimpleNamespace(
+            whisper_model="small",
+            ollama_embed_model="nomic-embed-text",
+            ollama_base_url="http://localhost:11434",
+        )
+        with patch("desktop_app.setup_wizard.load_settings", return_value=settings):
+            page = OpenAICompatiblePage()
+        page._base_url_input.setText("http://model-host:8000/v1")
+        page._chat_model_combo.setCurrentText("custom-model")
+        page.findChild(QDoubleSpinBox, "memory_chat").setValue(4)
+        page._embed_model_combo.setCurrentText("custom-embed")
+        page.findChild(QDoubleSpinBox, "memory_embed").setValue(3)
+        page._use_ollama_embed.setChecked(True)
+        assert page.findChild(QDoubleSpinBox, "memory_embed").value() == 1
+        summary = page.findChild(QLabel, "memory_summary").text()
+        assert "Server model estimate: 4.0 GB" in summary
+        assert "locally" in summary
+
+    def test_ollama_fallback_uses_configured_model_and_endpoint(self, qapp):
+        from PyQt6.QtWidgets import QDoubleSpinBox, QLabel
+
+        settings = SimpleNamespace(
+            whisper_model="small",
+            ollama_embed_model="custom-embed",
+            ollama_base_url="http://embed-host:11434",
+        )
+        with patch("desktop_app.setup_wizard.load_settings", return_value=settings):
+            page = OpenAICompatiblePage()
+        page._base_url_input.setText("http://model-host:8000/v1")
+        page._chat_model_combo.setCurrentText("custom-chat")
+        page.findChild(QDoubleSpinBox, "memory_chat").setValue(4)
+        page._use_ollama_embed.setChecked(True)
+
+        embed = page.findChild(QDoubleSpinBox, "memory_embed")
+        summary = page.findChild(QLabel, "memory_summary")
+        assert embed.value() == 0
+        assert "embeddings" in summary.text().lower()
+        embed.setValue(3)
+        assert "Server model estimate: 4.0 GB" in summary.text()
+        assert "Ollama embeddings: 3.0 GB" in summary.text()
+        assert "Whisper ~2.0 GB locally" in summary.text()
+
+    def test_remote_ollama_embedding_is_not_charged_to_local_gpu(self, qapp):
+        from PyQt6.QtWidgets import QDoubleSpinBox, QLabel
+
+        settings = SimpleNamespace(
+            whisper_model="small",
+            ollama_embed_model="custom-embed",
+            ollama_base_url="http://embed-host:11434",
+        )
+        with patch("desktop_app.setup_wizard.load_settings", return_value=settings):
+            with patch("desktop_app.setup_wizard.detect_total_vram_mb", return_value=8192):
+                page = OpenAICompatiblePage()
+        page._base_url_input.setText("http://localhost:8000/v1")
+        page._chat_model_combo.setCurrentText("custom-chat")
+        page.findChild(QDoubleSpinBox, "memory_chat").setValue(4)
+        page._use_ollama_embed.setChecked(True)
+        page.findChild(QDoubleSpinBox, "memory_embed").setValue(3)
+
+        summary = page.findChild(QLabel, "memory_summary").text()
+        assert "Combined ~6.0 GB" in summary
+        assert "Ollama embeddings: 3.0 GB on its server" in summary
+        assert "over" not in summary
+
+    def test_local_ollama_embedding_appears_in_combined_breakdown(self, qapp):
+        from PyQt6.QtWidgets import QDoubleSpinBox, QLabel
+
+        settings = SimpleNamespace(
+            whisper_model="small",
+            ollama_embed_model="nomic-embed-text",
+            ollama_base_url="http://localhost:11434",
+        )
+        with patch("desktop_app.setup_wizard.load_settings", return_value=settings):
+            page = OpenAICompatiblePage()
+        page._base_url_input.setText("http://localhost:8000/v1")
+        page._chat_model_combo.setCurrentText("custom-chat")
+        page.findChild(QDoubleSpinBox, "memory_chat").setValue(4)
+        page._use_ollama_embed.setChecked(True)
+        summary = page.findChild(QLabel, "memory_summary").text()
+        assert "Ollama embeddings: 1.0 GB locally" in summary
+        assert "Combined ~7.0 GB" in summary
+
+    def test_manual_estimate_survives_model_comparison(self, qapp):
+        from PyQt6.QtWidgets import QDoubleSpinBox
+
+        page = OpenAICompatiblePage()
+        chat = page.findChild(QDoubleSpinBox, "memory_chat")
+        page._chat_model_combo.setCurrentText("candidate-one")
+        chat.setValue(6.5)
+        page._chat_model_combo.setCurrentText("candidate-two")
+        assert chat.value() == 0
+        page._chat_model_combo.setCurrentText("candidate-one")
+        assert chat.value() == 6.5
+
+    def test_whisper_budget_refreshes_after_returning_from_voice_step(self, qapp):
+        from PyQt6.QtWidgets import QDoubleSpinBox, QLabel
+
+        with patch("desktop_app.setup_wizard.load_settings",
+                   return_value=SimpleNamespace(whisper_model="small")):
+            page = OpenAICompatiblePage()
+        page._base_url_input.setText("http://localhost:8000/v1")
+        page._chat_model_combo.setCurrentText("custom-model")
+        page.findChild(QDoubleSpinBox, "memory_chat").setValue(4)
+        summary = page.findChild(QLabel, "memory_summary")
+        assert "Whisper ~2.0 GB" in summary.text()
+
+        saved = {
+            "llm_base_url": "http://localhost:8000/v1",
+            "llm_chat_model": "custom-model",
+        }
+        with patch("desktop_app.setup_wizard.load_settings",
+                   return_value=SimpleNamespace(whisper_model="medium")):
+            with patch("jarvis.config._load_json", return_value=saved):
+                page.initializePage()
+        assert "Whisper ~5.0 GB" in summary.text()
+
+
+@pytest.mark.unit
+@pytest.mark.usefixtures("no_network")
 class TestDefaultModelDetection:
     """Regression tests: the default small model must be detected as missing when not
     installed, triggering the setup wizard install prompt.
@@ -1320,23 +1618,21 @@ class TestDefaultModelDetection:
                         assert status.is_fully_setup is True
 
 
+@pytest.mark.unit
+@pytest.mark.usefixtures("no_network")
 class TestWhisperModelOptions:
     """Tests for whisper model selection options in setup wizard."""
 
     def test_whisper_multilingual_model_options_available(self):
         """Multilingual whisper model options include recommended and lightweight options."""
-        from desktop_app.setup_wizard import WhisperSetupPage
-
-        model_ids = [m[0] for m in WhisperSetupPage.WHISPER_MODEL_OPTIONS]
+        model_ids = [m[0] for m in wizard_model_options()]
         assert "small" in model_ids
         assert "tiny" in model_ids
         assert "large-v3-turbo" in model_ids
 
     def test_whisper_english_model_options_available(self):
         """English-only whisper model options include recommended and lightweight options."""
-        from desktop_app.setup_wizard import WhisperSetupPage
-
-        model_ids = [m[0] for m in WhisperSetupPage.WHISPER_MODEL_OPTIONS_EN]
+        model_ids = [m[0] for m in wizard_model_options(True)]
         assert "small.en" in model_ids
         assert "tiny.en" in model_ids
         assert "medium.en" in model_ids
@@ -1345,9 +1641,7 @@ class TestWhisperModelOptions:
 
     def test_whisper_multilingual_model_options_have_required_fields(self):
         """Each multilingual whisper model option has required info fields."""
-        from desktop_app.setup_wizard import WhisperSetupPage
-
-        for model_tuple in WhisperSetupPage.WHISPER_MODEL_OPTIONS:
+        for model_tuple in wizard_model_options():
             assert len(model_tuple) == 5, f"Whisper model tuple should have 5 elements: {model_tuple}"
             model_id, name, file_size, ram, desc = model_tuple
             assert model_id, "Model ID should not be empty"
@@ -1365,10 +1659,8 @@ class TestWhisperModelOptions:
         page = MagicMock(spec=WhisperSetupPage)
         page._is_english_only = False
         page._is_apple_silicon = False
-        page.WHISPER_MODEL_OPTIONS = WhisperSetupPage.WHISPER_MODEL_OPTIONS
-        page.WHISPER_MODEL_OPTIONS_EN = WhisperSetupPage.WHISPER_MODEL_OPTIONS_EN
 
-        with patch("desktop_app.setup_wizard._is_faster_whisper_turbo_supported", return_value=False):
+        with patch("jarvis.listening.whisper_capabilities.is_faster_whisper_turbo_supported", return_value=False):
             options = WhisperSetupPage._get_current_model_options(page)
         model_ids = [m[0] for m in options]
         assert "large-v3-turbo" not in model_ids
@@ -1381,34 +1673,106 @@ class TestWhisperModelOptions:
         page = MagicMock(spec=WhisperSetupPage)
         page._is_english_only = False
         page._is_apple_silicon = False
-        page.WHISPER_MODEL_OPTIONS = WhisperSetupPage.WHISPER_MODEL_OPTIONS
-        page.WHISPER_MODEL_OPTIONS_EN = WhisperSetupPage.WHISPER_MODEL_OPTIONS_EN
 
-        with patch("desktop_app.setup_wizard._is_faster_whisper_turbo_supported", return_value=True):
+        with patch("jarvis.listening.whisper_capabilities.is_faster_whisper_turbo_supported", return_value=True):
             options = WhisperSetupPage._get_current_model_options(page)
         model_ids = [m[0] for m in options]
         assert "large-v3-turbo" in model_ids
 
-    def test_turbo_always_shown_on_apple_silicon(self):
-        """large-v3-turbo is always available on Apple Silicon (MLX backend)."""
+    def test_turbo_hidden_on_apple_without_usable_mlx(self):
+        """Turbo is hidden when Apple Silicon falls back to old faster-whisper."""
         from desktop_app.setup_wizard import WhisperSetupPage
 
         page = MagicMock(spec=WhisperSetupPage)
         page._is_english_only = False
         page._is_apple_silicon = True
-        page.WHISPER_MODEL_OPTIONS = WhisperSetupPage.WHISPER_MODEL_OPTIONS
-        page.WHISPER_MODEL_OPTIONS_EN = WhisperSetupPage.WHISPER_MODEL_OPTIONS_EN
 
-        with patch("desktop_app.setup_wizard._is_faster_whisper_turbo_supported", return_value=False):
+        with patch("jarvis.listening.whisper_capabilities.is_faster_whisper_turbo_supported", return_value=False), \
+             patch("desktop_app.setup_wizard.check_mlx_whisper_installed", return_value=False), \
+             patch("desktop_app.setup_wizard.load_settings", return_value=SimpleNamespace(whisper_backend="auto")):
+            options = WhisperSetupPage._get_current_model_options(page)
+        model_ids = [m[0] for m in options]
+        assert "large-v3-turbo" not in model_ids
+
+    def test_turbo_shown_on_apple_with_usable_mlx(self):
+        """Apple Silicon auto mode exposes turbo when MLX imports successfully."""
+        from desktop_app.setup_wizard import WhisperSetupPage
+
+        page = MagicMock(spec=WhisperSetupPage)
+        page._is_english_only = False
+        page._is_apple_silicon = True
+
+        with patch("jarvis.listening.whisper_capabilities.is_faster_whisper_turbo_supported", return_value=False), \
+             patch("desktop_app.setup_wizard.check_mlx_whisper_installed", return_value=True), \
+             patch("desktop_app.setup_wizard.load_settings", return_value=SimpleNamespace(whisper_backend="auto")):
             options = WhisperSetupPage._get_current_model_options(page)
         model_ids = [m[0] for m in options]
         assert "large-v3-turbo" in model_ids
 
-    def test_whisper_english_model_options_have_required_fields(self):
-        """Each English-only whisper model option has required info fields."""
+    def test_turbo_shown_on_apple_without_mlx_when_faster_whisper_supports_it(self):
+        """Apple Silicon can still expose turbo through a newer faster-whisper."""
         from desktop_app.setup_wizard import WhisperSetupPage
 
-        for model_tuple in WhisperSetupPage.WHISPER_MODEL_OPTIONS_EN:
+        page = MagicMock(spec=WhisperSetupPage)
+        page._is_english_only = False
+        page._is_apple_silicon = True
+
+        with patch("jarvis.listening.whisper_capabilities.is_faster_whisper_turbo_supported", return_value=True), \
+             patch("desktop_app.setup_wizard.check_mlx_whisper_installed", return_value=False), \
+             patch("desktop_app.setup_wizard.load_settings", return_value=SimpleNamespace(whisper_backend="auto")):
+            options = WhisperSetupPage._get_current_model_options(page)
+        model_ids = [m[0] for m in options]
+        assert "large-v3-turbo" in model_ids
+
+    def test_turbo_hidden_when_mlx_is_explicitly_disabled(self):
+        """An explicit faster-whisper backend must not inherit Apple MLX support."""
+        from desktop_app.setup_wizard import WhisperSetupPage
+
+        page = MagicMock(spec=WhisperSetupPage)
+        page._is_english_only = False
+        page._is_apple_silicon = True
+
+        with patch("jarvis.listening.whisper_capabilities.is_faster_whisper_turbo_supported", return_value=False), \
+             patch("desktop_app.setup_wizard.check_mlx_whisper_installed", return_value=True), \
+             patch("desktop_app.setup_wizard.load_settings", return_value=SimpleNamespace(whisper_backend="faster-whisper")):
+            options = WhisperSetupPage._get_current_model_options(page)
+        model_ids = [m[0] for m in options]
+        assert "large-v3-turbo" not in model_ids
+
+    def test_unavailable_turbo_selection_displays_medium(self, qapp):
+        """An existing turbo choice displays the runtime fallback in the wizard."""
+        from desktop_app.setup_wizard import WhisperSetupPage
+
+        with patch("jarvis.listening.whisper_capabilities.is_faster_whisper_turbo_supported", return_value=False):
+            page = WhisperSetupPage()
+            page._is_apple_silicon = False
+            page._is_english_only = False
+            page._selected_whisper_model = "large-v3-turbo"
+
+            page._rebuild_slider_ui()
+
+        model_ids = [model[0] for model in page._get_current_model_options()]
+        assert page._selected_whisper_model == "medium"
+        assert page._model_slider.value() == model_ids.index("medium")
+
+    def test_mlx_install_refreshes_model_options(self):
+        """Installing MLX rebuilds the slider so its turbo option is current."""
+        from desktop_app.setup_wizard import WhisperSetupPage
+
+        page = MagicMock(spec=WhisperSetupPage)
+        page.progress = MagicMock()
+        page.install_mlx_btn = MagicMock()
+        page._refresh_mlx_status = MagicMock()
+        page._rebuild_slider_ui = MagicMock()
+
+        WhisperSetupPage._on_mlx_installed(page, True, "installed")
+
+        page._refresh_mlx_status.assert_called_once_with()
+        page._rebuild_slider_ui.assert_called_once_with()
+
+    def test_whisper_english_model_options_have_required_fields(self):
+        """Each English-only whisper model option has required info fields."""
+        for model_tuple in wizard_model_options(True):
             assert len(model_tuple) == 5, f"Whisper model tuple should have 5 elements: {model_tuple}"
             model_id, name, file_size, ram, desc = model_tuple
             assert model_id, "Model ID should not be empty"
@@ -1420,6 +1784,8 @@ class TestWhisperModelOptions:
             assert model_id.endswith(".en"), f"English model should end with .en: {model_id}"
 
 
+@pytest.mark.unit
+@pytest.mark.usefixtures("no_network")
 class TestWhisperSetupPageSliderRebuild:
     """Regression tests for WhisperSetupPage slider rebuild lifecycle.
 
@@ -1430,6 +1796,35 @@ class TestWhisperSetupPageSliderRebuild:
     stay parented to their containers throughout rebuilds — the
     safe pattern for clearing items out of a layout.
     """
+
+    @pytest.mark.parametrize("refresh", ["language", "initialise"])
+    def test_rebuild_displays_only_current_labels_before_deferred_deletion(self, qapp, refresh):
+        """Repeated refreshes must display one label set in each slider row."""
+        from PyQt6.QtWidgets import QLabel
+        from desktop_app.setup_wizard import WhisperSetupPage
+
+        page = WhisperSetupPage()
+        page.resize(640, 600)
+        page.show()
+        qapp.processEvents()
+
+        for english_only in (False, True, False):
+            if refresh == "language":
+                page._on_language_changed(english_only)
+            else:
+                page.initializePage()
+            # Layout and paint events can run before deleteLater is delivered,
+            # as they do inside the wizard's nested event loop.
+            qapp.processEvents()
+            options = page._get_current_model_options()
+            for container, expected in (
+                (page._labels_container, [option[1] for option in options]),
+                (page._size_container, [f"{option[2]} / {option[3]}" for option in options]),
+            ):
+                visible = [label for label in container.findChildren(QLabel) if label.isVisible()]
+                assert [label.text() for label in visible] == expected
+                for left, right in zip(visible, visible[1:]):
+                    assert not left.geometry().intersects(right.geometry())
 
     def test_slider_labels_keep_container_parent_after_rebuild(self, qapp):
         """Newly-built slider labels must remain children of their containers.
@@ -1500,6 +1895,8 @@ class TestWhisperSetupPageSliderRebuild:
                     assert w.parent() is container
 
 
+@pytest.mark.unit
+@pytest.mark.usefixtures("no_network")
 class TestMCPPage:
     """Tests for the MCP servers wizard page."""
 
@@ -1555,7 +1952,7 @@ class TestMCPPage:
                 cb.isChecked.return_value = (i == 0)
                 page._checkboxes[entry.name] = cb
 
-            with patch("jarvis.config.default_config_path", return_value=cfg_path):
+            with patch("jarvis.config.get_config_path", return_value=cfg_path):
                 result = page.validatePage()
 
             assert result is True
@@ -1596,7 +1993,7 @@ class TestMCPPage:
                 cb.isChecked.return_value = False
                 page._checkboxes[entry.name] = cb
 
-            with patch("jarvis.config.default_config_path", return_value=cfg_path):
+            with patch("jarvis.config.get_config_path", return_value=cfg_path):
                 page.validatePage()
 
             saved = _load_json(cfg_path)
@@ -1605,6 +2002,8 @@ class TestMCPPage:
             cfg_path.unlink(missing_ok=True)
 
 
+@pytest.mark.unit
+@pytest.mark.usefixtures("no_network")
 class TestSearchProvidersPage:
     """Tests for the Search Providers wizard page (Brave + Wikipedia)."""
 
@@ -1633,7 +2032,7 @@ class TestSearchProvidersPage:
             cfg_path = Path(f.name)
         try:
             page = self._make_page(brave_key="BSA-abc123", wiki_enabled=True)
-            with patch("jarvis.config.default_config_path", return_value=cfg_path):
+            with patch("jarvis.config.get_config_path", return_value=cfg_path):
                 assert page.validatePage() is True
             saved = _load_json(cfg_path)
             # Default non-default-only write: Brave present, Wikipedia omitted.
@@ -1655,7 +2054,7 @@ class TestSearchProvidersPage:
             cfg_path = Path(f.name)
         try:
             page = self._make_page(brave_key="   ", wiki_enabled=True)
-            with patch("jarvis.config.default_config_path", return_value=cfg_path):
+            with patch("jarvis.config.get_config_path", return_value=cfg_path):
                 page.validatePage()
             saved = _load_json(cfg_path)
             assert "brave_search_api_key" not in saved
@@ -1675,7 +2074,7 @@ class TestSearchProvidersPage:
             cfg_path = Path(f.name)
         try:
             page = self._make_page(brave_key="", wiki_enabled=False)
-            with patch("jarvis.config.default_config_path", return_value=cfg_path):
+            with patch("jarvis.config.get_config_path", return_value=cfg_path):
                 page.validatePage()
             saved = _load_json(cfg_path)
             assert saved.get("wikipedia_fallback_enabled") is False
@@ -1694,7 +2093,7 @@ class TestSearchProvidersPage:
             cfg_path = Path(f.name)
         try:
             page = self._make_page(brave_key="", wiki_enabled=True)
-            with patch("jarvis.config.default_config_path", return_value=cfg_path):
+            with patch("jarvis.config.get_config_path", return_value=cfg_path):
                 page.validatePage()
             saved = _load_json(cfg_path)
             assert "brave_search_api_key" not in saved
@@ -1713,7 +2112,7 @@ class TestSearchProvidersPage:
             cfg_path = Path(f.name)
         try:
             page = self._make_page(brave_key="BSA-key", wiki_enabled=False)
-            with patch("jarvis.config.default_config_path", return_value=cfg_path):
+            with patch("jarvis.config.get_config_path", return_value=cfg_path):
                 page.validatePage()
             saved = _load_json(cfg_path)
             assert saved["ollama_chat_model"] == "gpt-oss:20b"
@@ -1721,3 +2120,43 @@ class TestSearchProvidersPage:
         finally:
             cfg_path.unlink(missing_ok=True)
 
+
+@pytest.mark.integration
+class TestOpenAICompatibleServer:
+    """Setup discovery and listing use only owned HTTP endpoints."""
+
+    def test_initialize_page_defaults_base_url_for_first_run(self, qapp, tmp_path, monkeypatch, stub_openai_server):
+        """First-run defaults and discovery use the owned local server."""
+        base, _ = stub_openai_server
+        cfg_path = tmp_path / "config.json"
+        cfg_path.write_text("{}", encoding="utf-8")
+        monkeypatch.setenv("JARVIS_CONFIG_PATH", str(cfg_path))
+        monkeypatch.setattr(OpenAICompatiblePage, "_DEFAULT_BASE_URL", base)
+        monkeypatch.setattr(OpenAICompatiblePage, "_KNOWN_SERVERS", [("Owned", base)])
+        page = OpenAICompatiblePage()
+        page.initializePage()
+        assert page._base_url_input.text() == OpenAICompatiblePage._DEFAULT_BASE_URL
+        assert page._chat_model_combo.currentText() == ""
+        assert page._discovery_worker.wait(3000)
+        qapp.processEvents()
+        assert "Found Owned" in page._connect_status.text()
+        assert base in page._connect_status.text()
+
+    def test_fetch_models_returns_server_model_ids(self, stub_openai_server):
+        """_fetch_models hits /v1/models on the configured server."""
+        base, _ = stub_openai_server
+        models = OpenAICompatiblePage._fetch_models(base, "", timeout=3)
+        assert "stub-chat" in models and "stub-embed" in models
+
+    def test_fetch_models_failsoft_on_unreachable_server(self, unavailable_openai_endpoint):
+        """An unreachable server yields an empty list (never raises), so the
+        user can still type a model id by hand."""
+        models = OpenAICompatiblePage._fetch_models(unavailable_openai_endpoint, "", timeout=1)
+        assert models == []
+
+    def test_discover_servers_finds_running_server(self, stub_openai_server, unavailable_openai_endpoint):
+        """Discovery returns reachable loopback servers and skips dead ports."""
+        base, _ = stub_openai_server
+        found = OpenAICompatiblePage._discover_servers(
+            [("Stub", base), ("Dead", unavailable_openai_endpoint)], timeout=2)
+        assert found == [("Stub", base)]

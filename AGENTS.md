@@ -1,0 +1,164 @@
+Data privacy comes first, always.
+
+Jarvis is offline-first by principle. Do not add integrations that depend on a specific proprietary cloud vendor (e.g. ElevenLabs TTS, or any SaaS that requires shipping user audio/text/data to a third party's servers), not even as an opt-in feature. The line is the offline path: a backend is acceptable only if it can run fully locally. Generic, self-hostable protocols where the user points at their own endpoint (Ollama, OpenAI-compatible servers, LM Studio) are fine precisely because they can be local; a vendor-locked cloud service with no local option is not. When a feature request asks for such a service, decline it on principle and redirect to the offline equivalent (e.g. better local TTS voices rather than cloud TTS).
+
+All user-facing command line output should make use of emojis. Especially an initial emoji to start off the lines that depict what the line is about. Output should make use of indentation spacing to establish a visual hierarchy and aim to make output as easy to sift through as possible. Exception: Windows .bat scripts cannot use emojis (cmd.exe doesn't render Unicode properly).
+
+Any important point in our logical flows should have debug logs using the `debug_log` method from `src/jarvis/debug.py`. Avoid excessive logging to keep the logs easily readable and actionable.
+
+Any code change must either adhere to our spec files perfectly or you should ask the user to confirm changes, which should also propagate to the specs themselves. Spec files follow the \*.spec.md format and live next to the code that implements them. Always search for related spec files before starting any work. When corrected about how something should work, check if there's a spec for it and whether it needs updating.
+
+### Spec File Registry
+
+| Spec file | Covers | Key principles |
+|-----------|--------|----------------|
+| `src/jarvis/config.spec.md` | Shared configuration file selection | One resolver for runtime and desktop reads, writes and navigation |
+| `website/website.spec.md` | Public product site, static build, discovery metadata and GitHub Pages publication | Crawlable content, truthful claims, no user stores or third-party tracking |
+| `src/desktop_app/desktop_app.spec.md` | System tray app, startup flow, daemon integration, windows, theme, updates | Desktop is separate from core; jarvis has no knowledge of desktop_app |
+| `src/desktop_app/settings_window.spec.md` | Auto-generated settings UI from config metadata | Metadata-driven; only non-default values written; preserves unknown keys |
+| `src/desktop_app/setup_wizard.spec.md` | First-run wizard (Ollama, models, Whisper, location) | Minimal friction; only shown when user action required; doesn't configure everything |
+| `src/desktop_app/chat_window.spec.md` | Text chat interface alongside voice; shared conversation, no TTS, bundled callbacks + subprocess IPC | One conversation for voice + text; text never speaks; redaction shared with voice path |
+| `src/jarvis/dictation/dictation.spec.md` | Hold-to-dictate engine, hotkey, clipboard paste | Independent from assistant pipeline; shared Whisper model; independent capture pause reason |
+| `src/jarvis/listening/listening.spec.md` | Voice listener, wake word detection, audio pipeline | — |
+| `src/jarvis/output/tune_player.spec.md` | Local thinking-sound generation and playback lifecycle | One owning worker; bounded stop; restart waits for audio teardown |
+| `src/jarvis/reply/reply.spec.md` | LLM reply generation, tool use, profiles | Tools return raw data; profiles handle formatting |
+| `src/jarvis/reply/evaluator.spec.md` | **Deprecated** — evaluator no longer runs in the reply engine; preserved for reference | Replaced by the planner; see planner.spec.md |
+| `src/jarvis/reply/planner.spec.md` | Task-list planner: pre-loop query decomposition + direct-exec step resolver for small models | Fail-open; rides warm small model chain; advisory for large models, direct-exec for small |
+| `src/jarvis/tools/builtin/local_files.spec.md` | Local file operations and listing boundaries | Home-directory confinement; literal UTF-8 content; boolean recursion |
+| `src/jarvis/tools/builtin/tool_search.spec.md` | toolSearchTool escape hatch for mid-loop tool routing | Re-runs the same router; never removes stop/self; capped per reply |
+| `src/jarvis/tools/external/mcp_runtime.spec.md` | Persistent MCP runtime: per-server long-lived stdio session, queue-based dispatch, retry on transient session loss | One worker per server keyed by config; calls to the same server serialise; `MCPServerSessionError` for session-level failures; opt-in `idle_timeout_sec` for stateless servers |
+| `src/jarvis/reply/prompts/prompts.spec.md` | System/user prompt templates | — |
+| `src/jarvis/tools/builtin/web_search.spec.md` | webSearch tool: cascade fetch, SSRF guard, prompt-injection fence, links-only envelope | Untrusted web content is fenced as data, not instructions; rank preference over speed; honest failure over confabulation |
+| `src/jarvis/tools/builtin/fetch_web_page.spec.md` | Supplied-URL page fetching, bounded download, HTML and raw-text extraction | Stream decoded content before parsing; reject oversized pages without partial results |
+| `src/jarvis/tools/builtin/nutrition/log_meal.spec.md` | logMeal tool: single-property schema for planner fast-path, internal nutrition extraction, untrusted-data fence, follow-ups | Public schema is a single optional `meal` string; nutrition fields are internal; user text is fenced as data |
+| `src/jarvis/utils/location.spec.md` | GeoIP location detection | Privacy-first; local GeoLite2 DB only |
+| `src/jarvis/memory/graph.spec.md` | Node graph memory (v2), self-organising tree, UI explorer | Dynamic structure; access-aware; auto-split/merge (future) |
+| `src/jarvis/memory/summariser.spec.md` | Diary summariser prompt contract, hygiene rules (deflection, attribution, topic separation), post-process scrub, and bulk-sweep clean button | Two-layer defence: prompt + deterministic scrub; corrupted summaries poison every downstream consumer |
+| `src/jarvis/memory/recall_gate.spec.md` | Deterministic skip-enrichment heuristic when the hot window covers a follow-up | Fail-open; language-agnostic via `\w{3,}` + `re.UNICODE`; planner intent always wins |
+| `src/jarvis/llm/llm.spec.md` | Pluggable LLM backend abstraction: `LLMBackend` ABC, `OllamaBackend`, `OpenAICompatibleBackend`, factory dispatch on `llm_provider`, `get_embedding_backend` override, config migrations, the two-tier model system (`Tier.FAST` / `Tier.CHAT` via `resolve_model`), function-style helpers | Provider-agnostic interface so Jarvis can run on Ollama or OpenAI-compatible servers (LM Studio / oMLX / llama.cpp / vLLM / LocalAI); every context states its tier instead of defining a model fallback chain |
+
+The LLM contexts graph at `docs/llm_contexts.md` maps every LLM call in the app (model, gating, inputs, outputs, limits, flow). Keep it up-to-date at all times: any change that adds, removes, or alters an LLM context (model resolution, timeout, cap, prompt source, gating flag, data-flow edge) must update `docs/llm_contexts.md` in the same PR.
+
+Avoid hardcoded language patterns as this assistant needs to support an arbitrary amount of different languages.
+
+Tools define when/how to be used and return raw data without LLM processing. The unified system prompt in `src/jarvis/system_prompt.py` handles response formatting and personality through the daemon's LLM loop.
+
+## Git Workflow
+
+The default branch is `develop`. All PRs and feature branches must target `develop`, not `main`.
+
+Use [Conventional Commits](https://www.conventionalcommits.org/) for all commit messages and PR titles (e.g. `fix:`, `feat:`, `refactor:`, `docs:`, `test:`, `chore:`).
+
+Reserve `feat:` and `fix:` for the Jarvis CLI and desktop product. Website-only changes use `docs:` for content or `chore:` for build and deployment work. GitHub Pages deploys only from `main`, including manual dispatch; website PRs still target `develop`.
+
+When pushing commits to a PR, always update the PR title and body to cover the entire changeset.
+
+After creating a PR, run the `/review-pr` skill on it before considering the task complete.
+
+Squash-merged commits on `develop` should only carry the PR number in the title (e.g. `(#171)`), never the originating issue number. Issue references belong in the commit body as `Closes #NNN` so that they auto-close when the commit reaches `main` on release.
+
+Use real line breaks in commit messages and GitHub text. For multiline `gh` bodies, write UTF-8 text to a file and pass `--body-file`; do not encode line breaks as literal `\n` sequences. Put each closing reference on its own body line. After publishing a release, verify closure of referenced issues before marking the triage work complete.
+
+## Issue Triage
+
+Use the `/triage` skill for triaging open issues and discussions. It owns the full workflow, diagnosis patterns, labelling conventions, and reply tone.
+
+## Releases
+
+Batch routine stable releases around meaningful user-visible improvements, allowing time to validate the accumulated changes. Keep fixes flowing into `develop` between releases. Do not publish multiple routine stable versions in one day. An additional same-day stable release is reserved for an urgent regression, security or data-loss fix.
+
+"Release" means fast-forwarding `main` to the current tip of `develop` and pushing it. First sync local `develop` with `origin/develop` so you ship the real head. No merge commit, no force push — just `git checkout main && git merge --ff-only develop && git push origin main`. This is what triggers the release workflow and the auto-close of issues referenced by `Closes #NNN` in the develop commits.
+
+## Development Environment
+
+The project uses a micromamba environment at `.mamba_env/`. Always activate it before running builds, tests, or the app:
+
+```bash
+eval "$(micromamba.exe shell hook --shell bash)" && micromamba activate "C:/Users/baris/projects/jarvis/.mamba_env"
+```
+
+Frontend rendering tests require Node.js 22 or later to execute the viewer JavaScript. Node.js is a development test dependency; Jarvis does not require it at runtime.
+
+## README Maintenance
+
+Keep README.md up-to-date when making changes that affect user-facing functionality. Update the README when:
+- Adding or removing built-in tools (update Features → Built-in Tools list)
+- Changing configuration options (update Configuration section)
+- Adding new MCP integration examples
+- Changing system requirements or installation steps
+- Fixing or introducing known limitations
+
+README priorities (in order of importance):
+1. **Privacy-first messaging** - The local/offline nature is a core selling point
+2. **Quick install** - Users should get running in minutes
+3. **Features list** - High-level capabilities at a glance
+4. **Known limitations** - Be transparent about what doesn't work yet
+5. **Configuration** - Only document options users actually need
+6. **MCP integrations** - Examples for popular tools
+7. **Troubleshooting** - Common issues with solutions
+
+Keep sections concise. Use collapsible `<details>` for lengthy content. Avoid documenting internal implementation details - the README is for end users, not developers.
+
+README style:
+- Lead with what Jarvis lets people do. Keep wording direct, clear and brief.
+- Cover the useful capabilities and show what makes them impressive through concrete examples, without hype or repeated claims.
+- Explain user-visible outcomes. Keep prompt rules, extraction stages, source attribution mechanics and other internal details in specs or technical docs.
+- A fix does not need another README sentence when the existing description already covers the capability. Prefer tightening or replacing text over adding more.
+
+---
+
+When the user says "remember" something, add it to AGENTS.md in the appropriate section (project-specific above the ---, or portable below).
+
+Run your changes and test them manually, iterate until everything is good.
+
+Always use TDD: write failing tests first, then implement the fix. Tests should verify **behaviours**, not implementation details. Test what the system does (observable outcomes), not how it does it (internal state, mock call counts, etc.).
+
+Tests must isolate user stores across the whole suite, including default dictation history. Fake transcriptions belong in temporary test storage and must never reach a user's saved history.
+
+Automated tests use owned audio fakes and never open microphones or play sound. Pytest keeps native audio entry points blocked through teardown and rejects even caught attempts. Physical hardware checks require an explicitly authorised manual run outside pytest.
+
+Ensure all your changes are covered by all appropriate form of automated tests - unit, integration, visual regression, evals, etc.
+
+Tests should verify mechanisms, not current values. Assert against config-driven or computed references rather than hardcoding specifics that change between migrations.
+
+Tests and patch targets use the runtime package names (`jarvis.*` and `desktop_app.*`).
+Do not add `src.` to imports, which creates separate module state and bypasses runtime subscribers or patches.
+
+Run evals after finalising a change that can affect agent accuracy.
+
+Any change to LLM prompts (system prompts, tool incentives, constraints, etc.) must be verified against a relevant eval case. If no eval exists for the behaviour being changed, write one first. The eval should demonstrate the improvement — i.e. it should fail or show worse results before the prompt change and pass or improve after.
+
+Commit your changes when you finish a fix or feature before moving on to the next task.
+
+Before running `git commit --amend`, always check `git log --oneline -3` first to verify you're amending the correct commit.
+
+Always use British English everywhere (e.g. "colour" not "color", "behaviour" not "behavior", "initialise" not "initialize").
+
+Do not use em dashes (—) in GitHub issue/PR/discussion replies or any user-facing writing. Prefer a comma, a full stop, a colon, or parentheses depending on the clause. This applies to replies you post on the user's behalf and to text generated for them.
+
+## Code, comments, specs, docs: describe the current state, not the history
+
+The codebase is ours and releases are versioned. Git carries the history; the code carries the present. Anything you write that lives in a file (code comments, docstrings, `*.spec.md`, `docs/*`, READMEs) should describe what the system *is*, not what it *was* or how it *changed*. Avoid:
+
+- "previously did X", "used to be Y", "this fixes the regression where…"
+- "refactored to", "migrated from", "now uses", "no longer reads"
+- "PR 2.5b will…", "deferred to follow-up", "TODO(PR X): drop this once…"
+- Phases tables, migration rollouts, "Done / Pending" status columns inside specs
+
+Commit messages and PR descriptions are the right place for "what changed and why" — they exist to be read in sequence. Files under `src/`, `docs/`, and `*.spec.md` are read as the present-day reference; historical narrative there ages badly and confuses future readers.
+
+## Refactor completely or not at all
+
+Use one canonical source for shared model catalogues and capability rules. Consumers derive their choices and decisions from it instead of maintaining separate copies.
+
+If you're touching every legacy call site, finish the job. Don't leave compat shims, fallback parameters, `SimpleNamespace` defaults, or `TODO(PR X)` markers for paths you are also rewriting in the same change. The whole point of doing the refactor is that the legacy shape goes away — keeping a half-converted state means future readers have to figure out which version of the contract is canonical, and the reasoning behind the old shape sits in the codebase as dead weight.
+
+The exception is genuinely external boundaries the codebase does not own: on-disk config files written by a previous release, third-party API shapes, persisted database rows. Those need migration paths because users depend on them. Internal function signatures, helper modules, and call patterns inside `src/` are ours to change cleanly.
+
+## Qt Layout: showing hidden widgets compresses existing ones
+
+When toggling widget visibility inside a constrained layout, provide a scroll viewport whose content retains its minimum usable size. Wizard pages use `ScrollableWizardPage` or a dedicated scroll area. Do not grow the wizard with `adjustSize()` or hardcoded heights when revealing controls; the window must stay within the available screen and navigation must remain reachable.
+
+## Prompt-engineering: denial-template mirroring
+
+When a small model keeps producing a canonical denial ("I only have access to the information you have shared in our current conversation", "I don't have any personal information about you", etc.), don't argue against the denial in the system prompt — that rarely wins against strong priors. Instead, phrase the injected context so it literally occupies the semantic slot the denial refers to. If the model denies having "information the user has shared in prior conversations", label the block exactly that. The denial stops triggering because the thing it claims to lack is now visibly present in the prompt. Arguing with the model's priors is expensive; feeding the denial its own words with the data pre-filled is cheap.

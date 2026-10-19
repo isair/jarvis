@@ -1,202 +1,140 @@
-"""
-Tests for collecting the macOS native crash report (`.ips`) so that
-"Fatal Python error: Aborted" crashes (which faulthandler cannot explain —
-it only dumps Python frames) become diagnosable from the app's own crash
-report. See #584/#575/#576: the SIGABRT source is a C-level abort in the
-main Qt thread whose native stack is only recorded in
-`~/Library/Logs/DiagnosticReports/Jarvis-*.ips`.
-"""
+"""Synthetic native crash reports identify the applicable report and crashed thread."""
 
 import json
-from pathlib import Path
+import os
+from types import SimpleNamespace
 
-from unittest.mock import patch
+import pytest
+
+from desktop_app import app as desktop
+
+pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("desktop_log_home", "no_network")]
 
 
-def _write_ips(path: Path, mtime: float, *, app_name: str = "Jarvis",
-               exc_type: str = "SIGABRT", indicator: str = "DirtyVM_FLUSH",
-               frames: list) -> None:
-    """Write a minimal but structurally valid Apple .ips crash report."""
+@pytest.fixture(autouse=True)
+def macos_platform(monkeypatch):
+    owned_sys = SimpleNamespace(**vars(desktop.sys))
+    owned_sys.platform = "darwin"
+    monkeypatch.setattr(desktop, "sys", owned_sys)
+
+
+@pytest.fixture
+def crash_log(tmp_path):
+    path = tmp_path / "jarvis_desktop_crash.log"
+    path.write_text("Fatal Python error: Aborted\n")
+    return path
+
+
+def _write_ips(path, mtime, frames, *, indent=None):
     body = {
-        "app_name": app_name,
-        "timestamp": "2026-08-08 13:35:39.539733",
-        "exception": {"type": exc_type, "signal": 6},
-        "termination": {"indicator": indicator},
-        "threads": [
-            {"id": 1, "frames": [{"imageOffset": 0, "symbol": f} for f in frames]},
-            {"triggered": True, "id": 2,
-             "frames": [{"imageOffset": i * 16, "symbol": s}
-                        for i, s in enumerate(frames)]},
-        ],
+        "app_name": "Jarvis", "exception": {"type": "SIGABRT"},
+        "termination": {"indicator": "Synthetic termination"},
+        "threads": [{"id": 1, "frames": [{"symbol": "idle_worker"}]},
+                    {"id": 2, "triggered": True, "frames": frames}],
     }
-    # .ips files are two-line JSON-ish: a metadata line then the payload.
-    path.write_text(
-        json.dumps({"app_name": app_name}) + "\n" + json.dumps(body),
-        encoding="utf-8",
-    )
-    import os
+    path.write_text(json.dumps({"app_name": "Jarvis"}) + "\n" + json.dumps(body, indent=indent))
     os.utime(path, (mtime, mtime))
 
 
-def _fresh_mtime() -> float:
-    """An mtime safely newer than any crash log written during the test."""
-    import time
-    return time.time() + 60
+@pytest.mark.parametrize("condition", ["missing", "empty", "other_app", "stale", "malformed"])
+def test_unavailable_or_inapplicable_report_returns_none(crash_log, tmp_path, condition):
+    directory = tmp_path / "missing" if condition == "missing" else tmp_path
+    fresh = crash_log.stat().st_mtime + 10
+    if condition in {"other_app", "stale"}:
+        name = "OtherApp-fixture.ips" if condition == "other_app" else "Jarvis-fixture.ips"
+        _write_ips(tmp_path / name, fresh if condition == "other_app" else fresh - 20,
+                   [{"symbol": "abort"}])
+    elif condition == "malformed":
+        report = tmp_path / "Jarvis-fixture.ips"
+        report.write_text("not json")
+        os.utime(report, (fresh, fresh))
+    assert desktop.collect_macos_crash_report(crash_log, diagnostics_dir=directory) is None
 
 
-class TestCollectMacosCrashReport:
-    def test_returns_none_when_diagnostics_dir_missing(self, tmp_path):
-        from desktop_app.app import collect_macos_crash_report
-        crash_log = tmp_path / "jarvis_desktop_crash.log"
-        crash_log.write_text("x")
-        missing = tmp_path / "nope"
-        assert collect_macos_crash_report(crash_log, diagnostics_dir=missing) is None
-
-    def test_returns_none_when_dir_empty(self, tmp_path):
-        from desktop_app.app import collect_macos_crash_report
-        crash_log = tmp_path / "jarvis_desktop_crash.log"
-        crash_log.write_text("x")
-        assert collect_macos_crash_report(crash_log, diagnostics_dir=tmp_path) is None
-
-    def test_returns_none_when_no_matching_app(self, tmp_path):
-        from desktop_app.app import collect_macos_crash_report
-        crash_log = tmp_path / "jarvis_desktop_crash.log"
-        crash_log.write_text("x")
-        other = tmp_path / "OtherApp-2026-08-08-133539.ips"
-        _write_ips(other, mtime=100.0, app_name="OtherApp", frames=["main"])
-        assert collect_macos_crash_report(crash_log, diagnostics_dir=tmp_path) is None
-
-    def test_returns_none_when_report_older_than_crash_log(self, tmp_path):
-        from desktop_app.app import collect_macos_crash_report
-        crash_log = tmp_path / "jarvis_desktop_crash.log"
-        crash_log.write_text("x")
-        # Crash report written BEFORE this session's log: stale, ignore it.
-        stale = tmp_path / "Jarvis-2026-07-01-000000.ips"
-        _write_ips(stale, mtime=50.0, frames=["main"])
-        assert collect_macos_crash_report(crash_log, diagnostics_dir=tmp_path) is None
-
-    def test_extracts_native_stack_from_fresh_report(self, tmp_path):
-        from desktop_app.app import collect_macos_crash_report
-        crash_log = tmp_path / "jarvis_desktop_crash.log"
-        crash_log.write_text("x")
-        ips = tmp_path / "Jarvis-2026-08-08-133539.ips"
-        frames = ["__pthread_kill", "abort", "qt_message_fatal",
-                  "QThread::start", "main"]
-        _write_ips(ips, mtime=_fresh_mtime(), frames=frames)
-        result = collect_macos_crash_report(crash_log, diagnostics_dir=tmp_path)
-        assert result is not None
-        assert "SIGABRT" in result
-        assert "DirtyVM_FLUSH" in result
-        assert "__pthread_kill" in result and "abort" in result
-        assert "qt_message_fatal" in result
-        assert ips.name in result
-
-    def test_handles_pretty_printed_multiline_payload(self, tmp_path):
-        """Real .ips payloads can be pretty-printed across many lines."""
-        from desktop_app.app import collect_macos_crash_report
-        crash_log = tmp_path / "jarvis_desktop_crash.log"
-        crash_log.write_text("x")
-        ips = tmp_path / "Jarvis-2026-08-08-133539.ips"
-        payload = (
-            '{\n  "app_name": "Jarvis",\n'
-            '  "exception": {"type": "SIGABRT"},\n'
-            '  "threads": [{"triggered": true, "frames": ['
-            '{"symbol": "abort"}, {"symbol": "main"}]}]\n}'
-        )
-        ips.write_text('{"app_name": "Jarvis"}\n' + payload)
-        import os as _os
-        _os.utime(ips, (_fresh_mtime(), _fresh_mtime()))
-        result = collect_macos_crash_report(crash_log, diagnostics_dir=tmp_path)
-        assert result is not None
-        assert "SIGABRT" in result and "abort" in result
-
-    def test_ignores_non_string_symbols(self, tmp_path):
-        """Frames without a demangled symbol render as '?' — never fall back
-        to the integer ``symbolLocation`` byte offset."""
-        from desktop_app.app import collect_macos_crash_report
-        crash_log = tmp_path / "jarvis_desktop_crash.log"
-        crash_log.write_text("x")
-        ips = tmp_path / "Jarvis-2026-08-08-133539.ips"
-        _write_ips(ips, mtime=_fresh_mtime(),
-                   frames=["abort", "__pthread_kill", "main"])
-        # Replace the payload with one whose frames carry only symbolLocation.
-        import os as _os
-        body = {
-            "app_name": "Jarvis",
-            "exception": {"type": "SIGABRT"},
-            "threads": [{"triggered": True, "id": 2,
-                         "frames": [{"imageOffset": 4096}]}],
-        }
-        ips.write_text('{"app_name": "Jarvis"}\n' + json.dumps(body))
-        _os.utime(ips, (_fresh_mtime(), _fresh_mtime()))
-        result = collect_macos_crash_report(crash_log, diagnostics_dir=tmp_path)
-        assert result is not None and "?" in result
-        assert "4096" not in result
-
-    def test_picks_newest_report(self, tmp_path):
-        from desktop_app.app import collect_macos_crash_report
-        crash_log = tmp_path / "jarvis_desktop_crash.log"
-        crash_log.write_text("x")
-        older = tmp_path / "Jarvis-2026-08-08-100000.ips"
-        newer = tmp_path / "Jarvis-2026-08-08-133539.ips"
-        _write_ips(older, mtime=_fresh_mtime() - 10, frames=["old_main"])
-        _write_ips(newer, mtime=_fresh_mtime(), frames=["new_main"])
-        result = collect_macos_crash_report(crash_log, diagnostics_dir=tmp_path)
-        assert result is not None and "new_main" in result and "old_main" not in result
-
-    def test_malformed_report_returns_none(self, tmp_path):
-        from desktop_app.app import collect_macos_crash_report
-        crash_log = tmp_path / "jarvis_desktop_crash.log"
-        crash_log.write_text("x")
-        bad = tmp_path / "Jarvis-2026-08-08-133539.ips"
-        bad.write_text("not json at all")
-        import os as _os
-        _os.utime(bad, (_fresh_mtime(), _fresh_mtime()))
-        assert collect_macos_crash_report(crash_log, diagnostics_dir=tmp_path) is None
-
-    def test_skipped_on_non_macos(self, tmp_path):
-        from desktop_app.app import collect_macos_crash_report
-        crash_log = tmp_path / "jarvis_desktop_crash.log"
-        crash_log.write_text("x")
-        ips = tmp_path / "Jarvis-2026-08-08-133539.ips"
-        _write_ips(ips, mtime=_fresh_mtime(), frames=["main"])
-        with patch.object(Path, "__str__", return_value="x"):
-            pass
-        with patch("desktop_app.app.sys.platform", "win32"):
-            assert collect_macos_crash_report(
-                crash_log, diagnostics_dir=tmp_path) is None
+@pytest.mark.parametrize("indent", [None, 2])
+def test_fresh_report_includes_crashed_thread_and_exception(crash_log, tmp_path, indent):
+    report = tmp_path / "Jarvis-fixture.ips"
+    frames = [{"symbol": symbol} for symbol in ("__pthread_kill", "abort", "qt_message_fatal")]
+    _write_ips(report, crash_log.stat().st_mtime + 10, frames, indent=indent)
+    result = desktop.collect_macos_crash_report(crash_log, diagnostics_dir=tmp_path)
+    assert result is not None
+    assert report.name in result and "SIGABRT" in result and "Synthetic termination" in result
+    for frame in frames:
+        assert frame["symbol"] in result
+    assert "idle_worker" not in result
 
 
-class TestPreviousCrashIncludesNativeStack:
-    def test_previous_crash_content_includes_native_stack(self, tmp_path, monkeypatch):
-        """check_previous_crash() must surface the macOS native stack so the
-        crash dialog / report-issue body carries the C-level abort source."""
-        from desktop_app import app as desktop_app
-        crash_log, crash_marker, _ = desktop_app.get_crash_paths()
+@pytest.mark.parametrize("symbol", [None, "", 123, ["not a symbol"]])
+def test_invalid_symbols_are_unknown_without_exposing_numeric_offsets(crash_log, tmp_path, symbol):
+    _write_ips(tmp_path / "Jarvis-fixture.ips", crash_log.stat().st_mtime + 10,
+               [{"symbol": symbol, "symbolLocation": 4096, "imageOffset": 8192}])
+    result = desktop.collect_macos_crash_report(crash_log, diagnostics_dir=tmp_path)
+    assert result is not None and "?" in result
+    assert "4096" not in result and "8192" not in result and "idle_worker" not in result
 
-        # Redirect paths to a temp dir for this test.
-        monkeypatch.setattr(desktop_app, "get_crash_paths",
-                            lambda: (tmp_path / "jarvis_desktop_crash.log",
-                                     tmp_path / ".crash_marker",
-                                     tmp_path / "previous_crash.log"))
-        crash_log, crash_marker, _ = desktop_app.get_crash_paths()
 
-        crash_log.write_text("=== Jarvis Desktop App Crash Log ===\nFatal Python error: Aborted\n")
-        crash_marker.touch()
+def test_newest_applicable_report_wins(crash_log, tmp_path):
+    fresh = crash_log.stat().st_mtime + 10
+    _write_ips(tmp_path / "Jarvis-older.ips", fresh, [{"symbol": "old_main"}])
+    _write_ips(tmp_path / "Jarvis-newer.ips", fresh + 10, [{"symbol": "new_main"}])
+    result = desktop.collect_macos_crash_report(crash_log, diagnostics_dir=tmp_path)
+    assert result is not None and "new_main" in result and "old_main" not in result
 
-        ips = tmp_path / "Jarvis-2026-08-08-133539.ips"
-        _write_ips(ips, mtime=_fresh_mtime(), frames=["__pthread_kill", "abort", "qt_message_fatal"])
-        # Point the wiring's collector at the temp diagnostics dir so the
-        # end-to-end path (check_previous_crash -> collector -> content) is
-        # exercised without touching the real home directory.
-        _real_collect = desktop_app.collect_macos_crash_report
-        monkeypatch.setattr(
-            desktop_app, "collect_macos_crash_report",
-            lambda crash_log: _real_collect(crash_log, diagnostics_dir=tmp_path),
-        )
-        with patch.object(desktop_app.sys, "platform", "darwin"):
-            content = desktop_app.check_previous_crash()
-        assert content is not None
-        assert "Fatal Python error: Aborted" in content
-        assert "Native crash report" in content
-        assert "__pthread_kill" in content
+
+def test_only_the_requested_number_of_crashed_frames_is_reported(crash_log, tmp_path):
+    frames = [{"symbol": f"crash_frame_{i}"} for i in range(6)]
+    limit = len(frames) // 2
+    _write_ips(tmp_path / "Jarvis-fixture.ips", crash_log.stat().st_mtime + 10, frames)
+    result = desktop.collect_macos_crash_report(crash_log, diagnostics_dir=tmp_path, max_frames=limit)
+    assert result is not None and "idle_worker" not in result
+    for index, frame in enumerate(frames):
+        assert (frame["symbol"] in result) == (index < limit)
+
+
+def test_native_reports_are_ignored_on_other_platforms(crash_log, tmp_path, monkeypatch):
+    _write_ips(tmp_path / "Jarvis-fixture.ips", crash_log.stat().st_mtime + 10, [{"symbol": "abort"}])
+    monkeypatch.setattr(desktop.sys, "platform", "win32")
+    assert desktop.collect_macos_crash_report(crash_log, diagnostics_dir=tmp_path) is None
+
+
+def test_previous_crash_includes_the_native_crashed_thread(crash_log, tmp_path, monkeypatch):
+    marker = tmp_path / ".crash_marker"
+    marker.touch()
+    monkeypatch.setattr(desktop, "get_crash_paths", lambda: (crash_log, marker, tmp_path / "previous_crash.log"))
+    _write_ips(tmp_path / "Jarvis-fixture.ips", crash_log.stat().st_mtime + 10,
+               [{"symbol": "__pthread_kill"}, {"symbol": "abort"}])
+    collector = desktop.collect_macos_crash_report
+    monkeypatch.setattr(desktop, "collect_macos_crash_report",
+                        lambda log: collector(log, diagnostics_dir=tmp_path))
+    content = desktop.check_previous_crash()
+    assert content is not None
+    assert "Fatal Python error: Aborted" in content and "Native crash report" in content
+    assert "__pthread_kill" in content and "idle_worker" not in content
+
+
+@pytest.mark.parametrize("unusable", ["malformed", "metadata-only", "non-object", "unreadable", "no-threads"])
+def test_newer_unusable_report_does_not_hide_native_stack(crash_log, tmp_path, monkeypatch, unusable):
+    fresh = crash_log.stat().st_mtime + 10
+    usable = tmp_path / "Jarvis-usable.ips"
+    newer = tmp_path / "Jarvis-incomplete.ips"
+    _write_ips(usable, fresh, [{"symbol": "native_abort_source"}])
+    contents = {
+        "malformed": '{"threads": [',
+        "metadata-only": json.dumps({"app_name": "Jarvis"}),
+        "non-object": '[]',
+        "unreadable": '{}',
+        "no-threads": json.dumps({"threads": []}),
+    }
+    newer.write_text(contents[unusable])
+    os.utime(newer, (fresh + 10, fresh + 10))
+    if unusable == "unreadable":
+        read_text = type(newer).read_text
+        def read_owned_report(path, *args, **kwargs):
+            if path == newer:
+                raise OSError("Owned crash file became unavailable")
+            return read_text(path, *args, **kwargs)
+        monkeypatch.setattr(type(newer), "read_text", read_owned_report)
+    result = desktop.collect_macos_crash_report(crash_log, diagnostics_dir=tmp_path)
+    assert result is not None
+    assert usable.name in result and "native_abort_source" in result
+    assert newer.name not in result

@@ -20,6 +20,78 @@ import pytest
 
 
 @pytest.mark.unit
+class TestPhoneShell:
+    def test_window_controls_and_rounded_frame(self, qapp, monkeypatch):
+        from desktop_app.chat_window import ChatWindow
+        from PyQt6.QtCore import Qt, QPoint
+        from PyQt6.QtTest import QTest
+        from PyQt6.QtWidgets import QSizeGrip
+        monkeypatch.setattr('desktop_app.chat_window.get_hot_window_messages', lambda: [])
+        win = ChatWindow()
+        win.show()
+        QTest.qWait(30)
+        rendered = win.grab().toImage()
+        assert rendered.pixelColor(0, 0).alpha() == 0
+        centre = rendered.rect().center()
+        assert rendered.pixelColor(centre).alpha() == 255
+        assert win.findChild(QSizeGrip).isVisible()
+        QTest.mouseDClick(win.title_bar, Qt.MouseButton.LeftButton, pos=QPoint(50, 10))
+        assert win.isMaximized()
+        QTest.mouseDClick(win.title_bar, Qt.MouseButton.LeftButton, pos=QPoint(50, 10))
+        assert not win.isMaximized()
+        win.minimise_button.click()
+        assert win.isMinimized()
+        win.showNormal()
+        win.close()
+
+    def test_custom_frame_close_preserves_conversation(self, qapp, monkeypatch):
+        from desktop_app.chat_window import ChatWindow
+        from PyQt6.QtCore import Qt
+        monkeypatch.setattr('desktop_app.chat_window.get_hot_window_messages', lambda: [])
+        win = ChatWindow()
+        win.show()
+        win._append_assistant('Still here')
+        assert win.windowFlags() & Qt.WindowType.FramelessWindowHint
+        win.close_button.click()
+        assert not win.isVisible()
+        win.show()
+        assert win.transcript_text() == 'Still here'
+        win.close()
+
+    def test_empty_state_disappears_without_becoming_a_message(self, qapp, monkeypatch):
+        from desktop_app.chat_window import ChatWindow
+        monkeypatch.setattr('desktop_app.chat_window.get_hot_window_messages', lambda: [])
+        win = ChatWindow()
+        win.show()
+        assert win.empty_state.isVisible()
+        assert win.transcript_text() == ''
+        win._append_user('Hello')
+        assert not win.empty_state.isVisible()
+        win.close()
+
+    @pytest.mark.parametrize('size', [(380, 560), (480, 780), (800, 650)])
+    def test_controls_fit_and_messages_are_literal_at_all_sizes(self, qapp, monkeypatch, size):
+        from desktop_app.chat_window import ChatWindow
+        from PyQt6.QtCore import Qt
+        from PyQt6.QtWidgets import QLabel
+        from PyQt6.QtTest import QTest
+        monkeypatch.setattr('desktop_app.chat_window.get_hot_window_messages', lambda: [])
+        win = ChatWindow()
+        win.resize(*size)
+        win.show()
+        win._append_assistant('<b>literal message</b> ' * 20)
+        win._set_thinking(True)
+        QTest.qWait(50)
+        for widget in (win.input_widget, win.send_button, win.stop_button, win.close_button):
+            assert win.rect().contains(widget.mapTo(win, widget.rect().bottomRight()))
+            assert widget.width() >= 36
+        bubble = next(w for w in win.findChildren(QLabel) if w.objectName() == 'bubble')
+        assert bubble.textFormat() == Qt.TextFormat.PlainText
+        assert bubble.width() < win.transcript_widget.viewport().width()
+        win.close()
+
+
+@pytest.mark.unit
 class TestChatWindowStructure:
     """The window exposes the UI elements the spec requires."""
 
@@ -603,23 +675,33 @@ class TestChatWindowInputKeys:
 class TestChatWindowTranscriptScroll:
     """New messages keep the latest content visible (auto-scroll to bottom)."""
 
-    def test_append_scrolls_to_bottom_after_many_lines(self, qapp, monkeypatch):
+    @pytest.mark.parametrize("rebuild", [False, True])
+    @pytest.mark.parametrize("kind", ["user", "assistant", "system"])
+    def test_long_transcript_keeps_newest_message_visible(self, qapp, monkeypatch, rebuild, kind):
         from desktop_app.chat_window import ChatWindow
+        from PyQt6.QtTest import QTest
 
-        monkeypatch.setattr(
-            "jarvis.daemon.submit_text_query", lambda text, **kw: None
-        )
+        monkeypatch.setattr("desktop_app.chat_window.get_hot_window_messages", lambda: [])
         win = ChatWindow()
         win.show()
         qapp.processEvents()
-        # Force a tall transcript so the viewport is scrolled past the first
-        # lines. Each append must bring the cursor (the view) back to the end.
-        for _ in range(80):
-            win._append_assistant("line of transcript content " * 4)
-        qapp.processEvents()
+        history = ["line of transcript content " * 4 for _ in range(80)]
+        for text in history:
+            win._append_assistant(text)
+        if rebuild:
+            win._render_transcript(win._messages)
+        QTest.qWait(100)
 
         scroll_bar = win.transcript_widget.verticalScrollBar()
+        assert scroll_bar.maximum() > 0
         assert scroll_bar.value() == scroll_bar.maximum()
+        scroll_bar.setValue(scroll_bar.minimum())
+        assert scroll_bar.value() < scroll_bar.maximum()
+
+        getattr(win, f"_append_{kind}")("newest message")
+        QTest.qWait(100)
+        assert scroll_bar.value() == scroll_bar.maximum()
+        assert win.transcript_text() == "\n".join([*history, "newest message"])
 
 
 @pytest.mark.unit
@@ -953,3 +1035,14 @@ class TestChatRewind:
         win._rewind_to_user(1, "question")
 
         assert rewinds == [], "rewind must be disabled while a query is in flight"
+
+
+@pytest.mark.unit
+def test_chat_activity_lines_reach_log_without_protocol_duplicates():
+    from desktop_app.app import _should_emit_as_log
+    from jarvis.daemon import CHAT_IPC_PREFIX
+
+    assert _should_emit_as_log('⌨️ Typed: "Where do I live?"\n')
+    assert _should_emit_as_log('🤖 Jarvis\n')
+    assert _should_emit_as_log('  London.\n')
+    assert not _should_emit_as_log(CHAT_IPC_PREFIX + '{"type":"complete","data":"London."}\n')

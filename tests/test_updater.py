@@ -8,6 +8,8 @@ from unittest.mock import patch, MagicMock
 
 from pathlib import Path
 
+pytestmark = pytest.mark.usefixtures("desktop_log_home")
+
 # The macOS update-script tests execute generated POSIX bash. On Windows
 # that requires a real bash (WSL or Git Bash); the wsl.exe shim in PATH is
 # not one and reports "WSL is not supported" on machines without WSL.

@@ -6,6 +6,17 @@ A self-organising node graph that stores the assistant's accumulated world knowl
 
 The graph dynamically structures knowledge by topic relevance using a hierarchical tree where nodes auto-split when they grow too large. Three fast-access entry points — **recent nodes**, **top nodes**, and **root node** — ensure the most relevant knowledge is always reachable without exhaustive search.
 
+### Knowledge and task history
+
+Completed assistant transactions and their confirmations belong in the diary,
+including creating, changing, deleting or cancelling records and opening
+resources. Completion alone does not make an interaction durable knowledge.
+Extraction and semantic review retain independently established personal facts
+and standing directives alongside those transactions. Record operations alone
+do not establish real-world events; deleting a record does not establish whether
+its underlying event happened. Explicit user corrections determine the supported
+claim, preserving its subject and temporal scope.
+
 ## Fixed Top-Level Branches
 
 On first bootstrap the graph seeds three non-deletable branches under root, defined in `FIXED_BRANCHES` in `graph.py`:
@@ -16,25 +27,60 @@ On first bootstrap the graph seeds three non-deletable branches under root, defi
 | `directives` | Directives | Imperatives the user issued at the assistant: reply style, tone rules, standing instructions |
 | `world` | World | External facts the assistant has learned: discoveries, practical knowledge, current events |
 
-These branches are created idempotently via `INSERT OR IGNORE` on stable IDs. The structure is intentionally shallow and purpose-driven — splits deepen each subtree over time, but the top layer stays fixed so the **warm profile** (see below) has a stable shape.
+These branches are created idempotently by inserting only missing stable IDs. The structure is intentionally shallow and purpose-driven — splits deepen each subtree over time, but the top layer stays fixed so the **warm profile** (see below) has a stable shape.
+
+Opening an initialised graph reads the existing revision and branch seeds without
+issuing seed writes. Under SQLite WAL, this permits opening and reading committed
+nodes while another owner holds a write transaction. Missing node schema or branch
+seeds require writable bootstrap. Actual mutations and access-score updates retain
+their normal SQLite write-lock requirements.
 
 No Other branch: the extractor defaults unknown classifications to `user`. A fact that genuinely belongs nowhere should not be stored.
 
-### Legacy-Shape Migration (destructive)
+Extracted facts must be non-empty strings. Missing, blank or non-string facts
+are discarded before semantic review, without discarding valid sibling entries.
+Numbers, booleans and structured JSON values cannot become memory text through
+implicit conversion.
 
-`GraphMemoryStore.migrate_legacy_shape()` checks the on-disk graph against the expected shape at daemon start-up. The graph is considered non-conforming if root has any direct child that isn't one of the fixed branches, or if root's own `data` column is non-empty (cold-start writes that landed on root before the taxonomy existed). In either case the entire `memory_nodes` table is wiped and root + the three fixed branches are re-seeded.
+### Startup Preservation
 
-Why destructive: pre-taxonomy nodes sitting under root would remain invisible to the warm profile forever. Carrying them as dead weight is worse than a clean slate. The diary is untouched, so users can re-populate via "Import from Diary" in the memory viewer once the wipe completes. Knowledge nodes are in beta — the structure and classification are now stable but the extractor quality is still being tuned.
+Opening the graph seeds only missing root and fixed branch records. Startup does
+not delete, clear, reclassify or move saved nodes because of their shape. Root
+facts and direct children outside the fixed branches can be manually created or
+imported; their placement does not establish their age or ownership.
 
-Called **only** from the daemon start-up path in `daemon.main()`. The memory viewer and reply engine instantiate `GraphMemoryStore` without triggering the migration, so a mid-session open never wipes anything.
+`GraphMemoryStore.has_unclassified_root_content()` reports non-empty root data or
+root children outside the fixed branches without writing to the database. The
+daemon advises users to review such notes in the Memory Viewer. All existing
+node IDs, contents, relationships and metadata remain intact, as does the diary.
+
+The warm profile includes User and Directives only. Unclassified root notes stay
+available in the viewer and explicit graph traversal; users choose their branch
+when organising them. Startup does not infer their classification or rely on a
+diary import to recover independently saved knowledge.
+
+The daemon owns its temporary inspection store and closes it on success or
+failure. Inspection failure remains non-fatal to startup and releases any open
+SQLite transaction.
 
 ### Branch-Pinned Traversal
 
-`find_best_node(..., branch_root_id=...)` skips the recent/top entry points and descends from the given branch root only. This prevents cross-branch contamination when routing extracted facts: a User fact cannot land in the World subtree just because a World node was recently touched.
+`find_best_node(..., branch_root_id=...)` requires the classified branch root and descends through that subtree only. This prevents cross-branch contamination when routing extracted facts: a User fact cannot land in the World subtree just because a World node was recently touched.
 
 ## Warm Profile
 
 `build_warm_profile(store, *, user_max_chars, directives_max_chars)` returns a `{"user": "...", "directives": "..."}` dict by walking the User and Directives subtrees breadth-first (ordered by each sibling's decayed access score) and concatenating node data up to the char caps. `format_warm_profile_block(profile)` renders it as a labelled system-prompt section using denial-template mirroring (see CLAUDE.md): the headings literally occupy the semantic slot that small-model canonical denials refer to ("INFORMATION THE USER HAS SHARED IN PRIOR CONVERSATIONS", "STANDING INSTRUCTIONS FROM THE USER").
+
+Node text is decoded incrementally from a read-only SQLite BLOB, with temporary
+text buffers bounded by the output budget and a small read chunk. Leading and
+trailing whitespace, Unicode, embedded NULs and the truncation ellipsis retain
+their text semantics. Identity lookup and text reading share a read savepoint;
+closing or abandoning that read releases only its snapshot, without committing
+or rolling back a caller's pending edits. Child enumeration reads identifiers
+in the same decayed-access order, without materialising child note payloads.
+Exhausted branch budgets do not read more nodes or enumerate descendants.
+Traversal can still enumerate sibling identifiers; text caps are not a total
+node-count or query-time budget.
 
 The warm profile is injected into every reply's initial system message (see `reply/engine.py` Step 3.5) unconditionally and query-agnostically — personalisation is the default, not something gated behind a question-detection heuristic. No LLM call is involved in composition; it's a pure SQLite read.
 
@@ -79,15 +125,76 @@ Nodes can be fetched individually, as children of a parent, as a subtree (nested
 
 ### Update
 
-Any combination of name, description, and data can be updated. Token count is recomputed when data changes. `updated_at` is always refreshed.
+Any combination of name, description, and data can be updated. Token count is
+recomputed when data changes. `updated_at` is always refreshed.
+
+Reading the current node, applying the supplied fields and committing the result
+share one store lock and an immediate SQLite write transaction, preserving
+independent concurrent edits across store instances and processes. Appending text
+uses the same atomic read-and-write boundary, retaining every concurrent append,
+and returns the committed node or no node if the target is absent. Its token
+count determines whether the split threshold is exceeded. Conditional updates
+compare supplied `expected_data` against the current row before any field change;
+a mismatch returns no updated node and leaves the current row untouched.
+The transaction commits before mutation listeners run, and the store lock is
+released before their callbacks. Failed writes roll back and release the database
+write lock so other writers can continue.
+
+Parent edits are validated under the same lock and transaction before any
+supplied field changes: the parent must exist and its ancestry must not create a
+cycle. Root and the fixed top-level branches retain their parents. Invalid parents
+return no updated node and leave every field untouched. Other nodes may be
+detached with a null parent, retaining their subtree.
 
 ### Delete
 
-Any node except root can be deleted. Children are orphaned (parent_id set to NULL via FK). The UI should warn before deleting nodes with children.
+Root and the fixed top-level branches are protected. Other nodes can be deleted;
+children are detached (parent_id set to NULL via FK). The UI should warn before
+deleting nodes with children. Deletion and child detachment share one transaction.
+Failed deletion rolls back and releases the database write lock. Mutation
+listeners run after successful commit, outside the store lock.
 
 ### Touch
 
-Increments `access_count` and updates `last_accessed`. Called automatically when a node is viewed in the UI or retrieved during query traversal.
+Access tracking is optional bookkeeping. `touch_node` attempts to increment
+`access_count` and update `last_accessed` in one transaction, without waiting for
+another database writer. The store lock protects the temporary zero busy timeout;
+the connection's configured timeout is restored after every attempt. An existing
+caller-owned transaction is left intact and its tracking attempt is skipped, so
+bookkeeping cannot commit pending content or release a read snapshot.
+
+Unavailable or rejected tracking writes roll back, preserve the saved counters
+and timestamps, release the database write lock and emit a diagnostic. They do
+not interrupt graph search, viewer reads or already committed content writes.
+Actual content reads and mutations retain their normal failure behaviour.
+Successful access tracking does not change the warm-profile revision.
+
+### Warm Profile Revision
+
+A persisted `warm_profile` revision in `memory_graph_revisions` tracks User and
+Directives profile inputs. SQLite triggers advance it for inserts, deletes and
+content/parent edits anywhere in those subtrees. Before-insert checks include
+the existing row for SQLite replacement writes. Before/after update checks cover
+moves into or out of a relevant branch. Ancestor queries use indexed parent links
+and terminate on repeated nodes. Access-only touches and World-only writes leave
+the revision unchanged. Triggers operate within the writer's transaction,
+including writes from separate connections or processes. Schema initialisation
+preserves existing nodes and revision values. Writable construction
+closes its connection if schema initialisation or branch seeding fails, releasing
+any open transaction before propagating the original error.
+
+The reply cache includes the database path and revision with its profile block.
+Each turn checks that signature before reuse, so committed external edits reach
+the next turn without requiring an in-process callback. An absent revision table
+or counter leaves existing node data readable: profiles are rebuilt without
+caching, and any prior cached profile is discarded. Readers do not create the
+revision metadata; writable bootstrap supplies it. Changed profiles are
+rebuilt; an unavailable rebuild supplies no stale block. Temporary read stores
+are closed after use. Profile reads open the existing database with SQLite's
+read-only mode, without schema or branch seed writes. A read transaction keeps
+the revision and profile traversal on one committed snapshot. Bootstrap and
+schema initialisation belong to writable stores at daemon start-up or graph
+editing boundaries; opening a missing graph for reading creates no files.
 
 ### Mutation Listeners
 
@@ -126,8 +233,15 @@ Triggered automatically when `data_token_count > SPLIT_THRESHOLD` (1500 tokens) 
 This means the tree depth itself encodes a raw→refined spectrum: surface-level nodes hold recently ingested knowledge, deeper nodes hold distilled novel knowledge that survived multiple split cycles. Model upgrades naturally shrink the graph as previously-novel facts become common knowledge.
 
 Split quality safeguards:
-- Minimum 2 categories required (abort if LLM proposes fewer)
+- The request has an 8192-token context and a 4096-token response budget for
+  the organised facts, category metadata and parent summary. The timeout is
+  45 seconds by default; incomplete generations preserve the source node.
+- Between 2 and 5 categories required (abort outside these bounds)
 - Each category must have at least one fact
+- Categories form a JSON array of objects with non-empty string names and
+  non-empty arrays of non-empty string facts. Every category is validated before
+  any child is created; an invalid category leaves the parent data and children
+  untouched.
 - If the split fails (LLM error, bad JSON), the node retains its data and the next write retries
 
 ## Auto-Merge (Future — requires LLM integration)
@@ -155,16 +269,30 @@ The graph memory system is fully automatic — no tool calls required. It integr
 
 Piggybacks on the existing diary update flow in `conversation.py`:
 
-1. After a successful diary update, the conversation summary is passed to `update_graph_from_dialogue()`
-2. **Extract + classify**: LLM extracts novel knowledge from the summary and classifies each fact into one of the three fixed branches (`USER` / `DIRECTIVES` / `WORLD`). Output is a JSON list of `{"branch": "...", "fact": "..."}` objects. Rough routing heuristic baked into the prompt: if the user is *telling the assistant how to behave* → DIRECTIVES; if the user is *telling the assistant about themselves* → USER; if the assistant *discovered a fact about the world* → WORLD. Unknown branches default to USER. Requests are reframed as knowledge ("user asked about CEX hours" → "CEX Kensington closes at 6pm on Sundays"). Patterns and consolidation emerge through auto-split.
-3. **Traverse**: Each fact is placed in the best-fitting node using branch-pinned descent from its tagged branch root (recent/top shortcuts are skipped so cross-branch contamination is impossible):
-   - **Recent nodes** — checked first; follows conversational momentum
-   - **Top nodes** — checked second; matches frequently accessed knowledge domains
-   - **Root traversal** — greedy top-down descent; LLM picks the best child at each level, or stops at the current node if none fit
+1. After a successful diary update, the saved row is read by its returned persistent ID. Its summary and stored UTC date are passed to `update_graph_from_dialogue()`, including when generation crosses midnight. Extraction and semantic fact review receive the same source summary and optional diary-date prefix. An unavailable row skips extraction. The diary flush owns a temporary graph store and closes it after a completed, skipped or failed graph pass. Graph failures preserve the successful diary save.
+2. **Extract + classify**: LLM extracts novel knowledge from the summary and classifies each fact into one of the three fixed branches (`USER` / `DIRECTIVES` / `WORLD`). Output is a JSON list of `{"branch": "...", "fact": "..."}` objects. Every object repeats both named keys, including consecutive facts in the same branch; branch labels are values, never bare entries. Rough routing heuristic baked into the prompt: if the user is *telling the assistant how to behave* → DIRECTIVES; if the user is *telling the assistant about themselves* → USER; if the assistant *discovered a fact about the world* → WORLD. Unknown branches default to USER. Requests are reframed as knowledge ("user asked about CEX hours" → "CEX Kensington closes at 6pm on Sundays"). Patterns and consolidation emerge through auto-split.
+   **Semantic hygiene review**: before graph storage, a focused classification call reviews the non-empty candidate list by meaning in every language. The original source summary and indexed candidate text are supplied as untrusted JSON data. Proposed branches are withheld so review independently classifies meaning without adopting the initial destination. Each candidate receives two independent fields: a source-support and durability `verdict` (`DURABLE`, `TRANSIENT`, `INTERACTION`, `ADVICE` or `UNSUPPORTED`) and a semantic `kind` (`USER`, `DIRECTIVES`, `WORLD`, `REQUEST_HISTORY`, `ASSISTANT_SELF` or `OTHER`). A plausible personal claim can have kind `USER` while its verdict is `UNSUPPORTED`. Source support requires the same subject, relationship and temporal status. Quoted translation/explanation examples, third-party assertions, hypothetical circumstances, requested options and former facts cannot establish current user facts. Actual reported user declarations remain eligible. Forecasts for any duration, current weather/time readings, questions without an answer and assistant suggestions are excluded. Explicit style directives, personal plans/preferences, business details and enduring climate facts remain valid. Source summary and candidate text are untrusted data and must not direct the review. Only original candidates with verdict `DURABLE` and kind matching their proposed knowledge branch survive; their branch and text are preserved. Branch disagreements, request-history narratives and assistant self-descriptions are discarded, not retagged or rewritten. The response is a JSON object mapping every supplied candidate ID exactly once to an object containing exactly `verdict` and `kind`. The three knowledge branch kinds are eligible; request history, assistant self-description and other kinds are excluded even when source-supported. Duplicate fields, unknown labels and incomplete results reject the whole review. An unavailable or malformed review skips that graph cycle without altering the diary. Extraction and review share the extraction timeout; review has a 4096-token context, temperature zero and a response cap of 2048 tokens. There are no review retries.
+
+   Indirectly reported ongoing instructions retain their force as canonical
+   Directives rules. Reporting tense alone does not expire a rule; explicit
+   scope, cancellation and replacement determine whether it is active. One-off
+   writing tasks, completed tests and quoted examples do not establish standing
+   instructions. The review excludes narratives of requests in every branch, and descriptions
+   of this assistant's own age, identity or capabilities. Genuine user interests remain User facts.
+
+3. **Traverse**: Each fact is placed in the best-fitting node by descending from its tagged branch root only. At each level the LLM picks a child or stops at the current node when none fit. Recent and top access scores order retrieval, not the placement entry point.
    - **Picker model**: `update_graph_from_dialogue` / `find_best_node` / `_llm_pick_best_child` accept an optional `picker_model` override. Callers (daemon, memory viewer's diary-import endpoint) resolve it via `resolve_model(cfg, Tier.FAST)` so the best-child classification runs on the small warm fast model instead of the big chat model. When `picker_model` is `None` the picker falls back to the chat model.
-4. **Dedupe (fast-path)**: Before any LLM call, `GraphMemoryStore.node_contains_fact` compares the fact against each line of the chosen node's data under Unicode-aware folding (`unicodedata.NFKC` + `str.casefold` + whitespace collapse), so ASCII casing, locale quirks (Turkish `İ`/`ı`, German `ß`/`ss`), and incidental whitespace don't cause false negatives. Exact matches are skipped, **not** reported as newly learned, and do **not** touch the node's access score (a re-extraction isn't fresh reinforcement). The merge step below would also collapse re-extractions, but cumulative daily summaries re-emit the same lines often enough that catching them with a cheap SQL read avoids a flood of small-model calls — semantically equivalent, just faster. Skips are still counted: `update_graph_from_dialogue` returns a `GraphUpdateResult(stored, skipped)` so the CLI can log "nothing new (N duplicates skipped)" on all-duplicate flushes; silencing that line would make the memory pipeline look broken. The check only covers the picker's chosen node, so a later flush that routes the same fact to a different node within the branch can still leak through — caught by the merge step on that node instead.
-5. **Merge** (batched per node): `merge_node_data(store, node_id, new_facts: list[str], ...)` sends the existing node data + **all** new facts routed to that node in this flush to the picker model and asks it to produce a clean, consolidated, contradiction-free fact list, which is written back as the node's full `data`. The orchestrator groups the flush by `node_id` first so a 5-fact flush against the User node fires **one** rewrite that incorporates all five facts, not five separate rewrites of the same `data`. The call returns a `MergeResult(success: bool, incorporated_indices: list[int])` so the orchestrator can report only the facts that actually survived as new lines (consolidated-out facts aren't claimed as "newly stored"). One LLM call subsumes four behaviours: (a) **supersession** — contradictions, negations, and same-attribute updates drop the old line ("user does not need a daily check-in" replaces both "user has a need for a daily check-in" and the same need framed as an interest); (b) **near-duplicate dedupe** — different wordings of the same fact collapse to one canonical phrasing; (c) **consolidation** — repeated daily activities fold into patterns ("ate sushi on Monday", "ate sushi on Thursday" → "regularly eats sushi"); (d) **meta-narrative pruning** — lines that narrate the assistant's own behaviour, capabilities, or denials ("The assistant is unable to navigate to a web page", "The assistant suggested grilled salmon") are extractor artefacts from earlier prompt versions and get dropped. Counterpart to the extractor's BANNED FACT FORMS list: the extractor blocks them at write-time, the merge prompt scrubs the historical leftovers that a `consolidate-all` sweep can then surface. Genuine user-issued imperatives ("Always reply in British English") are not meta-narrative and survive. Independent facts coexist (a "user ate a Big Mac" line does not silently drop "user is vegetarian"; the contradiction stays visible). Because the latest prompt always rewrites the whole node, updated conventions propagate to old data without a separate migration. **Hallucination guard**: the rewrite is rejected if it returns more lines than `len(existing) + len(new) + 2` — a runaway model can't quietly inflate the node. Fail-open: empty/cold node, LLM error, parse failure, oversized rewrite, or an empty rewrite all fall back to plain `append_to_node` for each new fact so they still land — a contradiction is recoverable, a silent wipe or hallucinated bloat is not.
-6. **Split**: If the merge or fallback append pushes the node past `SPLIT_THRESHOLD`, auto-split is triggered
+4. **Dedupe (fast-path)**: Before traversal, `GraphMemoryStore.get_branch_fact_keys` snapshots each candidate branch's persisted fact lines from its root and every descendant using one recursive SQLite query. Unicode-aware folding (`unicodedata.NFKC` + `str.casefold` + whitespace collapse) ignores casing and incidental whitespace. Exact keys already persisted or pending in the same branch are skipped before picker and merge calls, regardless of destination changes. A pending key is added only after successful routing. Branch boundaries remain distinct; substrings, negations and temporal qualifiers are not similarity matches. Skips are counted in `GraphUpdateResult(stored, skipped)`, are not reported as newly learned and do not touch access scores. Each branch is read once per flush. Semantic consolidation remains the node merge's responsibility.
+5. **Merge** (batched per node): `merge_node_data(store, node_id, new_facts: list[str], ...)` sends the existing node data + **all** new facts routed to that node in this flush to the picker model and asks it to produce a clean, consolidated, contradiction-free fact list, which is written back as the node's full `data`. The orchestrator groups the flush by `node_id` first so a 5-fact flush against the User node fires **one** rewrite that incorporates all five facts, not five separate rewrites of the same `data`. The call returns a `MergeResult(success: bool, incorporated_indices: list[int])` so the orchestrator can report only the facts that actually survived as new lines (consolidated-out facts aren't claimed as "newly stored"). One LLM call subsumes four behaviours: (a) **supersession** — contradictions, negations, and same-attribute updates drop the old line ("user does not need a daily check-in" replaces both "user has a need for a daily check-in" and the same need framed as an interest); (b) **near-duplicate dedupe** — different wordings of the same fact collapse to one canonical phrasing; (c) **consolidation** — repeated daily activities fold into patterns ("ate sushi on Monday", "ate sushi on Thursday" → "regularly eats sushi"); (d) **meta-narrative pruning** — lines that narrate the assistant's own behaviour, capabilities, or denials ("The assistant is unable to navigate to a web page", "The assistant suggested grilled salmon") are extractor artefacts from earlier prompt versions and get dropped. Counterpart to the extractor's BANNED FACT FORMS list: the extractor blocks them at write-time, the merge prompt scrubs the historical leftovers that a `consolidate-all` sweep can then surface. Genuine user-issued imperatives ("Always reply in British English") are not meta-narrative and survive. Independent facts coexist (a "user ate a Big Mac" line does not silently drop "user is vegetarian"; the contradiction stays visible). Because the latest prompt always rewrites the whole node, updated conventions propagate to old data without a separate migration. **Hallucination guard**: the rewrite is rejected if its complete stored text contains more non-empty lines than `len(existing) + len(new) + 2`, including embedded newlines within an individual returned fact — a runaway model can't quietly inflate the node. Fail-open: empty/cold node, LLM error, parse failure, oversized rewrite, or an empty rewrite all fall back to plain `append_to_node` for each new fact so they still land — a contradiction is recoverable, a silent wipe or hallucinated bloat is not.
+   A rewrite containing a non-string fact is invalid as a whole. It cannot
+   partially replace current data. Blank string entries are ignored.
+   Rewrites commit only if the node's raw source data still matches the model
+   input snapshot. Inference runs without a database write lock. An intervening
+   content change rejects the rewrite, preserving the concurrent edit; fallback
+   appends new facts to the current node. A deleted target is neither recreated
+   nor reported as stored. Self-consolidation rejects stale output without an
+   append fallback.
+6. **Split**: If the merge or fallback append pushes the node past `SPLIT_THRESHOLD`, auto-split is triggered. Inference holds no database write lock. The node name, description and raw data must still match the source snapshot inside an immediate write transaction. Changed or deleted sources reject the proposal without creating children. Child insertion and parent clearing commit together; a failed write rolls back the entire split. Existing children and access metadata are preserved. Mutation listeners run only after the complete split commits.
 
 Cold start: each fact lands directly on its tagged branch root (User / Directives / World) until enough data accumulates there for the first auto-split. The tree structure emerges organically under each branch.
 
@@ -197,7 +325,6 @@ Note: the always-on warm profile (User + Directives injected on every turn) is s
 | `MERGE_THRESHOLD` | 200 | Tokens below which children collapse |
 | `RECENT_NODES_COUNT` | 10 | Recent nodes to surface |
 | `TOP_NODES_COUNT` | 15 | Top nodes to surface |
-| `TOP_NODES_WINDOW_DAYS` | 30 | Legacy — kept for API compat, no longer used for filtering |
 | `DECAY_HALF_LIFE_DAYS` | 14 | Days until a node's access score halves |
 | `MAX_TRAVERSAL_DEPTH` | 8 | Safety limit on graph traversal |
 | `SUMMARY_MAX_LENGTH` | 300 | Max chars for node description |

@@ -52,17 +52,32 @@ the tool returns a graceful failure (`success=False`) with a friendly
 "I didn't catch what you ate" prompt rather than calling the LLM with an
 empty body.
 
+### Recording eligibility
+
+Before extraction, the fast tier decides whether the actual request reports the
+user's own intake, explicitly requests a meal record, or supplies a bare meal
+description. Advice, possible future intake, denial and another person's intake
+alone do not authorise recording. An empty actual request uses the supplied
+description as direct input. The derived food description alone cannot override
+the actual request.
+
+The decision is exactly `{"record": true}` or `{"record": false}`. Unknown,
+unavailable or malformed decisions return a final unsuccessful result with an
+error, without extraction, coaching, retries or persistence. A valid negative
+decision returns a final non-recording result without an error. Requests or
+descriptions longer than 1200 characters return the unknown outcome instead of
+truncating away a qualification.
+
 ### Untrusted-data fence
 
-`original_text` (whether sourced from `meal` arg or `redacted_text`) is
-treated as untrusted data inside the prompt to `NUTRITION_SYS`. It is
-truncated to 1200 characters and wrapped in explicit delimiters:
-
-```
-<<<BEGIN UNTRUSTED USER TEXT>>>
-…meal description…
-<<<END UNTRUSTED USER TEXT>>>
-```
+Both the actual request and derived description are untrusted JSON string
+values, kept distinct as `user_request` and `meal_description`. The eligibility
+pass wraps them in `UNTRUSTED MEAL INPUT` delimiters. Extraction wraps the same
+source values in `UNTRUSTED USER TEXT` delimiters. The actual request takes
+precedence when food details conflict; derived details resolve referenced food
+when the request omits its name. Extraction describes and estimates only the
+user's eligible food, excluding another person's food and denied or considered
+intake. Its inputs are bounded to 1200 characters each.
 
 The instruction above the fence tells the model to treat the contents as
 data and ignore any embedded instructions. This is defence-in-depth: small
@@ -72,37 +87,69 @@ trivial "ignore previous instructions" injections in meal descriptions.
 
 ### LLM passes
 
-Two passes against the chat model (`cfg.llm_chat_model`):
+One eligibility pass uses `resolve_model(cfg, Tier.FAST)`, the shared generation
+budget, temperature 0, disabled thinking and `cfg.llm_chat_timeout_sec`. Approved
+requests then use two passes against the chat model (`cfg.llm_chat_model`):
 
 1. **Extraction** (`extract_and_log_meal` → `NUTRITION_SYS`): returns either
    a JSON object with the nutrition fields above OR the literal string
    `NONE` if no meal is described. Fences (` ```json … ``` `) added by
-   small models are stripped before parsing. Failure to parse returns
-   `None` and the tool retries up to `context.max_retries`.
+   small models are stripped before interpreting either outcome. A valid
+   `NONE` decision returns a final unsuccessful tool result without inserting
+   a record, running coaching or retrying extraction. A one-item JSON array
+   containing a nutrition object is normalised to that single object. Empty,
+   multi-item or nested arrays are not combined or guessed. Other non-object payloads and
+   parsing failures return `None` and the tool retries up to
+   `context.max_retries`.
 2. **Follow-ups** (`generate_followups_for_meal`): a short coach prompt
    asking for 2-3 healthy, realistic follow-ups (hydration, protein,
    veggies, sodium/potassium balance, light activity).
 
-Both passes share `cfg.llm_chat_timeout_sec` and the `llm_thinking_enabled`
-flag.
+All three passes share a bounded 1,024-token generation budget, including
+reasoning and the answer, and `cfg.llm_chat_timeout_sec`. The eligibility pass
+requests disabled thinking; the chat passes use `llm_thinking_enabled`. The
+shared room allows servers that retain reasoning to emit a structured answer.
 
 ### Database
 
 Logged via `Database.insert_meal(...)`, which uses parameterised SQL.
 `source_app` is `"stdin"` when `cfg.use_stdin` is true, otherwise
 `"unknown"`. Optional fields (potassium, micros, confidence) are stored as
-NULL when missing.
+NULL when missing. Numeric fields are normalised to finite floats before
+formatting and persistence; invalid or non-finite values are stored as NULL.
+JSON booleans and negative amounts are invalid numeric estimates and are stored
+as NULL. Confidence is a probability from 0 to 1 inclusive; out-of-range
+confidence is stored as NULL without a percentage in the confirmation.
+Descriptions have surrounding whitespace stripped; missing, blank or non-string
+descriptions use the generic meal label. The same label appears in the saved row,
+confirmation, resource reference and optional coaching input.
+The description and macro confirmation fields are prepared before inserting.
+A successful insert completes
+logging: coaching failures or empty coaching output return that confirmation
+without retrying the write. Extraction and database failures before a successful
+insert retain the configured retry policy.
 
 ### Reply shape
 
 On success the tool returns:
 
 ```
-Logged meal #<id>: <description> — <macro summary>[ (confidence X%)].
+Logged meal #<id>: <description>: <macro summary>[ (confidence X%)].
 Follow-ups: <coach text>
 ```
 
+The follow-up line is present only when coaching returns non-empty text.
 The macro summary is a comma-joined list of present-only fields (kcal,
-protein, carbs, fat, fiber). On failure: `"Failed to log meal"` (extractor
-returned NONE or all retries raised) or `"No meal description provided"`
-(extract-text guard).
+protein, carbs, fat, fiber), or `nutrition estimates unavailable` when none are
+present. A valid extractor `NONE` result confirms that no meal was described and no
+record created. Exhausted extraction retries return `"Failed to log meal"`;
+empty input returns `"No meal description provided"`. Eligibility outcomes are
+described above.
+
+### Recorded resource reference
+
+A successful extraction returns a `ToolExecutionResult` with the saved meal's
+`kind="meal"`, database ID and stored description as its label. `run()` returns
+that result directly. The reference is independent of coaching and reply prose.
+The reply engine preserves it through digestion and carries it into follow-up
+planning (see `src/jarvis/tools/types.spec.md`).

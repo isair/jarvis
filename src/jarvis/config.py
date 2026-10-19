@@ -16,24 +16,28 @@ from dotenv import load_dotenv
 
 SUPPORTED_CHAT_MODELS: Dict[str, Dict[str, str]] = {
     "gemma4:e2b": {
-        "name": "Gemma 4 E2B (Default)",
+        "openai_id": "google/gemma-4-E2B-it",
+        "name": "Gemma 4 E2B (Low memory)",
         "description": "Fast, multimodal, effective 2B — a little dumb, occasionally fumbles tool calls; ~7.2GB download",
         "size": "~7.2GB",
         "vram": "8GB+",
     },
     "gemma4:e4b": {
-        "name": "Gemma 4 E4B (Recommended)",
+        "openai_id": "google/gemma-4-E4B-it",
+        "name": "Gemma 4 E4B (Default)",
         "description": "Smarter tool use and reasoning, multimodal, effective 4B — ~9.6GB download",
         "size": "~9.6GB",
         "vram": "16GB+",
     },
     "qwen3.8:27b": {
+        "openai_id": "Qwen/Qwen3.8-27B",
         "name": "Qwen 3.8 27B (High-end)",
         "description": "Best performance, ~18GB download",
         "size": "~18GB",
         "vram": "24GB+",
     },
     "qwen3.5:0.8b": {
+        "openai_id": "Qwen/Qwen3.5-0.8B",
         "name": "Qwen 3.5 0.8B (Low-VRAM)",
         "description": "Tiny agentic model, strong reasoning for its size, built for tool-use flows; ~1.0GB download",
         "size": "~1.0GB",
@@ -41,13 +45,31 @@ SUPPORTED_CHAT_MODELS: Dict[str, Dict[str, str]] = {
     },
 }
 
-# The default chat model (first in the supported list)
-DEFAULT_CHAT_MODEL = "gemma4:e2b"
+# The quality-first chat default; setup adapts it to the memory budget.
+DEFAULT_CHAT_MODEL = "gemma4:e4b"
+DEFAULT_EMBEDDING_MODEL = "nomic-embed-text"
+SUPPORTED_EMBEDDING_MODEL_IDS = (DEFAULT_EMBEDDING_MODEL,)
+SUPPORTED_OPENAI_EMBEDDING_MODEL_IDS = ("nomic-ai/nomic-embed-text-v1.5",)
 # Ollama-path default for the fast tier (voice intent, tool routing, and the
 # other real-time classification passes). On an OpenAI-compatible chat
 # provider an unset fast model resolves to the active chat model instead —
 # this pull-name only exists on Ollama.
 DEFAULT_FAST_MODEL = "gemma4:e2b"
+SUPPORTED_FAST_MODEL_IDS = ("qwen3.5:0.8b", "gemma4:e2b", "gemma4:e4b")
+
+
+def get_model_recommendations(provider: str) -> dict[str, tuple[str, ...]]:
+    """Model-family names for each role; names do not certify a server runtime."""
+    if provider == "ollama":
+        return {"Chat": tuple(SUPPORTED_CHAT_MODELS), "Fast": SUPPORTED_FAST_MODEL_IDS,
+                "Embedding": SUPPORTED_EMBEDDING_MODEL_IDS}
+    if provider == "openai_compatible":
+        return {
+            "Chat": tuple(info["openai_id"] for info in SUPPORTED_CHAT_MODELS.values()),
+            "Fast": tuple(SUPPORTED_CHAT_MODELS[model]["openai_id"] for model in SUPPORTED_FAST_MODEL_IDS),
+            "Embedding": SUPPORTED_OPENAI_EMBEDDING_MODEL_IDS,
+        }
+    return {"Chat": (), "Fast": (), "Embedding": ()}
 
 
 def get_supported_model_ids() -> set[str]:
@@ -92,6 +114,7 @@ class Settings:
     llm_base_url: str
     llm_api_key: str
     llm_chat_model: str
+    llm_thinking_enabled: bool
     embedding_provider: str  # "" (= same as llm_provider) | "ollama" | "openai_compatible"
     embedding_base_url: str
     embedding_api_key: str
@@ -111,15 +134,10 @@ class Settings:
     # long-running tool — a 5-minute ceiling there would stall replies.
     llm_digest_timeout_sec: float
     llm_embedding_timeout_sec: float
-    llm_profile_select_timeout_sec: float
 
-    # Profiles & Behavior
-    active_profiles: list[str]
+    # Runtime flags
     use_stdin: bool
     voice_debug: bool
-
-    # Screen Capture
-    allowlist_bundles: list[str]
 
     # Text-to-Speech
     tts_enabled: bool
@@ -145,7 +163,6 @@ class Settings:
     voice_min_energy: float
 
     # Voice Collection & Timing
-    voice_block_seconds: float
     voice_collect_seconds: float
     voice_max_collect_seconds: float
 
@@ -153,17 +170,17 @@ class Settings:
     wake_word: str
     wake_aliases: list[str]
     wake_fuzzy_ratio: float
+    stop_commands: list[str]
+    stop_command_fuzzy_ratio: float
 
     # Whisper Speech Recognition
     whisper_model: str
     whisper_backend: str  # "auto", "mlx", or "faster-whisper"
     whisper_device: str  # "cuda", "auto", or "cpu" (only for faster-whisper)
     whisper_compute_type: str
-    whisper_vad: bool
     whisper_min_confidence: float
     whisper_no_speech_threshold: float
     whisper_min_audio_duration: float
-    whisper_min_word_length: int
 
     # Voice Activity Detection (VAD)
     vad_enabled: bool
@@ -193,6 +210,7 @@ class Settings:
     # ``jarvis.llm.resolve_model(cfg, Tier.FAST)``.
     fast_model: str
     intent_judge_timeout_sec: float
+    intent_judge_thinking_enabled: bool
 
     # Transcript Buffer - ambient speech context for intent judge
     transcript_buffer_duration_sec: float
@@ -224,17 +242,10 @@ class Settings:
     # Agentic Loop
     agentic_max_turns: int
     tool_selection_strategy: str  # "all", "keyword", "embedding", or "llm"
-    # None = auto (on for SMALL models, off for LARGE). Explicit true/false forces.
-    evaluator_enabled: Optional[bool]
     # Upper bound on toolSearchTool invocations per reply turn. The cap
     # prevents a small model from churning through the escape hatch forever
     # when no tool really fits.
     tool_search_max_calls: int
-    # Upper bound on evaluator-driven nudges per reply. Each time the
-    # evaluator says "continue" with a nudge, the nudge is injected into
-    # the next turn's system message. This cap stops nudge ping-pong when
-    # the model keeps producing prose despite the nudge.
-    evaluator_nudge_max: int
     # Whether the pre-loop planner is enabled. True = planner always runs;
     # False = planner never runs (legacy behaviour, with the
     # compound_query fallback still active). Default True — the planner
@@ -271,6 +282,7 @@ class Settings:
     dictation_enabled: bool
     dictation_hotkey: str
     dictation_filler_removal: bool
+    dictation_thinking_enabled: bool
     dictation_custom_dictionary: list
 
     # MCP Integration
@@ -278,7 +290,16 @@ class Settings:
 
 
 
-def default_config_path() -> Path:
+def is_voice_debug_enabled() -> bool:
+    """Read the process diagnostic switch without configuration I/O."""
+    return os.environ.get("JARVIS_VOICE_DEBUG", "0") == "1"
+
+
+def get_config_path() -> Path:
+    """Select the explicit override or normal per-user configuration file."""
+    override = os.environ.get("JARVIS_CONFIG_PATH")
+    if override:
+        return Path(override).expanduser()
     xdg = os.environ.get("XDG_CONFIG_HOME")
     if xdg:
         return Path(xdg) / "jarvis" / "config.json"
@@ -412,8 +433,7 @@ def load_config() -> Dict[str, Any]:
     Returns defaults merged with any values from the config file.
     Unlike load_settings(), this returns the raw dict instead of a Settings object.
     """
-    cfg_path_env = os.environ.get("JARVIS_CONFIG_PATH")
-    cfg_path = Path(cfg_path_env).expanduser() if cfg_path_env else default_config_path()
+    cfg_path = get_config_path()
     cfg_json = _load_json(cfg_path)
 
     # Apply config migrations for version upgrades
@@ -447,6 +467,25 @@ def _expand_path(value: Any) -> Optional[str]:
         return str(Path(str(value)).expanduser())
     except Exception:
         return str(value)
+
+
+def _expand_model_reference(value: Any) -> Optional[str]:
+    """Normalise a model setting that may name a model rather than a file.
+
+    A Whisper model is given as a size ("medium"), a Hugging Face repo ID
+    ("owner/model"), or a directory on disk. Only the last is a path, and
+    path normalisation would rewrite the repo ID's separator to a backslash
+    on Windows, leaving an identifier the loader cannot resolve. Expansion
+    therefore applies to what is recognisably a path and nothing else.
+    """
+    if value in (None, "", "null"):
+        return None
+    raw = str(value)
+    try:
+        is_a_path = raw.startswith("~") or Path(raw).is_absolute() or Path(raw).exists()
+    except Exception:
+        is_a_path = False
+    return _expand_path(raw) if is_a_path else raw
 
 
 def _ensure_dict(value: Any) -> Dict[str, Any]:
@@ -490,7 +529,7 @@ def get_default_config() -> Dict[str, Any]:
         "embedding_api_key": "",
         "embedding_model": "",  # falls back to ollama_embed_model when empty
         "ollama_base_url": "http://127.0.0.1:11434",
-        "ollama_embed_model": "nomic-embed-text",
+        "ollama_embed_model": DEFAULT_EMBEDDING_MODEL,
         "ollama_chat_model": DEFAULT_CHAT_MODEL,
         "llm_chat_timeout_sec": 180.0,
         "llm_tools_timeout_sec": 300.0,
@@ -498,19 +537,9 @@ def get_default_config() -> Dict[str, Any]:
         # block the reply loop per tool call, amplified by agentic turns.
         "llm_digest_timeout_sec": 8.0,
         "llm_embedding_timeout_sec": 60.0,
-        "llm_profile_select_timeout_sec": 30.0,
 
-        # Profiles & Behavior
-        "active_profiles": ["developer", "business", "life"],
+        # Runtime flags
         "use_stdin": False,
-
-        # Screen Capture
-        "allowlist_bundles": [
-            "com.apple.Terminal",
-            "com.googlecode.iterm2",
-            "com.microsoft.VSCode",
-            "com.jetbrains.intellij",
-        ],
 
 
         # Text-to-Speech
@@ -537,7 +566,6 @@ def get_default_config() -> Dict[str, Any]:
         "voice_min_energy": 0.02,
 
         # Voice Collection & Timing
-        "voice_block_seconds": 4.0,
         "voice_collect_seconds": 4.5,
         "voice_max_collect_seconds": 180.0,
 
@@ -551,11 +579,9 @@ def get_default_config() -> Dict[str, Any]:
         "whisper_backend": "auto",  # "auto" (MLX on Apple Silicon, else faster-whisper), "mlx", or "faster-whisper"
         "whisper_device": "auto",  # "cuda" (recommended if available), "auto", or "cpu" (only for faster-whisper)
         "whisper_compute_type": "int8",
-        "whisper_vad": True,
         "whisper_min_confidence": 0.3,  # Filter low-confidence segments (hallucinations)
         "whisper_no_speech_threshold": 0.5,  # Hard cutoff: reject segments where no_speech_prob >= this
         "whisper_min_audio_duration": 0.15,
-        "whisper_min_word_length": 1,
 
         # Voice Activity Detection (VAD)
         "vad_enabled": True,
@@ -612,12 +638,8 @@ def get_default_config() -> Dict[str, Any]:
         # Agentic Loop
         "agentic_max_turns": 8,
         "tool_selection_strategy": "llm",
-        # None = auto (on for small models, off for large). Set true/false to force.
-        "evaluator_enabled": None,
         # Cap the number of toolSearchTool invocations per reply.
         "tool_search_max_calls": 3,
-        # Cap the number of evaluator-driven nudges per reply.
-        "evaluator_nudge_max": 2,
         # Task-list planner (see src/jarvis/reply/planner.spec.md). Runs on
         # the chat model; the fast tier resolves its steps for small models.
         "planner_enabled": True,
@@ -667,8 +689,7 @@ def load_settings() -> Settings:
     load_dotenv(override=False)
 
     # Resolve config path
-    cfg_path_env = os.environ.get("JARVIS_CONFIG_PATH")
-    cfg_path = Path(cfg_path_env).expanduser() if cfg_path_env else default_config_path()
+    cfg_path = get_config_path()
     cfg_dir = cfg_path.parent
     try:
         cfg_dir.mkdir(parents=True, exist_ok=True)
@@ -688,12 +709,11 @@ def load_settings() -> Settings:
 
     # Build Settings. Some fields support env var overrides.
     # Env overrides: JARVIS_VOICE_DEBUG, JARVIS_WHISPER_BACKEND
-    voice_debug = os.environ.get("JARVIS_VOICE_DEBUG", "0") == "1"
+    voice_debug = is_voice_debug_enabled()
 
     # Normalize/convert fields
     db_path = _expand_path(merged.get("db_path")) or _default_db_path()
     sqlite_vss_path = _expand_path(merged.get("sqlite_vss_path"))
-    allowlist_bundles = _ensure_list(merged.get("allowlist_bundles"))
 
     ollama_base_url = str(merged.get("ollama_base_url"))
     ollama_embed_model = str(merged.get("ollama_embed_model"))
@@ -729,7 +749,6 @@ def load_settings() -> Settings:
     else:
         embedding_model = ollama_embed_model
     use_stdin = bool(merged.get("use_stdin", False))
-    active_profiles = _ensure_list(merged.get("active_profiles"))
     tts_enabled = bool(merged.get("tts_enabled", True))
     tts_engine = str(merged.get("tts_engine", "piper")).lower()
     if tts_engine not in ("piper", "chatterbox"):
@@ -762,15 +781,12 @@ def load_settings() -> Settings:
 
     voice_device_val = merged.get("voice_device")
     voice_device = None if voice_device_val in (None, "", "default", "system") else str(voice_device_val)
-    voice_block_seconds = float(merged.get("voice_block_seconds", 4.0))
     voice_collect_seconds = float(merged.get("voice_collect_seconds", 2.5))
     voice_max_collect_seconds = float(merged.get("voice_max_collect_seconds", 60.0))
     wake_word = str(merged.get("wake_word", "jarvis")).strip().lower()
     wake_aliases = [a.strip().lower() for a in _ensure_list(merged.get("wake_aliases")) if a.strip()]
     wake_fuzzy_ratio = float(merged.get("wake_fuzzy_ratio", 0.78))
-    # whisper_model accepts a size name ("medium") or a local model
-    # directory; _expand_path is a no-op for plain names.
-    whisper_model = _expand_path(merged.get("whisper_model")) or "medium"
+    whisper_model = _expand_model_reference(merged.get("whisper_model")) or "medium"
     whisper_backend = os.environ.get("JARVIS_WHISPER_BACKEND", "").lower() or str(merged.get("whisper_backend", "auto")).lower()
     if whisper_backend not in ("auto", "mlx", "faster-whisper"):
         whisper_backend = "auto"
@@ -778,7 +794,6 @@ def load_settings() -> Settings:
     if whisper_device not in ("cuda", "auto", "cpu"):
         whisper_device = "auto"
     whisper_compute_type = str(merged.get("whisper_compute_type", "int8"))
-    whisper_vad = bool(merged.get("whisper_vad", True))
     voice_min_energy = float(merged.get("voice_min_energy", 0.02))
     vad_enabled = bool(merged.get("vad_enabled", True))
     vad_aggressiveness = int(merged.get("vad_aggressiveness", 2))
@@ -836,12 +851,6 @@ def load_settings() -> Settings:
     tool_selection_strategy = str(merged.get("tool_selection_strategy", "llm")).lower()
     if tool_selection_strategy not in ("all", "keyword", "embedding", "llm"):
         tool_selection_strategy = "llm"
-    _eval_raw = merged.get("evaluator_enabled", None)
-    evaluator_enabled: Optional[bool]
-    if _eval_raw is None:
-        evaluator_enabled = None
-    else:
-        evaluator_enabled = bool(_eval_raw)
     planner_enabled = bool(merged.get("planner_enabled", True))
     try:
         planner_timeout_sec = float(merged.get("planner_timeout_sec", 3.0))
@@ -853,12 +862,6 @@ def load_settings() -> Settings:
         tool_search_max_calls = 3
     if tool_search_max_calls < 0:
         tool_search_max_calls = 0
-    try:
-        evaluator_nudge_max = int(merged.get("evaluator_nudge_max", 2))
-    except (TypeError, ValueError):
-        evaluator_nudge_max = 2
-    if evaluator_nudge_max < 0:
-        evaluator_nudge_max = 0
     location_enabled = bool(merged.get("location_enabled", True))
     location_cache_minutes = int(merged.get("location_cache_minutes", 60))
     location_ip_address_val = merged.get("location_ip_address")
@@ -877,12 +880,10 @@ def load_settings() -> Settings:
     whisper_min_confidence = float(merged.get("whisper_min_confidence", 0.4))
     whisper_no_speech_threshold = float(merged.get("whisper_no_speech_threshold", 0.5))
     whisper_min_audio_duration = float(merged.get("whisper_min_audio_duration", 0.3))
-    whisper_min_word_length = int(merged.get("whisper_min_word_length", 2))
     llm_chat_timeout_sec = float(merged.get("llm_chat_timeout_sec", 180.0))
     llm_tools_timeout_sec = float(merged.get("llm_tools_timeout_sec", 300.0))
     llm_digest_timeout_sec = float(merged.get("llm_digest_timeout_sec", 8.0))
     llm_embedding_timeout_sec = float(merged.get("llm_embedding_timeout_sec", 60.0))
-    llm_profile_select_timeout_sec = float(merged.get("llm_profile_select_timeout_sec", 30.0))
 
     return Settings(
         # Database & Storage
@@ -894,6 +895,7 @@ def load_settings() -> Settings:
         llm_base_url=llm_base_url,
         llm_api_key=llm_api_key,
         llm_chat_model=llm_chat_model,
+        llm_thinking_enabled=bool(merged["llm_thinking_enabled"]),
         embedding_provider=embedding_provider,
         embedding_base_url=embedding_base_url,
         embedding_api_key=embedding_api_key,
@@ -905,15 +907,10 @@ def load_settings() -> Settings:
         llm_tools_timeout_sec=llm_tools_timeout_sec,
         llm_digest_timeout_sec=llm_digest_timeout_sec,
         llm_embedding_timeout_sec=llm_embedding_timeout_sec,
-        llm_profile_select_timeout_sec=llm_profile_select_timeout_sec,
 
-        # Profiles & Behavior
-        active_profiles=active_profiles,
+        # Runtime flags
         use_stdin=use_stdin,
         voice_debug=voice_debug,
-
-        # Screen Capture
-        allowlist_bundles=allowlist_bundles,
 
         # Text-to-Speech
         tts_enabled=tts_enabled,
@@ -939,7 +936,6 @@ def load_settings() -> Settings:
         voice_min_energy=voice_min_energy,
 
         # Voice Collection & Timing
-        voice_block_seconds=voice_block_seconds,
         voice_collect_seconds=voice_collect_seconds,
         voice_max_collect_seconds=voice_max_collect_seconds,
 
@@ -947,17 +943,17 @@ def load_settings() -> Settings:
         wake_word=wake_word,
         wake_aliases=wake_aliases,
         wake_fuzzy_ratio=wake_fuzzy_ratio,
+        stop_commands=_ensure_list(merged["stop_commands"]),
+        stop_command_fuzzy_ratio=float(merged["stop_command_fuzzy_ratio"]),
 
         # Whisper Speech Recognition
         whisper_model=whisper_model,
         whisper_backend=whisper_backend,
         whisper_device=whisper_device,
         whisper_compute_type=whisper_compute_type,
-        whisper_vad=whisper_vad,
         whisper_min_confidence=whisper_min_confidence,
         whisper_no_speech_threshold=whisper_no_speech_threshold,
         whisper_min_audio_duration=whisper_min_audio_duration,
-        whisper_min_word_length=whisper_min_word_length,
 
         # Voice Activity Detection (VAD)
         vad_enabled=vad_enabled,
@@ -978,6 +974,7 @@ def load_settings() -> Settings:
         # Fast tier (voice intent, tool routing, quick classifications)
         fast_model=fast_model,
         intent_judge_timeout_sec=intent_judge_timeout_sec,
+        intent_judge_thinking_enabled=bool(merged["intent_judge_thinking_enabled"]),
 
         # Transcript Buffer
         transcript_buffer_duration_sec=transcript_buffer_duration_sec,
@@ -992,9 +989,7 @@ def load_settings() -> Settings:
         tool_result_digest_enabled=tool_result_digest_enabled,
         agentic_max_turns=agentic_max_turns,
         tool_selection_strategy=tool_selection_strategy,
-        evaluator_enabled=evaluator_enabled,
         tool_search_max_calls=tool_search_max_calls,
-        evaluator_nudge_max=evaluator_nudge_max,
         planner_enabled=planner_enabled,
         planner_timeout_sec=planner_timeout_sec,
 
@@ -1014,6 +1009,7 @@ def load_settings() -> Settings:
         dictation_enabled=dictation_enabled,
         dictation_hotkey=dictation_hotkey,
         dictation_filler_removal=dictation_filler_removal,
+        dictation_thinking_enabled=bool(merged["dictation_thinking_enabled"]),
         dictation_custom_dictionary=dictation_custom_dictionary,
 
         # MCP Integration

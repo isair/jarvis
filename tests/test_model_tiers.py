@@ -1,166 +1,85 @@
-"""The two-tier model system: FAST (reflexes) and CHAT (the reply brain).
-
-Jarvis needs exactly two inference tiers plus embeddings:
-
-- **FAST** — small, warm, low-latency model for real-time classification
-  work with tiny strict-JSON outputs (the Model tiers table in llm.spec.md
-  is the authoritative context list).
-- **CHAT** — the capable model that writes replies, plans, summarises and
-  extracts knowledge.
-
-Users pick one model per tier (``fast_model`` / chat model); every context
-resolves through ``jarvis.llm.resolve_model(cfg, tier)``. These tests pin
-the mechanism (provider-aware defaults, explicit override wins, migration
-from the retired per-context keys), not specific model names.
-"""
-
-from __future__ import annotations
+"""Model tiers resolve per provider and preserve choices through config migration."""
 
 import json
-
 from types import SimpleNamespace
 
+import pytest
 
-def _load_settings_from(tmp_path, monkeypatch, cfg: dict, version: int = 2):
-    cfg_path = tmp_path / "config.json"
-    cfg_path.write_text(json.dumps({"_config_version": version, **cfg}))
-    monkeypatch.setenv("JARVIS_CONFIG_PATH", str(cfg_path))
-    from jarvis.config import load_settings
-    return load_settings(), cfg_path
+from jarvis.config import DEFAULT_FAST_MODEL, load_settings
+from jarvis.llm import resolve_model, Tier
 
-
-class TestFastModelResolution:
-    """cfg.fast_model always carries a resolved, provider-valid model name."""
-
-    def test_ollama_path_defaults_to_small_pull(self, tmp_path, monkeypatch):
-        from jarvis.config import DEFAULT_FAST_MODEL
-        settings, _ = _load_settings_from(tmp_path, monkeypatch, {})
-        assert settings.fast_model == DEFAULT_FAST_MODEL
-
-    def test_openai_path_defaults_to_chat_model(self, tmp_path, monkeypatch):
-        settings, _ = _load_settings_from(tmp_path, monkeypatch, {
-            "llm_provider": "openai_compatible",
-            "llm_base_url": "http://localhost:1234/v1",
-            "llm_chat_model": "qwen-27b",
-        })
-        assert settings.fast_model == "qwen-27b"
-
-    def test_explicit_fast_model_wins_on_ollama(self, tmp_path, monkeypatch):
-        settings, _ = _load_settings_from(tmp_path, monkeypatch, {
-            "fast_model": "qwen3:1.7b",
-        })
-        assert settings.fast_model == "qwen3:1.7b"
-
-    def test_explicit_fast_model_wins_on_openai(self, tmp_path, monkeypatch):
-        settings, _ = _load_settings_from(tmp_path, monkeypatch, {
-            "llm_provider": "openai_compatible",
-            "llm_base_url": "http://localhost:1234/v1",
-            "llm_chat_model": "qwen-27b",
-            "fast_model": "small-served-model",
-        })
-        assert settings.fast_model == "small-served-model"
-
-    def test_embedding_provider_does_not_affect_fast_tier(self, tmp_path, monkeypatch):
-        from jarvis.config import DEFAULT_FAST_MODEL
-        settings, _ = _load_settings_from(tmp_path, monkeypatch, {
-            "llm_provider": "ollama",
-            "embedding_provider": "openai_compatible",
-            "embedding_base_url": "http://localhost:1234/v1",
-            "embedding_model": "text-embedding-3-small",
-        })
-        assert settings.fast_model == DEFAULT_FAST_MODEL
+pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("no_network")]
 
 
-class TestResolveModel:
-    """resolve_model(cfg, tier) is the single entry point for every context."""
-
-    def test_fast_tier_returns_fast_model(self):
-        from jarvis.llm import resolve_model, Tier
-        cfg = SimpleNamespace(fast_model="tiny", llm_chat_model="big")
-        assert resolve_model(cfg, Tier.FAST) == "tiny"
-
-    def test_chat_tier_returns_chat_model(self):
-        from jarvis.llm import resolve_model, Tier
-        cfg = SimpleNamespace(fast_model="tiny", llm_chat_model="big")
-        assert resolve_model(cfg, Tier.CHAT) == "big"
-
-    def test_fast_tier_falls_back_to_chat_when_unset(self):
-        from jarvis.llm import resolve_model, Tier
-        cfg = SimpleNamespace(fast_model="", llm_chat_model="big")
-        assert resolve_model(cfg, Tier.FAST) == "big"
+def _load_settings_from(tmp_path, monkeypatch, values, version=2):
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"_config_version": version, **values}))
+    monkeypatch.setenv("JARVIS_CONFIG_PATH", str(path))
+    return load_settings(), path
 
 
-class TestV3Migration:
-    """The retired per-context keys fold into fast_model and disappear."""
+@pytest.mark.parametrize("provider", ["ollama", "openai_compatible"])
+@pytest.mark.parametrize("explicit", [False, True])
+def test_loaded_settings_resolve_both_tiers_for_the_chat_provider(tmp_path, monkeypatch, provider, explicit):
+    values = {"llm_provider": provider, "llm_chat_model": "served-chat",
+              "ollama_chat_model": "ollama-chat"}
+    if explicit:
+        values["fast_model"] = "chosen-fast"
+    settings, _ = _load_settings_from(tmp_path, monkeypatch, values)
+    expected_chat = values["ollama_chat_model"] if provider == "ollama" else values["llm_chat_model"]
+    expected_fast = values["fast_model"] if explicit else (
+        DEFAULT_FAST_MODEL if provider == "ollama" else expected_chat)
+    assert settings.fast_model == expected_fast
+    assert resolve_model(settings, Tier.FAST) == expected_fast
+    assert resolve_model(settings, Tier.CHAT) == expected_chat
 
-    def test_intent_judge_model_becomes_fast_model(self, tmp_path, monkeypatch):
-        settings, cfg_path = _load_settings_from(tmp_path, monkeypatch, {
-            "intent_judge_model": "my-judge",
-        })
-        assert settings.fast_model == "my-judge"
-        on_disk = json.loads(cfg_path.read_text())
-        assert on_disk.get("fast_model") == "my-judge"
-        for dead in ("intent_judge_model", "tool_router_model",
-                     "evaluator_model", "planner_model"):
-            assert dead not in on_disk
-        assert on_disk["_config_version"] >= 3
 
-    def test_tool_router_model_promotes_when_judge_absent(self, tmp_path, monkeypatch):
-        settings, cfg_path = _load_settings_from(tmp_path, monkeypatch, {
-            "tool_router_model": "my-router",
-        })
-        assert settings.fast_model == "my-router"
-        assert json.loads(cfg_path.read_text()).get("fast_model") == "my-router"
+def test_embedding_provider_does_not_change_the_fast_tier(tmp_path, monkeypatch):
+    settings, _ = _load_settings_from(tmp_path, monkeypatch, {
+        "llm_provider": "ollama", "embedding_provider": "openai_compatible",
+        "embedding_base_url": "http://localhost:1234/v1",
+        "embedding_model": "served-embedding",
+    })
+    assert settings.fast_model == DEFAULT_FAST_MODEL
 
-    def test_judge_wins_over_router_when_both_present(self, tmp_path, monkeypatch):
-        settings, _ = _load_settings_from(tmp_path, monkeypatch, {
-            "intent_judge_model": "my-judge",
-            "tool_router_model": "my-router",
-        })
-        assert settings.fast_model == "my-judge"
 
-    def test_evaluator_and_planner_keys_are_dropped(self, tmp_path, monkeypatch):
-        _, cfg_path = _load_settings_from(tmp_path, monkeypatch, {
-            "evaluator_model": "x", "planner_model": "y",
-        })
-        on_disk = json.loads(cfg_path.read_text())
-        assert "evaluator_model" not in on_disk
-        assert "planner_model" not in on_disk
-        assert "fast_model" not in on_disk  # neither key promotes
+@pytest.mark.parametrize("fast", ["chosen-fast", "", None, "  "])
+@pytest.mark.parametrize("tier", [Tier.FAST, Tier.CHAT])
+def test_tier_resolution_uses_the_chosen_model_or_chat_fallback(fast, tier):
+    settings = SimpleNamespace(fast_model=fast, llm_chat_model="chosen-chat")
+    expected = fast if tier is Tier.FAST and fast == "chosen-fast" else settings.llm_chat_model
+    assert resolve_model(settings, tier) == expected
 
-    def test_existing_fast_model_is_preserved(self, tmp_path, monkeypatch):
-        settings, cfg_path = _load_settings_from(tmp_path, monkeypatch, {
-            "fast_model": "already-chosen",
-            "intent_judge_model": "old-judge",
-        })
-        assert settings.fast_model == "already-chosen"
-        on_disk = json.loads(cfg_path.read_text())
-        assert on_disk["fast_model"] == "already-chosen"
-        assert "intent_judge_model" not in on_disk
 
-    def test_v1_config_with_explicit_judge_composes_to_fast_model(self, tmp_path, monkeypatch):
-        """An old install (pre-v2 config) with a chosen judge model, upgraded
-        across both migrations in one load, keeps its model on the fast tier."""
-        settings, cfg_path = _load_settings_from(tmp_path, monkeypatch, {
-            "ollama_chat_model": "gpt-oss:20b",
-            "intent_judge_model": "my-judge",
-        }, version=1)
-        assert settings.fast_model == "my-judge"
-        on_disk = json.loads(cfg_path.read_text())
-        assert on_disk["fast_model"] == "my-judge"
-        assert on_disk["_config_version"] >= 3
-        # The v2 promotion still happened alongside.
-        assert on_disk["llm_chat_model"] == "gpt-oss:20b"
-
-    def test_default_ollama_judge_value_does_not_promote(self, tmp_path, monkeypatch):
-        """A v2 config carrying the old *default* judge value (written by an
-        older settings save) must not pin fast_model to it — the user never
-        chose it, and pinning would block future default upgrades."""
-        from jarvis.config import DEFAULT_FAST_MODEL
-        default_judge = DEFAULT_FAST_MODEL
-        settings, cfg_path = _load_settings_from(tmp_path, monkeypatch, {
-            "intent_judge_model": default_judge,
-        })
-        on_disk = json.loads(cfg_path.read_text())
+@pytest.mark.parametrize("version", [1, 2])
+@pytest.mark.parametrize("legacy,chosen", [
+    ({"intent_judge_model": "chosen-judge"}, "chosen-judge"),
+    ({"tool_router_model": "chosen-router"}, "chosen-router"),
+    ({"intent_judge_model": "chosen-judge", "tool_router_model": "chosen-router"}, "chosen-judge"),
+    ({"evaluator_model": "discarded-evaluator", "planner_model": "discarded-planner"}, None),
+    ({"fast_model": "chosen-fast", "intent_judge_model": "discarded-judge"}, "chosen-fast"),
+    ({"intent_judge_model": DEFAULT_FAST_MODEL}, None),
+    ({"intent_judge_model": DEFAULT_FAST_MODEL, "tool_router_model": "chosen-router"}, "chosen-router"),
+])
+def test_migration_preserves_chosen_models_unrelated_settings_and_repeat_loads(tmp_path, monkeypatch, version, legacy, chosen):
+    extra = {"extension_settings": {"literal": "İstanbul, 東京", "enabled": False}}
+    values = {"ollama_chat_model": "chosen-chat", **extra, **legacy}
+    settings, path = _load_settings_from(tmp_path, monkeypatch, values, version)
+    on_disk = json.loads(path.read_text())
+    assert settings.fast_model == (chosen or DEFAULT_FAST_MODEL)
+    assert settings.llm_chat_model == values["ollama_chat_model"]
+    if chosen is None:
         assert "fast_model" not in on_disk
-        assert settings.fast_model == default_judge  # still resolves via default
+    else:
+        assert on_disk["fast_model"] == chosen
+    for retired in ("intent_judge_model", "tool_router_model", "evaluator_model", "planner_model"):
+        assert retired not in on_disk
+    assert on_disk["_config_version"] >= 3
+    assert on_disk["extension_settings"] == extra["extension_settings"]
+    if version == 1:
+        assert on_disk["llm_chat_model"] == values["ollama_chat_model"]
+    saved_bytes = path.read_bytes()
+    reloaded = load_settings()
+    assert reloaded.fast_model == settings.fast_model
+    assert reloaded.llm_chat_model == settings.llm_chat_model
+    assert path.read_bytes() == saved_bytes

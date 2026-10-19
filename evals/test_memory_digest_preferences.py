@@ -1,32 +1,9 @@
-"""
-Memory Digest — Preference-Signal Surfacing (Live)
-
-Guards that the memory digest distiller (``enrichment.digest_memory_for_query``)
-surfaces past user engagement in the same domain as a taste/preference signal
-for recommendation-style queries ("what should I watch tonight", "suggest a
-restaurant", etc.), instead of returning NONE just because the snippets never
-contain an explicitly stated preference.
-
-Motivating field incident (2026-04-20):
-  User asked "what should I watch tonight, Jarvis?". The diary contained
-  fresh entries about the user engaging with the films Titanic and Possessor.
-  The digest returned NONE → the reply model formed a generic webSearch for
-  "what should I watch tonight" → the final reply recommended the generic
-  Rotten Tomatoes top-1 result ("Big Mistakes on Netflix"), ignoring the
-  user's actual taste and re-recommending nothing-from-their-history.
-
-The general principle (encoded in the digest prompt): past interactions in
-the query's domain are preference evidence even when no preference was
-stated in plain words. This is domain-agnostic — it should hold for food,
-books, music, news, films, anywhere.
-
-Run: EVAL_JUDGE_MODEL=gemma4:e2b pytest evals/test_memory_digest_preferences.py -v
-"""
+"""Memory-digest evals surface same-domain engagement for recommendations."""
 
 import pytest
 
-from conftest import requires_judge_llm
-from helpers import JUDGE_BASE_URL, JUDGE_MODEL
+from evals.tool_routing import requires_judge_llm
+from evals.memory_digest import digest_for_eval
 
 
 @pytest.mark.eval
@@ -35,15 +12,7 @@ class TestMemoryDigestSurfacesPreferenceSignals:
     """Live tests that the digest surfaces engagement-as-preference signals."""
 
     def _digest(self, query: str, diary_entries: list[str]) -> str:
-        from jarvis.reply.enrichment import digest_memory_for_query
-        return digest_memory_for_query(
-            query=query,
-            diary_entries=diary_entries,
-            graph_parts=[],
-            ollama_base_url=JUDGE_BASE_URL,
-            ollama_chat_model=JUDGE_MODEL,
-            timeout_sec=60.0,
-        )
+        return digest_for_eval(query, diary_entries)
 
     def test_watch_recommendation_surfaces_recently_discussed_films(self):
         """Reproduces the 2026-04-20 incident directly at the digest layer."""
@@ -60,12 +29,7 @@ class TestMemoryDigestSurfacesPreferenceSignals:
         print(f"\n  Digest: {digest!r}")
 
         # Digest must not be empty — past film engagement is a preference signal.
-        if not digest:
-            pytest.xfail(
-                f"Small judge model {JUDGE_MODEL} returned NONE for a "
-                f"recommendation query despite recent film engagement. "
-                f"This is the exact regression the prompt-level fix targets."
-            )
+        assert digest and digest.strip(), "🧠 Relevant memory must produce a nonempty digest"
 
         lowered = digest.lower()
         # At least one of the recently-engaged titles must surface.
@@ -88,11 +52,7 @@ class TestMemoryDigestSurfacesPreferenceSignals:
         digest = self._digest("suggest a restaurant for dinner tonight", diary)
         print(f"\n  Digest: {digest!r}")
 
-        if not digest:
-            pytest.xfail(
-                f"Small judge model {JUDGE_MODEL} returned NONE for a "
-                f"restaurant recommendation despite recent cuisine engagement."
-            )
+        assert digest and digest.strip(), "🧠 Relevant memory must produce a nonempty digest"
 
         lowered = digest.lower()
         # At least one of the engaged cuisines/items must surface.

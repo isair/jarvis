@@ -66,10 +66,10 @@ CLASS_DESCRIPTIONS = {
     "TestIntentJudgeFallback": "Intent judge fallback behaviour when unavailable",
     "TestIntentJudgeMultiSegment": "Intent judge with multi-segment buffers and multi-person conversations",
     "TestWakeWordValidationSafetyNet": "Integration: listener rejects judge hallucinations when no wake word present",
-    "TestEchoReasoningDistrust": "Integration: listener overrides judge echo claims when EchoDetector cleared",
+    "TestFollowUpAfterTTS": "Integration: genuine directed follow-ups are admitted after TTS",
     "TestHotWindowHeuristicAccuracy": "Integration: could_be_hot_window heuristic passes correct mode to judge",
     "TestProcessedSegmentFilteringIntegration": "Integration: processed segments excluded from judge prompt",
-    "TestHotWindowUsesRawText": "Integration: hot window preserves full user text, wake word uses judge extraction",
+    "TestHotWindowUsesRawText": "Integration: hot-window and wake-word requests preserve recognised user speech",
     "TestMultiSegmentBufferIntegration": "Integration: multi-segment buffer with TTS echoes handled correctly",
     "TestStopCommandBypassesJudge": "Integration: stop commands during TTS bypass judge entirely",
     "TestKnowledgeExtractionQuality": "Tests that novel knowledge is correctly extracted from summaries",
@@ -681,6 +681,21 @@ def pytest_sessionfinish(session, exitstatus):
 def mock_config():
     """Provide a mock configuration for eval tests."""
     return MockConfig()
+
+
+@pytest.fixture
+def configure_mcp_tools(mock_config, monkeypatch):
+    """Supply registered MCP tool metadata without starting external processes."""
+    from jarvis.tools import registry
+
+    def configure(*specs):
+        catalogue = {spec.name: spec for spec in specs}
+        mock_config.mcps = {name.split("__", 1)[0]: {} for name in catalogue}
+        monkeypatch.setattr(registry, "get_cached_mcp_tools", lambda: catalogue.copy())
+        monkeypatch.setattr(registry, "is_mcp_cache_initialized", lambda: False)
+        return catalogue
+
+    return configure
 
 
 @pytest.fixture

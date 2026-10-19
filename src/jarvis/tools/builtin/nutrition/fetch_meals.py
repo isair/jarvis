@@ -1,79 +1,87 @@
 """Fetch meals tool for nutrition tracking."""
 
-from typing import Dict, Any, Optional, List, Callable
+from typing import Dict, Any, Optional, List
 from datetime import datetime, timezone, timedelta
 
 from ....debug import debug_log
 from ...base import Tool, ToolContext
 from ...types import ToolExecutionResult
+from .amounts import normalise_amount
 
 
-def _normalize_time_range(args: Optional[Dict[str, Any]]) -> tuple[str, str]:
-    """Normalize time range for meal fetching."""
+def _normalise_time_range(args: Optional[Dict[str, Any]]) -> tuple[str, str]:
+    """Resolve inclusive bounds into the stored UTC ISO timestamp format."""
+    if args is not None and not isinstance(args, dict):
+        raise ValueError("Meal time range must be an object")
     now = datetime.now(timezone.utc)
-    since: Optional[str] = None
-    until: Optional[str] = None
-    if args and isinstance(args, dict):
+
+    def parse_bound(name: str) -> Optional[datetime]:
+        value = args.get(name) if args else None
+        if value is None or value == "":
+            return None
+        if not isinstance(value, str):
+            raise ValueError(f"{name} must be an ISO timestamp")
         try:
-            since_val = args.get("since_utc")
-            since = str(since_val) if since_val else None
-        except Exception:
-            since = None
-        try:
-            until_val = args.get("until_utc")
-            until = str(until_val) if until_val else None
-        except Exception:
-            until = None
-    if since is None and until is None:
-        # Default last 24h
-        return (now - timedelta(days=1)).isoformat(), now.isoformat()
-    if since is None and until is not None:
-        # backfill 24h prior to until
-        try:
-            until_dt = datetime.fromisoformat(until.replace("Z", "+00:00"))
-        except Exception:
-            until_dt = now
-        return (until_dt - timedelta(days=1)).isoformat(), until_dt.isoformat()
-    if since is not None and until is None:
-        return since, now.isoformat()
-    return since or (now - timedelta(days=1)).isoformat(), until or now.isoformat()
+            instant = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            if instant.tzinfo is None:
+                instant = instant.replace(tzinfo=timezone.utc)
+            return instant.astimezone(timezone.utc)
+        except (ValueError, OverflowError) as error:
+            raise ValueError(f"{name} must be a representable UTC ISO timestamp") from error
+
+    since, until = parse_bound("since_utc"), parse_bound("until_utc")
+    until = until or now
+    try:
+        since = since or (until - timedelta(days=1))
+    except OverflowError as error:
+        raise ValueError("Meal time range exceeds the supported timestamp bounds") from error
+    if since > until:
+        raise ValueError("since_utc must not be after until_utc")
+    # Zero fractions sort after whole-second timestamps in the stored text
+    # format; explicit upper precision includes both at the same instant.
+    return since.isoformat(), until.isoformat(timespec="microseconds")
 
 
 def summarize_meals(meals: List[Any]) -> str:
-    """Summarize a list of meals with totals."""
-    lines: List[str] = []
-    total_kcal = 0.0
-    total_protein = 0.0
-    total_carbs = 0.0
-    total_fat = 0.0
-    for m in meals:
-        try:
-            desc = m["description"] if isinstance(m, dict) else m["description"]
-        except Exception:
-            desc = "meal"
-        try:
-            kcal = float(m["calories_kcal"]) if m["calories_kcal"] is not None else 0.0
-        except Exception:
-            kcal = 0.0
-        try:
-            prot = float(m["protein_g"]) if m["protein_g"] is not None else 0.0
-        except Exception:
-            prot = 0.0
-        try:
-            carbs = float(m["carbs_g"]) if m["carbs_g"] is not None else 0.0
-        except Exception:
-            carbs = 0.0
-        try:
-            fat = float(m["fat_g"]) if m["fat_g"] is not None else 0.0
-        except Exception:
-            fat = 0.0
-        total_kcal += kcal
-        total_protein += prot
-        total_carbs += carbs
-        total_fat += fat
-        lines.append(f"- {desc} (~{int(round(kcal))} kcal, {int(round(prot))}g P, {int(round(carbs))}g C, {int(round(fat))}g F)")
-    header = f"Meals: {len(meals)} | Total ~{int(round(total_kcal))} kcal, {int(round(total_protein))}g P, {int(round(total_carbs))}g C, {int(round(total_fat))}g F"
-    return header + ("\n" + "\n".join(lines) if lines else "")
+    """Summarise available estimates with per-nutrient coverage."""
+    nutrients = (
+        ('calories_kcal', '~', ' kcal', 'kcal'),
+        ('protein_g', '', 'g P', 'protein'),
+        ('carbs_g', '', 'g C', 'carbs'),
+        ('fat_g', '', 'g F', 'fat'),
+    )
+    totals, counts = [0.0] * len(nutrients), [0] * len(nutrients)
+
+    def formatted(amount, nutrient):
+        _, prefix, suffix, name = nutrient
+        return f'{name} unavailable' if amount is None else f'{prefix}{int(round(amount))}{suffix}'
+
+    lines = []
+    for row in meals:
+        meal = dict(row)
+        estimates = []
+        for index, nutrient in enumerate(nutrients):
+            amount = normalise_amount(meal.get(nutrient[0]))
+            if amount is not None:
+                totals[index] += amount
+                counts[index] += 1
+            estimates.append(formatted(amount, nutrient))
+        meal_id = meal.get('id')
+        label = f'#{meal_id}: ' if meal_id is not None else ''
+        lines.append(f"- {label}{meal.get('description', 'meal')} ({', '.join(estimates)})")
+
+    total_estimates = []
+    for total, count, nutrient in zip(totals, counts, nutrients):
+        amount = normalise_amount(total) if count or not meals else None
+        text = formatted(amount, nutrient)
+        if 0 < count < len(meals):
+            text += f' ({count}/{len(meals)} meals estimated; full {nutrient[3]} total unavailable)'
+        total_estimates.append(text)
+    header = f"Meals: {len(meals)} | Total {', '.join(total_estimates)}"
+    debug_log('fetchMeals: estimate coverage ' + ', '.join(
+        f'{nutrient[3]}={count}/{len(meals)}' for nutrient, count in zip(nutrients, counts)
+    ), 'nutrition')
+    return header + ('\n' + '\n'.join(lines) if lines else '')
 
 
 class FetchMealsTool(Tool):
@@ -92,8 +100,13 @@ class FetchMealsTool(Tool):
         return {
             "type": "object",
             "properties": {
-                "since_utc": {"type": "string", "description": "Start time in ISO format (UTC)"},
-                "until_utc": {"type": "string", "description": "End time in ISO format (UTC)"}
+                "since_utc": {"type": "string", "format": "date-time", "description": "Inclusive start time in ISO date-time format (UTC). For a nearby local calendar day, select its start_utc reference."},
+                "until_utc": {"type": "string", "format": "date-time", "description": (
+                    "Inclusive end time in ISO date-time format (UTC). "
+                    "For a calendar day, use its final instant (23:59:59.999999 in that calendar time zone), "
+                    "not midnight at the start of the following day. "
+                    "For a nearby local calendar day, select its end_inclusive_utc reference."
+                )}
             },
             "required": []
         }
@@ -101,11 +114,16 @@ class FetchMealsTool(Tool):
     def run(self, args: Optional[Dict[str, Any]], context: ToolContext) -> ToolExecutionResult:
         """Execute the fetch meals tool."""
         context.user_print("📖 Retrieving your meals…")
-        since, until = _normalize_time_range(args if isinstance(args, dict) else None)
+        try:
+            since, until = _normalise_time_range(args)
+        except ValueError as error:
+            debug_log(f"fetchMeals: invalid time range: {error}", "nutrition")
+            context.user_print("⚠️ The meal time range is invalid.")
+            return ToolExecutionResult(success=False, reply_text=None, error_message=str(error))
         debug_log(f"fetchMeals: range since={since} until={until}", "nutrition")
         meals = context.db.get_meals_between(since, until)
         debug_log(f"fetchMeals: count={len(meals)}", "nutrition")
-        summary = summarize_meals([dict(r) for r in meals])
+        summary = summarize_meals(meals)
         # Return raw meal summary for profile processing
         context.user_print("✅ Meals retrieved.")
         return ToolExecutionResult(success=True, reply_text=summary)

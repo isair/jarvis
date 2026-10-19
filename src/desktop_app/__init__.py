@@ -15,6 +15,9 @@ os.environ.setdefault('OPENBLAS_NUM_THREADS', '1')
 os.environ.setdefault('MKL_NUM_THREADS', '1')
 os.environ.setdefault('OMP_NUM_THREADS', '1')
 
+# Validate the shared runtime requirement before importing desktop dependencies.
+import jarvis
+
 # Re-export main for entry point
 from desktop_app.app import main
 

@@ -1,18 +1,22 @@
-"""
-Tests for desktop_app.py functionality.
-
-Tests crash detection, model support checking, and other utility functions.
-Note: GUI components are not tested here - only the underlying logic.
-"""
+"""Desktop contracts with controlled runtimes and temporary diagnostics."""
 
 import os
 import pytest
 import subprocess
 import sys
 import tempfile
+import time
+from concurrent.futures import ThreadPoolExecutor
+from threading import Thread
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
+
+
+pytestmark = [
+    pytest.mark.unit,
+    pytest.mark.usefixtures("desktop_log_home", "no_network"),
+]
 
 
 class TestEntryPointImports:
@@ -45,6 +49,7 @@ class TestEntryPointImports:
             "launch. Use `from desktop_app.X import ...` instead.\n"
             "Offenders:\n  " + "\n  ".join(relative_imports)
         )
+
 
 class TestOllamaRuntimeFlags:
     """The desktop startup must only launch/verify Ollama when a local
@@ -97,6 +102,45 @@ class TestOpenAICompatStartupCheck:
     """At startup Jarvis can't launch a third-party LLM server, so it must
     check reachability and warn the user early rather than failing silently
     on the first request."""
+
+    @pytest.mark.parametrize("open_wizard", [False, True])
+    @pytest.mark.parametrize("wizard_accepted", [False, True])
+    def test_splash_hidden_during_warning_and_wizard(
+        self, qapp, monkeypatch, open_wizard, wizard_accepted
+    ):
+        from types import SimpleNamespace
+        from PyQt6.QtWidgets import QMessageBox, QWidget
+        from desktop_app import app as app_mod
+
+        splash = QWidget()
+        splash.show()
+        qapp.processEvents()
+        visited = []
+
+        def show_warning(dialog):
+            assert not splash.isVisible()
+            visited.append("warning")
+            return 0
+
+        def run_wizard():
+            assert not splash.isVisible()
+            visited.append("wizard")
+            return wizard_accepted
+
+        monkeypatch.setattr(QMessageBox, "exec", show_warning)
+        monkeypatch.setattr(QMessageBox, "clickedButton", lambda dialog: next(
+            button for button in dialog.buttons()
+            if (dialog.buttonRole(button) == QMessageBox.ButtonRole.ActionRole) == open_wizard
+        ))
+        monkeypatch.setattr(app_mod, "_run_setup_wizard", run_wizard)
+        try:
+            app_mod._show_openai_unreachable_dialog(
+                SimpleNamespace(llm_base_url="http://localhost:1234/v1"), splash
+            )
+            assert visited == (["warning", "wizard"] if open_wizard else ["warning"])
+            assert splash.isVisible()
+        finally:
+            splash.close()
 
     def test_reachable_when_models_listed(self):
         from types import SimpleNamespace
@@ -365,6 +409,24 @@ class TestRuntimeStatusSnapshot:
         assert "\n🔌 MCP\n  Configured servers: 2" in text
 
 
+@pytest.mark.parametrize("platform", ["darwin", "win32", "linux"])
+def test_crash_paths_stay_in_the_test_home(tmp_path, monkeypatch, platform):
+    from desktop_app import get_crash_paths, paths
+
+    platform_view = MagicMock(wraps=sys)
+    platform_view.platform = platform
+    monkeypatch.setattr(paths, "sys", platform_view)
+    mkdir = Path.mkdir
+
+    def owned_mkdir(path, *args, **kwargs):
+        assert path.is_relative_to(tmp_path), "Crash diagnostics escaped the test home"
+        return mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", owned_mkdir)
+    crash_paths = get_crash_paths()
+    assert all(path.is_relative_to(tmp_path) for path in crash_paths)
+
+
 class TestGetCrashPaths:
     """Tests for get_crash_paths() function."""
 
@@ -460,23 +522,6 @@ class TestCrashMarkerFunctions:
 class TestCheckPreviousCrash:
     """Tests for check_previous_crash() function."""
 
-    @pytest.fixture(autouse=True)
-    def _sandbox_crash_paths(self, tmp_path, monkeypatch):
-        """Point crash log/marker paths at a temp dir.
-
-        The real log dir (LOCALAPPDATA\\Jarvis) belongs to a running Jarvis
-        instance; tests must never write to, rename, or delete files there
-        (they are locked while the app runs).
-        """
-        from desktop_app.paths import get_log_dir
-
-        log_dir = tmp_path / "jarvis_logs"
-        log_dir.mkdir(parents=True, exist_ok=True)
-        monkeypatch.setattr(
-            "desktop_app.paths.get_log_dir",
-            lambda: log_dir,
-        )
-
     def test_returns_none_when_no_marker(self):
         """check_previous_crash() should return None if no crash marker exists."""
         from desktop_app import get_crash_paths, check_previous_crash, mark_session_clean_exit
@@ -550,82 +595,6 @@ class TestCheckPreviousCrash:
         crash_log.unlink(missing_ok=True)
 
 
-class TestCheckModelSupport:
-    """Tests for check_model_support() function."""
-
-    @patch("jarvis.config.load_config")
-    def test_returns_none_for_supported_model(self, mock_load_config):
-        """check_model_support() should return None for supported models."""
-        from desktop_app import check_model_support
-        from jarvis.config import DEFAULT_CHAT_MODEL
-
-        mock_load_config.return_value = {"ollama_chat_model": DEFAULT_CHAT_MODEL}
-
-        result = check_model_support()
-        assert result is None
-
-    @patch("jarvis.config.load_config")
-    def test_returns_model_name_for_unsupported_model(self, mock_load_config):
-        """check_model_support() should return model name for unsupported models."""
-        from desktop_app import check_model_support
-
-        mock_load_config.return_value = {"ollama_chat_model": "some-unsupported-model:7b"}
-
-        result = check_model_support()
-        assert result == "some-unsupported-model:7b"
-
-    @patch("jarvis.config.load_config")
-    def test_matches_base_model_name(self, mock_load_config):
-        """check_model_support() should match base model names without tags."""
-        from desktop_app import check_model_support
-        from jarvis.config import SUPPORTED_CHAT_MODELS
-
-        # Get a supported model and use just its base name
-        supported_model = next(iter(SUPPORTED_CHAT_MODELS.keys()))
-        base_name = supported_model.split(":")[0]
-
-        mock_load_config.return_value = {"ollama_chat_model": base_name}
-
-        result = check_model_support()
-        assert result is None  # Should be recognized as supported
-
-    @patch("jarvis.config.load_config")
-    def test_handles_config_error_gracefully(self, mock_load_config):
-        """check_model_support() should return None on config errors."""
-        from desktop_app import check_model_support
-
-        mock_load_config.side_effect = Exception("Config error")
-
-        result = check_model_support()
-        assert result is None
-
-    @patch("jarvis.config.load_config")
-    def test_uses_default_when_not_configured(self, mock_load_config):
-        """check_model_support() should use default model when not in config."""
-        from desktop_app import check_model_support
-
-        mock_load_config.return_value = {}  # No ollama_chat_model key
-
-        result = check_model_support()
-        # Default model is supported, so should return None
-        assert result is None
-
-
-class TestModelSupportIntegration:
-    """Integration tests for model support checking."""
-
-    def test_all_supported_models_pass_check(self):
-        """All models in SUPPORTED_CHAT_MODELS should pass the support check."""
-        from desktop_app import check_model_support
-        from jarvis.config import SUPPORTED_CHAT_MODELS
-
-        for model_id in SUPPORTED_CHAT_MODELS:
-            with patch("jarvis.config.load_config") as mock_config:
-                mock_config.return_value = {"ollama_chat_model": model_id}
-                result = check_model_support()
-                assert result is None, f"Model {model_id} should be supported"
-
-
 class TestLogViewerReportIssue:
     """Tests for report issue URL generation logic.
 
@@ -633,86 +602,6 @@ class TestLogViewerReportIssue:
     LogViewerWindow class because Qt GUI components require a display server
     and block in test environments.
     """
-
-    def test_report_issue_url_generation(self):
-        """Report issue should generate correct GitHub issue URL with redacted content."""
-        import urllib.parse
-        import webbrowser
-        from jarvis import get_version
-        from jarvis.utils.redact import redact
-
-        # Simulate what _report_issue does
-        log_content = (
-            "Starting Jarvis...\n"
-            "API token: sk-secret-key-12345\n"
-            "User email: user@example.com\n"
-            "Error: Something went wrong\n"
-        )
-
-        # Apply same redaction as the actual method
-        redacted_logs = redact(log_content, max_len=6000)
-
-        try:
-            version = get_version()
-        except Exception:
-            version = "unknown"
-
-        # Build URL same as the actual method
-        title = "Bug Report"
-        body = f"""## Bug Report
-
-**Version:** {version}
-**Platform:** {sys.platform}
-
-### Description
-(Please describe what went wrong or what you expected to happen)
-
-
-
-### Steps to Reproduce
-1.
-2.
-3.
-
-<details>
-<summary>📋 Logs (click to expand)</summary>
-
-```
-{redacted_logs}
-```
-
-</details>
-
-### Additional Context
-(Any other relevant information)
-"""
-        params = urllib.parse.urlencode({
-            'title': title,
-            'body': body,
-            'labels': 'bug'
-        })
-        url = f"https://github.com/isair/jarvis/issues/new?{params}"
-
-        # Parse and verify
-        assert url.startswith("https://github.com/isair/jarvis/issues/new?")
-        parsed = urllib.parse.urlparse(url)
-        params_parsed = urllib.parse.parse_qs(parsed.query)
-
-        # Check title and labels
-        assert params_parsed['title'][0] == "Bug Report"
-        assert params_parsed['labels'][0] == "bug"
-
-        # Check body contains expected sections
-        body_decoded = params_parsed['body'][0]
-        assert "## Bug Report" in body_decoded
-        assert "### Description" in body_decoded
-        assert "### Steps to Reproduce" in body_decoded
-        assert "<details>" in body_decoded
-        assert "📋 Logs (click to expand)" in body_decoded
-
-        # Check that sensitive data was redacted
-        assert "user@example.com" not in body_decoded
-        assert "[REDACTED_EMAIL]" in body_decoded
 
     def test_report_issue_truncates_long_logs(self):
         """Report issue should truncate long logs, keeping init section + tail."""
@@ -1336,248 +1225,224 @@ class TestCudaRecoveryAction:
         assert "-LogPath" in captured["params"]
 
 
-class TestMemoryViewerModulePath:
-    """Tests to verify memory viewer module references are valid.
+class TestMemoryViewerSubprocessLaunch:
+    """The development launcher supplies a runnable local viewer module."""
 
-    These tests catch issues like wrong module paths in subprocess calls
-    without requiring actual GUI/server components.
-    """
-
-    def test_memory_viewer_module_is_importable(self):
-        """The module used for subprocess mode should be importable."""
-        import importlib
+    @pytest.mark.parametrize("existing_pythonpath", [None, "unrelated-source-path"])
+    def test_launched_module_imports_from_the_selected_checkout(
+        self, qapp, monkeypatch, tmp_path, existing_pythonpath,
+    ):
+        import socket
+        from desktop_app import app as app_mod
 
         pytest.importorskip("flask")
-
-        # This is the module path used in MemoryViewerWindow.start_server()
-        # If this fails, the subprocess command will fail at runtime
-        module = importlib.import_module("desktop_app.memory_viewer")
-        assert hasattr(module, "app"), "memory_viewer should have Flask 'app' attribute"
-        assert hasattr(module, "main"), "memory_viewer should have 'main' function"
-
-    def test_memory_viewer_subprocess_module_runs(self):
-        """The module should be runnable with python -m (with correct PYTHONPATH)."""
-        pytest.importorskip("flask")
-
-        # Set PYTHONPATH the same way start_server() does
-        src_path = Path(__file__).parent.parent / "src"
-        env = os.environ.copy()
-        env["PYTHONPATH"] = str(src_path)
-
-        # Test that the module can at least be imported in subprocess
-        result = subprocess.run(
-            [sys.executable, "-c", "import desktop_app.memory_viewer"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            env=env,
-        )
-        assert result.returncode == 0, f"Module import failed: {result.stderr}"
-
-    def test_memory_viewer_module_path_matches_code(self):
-        """Verify the module path in start_server matches the actual location."""
-        import re
-        from pathlib import Path
-
-        # Read the actual code to find the module path used
-        app_py = Path(__file__).parent.parent / "src" / "desktop_app" / "app.py"
-        content = app_py.read_text(encoding="utf-8")
-
-        # Find the subprocess module path
-        match = re.search(r'"-m",\s*"([^"]+)"', content)
-        assert match, "Could not find subprocess module path in app.py"
-
-        module_path = match.group(1)
-        assert module_path == "desktop_app.memory_viewer", (
-            f"Module path should be 'desktop_app.memory_viewer', found '{module_path}'"
-        )
+        launches = []
+        connections = iter([1, 0])
+        process = MagicMock()
+        process.poll.return_value = None
+        window = None
+        with monkeypatch.context() as launch:
+            launch.setattr(app_mod, "HAS_WEBENGINE", False)
+            launch.setattr(app_mod.sys, "frozen", False, raising=False)
+            if existing_pythonpath is None:
+                launch.delenv("PYTHONPATH", raising=False)
+            else:
+                launch.setenv("PYTHONPATH", existing_pythonpath)
+            sock = MagicMock()
+            sock.connect_ex.side_effect = lambda address: next(connections)
+            launch.setattr(socket, "socket", lambda *args: sock)
+            def capture(command, **options):
+                launches.append((command, options["env"]))
+                return process
+            launch.setattr(app_mod.subprocess, "Popen", capture)
+            window = app_mod.MemoryViewerWindow()
+            assert window.start_server()
+        try:
+            command, environment = launches[0]
+            assert command[1] == "-m"
+            probe = (
+                "import importlib, sys; from flask import Flask; "
+                "viewer = importlib.import_module(sys.argv[1]); "
+                "assert isinstance(viewer.app, Flask); assert callable(viewer.main); "
+                "print(viewer.__file__)"
+            )
+            result = subprocess.run(
+                [command[0], "-c", probe, command[2]], env=environment,
+                cwd=tmp_path, capture_output=True, text=True, timeout=10,
+            )
+            assert result.returncode == 0, result.stderr
+            assert Path(result.stdout.strip()).resolve() == (
+                Path(app_mod.__file__).with_name("memory_viewer.py").resolve()
+            )
+            if existing_pythonpath is not None:
+                assert existing_pythonpath in environment["PYTHONPATH"].split(os.pathsep)
+        finally:
+            window.stop_server()
+            window.close()
 
 
 class TestDaemonSmokeTest:
-    """Tests for the --smoke-test flag on the daemon entry point."""
+    """Entry-point initialisation and cleanup with owned runtime dependencies."""
 
-    def test_smoke_test_prints_marker_and_returns(self):
-        """daemon.main(smoke_test=True) prints SMOKE_TEST_INIT_OK and returns."""
-        from unittest.mock import patch, MagicMock
-        import io
+    @pytest.fixture
+    def runtime(self, monkeypatch):
+        import threading
+        import jarvis.daemon as daemon
+        import jarvis.memory.graph as graph
+        import jarvis.dictation.dictation_engine as dictation
+        import jarvis.tools.external.mcp_runtime as mcp
+        from tests.conftest import MockConfig
 
-        # Mock all heavy dependencies so the smoke test path runs without
-        # needing a real database, Whisper model, TTS engine, etc.
-        with patch("jarvis.daemon.load_settings") as mock_load, \
-             patch("jarvis.daemon.Database") as mock_db, \
-             patch("jarvis.daemon.initialize_mcp_tools", return_value=({}, {})), \
-             patch("jarvis.daemon.DialogueMemory") as mock_dm, \
-             patch("jarvis.daemon.get_location_context", return_value="Location: Test"), \
-             patch("jarvis.daemon.create_tts_engine") as mock_tts, \
-             patch("jarvis.daemon.VoiceListener") as mock_vl, \
-             patch("jarvis.memory.graph.GraphMemoryStore") as mock_graph:
+        cfg = MockConfig(db_path=":memory:")
+        cfg.dictation_hotkey = "ctrl+shift+d"
+        database = MagicMock()
+        listener = MagicMock()
+        dictation_engine = MagicMock()
+        tts = MagicMock(enabled=False)
+        memory = MagicMock()
+        memory.get_pending_chunks.return_value = []
+        graph_store = MagicMock()
+        graph_store.has_unclassified_root_content.return_value = False
+        threads = MagicMock(wraps=threading)
+        threads.Thread = MagicMock()
+        monkeypatch.setenv("JARVIS_STDIN_IPC", "1")
+        for name, value in {
+            "load_settings": MagicMock(return_value=cfg),
+            "Database": MagicMock(return_value=database),
+            "DialogueMemory": MagicMock(return_value=memory),
+            "get_location_context": MagicMock(return_value="Location: Test"),
+            "create_tts_engine": MagicMock(return_value=tts),
+            "VoiceListener": MagicMock(return_value=listener),
+            "initialize_mcp_tools": MagicMock(return_value=({}, {})),
+            "_install_signal_handlers": MagicMock(),
+            "_diary_update_callbacks": {},
+            "threading": threads,
+        }.items():
+            monkeypatch.setattr(daemon, name, value)
+        monkeypatch.setattr(graph, "GraphMemoryStore", MagicMock(return_value=graph_store))
+        monkeypatch.setattr(graph, "register_graph_mutation_listener", MagicMock())
+        monkeypatch.setattr(graph, "unregister_graph_mutation_listener", MagicMock())
+        monkeypatch.setattr(dictation, "DictationEngine", MagicMock(return_value=dictation_engine))
+        monkeypatch.setattr(mcp, "shutdown_runtime", MagicMock())
+        # Restore the embedded runtime's references even if initialisation fails.
+        for name in (
+            "_global_cfg", "_global_db", "_global_dialogue_memory",
+            "_global_voice_listener", "_global_tts_engine", "_global_dictation_engine",
+            "_warm_profile_graph_listener", "_global_stop_requested",
+        ):
+            monkeypatch.setattr(daemon, name, None)
+        return daemon, database, listener, dictation_engine
 
-            from tests.conftest import MockConfig
-            mock_load.return_value = MockConfig(db_path=":memory:")
+    def test_smoke_test_prints_marker_and_returns(self, runtime, capsys):
+        daemon, database, listener, dictation = runtime
+        daemon.main(smoke_test=True)
+        assert "SMOKE_TEST_INIT_OK" in capsys.readouterr().out
+        assert daemon.VoiceListener.call_args.kwargs.get("on_low_confidence") is None
+        database.close.assert_called_once()
+        listener.stop.assert_called_once()
+        dictation.stop.assert_called_once()
 
-            mock_db_instance = MagicMock()
-            mock_db.return_value = mock_db_instance
+    @pytest.mark.parametrize("background_wait", [False, True])
+    def test_normal_mode_does_not_print_marker(self, runtime, monkeypatch, capsys, background_wait):
+        import threading
+        import time
 
-            mock_dm_instance = MagicMock()
-            mock_dm.return_value = mock_dm_instance
-
-            mock_tts_instance = MagicMock()
-            mock_tts_instance.enabled = False
-            mock_tts.return_value = mock_tts_instance
-
-            mock_vl_instance = MagicMock()
-            mock_vl.return_value = mock_vl_instance
-
-            mock_graph_instance = MagicMock()
-            mock_graph_instance.migrate_legacy_shape.return_value = False
-            mock_graph.return_value = mock_graph_instance
-
-            # Capture stdout
-            captured = io.StringIO()
-            with patch("sys.stdout", captured):
-                from jarvis.daemon import main
-                main(smoke_test=True)
-
-            output = captured.getvalue()
-            assert "SMOKE_TEST_INIT_OK" in output, (
-                f"Expected SMOKE_TEST_INIT_OK marker in output, got:\n{output}"
-            )
-            # Verify cleanup happened
-            mock_db_instance.close.assert_called_once()
-
-    def test_normal_mode_does_not_print_marker(self):
-        """daemon.main(smoke_test=False) does NOT print SMOKE_TEST_INIT_OK."""
-        # This test verifies the smoke test marker is exclusive to smoke_test mode.
-        # We mock enough to reach the branching point but the main loop would
-        # block forever, so we raise an exception right before it.
-        from unittest.mock import patch, MagicMock
-        import io
+        daemon, database, listener, dictation = runtime
 
         class StopBeforeMainLoop(Exception):
             pass
 
-        with patch("jarvis.daemon.load_settings") as mock_load, \
-             patch("jarvis.daemon.Database") as mock_db, \
-             patch("jarvis.daemon.initialize_mcp_tools", return_value=({}, {})), \
-             patch("jarvis.daemon.DialogueMemory") as mock_dm, \
-             patch("jarvis.daemon.get_location_context", return_value="Location: Test"), \
-             patch("jarvis.daemon.create_tts_engine") as mock_tts, \
-             patch("jarvis.daemon.VoiceListener") as mock_vl, \
-             patch("jarvis.memory.graph.GraphMemoryStore") as mock_graph, \
-             patch("jarvis.daemon.time.sleep", side_effect=StopBeforeMainLoop()):
+        def stop_loop(_seconds):
+            raise StopBeforeMainLoop()
 
-            from tests.conftest import MockConfig
-            mock_load.return_value = MockConfig(db_path=":memory:")
+        clock = MagicMock(wraps=time)
+        clock.sleep.side_effect = stop_loop
+        monkeypatch.setattr(daemon, "time", clock)
+        errors = []
 
-            mock_db_instance = MagicMock()
-            mock_db.return_value = mock_db_instance
+        def wait_in_background():
+            try:
+                time.sleep(0.01)
+            except Exception as exc:
+                errors.append(exc)
 
-            mock_dm_instance = MagicMock()
-            mock_dm.return_value = mock_dm_instance
+        def start_listener():
+            worker = threading.Thread(target=wait_in_background)
+            worker.start()
+            worker.join(timeout=2)
+            assert not worker.is_alive()
 
-            mock_tts_instance = MagicMock()
-            mock_tts_instance.enabled = False
-            mock_tts.return_value = mock_tts_instance
-
-            mock_vl_instance = MagicMock()
-            mock_vl.return_value = mock_vl_instance
-
-            mock_graph_instance = MagicMock()
-            mock_graph_instance.migrate_legacy_shape.return_value = False
-            mock_graph.return_value = mock_graph_instance
-
-            captured = io.StringIO()
-            with patch("sys.stdout", captured):
-                from jarvis.daemon import main
-                try:
-                    main(smoke_test=False)
-                except StopBeforeMainLoop:
-                    pass
-
-            output = captured.getvalue()
-            assert "SMOKE_TEST_INIT_OK" not in output, (
-                "SMOKE_TEST_INIT_OK should not appear in normal mode"
-            )
-            assert "✓ Daemon started" in output, (
-                f"Expected normal startup output, got:\n{output}"
-            )
+        if background_wait:
+            listener.start.side_effect = start_listener
+        with pytest.raises(StopBeforeMainLoop):
+            daemon.main(smoke_test=False)
+        output = capsys.readouterr().out
+        assert "SMOKE_TEST_INIT_OK" not in output
+        assert "✓ Daemon started" in output
+        assert not errors, f"Daemon loop clock escaped into a competing thread: {errors}"
+        database.close.assert_called_once()
+        listener.stop.assert_called_once()
+        dictation.stop.assert_called_once()
 
 
 class TestDesktopSmokeTest:
-    """Tests for the --smoke-test flag on the desktop app entry point."""
+    """Desktop smoke startup, diagnostics and exit codes without native services."""
 
-    def test_smoke_test_main_calls_daemon_with_smoke_flag(self):
-        """_smoke_test_main() calls daemon_main(smoke_test=True)."""
-        from unittest.mock import patch, MagicMock
+    @pytest.fixture
+    def runtime(self, monkeypatch):
+        import desktop_app.app as app
+        import jarvis.daemon as daemon
+        from PyQt6 import QtWidgets
 
-        mock_qapp = MagicMock()
-        mock_qapp.instance.return_value = mock_qapp
+        qt = MagicMock()
+        qt.instance.return_value = qt.return_value
+        daemon_main = MagicMock()
+        monkeypatch.setattr(QtWidgets, "QApplication", qt)
+        monkeypatch.setattr(daemon, "main", daemon_main)
+        # Stream replacements belong to this entry point, not the test process.
+        monkeypatch.setattr(app, "sys", SimpleNamespace(
+            platform=sys.platform, argv=["Jarvis"], frozen=False,
+            stdout=sys.stdout, stderr=sys.stderr,
+            __stdout__=sys.__stdout__, __stderr__=sys.__stderr__,
+        ))
+        monkeypatch.setenv("QT_QPA_PLATFORM", os.environ.get("QT_QPA_PLATFORM", "offscreen"))
+        return app, qt, daemon_main
 
-        with patch("PyQt6.QtWidgets.QApplication", mock_qapp), \
-             patch("jarvis.daemon.main") as mock_daemon_main:
+    @pytest.mark.parametrize("existing_app", [False, True])
+    def test_success_initialises_daemon_and_prints_marker(self, runtime, capsys, existing_app):
+        app, qt, daemon_main = runtime
+        if not existing_app:
+            qt.instance.return_value = None
+        assert app._smoke_test_main() == 0
+        daemon_main.assert_called_once_with(smoke_test=True)
+        assert "SMOKE_TEST_PASSED" in capsys.readouterr().out
 
-            from desktop_app.app import _smoke_test_main
-            result = _smoke_test_main()
+    @pytest.mark.parametrize("failure", ["qt", "daemon"])
+    def test_failure_returns_one_with_diagnostics(self, runtime, capsys, failure):
+        app, qt, daemon_main = runtime
+        error = RuntimeError("Simulated init failure")
+        if failure == "qt":
+            qt.instance.side_effect = error
+        else:
+            daemon_main.side_effect = error
+        assert app._smoke_test_main() == 1
+        output = capsys.readouterr()
+        assert "SMOKE_TEST_PASSED" not in output.out
+        assert "initialisation failed" in output.out
+        assert str(error) in output.out
+        assert str(error) in output.err
+        if failure == "qt":
+            daemon_main.assert_not_called()
 
-            mock_daemon_main.assert_called_once_with(smoke_test=True)
-            assert result == 0
-
-    def test_smoke_test_main_prints_pass_on_success(self):
-        """_smoke_test_main() prints SMOKE_TEST_PASSED when daemon succeeds."""
-        from unittest.mock import patch, MagicMock
-        import io
-
-        mock_qapp = MagicMock()
-        mock_qapp.instance.return_value = mock_qapp
-
-        with patch("PyQt6.QtWidgets.QApplication", mock_qapp), \
-             patch("jarvis.daemon.main") as mock_daemon_main:
-
-            mock_daemon_main.return_value = None
-
-            captured = io.StringIO()
-            with patch("sys.stdout", captured):
-                from desktop_app.app import _smoke_test_main
-                result = _smoke_test_main()
-
-            output = captured.getvalue()
-            assert "SMOKE_TEST_PASSED" in output, (
-                f"Expected SMOKE_TEST_PASSED in output, got:\n{output}"
-            )
-            assert result == 0
-
-    def test_smoke_test_main_returns_1_on_daemon_failure(self):
-        """_smoke_test_main() returns 1 when daemon_main raises."""
-        from unittest.mock import patch, MagicMock
-
-        mock_qapp = MagicMock()
-        mock_qapp.instance.return_value = mock_qapp
-
-        with patch("PyQt6.QtWidgets.QApplication", mock_qapp), \
-             patch("jarvis.daemon.main", side_effect=RuntimeError("Simulated init failure")):
-
-            from desktop_app.app import _smoke_test_main
-            result = _smoke_test_main()
-
-            assert result == 1, f"Expected exit code 1 on failure, got {result}"
-
-    def test_main_routes_smoke_test_flag(self):
-        """main() detects --smoke-test and calls _smoke_test_main()."""
-        from unittest.mock import patch
-
-        # The smoke test flag detection is a simple string check in sys.argv.
-        # We test it by patching _smoke_test_main to verify it is called.
-        with patch("desktop_app.app.sys.argv", ["Jarvis.exe", "--smoke-test"]), \
-             patch("desktop_app.app._smoke_test_main", return_value=42) as mock_smoke:
-
-            from desktop_app.app import main
-            result = main()
-
-            mock_smoke.assert_called_once()
-            assert result == 42  # return value propagated from _smoke_test_main
+    def test_main_routes_smoke_test_flag(self, runtime, monkeypatch):
+        app, _qt, _daemon_main = runtime
+        app.sys.argv = ["Jarvis", "--smoke-test"]
+        smoke = MagicMock(return_value=42)
+        monkeypatch.setattr(app, "_smoke_test_main", smoke)
+        assert app.main() == smoke.return_value
+        smoke.assert_called_once_with()
 
 
-@pytest.mark.unit
 class TestRuntimeStatusDialog:
     """The runtime-status dialog renders the snapshot as a structured,
     themed dialog rather than a plain text blob."""
@@ -1656,9 +1521,7 @@ class TestRuntimeStatusDialog:
 
 
 class TestTrayMenuLayout:
-    """The tray menu groups the listening controls together: the
-    Start/Stop Listening toggle sits directly above the listening Status
-    line in the same section of the menu."""
+    """The tray menu groups assistant power, voice capture and status controls."""
 
     def _tray_menu(self, qapp):
         from desktop_app.app import JarvisSystemTray
@@ -1669,21 +1532,50 @@ class TestTrayMenuLayout:
         tray.create_menu()
         return tray.menu
 
-    def test_listening_toggle_is_above_status_in_same_section(self, qapp):
+    def test_dictation_menu_action_opens_saved_history(self, qapp, tmp_path, monkeypatch):
+        from desktop_app.app import JarvisSystemTray
+        from desktop_app.dictation_history import DictationHistoryWindow
+        from jarvis.dictation.history import DictationHistory
+        from PyQt6.QtWidgets import QLabel, QSystemTrayIcon
+
+        history = DictationHistory(path=tmp_path / "history.json")
+        entry = history.add("A saved dictation, café")
+        tray = JarvisSystemTray.__new__(JarvisSystemTray)
+        tray.tray_icon = QSystemTrayIcon()
+        tray.dictation_history_window = DictationHistoryWindow(history)
+        monkeypatch.setattr(tray, "_maybe_add_cuda_recovery_action", lambda: None)
+        tray.create_menu()
+        try:
+            assert not tray.dictation_history_window.isVisible()
+            action = next(action for action in tray.menu.actions() if "Dictation History" in action.text())
+            action.trigger()
+            qapp.processEvents()
+            assert tray.dictation_history_window.isVisible()
+            assert entry["text"] in [label.text() for label in tray.dictation_history_window.findChildren(QLabel)]
+        finally:
+            tray.dictation_history_window.close()
+            tray.dictation_history_window.deleteLater()
+            tray._voice_pause_timer.stop()
+            tray._voice_pause_timer.deleteLater()
+            tray.menu.deleteLater()
+            tray.tray_icon.deleteLater()
+
+    def test_power_toggle_is_above_voice_pause_and_status_in_same_section(self, qapp):
         menu = self._tray_menu(qapp)
         actions = list(menu.actions())
 
         toggle_idx = next(
-            i for i, a in enumerate(actions) if "Listening" in a.text()
+            i for i, a in enumerate(actions) if a.text() == "▶️ Turn On"
         )
         status_idx = next(
             i for i, a in enumerate(actions) if "Status:" in a.text()
         )
 
-        assert toggle_idx < status_idx
+        voice_idx = next(i for i, a in enumerate(actions) if "Voice Listening" in a.text())
+        assert toggle_idx < voice_idx < status_idx
         between = actions[toggle_idx + 1 : status_idx]
         assert not any(a.isSeparator() for a in between), (
-            "Start/Stop Listening and the Status line must share one menu section"
+            "Power and the Status line must share one menu section"
         )
 
 class TestListeningWindowVisibility:
@@ -1695,6 +1587,43 @@ class TestListeningWindowVisibility:
     start_daemon must not force them open and stop_daemon must not hide
     them (even when the diary dialog appears).
     """
+
+    @pytest.fixture(autouse=True)
+    def runtime(self, monkeypatch):
+        from desktop_app import app as app_mod
+
+        self._patch_face_state(monkeypatch)
+        for name in ("time", "threading", "subprocess"):
+            boundary = MagicMock(wraps=getattr(app_mod, name))
+            if name == "time":
+                boundary.sleep.return_value = None
+            monkeypatch.setattr(app_mod, name, boundary)
+
+    @pytest.mark.parametrize("boundary", ["thread", "subprocess", "wait"])
+    def test_runtime_keeps_unrelated_work_independent(self, qapp, monkeypatch, boundary):
+        from desktop_app import app as app_mod
+
+        if boundary == "wait":
+            self._tray_for_stop_bundled(monkeypatch)
+            before = list(app_mod.time.sleep.call_args_list)
+            worker = Thread(target=lambda: time.sleep(0.001))
+            worker.start()
+            worker.join(timeout=5)
+            assert not worker.is_alive()
+            assert list(app_mod.time.sleep.call_args_list) == before, "An unrelated wait entered shutdown timing"
+            return
+
+        self._tray_for_start(monkeypatch)
+        if boundary == "thread":
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                assert pool.submit(lambda: "independent").result(timeout=5) == "independent"
+        else:
+            token = "independent"
+            result = subprocess.run(
+                [sys.executable, "-c", f"print({token!r})"],
+                capture_output=True, text=True, timeout=5, check=True,
+            )
+            assert result.stdout.strip() == token
 
     def _tray_for_start(self, monkeypatch):
         import desktop_app.app as app_mod
@@ -1731,6 +1660,15 @@ class TestListeningWindowVisibility:
         # No real reader thread in a unit test.
         monkeypatch.setattr(app_mod.threading, "Thread", MagicMock())
         return tray
+
+    def test_start_daemon_offers_turn_off(self, qapp, monkeypatch):
+        from PyQt6.QtGui import QAction
+
+        tray = self._tray_for_start(monkeypatch)
+        tray.toggle_action = QAction("▶️ Turn On")
+        tray.start_daemon()
+        assert tray.is_listening is True
+        assert tray.toggle_action.text() == "⏻ Turn Off"
 
     def test_start_daemon_does_not_show_log_viewer(self, qapp, monkeypatch):
         tray = self._tray_for_start(monkeypatch)
@@ -1773,7 +1711,6 @@ class TestListeningWindowVisibility:
         monkeypatch.setattr(app_mod, "DiaryUpdateDialog", MagicMock(return_value=fake_dialog))
         monkeypatch.setattr("jarvis.daemon.set_diary_update_callbacks", MagicMock())
         monkeypatch.setattr("jarvis.daemon.request_stop", MagicMock())
-        monkeypatch.setattr(app_mod.time, "sleep", MagicMock())
         return tray, fake_dialog
 
     def test_stop_daemon_bundled_does_not_hide_windows(self, qapp, monkeypatch):
@@ -1812,8 +1749,18 @@ class TestListeningWindowVisibility:
 
         fake_dialog = MagicMock()
         monkeypatch.setattr(app_mod, "DiaryUpdateDialog", MagicMock(return_value=fake_dialog))
-        monkeypatch.setattr(app_mod.time, "sleep", MagicMock())
         return tray, fake_dialog
+
+    @pytest.mark.parametrize("bundled", [False, True])
+    def test_stop_daemon_offers_turn_on(self, qapp, monkeypatch, bundled):
+        from PyQt6.QtGui import QAction
+
+        setup = self._tray_for_stop_bundled if bundled else self._tray_for_stop_subprocess
+        tray, _ = setup(monkeypatch)
+        tray.toggle_action = QAction("⏻ Turn Off")
+        tray.stop_daemon(show_diary_dialog=False)
+        assert tray.is_listening is False
+        assert tray.toggle_action.text() == "▶️ Turn On"
 
     def _patch_face_state(self, monkeypatch):
         """Monkeypatch get_jarvis_state with a mock state manager.
@@ -1852,6 +1799,7 @@ class TestListeningWindowVisibility:
     def test_check_daemon_status_subprocess_crash_puts_face_asleep(self, qapp, monkeypatch):
         """An unexpected subprocess exit also puts the face back to sleep."""
         import desktop_app.app as app_mod
+        from PyQt6.QtGui import QAction
 
         tray = app_mod.JarvisSystemTray.__new__(app_mod.JarvisSystemTray)
         tray.is_bundled = False
@@ -1864,15 +1812,18 @@ class TestListeningWindowVisibility:
         tray.face_window = MagicMock()
         tray.log_signals = MagicMock()
         tray.tray_icon = MagicMock()
-        tray.toggle_action = MagicMock()
+        tray.toggle_action = QAction("⏻ Turn Off")
         tray.status_action = MagicMock()
         tray.update_icon = MagicMock()
         tray._set_chat_daemon_status = MagicMock()
         tray._chat_submit_fn = lambda text: None
+        tray._daemon_stop_expected = False
+        tray._initialise_voice_pause_controls()
 
         fake_state, JarvisState = self._patch_face_state(monkeypatch)
         tray.check_daemon_status()
         assert tray.is_listening is False
+        assert tray.toggle_action.text() == "▶️ Turn On"
         fake_state.set_state.assert_called_once_with(JarvisState.ASLEEP)
 
     def test_stop_daemon_subprocess_does_not_hide_windows(self, qapp, monkeypatch):

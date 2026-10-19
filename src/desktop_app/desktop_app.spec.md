@@ -1,5 +1,7 @@
 # Desktop App Specification
 
+[Configuration file selection](../jarvis/config.spec.md) is shared with the daemon. Desktop configuration reads, writes and directory navigation use the selected file.
+
 This document outlines the architecture and behavior of the Jarvis Desktop App - a cross-platform PyQt6 system tray application that provides a graphical interface for the Jarvis voice assistant.
 
 ## Overview
@@ -9,6 +11,14 @@ The desktop app is a **separate package** from the core `jarvis` module. It depe
 - Running Jarvis headless (CLI/daemon only)
 - Building alternative UIs (web, mobile) without modifying core logic
 - Keeping PyQt6 dependencies isolated from the core package
+
+## Source Runtime
+
+Source installations require Python 3.11 or later. CLI and desktop package
+entrypoints reject unsupported runtimes before application dependencies or user
+configuration are loaded, with an actionable error. The POSIX development
+launcher validates interpreter versions before creating a virtual environment,
+selects a supported candidate and rejects an unsupported existing environment.
 
 ## Package Structure
 
@@ -68,8 +78,8 @@ flowchart TD
 
 ### Key Startup Features
 
-1. **Splash Screen**: Shows immediately to provide visual feedback while loading
-2. **Provider-aware Ollama gating** (`_ollama_runtime_flags` in `app.py`): The Ollama server-start and model-verification steps run only when a local provider actually uses Ollama. A pure OpenAI-compatible setup (chat and embeddings both remote) skips them entirely. `get_required_models()` is provider-aware, so model verification pulls exactly the models that run locally: chat + intent-judge when chat is on Ollama, and the embedding model when embeddings are on Ollama. When chat is on Ollama, a missing model opens the setup wizard; when only embeddings are local (remote chat), a missing embedding model surfaces a clear non-blocking instruction (memory search falls back to keyword matching until it is pulled). The unsupported-chat-model check runs only on the Ollama chat path. `should_show_setup_wizard()` returns False for an OpenAI-compatible chat provider.
+1. **Splash Screen**: Shows immediately to provide visual feedback while loading. It stays hidden throughout the unreachable-server warning and any setup wizard opened from that warning, then resumes when startup continues (whether the wizard is accepted or cancelled).
+2. **Provider-aware Ollama gating** (`_ollama_runtime_flags` in `app.py`): The Ollama server-start and model-verification steps run only when a local provider actually uses Ollama. A pure OpenAI-compatible setup (chat and embeddings both remote) skips them entirely. `get_required_models()` is provider-aware, so model verification pulls exactly the models that run locally: chat + intent-judge when chat is on Ollama, and the embedding model when embeddings are on Ollama. When chat is on Ollama, a missing model opens the setup wizard; when only embeddings are local (remote chat), a missing embedding model surfaces a clear non-blocking instruction (memory search falls back to keyword matching until it is pulled). The recommendation check reports all unlisted model selections together, independently for Chat, Fast and Embedding roles using settings reloaded after startup setup steps and the central role catalogues. Chat and Fast follow the chat provider, while Embedding follows its effective provider independently. Ollama recommendations use pull IDs, with untagged and `:latest` IDs treated as equivalent. OpenAI-compatible recommendations use exact publisher model IDs from the same central model-family metadata. Unknown aliases and variants receive advice rather than inheriting a family recommendation. Model names do not certify weights, performance or runtime compatibility; advice for external servers explains aliases and directs users to Connect & load models in setup for capability checks. No network request is made by the recommendation check. The advice offers Open Setup Wizard and Continue Anyway, never changes settings automatically, and renders model names as plain text. Its scroll viewport retains the description’s minimum usable size, with both action buttons outside the viewport and reachable in a constrained window. `should_show_setup_wizard()` returns False for an OpenAI-compatible chat provider.
 3. **Ollama Auto-Start**: When Ollama is in use and not running, automatically starts it (up to 15s wait). If the wait times out, the setup wizard opens so the user can diagnose connectivity; cancelling the wizard exits the app. The desktop app records ownership only for an Ollama runtime it launches in this session. On app exit, it stops that owned runtime and leaves any pre-existing user-managed Ollama process running.
 3a. **OpenAI-compatible reachability check** (`_check_openai_compat_reachable` in `app.py`): Jarvis cannot start a third-party server the way it starts Ollama, so on a pure OpenAI-compatible setup it checks the server answers `GET /v1/models` and, if not, shows a one-off warning naming the address (never the API key) and pointing to Settings, then continues. The user only otherwise discovers a down server when their first request fails.
 4. **Single Instance Lock**: Prevents multiple copies from running simultaneously. If another instance is detected, shows a dialog offering to close the existing instance and start fresh.
@@ -81,6 +91,19 @@ flowchart TD
 |------|---------|
 | `--smoke-test` | CI smoke-test mode. Creates a minimal offscreen QApplication, runs the daemon initialisation (`daemon.main(smoke_test=True)`), prints `SMOKE_TEST_PASSED` on success (or the error + traceback on failure), and exits with code 0 or 1. Forces UTF-8 stdout/stderr on every OS (emoji-safe even when the console is an ANSI code page or absent) and Qt's offscreen platform on Linux so the gate never depends on xvfb/xcb. Bypasses the single-instance lock, crash detection, splash screen, setup wizard, Ollama checks, model verification, tray icon, and event loop. Used by the `release-smoke.yml` workflow to verify the bundled binary starts without missing DLLs or broken imports before fast-forwarding `main` to `develop`. |
 
+The Release Smoke Test workflow defaults to validation only. It builds and
+smoke-tests the selected ref without publishing a stable release. Promotion
+requires an explicit release run on `develop` with `validate_only=false`. The
+tested commit must match the freshly fetched `origin/develop` tip, and `main`
+must be its ancestor. A changed develop tip requires another smoke-test run.
+
+Stable release metadata stays in a draft while stable installers are built.
+The release becomes public only after every platform's installer is available
+and the release attachment step has uploaded the binaries successfully.
+
+Release preparation errors fail the workflow with visible diagnostics. A
+successful run without releasable changes reports that no release is needed.
+
 ## Main Components
 
 ### JarvisSystemTray
@@ -89,6 +112,10 @@ The central controller that manages:
 
 - **System tray icon** with context menu
 - **Daemon lifecycle** (start/stop the Jarvis voice assistant)
+- **Voice pause**: Pause Voice Listening / Resume Voice Listening controls
+  assistant capture without stopping the daemon, models, MCP sessions, text
+  chat or intentional dictation. Turn Off shuts down the assistant. The
+  assistant power action reads Turn On while stopped and Turn Off while running.
 - **Window management** (log viewer, memory viewer, face window)
 - **Update checking** on startup and on-demand
 - **Runtime diagnostics** (`🩺 Runtime Status`): shows whether the assistant is listening, the daemon mode/PID, whether Low Power Mode is active, whether Ollama is needed/running, whether Jarvis owns the current Ollama runtime, active chat/embedding models, and configured MCP server count. The dialog is informational and never starts or stops services.
@@ -106,11 +133,98 @@ The central controller that manages:
 | **TaskCentreWindow** | Submit, monitor, and cancel prompts executed by the local task service |
 | **ChatWindow** | Text chat interface alongside voice; shares one conversation with the voice path and is enabled only while the daemon is running (see `chat_window.spec.md`) |
 
-| **TaskCentreWindow** | Submit, monitor, and cancel prompts executed by the local task service |
+### Activity log and downloads
 
-Window visibility is user-controlled: starting or stopping the assistant never shows or hides the log viewer or the face window. The windows open automatically once at app launch; after that the tray menu's `📝 View Logs` and `👤 Show Face` actions are the only controls over their visibility (the diary dialog shown while stopping is raised on top but leaves those windows' visibility untouched).
+- Daemon startup emits its build version and release channel before loading configuration. Bundled builds use their stamped metadata; source runs without build metadata identify as `dev-local (develop)`. The identity remains visible in shared logs when configuration loading fails.
+- Accepted typed chat requests and delivered replies appear in the activity log alongside voice exchanges. Queries are redacted and reply secrets are scrubbed; chat protocol events remain hidden.
+- The log viewer uses a timestamped timeline with distinct success, warning and error colours from the shared theme. Messages are inserted as plain text, including tracebacks.
+- Download updates appear in a live card above the timeline, showing the filename, percentage, transferred/total bytes, speed and remaining time when supplied by the downloader. Unknown totals use an indeterminate bar, never a fabricated percentage.
+- Repeated updates are coalesced; the timeline retains download start/completion events and all ordinary messages. Completion of a small metadata file must not hide another active model download.
+- The progress card is visible only while work is active: it hides when the last download completes, when MLX Whisper reports readiness, or when the listener announces listening. Completion remains in the timeline. A subsequent download or preparation stage shows the card again; repeated final updates do not leave a permanent 100% card.
+- After 15 seconds without a transfer update, the card states how long it has been waiting. It does not invent byte progress. Model loading/warmup is a separate indeterminate stage, followed by readiness or an error.
+- Both bundled output capture and subprocess output support carriage-return progress and strip terminal control sequences. The desktop sets `TQDM_POSITION=-1` before loading dependencies so Hugging Face emits byte progress to non-terminal output, respecting explicit user environment overrides.
+- Clear resets both the timeline and download state. Report Issue includes the visible progress snapshot and applies the existing redaction rules to it.
+- Missing optional location support is reported once at startup with a pointer to Setup, without printing the full installation guide.
+- Missing optional location support is a warning, rendered in yellow because it degrades available functionality.
 
-**Face state follows the daemon lifecycle**: the face animates from states written by the daemon (`JarvisStateManager`, file-backed for cross-process use). Whenever the daemon goes down — the tray's Stop/Start Listening toggle, an unexpected exit, or the setup wizard pausing it — the tray resets the face to `ASLEEP` so it never looks awake while no daemon is running. Starting the daemon lets the daemon's own state writes take over again.
+Window visibility is user-controlled: starting or stopping the assistant never shows or hides the log viewer or the face window. The windows open automatically once at app launch; after that the tray menu's `📝 View Logs` and `👤 Show Face` actions open them, while window close controls and the face's `Hide face` menu can hide them (the diary dialog shown while stopping is raised on top but leaves those windows' visibility untouched).
+
+### Desktop face presence
+
+The face is a compact frameless, translucent tool window, always on top without
+accepting focus or activating when shown. macOS keeps the tool window visible
+when another application is active. It paints an angular amber mask made from
+straight connected light beams, small illuminated junctions, diamond eyes,
+cheek accents and a straight mouth seam. Slow paired energy highlights travel
+around the fixed beams on a twelve-second cycle, with greater intensity during
+processing. Fine amber strokes and fixed glowing junctions define the mask,
+with a narrow ink outline for contrast on light backgrounds. The mask is 70%
+of the design width and 1.3 times as tall as it is wide. Diamond eyes sit 15%
+of its height above the centre, and the mouth spans 70% of its width at 25%
+of its height below the centre. Pupils are flat amber lights. There is
+no background panel, grid, title bar, subtitle area or persistent toolbar.
+Eyes paint only their outlines and small lit pupils, with transparent
+interiors and surroundings. Contrast and glow follow those strokes; there is
+no filled eye halo to obscure desktop content.
+
+The default footprint is 220 × 280 logical pixels, with zero layout margins.
+Vector strokes, glows and motion scale together with the face geometry.
+Presence opacity and state-entry animations follow the same frame-level state
+observation for bundled signals and file-backed subprocess updates.
+Asleep and idle states have lower window opacity than active listening,
+thinking, speaking or dictation. The native input region follows the face's
+contour with enough padding for breathing and active cues. Empty corners and
+lateral margins pass clicks through to the desktop.
+Dragging the face uses native window movement where supported, with a pointer
+position fallback. A right-click menu hides the face; the tray shows it again
+without activating it. Visibility remains user-controlled after launch.
+
+The face's character comes from restrained expressions and uninterrupted
+negative space. Awake breathing changes its size by at most 0.6%, without
+moving or tilting the window. Natural brief blinks occur 4.5 to 7.5 seconds
+apart. Idle glances last 3.2 seconds, stay within 2.5 logical pixels horizontally
+and one vertically, and are separated by 9 to 15 seconds of rest. The face
+does not track the pointer or analyse the desktop.
+
+- **Asleep:** straight closed eye beams and a still, dim silhouette after settling.
+- **Idle:** soft breathing, a straight mask seam and occasional blinks and glances.
+- **Listening:** receptive eyes and a close-fitting amber echo on a two-second cycle.
+- **Thinking:** pupils look gently upwards while the flowing beam highlights intensify.
+- **Speaking:** the mouth seam opens into a small, smoothly tapered waveform. It indicates
+  the speaking state without measuring or recording audio.
+- **Dictation:** a close-fitting coral outline breathes during recording; processing
+  combines that outline with the thinking expression.
+
+Animation follows monotonic elapsed time, with smooth activation and state
+blends independent of frame rate. Each frame does a bounded amount of work,
+including after a long event-loop stall. Hidden faces stop their animation
+timer and observe the latest state immediately when shown. Visible resting
+faces use a lower refresh rate, with a 250 ms state check when fully asleep.
+`scripts/capture_face_preview.py` renders the actual widget on light and dark
+backgrounds using isolated in-memory state and a fixed clock.
+
+**Face state follows the daemon lifecycle**: the face animates from states written by the daemon (`JarvisStateManager`, file-backed for cross-process use). Whenever the daemon goes down — the tray's Turn Off / Turn On control, an unexpected exit, or the setup wizard pausing it — the tray resets the face to `ASLEEP` so it never looks awake while no daemon is running. Starting the daemon lets the daemon's own state writes take over again.
+
+### Face context menu
+
+Right-clicking the face opens a themed, opaque menu with a Hide Face action
+and every tray action, in tray order with the same separators. The actions are
+shared with the tray, so status labels, enabled states, callbacks and
+platform-specific recovery controls stay consistent while either menu is open.
+The popup uses the desktop's dark surface, amber selection and muted disabled
+items. Long menus scroll in one column within the available screen instead of
+spreading into clipped columns. The face retains its transparent background and non-activating presence.
+
+### Rejected speech
+
+Low-confidence transcription is a listener diagnostic, not evidence of an
+addressed user request. It does not produce face text, reserve subtitle space,
+change face state, raise the window or trigger TTS. The face contains only its
+animation; rejected segments remain filtered and logged by the listener.
+
+### macOS tray event safety
+
+The desktop installs a guard on Qt Cocoa tray activation callbacks after creating `QApplication` and before showing a tray icon. Non-mouse and missing AppKit events do not reach Qt's `clickCount` access. Ordinary mouse events retain the native activation reason and menu handling. Native implementation pointers are captured before replacement so repeated installation cannot recursively call the guard. The guard affects only Qt's tray delegate within the desktop process; it does not modify AppKit event classes, capture keyboard input, or post system events. If native guard installation is unavailable, the desktop records a diagnostic.
 
 ### Tray Menu: GPU Library Recovery (Windows)
 
@@ -120,7 +234,11 @@ The Inno Setup script also runs a `VerifyCudaInstall` hook after the CUDA downlo
 
 ### DictationHistoryWindow Behaviour
 
-- **Backing store**: File-backed via `DictationHistory` (`src/jarvis/dictation/history.py`); entries are newest-first with `id`, `text`, `timestamp`, `duration`. Disk is the source of truth — the window must not assume its in-memory instance is authoritative.
+- **Backing store**: File-backed via `DictationHistory` (`src/jarvis/dictation/history.py`); entries are newest-first with `id`, `text`, `timestamp`, `duration`. Disk is the source of truth — the window must not assume its in-memory instance is authoritative. Adding or deleting an entry reads the current disk contents before applying that change. Deleting a cached entry preserves external additions and deletions, and returns false if the requested ID is already absent.
+- **Unavailable history**: Mutations require a readable JSON list. Read errors, invalid JSON and an unknown top-level shape raise `HistoryUpdateError` before any replacement, preserving saved bytes and the cached snapshot. A missing file or a valid empty list can accept a new entry. Initial unavailable history is presented as empty without rewriting it; failed refreshes retain the last valid cached view. Failed writes restore the snapshot read for that transaction, without relying on another read after the failure.
+- **Literal dictation text**: Cards display saved text as plain text, including markup and image-like tags. Saved input cannot request rich-text formatting or image resources; copy actions retain the original text.
+- **Record validity**: History reads and publication require object entries with non-empty text IDs and UTF-8 encodable text. Timestamp and duration metadata, when present, are finite numbers rather than booleans; timestamps must be representable by the local datetime renderer. Missing legacy metadata retains the renderer's zero defaults, and extra fields remain literal. Invalid records reject the complete update rather than being filtered, repaired or coerced; cached valid entries and saved bytes remain intact.
+- **Complete saved history**: Writes serialise into a private temporary file beside the history file and publish it with an atomic replacement after closing it. An incomplete write or failed replacement leaves the saved history intact. Temporary files are removed after success or handled write failures. A shared sidecar file lock serialises each complete read-modify-write across desktop and daemon processes. Background writes wait at most two seconds for native ownership before taking the instance lock. Foreground Delete and Clear operations acquire both locks without waiting. Busy foreground actions show the retry message and retain the displayed cards without reading the locked history. Clear confirmation uses the displayed cards, so it does not wait for a background writer. Unavailable or failed mutations raise `HistoryUpdateError`; the window shows a retry message, and the engine does not publish a successful-history callback. The sidecar remains separate from the replaced JSON file.
 - **Hidden windows are inert**: Signals from the dictation engine must not mutate the widget tree while the window is hidden; pending entries are surfaced on next open instead. The engine persists entries regardless, so no data is lost.
 - **On show, reload from disk and rebuild**: The window reads disk state on every show, because the daemon may be in a separate process (subprocess mode) or may have recorded entries while the window was hidden (bundled mode). In-memory state alone is not trusted.
 - **While visible, poll for external writes**: A short interval timer watches the history file's mtime and reloads on change so subprocess-mode dictations appear without requiring a re-open.
@@ -132,12 +250,12 @@ The Inno Setup script also runs a `VerifyCudaInstall` hook after the CUDA downlo
 
 - Real-time log streaming from daemon
 - Monospace font for readability (JetBrains Mono on macOS, Consolas elsewhere)
-- **Report Issue button**: Opens GitHub issue with:
-  - Pre-filled bug report template
-  - Auto-redacted log contents (emails, tokens, JWTs, passwords, etc.)
-  - Logs in collapsible `<details>` section
-  - Version and platform info
-  - Log truncation preserves the init section (everything up to the last `─`×50 separator) + recent tail (most useful for debugging); middle lines are truncated
+- **Report Issue button**: Opens a local composer asking what happened and, optionally, what should have happened. A short summary and reproduction steps live behind an optional extra-details control. The first description line supplies the issue title unless the user supplies a summary. Whitespace-only descriptions keep review disabled.
+- A separate review step presents the description as readable text, without Markdown or configuration jargon. Troubleshooting details start collapsed and can be inspected or excluded together. Back preserves entered details. Copy and browser actions are available only after advancing to review. Nothing is submitted automatically.
+- Known secrets, URL user information credentials and email addresses are scrubbed across all fields, metadata and logs. URL hosts, ports and paths remain available for diagnosis. User text is escaped before rich rendering, so it cannot introduce HTML, images or links. Troubleshooting details can still contain conversation text, which the review explains.
+- Reports include a readable version/channel. Optional troubleshooting details include OS/architecture, a whitelist of configured provider, chat model and Whisper choices, and current download progress. Credentials, endpoint fields and the complete configuration are not included. Configured choices are not presented as observed runtime readiness. Logs retain bounded truncation preserving startup, fatal diagnostics and recent activity.
+- Short reports open a pre-filled GitHub issue. Reports whose encoded browser link exceeds 8,000 characters explicitly offer to copy the prepared report and open GitHub for the user to paste it. Copying and browser transport use the same redacted report content represented by the review and optional troubleshooting panel. A browser failure keeps the composer and its contents open with copy guidance.
+- Both pages have scroll viewports retaining usable field and preview sizes when extra details are revealed; navigation remains outside the scrolling area.
 
 ### Splash Screen
 
@@ -176,7 +294,7 @@ The desktop app runs the Jarvis daemon in a **QThread** (bundled mode) or **subp
 
 All long-lived worker QThreads in the desktop app inherit `KeepAliveWorker`
 (`src/desktop_app/qt_worker.py`): `DaemonThread`, `SetupCheckWorker`,
-`_LLMReachWorker`, `ServerCheckWorker` (app.py) and every setup-wizard
+`_LLMReachWorker`, `ServerCheckWorker` (app.py), `DownloadWorker` and every setup-wizard
 worker. The class keeps each started worker referenced in a class-level
 registry until its OS thread has fully finished (released via the built-in
 `finished` signal). Dropping the last Python reference to a winding-down
@@ -191,6 +309,21 @@ completion signals use other names (`check_done`, `completed`, `done`).
 `Qt.QueuedConnection`: the signal is emitted from the worker's OS thread,
 and the slot mutates Qt UI state (menu actions, tray icon, face state), so
 it must run on the main thread.
+
+### Daemon ownership and shutdown
+
+Starting is blocked while an owned thread or subprocess is alive, or while
+Stop is processing Qt events. The core daemon also holds a per-user OS lock
+across initialisation and cleanup (see `src/jarvis/daemon_lock.spec.md`).
+
+A bundled shutdown that exhausts its wait retains the worker handle and
+blocks replacement until that worker finishes. Its completion callback is
+queued on the GUI thread and identifies the originating worker. A delayed
+callback cannot reset a replacement daemon's UI or drop its handle. Stop
+uses its captured worker reference while processing events; completion can
+safely retire the tray's reference. Re-entrant Stop requests return without
+starting another shutdown. The status timer also retires finished workers,
+including those whose shutdown timed out.
 
 ### Daemon Callbacks
 
@@ -217,6 +350,20 @@ In subprocess mode, the daemon runs as a separate process. IPC is achieved via s
 - Chat IPC lines are marshalled onto the Qt main thread via `ChatIpcSignals`, then `_on_chat_ipc_line()` forwards them to `ChatWindow.process_ipc_line()`
 - When the daemon starts, stops, or a subprocess exits unexpectedly, the tray updates any open ChatWindow lifecycle banner and clears or refreshes its subprocess stdin submit function so the window never writes to a dead pipe.
 - Same UI experience as bundled mode
+
+Voice pause uses the core `set_voice_listening_paused` API in bundled mode.
+Subprocess mode sends `__VOICE_PAUSE__:` JSON with a Boolean `paused` and unique
+`request_id`; the daemon returns `__VOICE_STATUS__:` status data carrying the
+same identity, availability and applied user-pause state. These protocol lines
+are hidden from the activity log and marshalled onto the Qt main thread.
+The tray changes its paused/resumed status only after a matching valid
+acknowledgement. Pending requests disable the action. After ten seconds without
+confirmation, or a broken pipe/unavailable capture, it reports an unknown voice
+state and permits a fresh pause attempt. Late identities and events from another
+daemon process cannot affect the current runtime. Shutdown disables the action;
+a replacement daemon begins with unpaused capture. Pause is runtime state and is
+not saved to configuration. The hardware capture stream remains warm while
+assistant input is discarded; this control does not claim to release the device.
 
 ### Task Centre
 
@@ -264,6 +411,22 @@ Updates are only available in bundled mode (PyInstaller builds).
 | **Windows** | Creates a batch script that waits for the current process (by PID via `tasklist`) to exit, then runs the Inno Setup installer with `/SILENT` so the installer's own progress window provides visual feedback during install, then relaunches the upgraded exe. Rollback is handled by Inno Setup's own in-session rollback + retained uninstaller data. |
 | **Linux** | Creates a shell script that waits for the current process (by PID via `kill -0`) to exit, moves the old directory to `Jarvis.backup` for rollback, moves the new directory in, and relaunches |
 
+Linux tar extraction explicitly uses the standard library's `data` filter,
+confining entries and link targets to staging and refusing special files.
+The payload root must be a real `Jarvis` directory. Rejected or failed staging
+is removed without launching the installation script; contained library links
+and executable permissions remain usable.
+
+Update download cancellation (Cancel, window close or Escape) leaves the GUI
+responsive while the current network operation finishes. The dialog shows
+cancellation progress and closes after its worker has finished; only then is
+its staging directory removed. Cancelled downloads ignore queued progress,
+errors, completion and deferred installation callbacks. HTTP responses are
+closed on success, failure and cancellation. After successful installer
+handoff, the downloaded archive is removed while the installer retains its
+separate extracted staging. The restart completes; window close and Escape
+cannot cancel it.
+
 ### Update Flow (Windows/Linux)
 
 ```mermaid
@@ -302,7 +465,11 @@ A Flask-based web interface for browsing conversation history:
 - Runs on `localhost:5050`
 - **Bundled mode**: Flask runs in a daemon thread
 - **Development mode**: Flask runs as subprocess
-- Opens in embedded QWebEngineView or system browser (macOS fallback)
+- Opens in embedded QWebEngineView or the system browser (macOS bundle, unavailable or failed WebEngine). Browser mode opens directly without showing or focusing a native placeholder window.
+- Browser and server opening failures display actionable feedback; closing an embedded viewer keeps the server available until app quit.
+- Viewer typography uses system fonts. Styling and static resources are local or inline, with no third-party font or stylesheet requests when opening the viewer.
+- Meal descriptions display as literal text, including markup-like content. Saved descriptions cannot introduce HTML elements, resource requests or event handlers.
+- Maintenance progress rows display streamed dates, node names and error details as literal text. Each row is appended without reparsing existing rows as HTML, and the log follows its latest entry.
 
 ## Error Handling
 
@@ -320,8 +487,9 @@ stack faulthandler cannot capture — it only dumps Python frames, which for
 the abort family (#584/#575/#576) shows nothing but the main thread parked
 in `app.exec()`. On macOS the OS still writes a full report with native
 frames to `~/Library/Logs/DiagnosticReports/Jarvis-*.ips`. On the next
-launch, `collect_macos_crash_report()` finds the newest report newer than
-the previous crash log and appends its exception type, termination
+launch, `collect_macos_crash_report()` finds the newest readable report with
+a valid thread payload newer than the previous crash log, skipping incomplete
+or unusable files, and appends its exception type, termination
 indicator and the crashed thread's top native frames to the crash-dialog
 content and the report-issue body, so these aborts become diagnosable.
 
@@ -351,3 +519,21 @@ content and the report-issue body, so these aborts become diagnosable.
 | Database | `~/.local/share/jarvis/` | `%LOCALAPPDATA%\jarvis\` | `~/.local/share/jarvis/` |
 | Crash logs | `~/Library/Logs/Jarvis/` | `%LOCALAPPDATA%\Jarvis\` | `~/.jarvis/` |
 | Instance lock | `~/Library/Application Support/Jarvis/` | `%LOCALAPPDATA%\Jarvis\` | `~/.jarvis/` |
+
+## Speech packaging
+
+- Desktop builds include faster-whisper's local speech detector assets. The installed engine's Turbo capability remains available in the frozen executable.
+- The speech runtime uses faster-whisper 1.2.1 with PyAV 11 or 12. Recognition and speech detection run locally.
+
+- macOS arm64 desktop builds include the MLX Whisper backend, its tokeniser/audio assets, native MLX libraries and `mlx/lib/mlx.metallib`. SciPy remains available for word alignment.
+- The MLX namespace is collected explicitly rather than recursively, and the optional PyTorch Whisper implementation is excluded from collection. Numba uses the PyInstaller dependency hook.
+- A missing Metal shader library stops the arm64 build. Intel Mac, Windows and Linux builds do not collect the Apple backend.
+
+
+## Memory Viewer Database Ownership
+
+The diary-to-graph import stream owns its temporary diary connection. It closes
+that connection after a complete or empty import, an early read or graph failure,
+and when the client closes the stream before completion. The shared graph store
+retains its separate viewer lifetime. Per-summary failures remain isolated so
+the stream can continue processing later entries.

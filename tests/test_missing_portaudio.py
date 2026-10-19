@@ -18,6 +18,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
 
 SCENARIO = r"""
@@ -98,3 +100,81 @@ def test_listener_imports_without_portaudio():
         attr="sd",
     )
     _assert_ok(result)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize('error', [
+    'ImportError("fixture native binary blocked")',
+    'OSError("fixture shared library unavailable")',
+    'ValueError("fixture optional module metadata unavailable")',
+])
+@pytest.mark.parametrize('dependency', ['faster_whisper', 'sounddevice', 'webrtcvad', 'numpy'])
+def test_text_submission_survives_unavailable_speech_backend(error, dependency):
+    """An unavailable audio dependency cannot prevent a typed reply."""
+    extra = r'''
+import threading
+from unittest.mock import patch
+from jarvis.memory.conversation import DialogueMemory
+
+m._global_cfg = object()
+m._global_db = object()
+m._global_dialogue_memory = DialogueMemory(inactivity_timeout=300, max_interactions=20)
+completed = threading.Event()
+replies = []
+def complete(reply):
+    replies.append(reply)
+    completed.set()
+def text_engine(*, text, tts, **kwargs):
+    assert tts is None
+    return "Typed reply: " + text
+with patch('jarvis.reply.engine.run_reply_engine', text_engine):
+    m.submit_text_query('hello Jarvis', on_complete=complete)
+    assert completed.wait(5), 'Typed query never completed'
+assert replies == ['Typed reply: hello Jarvis'], replies
+'''
+    result = _run('jarvis.daemon', dep=dependency, error=error,
+                  attr='_global_db', extra=extra)
+    _assert_ok(result)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize('error', [
+    'ImportError("fixture VAD native binary blocked")',
+    'OSError("fixture VAD shared library unavailable")',
+    'RuntimeError("fixture VAD initialisation unavailable")',
+])
+def test_listener_uses_energy_detection_when_optional_vad_cannot_import(error):
+    """Unavailable optional VAD preserves capture and rejects silent frames."""
+    extra = r'''
+from collections import deque
+from types import SimpleNamespace
+import numpy as np
+
+listener = m.VoiceListener.__new__(m.VoiceListener)
+listener.cfg = SimpleNamespace(voice_min_energy=0.02)
+listener._recent_audio_energy = deque(maxlen=20)
+listener._vad = None
+assert not listener._is_speech_frame(np.zeros(320, dtype=np.float32)), 'Silence accepted as speech'
+assert not listener._is_speech_frame(np.ones(320, dtype=np.float32) * listener.cfg.voice_min_energy / 2), 'Below-threshold noise accepted'
+assert listener._is_speech_frame(np.ones(320, dtype=np.float32) * listener.cfg.voice_min_energy * 2), 'Audible frame rejected'
+assert m.sd is not None, 'Optional VAD failure disabled microphone capture'
+'''
+    result = _run('jarvis.listening.listener', dep='webrtcvad', error=error,
+                  attr='webrtcvad', extra=extra)
+    _assert_ok(result)
+    assert 'PortAudio' not in result.stdout
+
+
+@pytest.mark.unit
+def test_listener_without_numpy_reports_unavailable_processing():
+    """Capture cannot run without its required array-processing dependency."""
+    extra = r'''
+listener = m.VoiceListener.__new__(m.VoiceListener)
+listener._run()
+'''
+    result = _run('jarvis.listening.listener', dep='numpy',
+                  error='ImportError("fixture array processing unavailable")',
+                  attr='np', extra=extra)
+    _assert_ok(result)
+    assert 'audio processing' in result.stdout.lower()
+    assert 'PortAudio' not in result.stdout

@@ -22,9 +22,15 @@ record concurrency and calling thread, then drive the real engine code.
 
 import threading
 import time
+from types import SimpleNamespace
+from unittest.mock import Mock
+
+import pytest
 
 import jarvis.dictation.dictation_engine as de
 from jarvis.utils.audio_lock import portaudio_lock
+
+pytestmark = pytest.mark.unit
 
 
 class _ConcurrencyProbe:
@@ -35,12 +41,15 @@ class _ConcurrencyProbe:
         self.active = 0
         self.max_active = 0
         self.calls = []
+        self.open_entered = threading.Event()
 
     def enter(self, name):
         with self._lock:
             self.active += 1
             self.max_active = max(self.max_active, self.active)
             self.calls.append((name, threading.get_ident()))
+        if name == "open":
+            self.open_entered.set()
         time.sleep(0.02)  # widen the overlap window
 
     def exit(self):
@@ -52,7 +61,7 @@ class _FakeStream:
     def __init__(self, probe, gate=None, **kwargs):
         probe.enter("open")
         if gate is not None:
-            gate.wait(timeout=5)  # let tests pin the open/stop interleaving
+            assert gate.wait(timeout=5), "Test did not release stream opening"
         self._probe = probe
         self.closed = False
         probe.exit()
@@ -80,15 +89,26 @@ class _FakeSounddevice:
         return _FakeStream(self._probe, gate=self._open_gate, **kwargs)
 
     def query_devices(self, *args, **kwargs):
-        return {"default_samplerate": 16000}
+        return {"index": 0, "name": "Synthetic microphone",
+                "max_input_channels": 1, "default_samplerate": 16000}
 
 
-def _drain_worker_threads(baseline):
-    """Join threads spawned during a test so a late worker can't run against
-    the next test's monkeypatched fake sounddevice."""
-    for t in threading.enumerate():
-        if t not in baseline and t is not threading.current_thread():
-            t.join(timeout=5)
+@pytest.fixture(autouse=True)
+def isolated_dictation(monkeypatch):
+    workers = []
+
+    def worker(*args, **kwargs):
+        thread = threading.Thread(*args, **kwargs)
+        workers.append(thread)
+        return thread
+
+    monkeypatch.setattr(de, "threading", SimpleNamespace(Lock=threading.Lock, RLock=threading.RLock, Thread=worker))
+    monkeypatch.setattr(de, "parse_hotkey", lambda hotkey: (frozenset(), None))
+    monkeypatch.setattr(de, "_play_beep", lambda *args: None)
+    yield
+    for thread in workers:
+        thread.join(timeout=5)
+        assert not thread.is_alive(), "Dictation worker did not finish"
 
 
 def _make_engine(monkeypatch, probe, open_gate=None):
@@ -98,13 +118,13 @@ def _make_engine(monkeypatch, probe, open_gate=None):
         whisper_model_ref=lambda: object(),
         whisper_backend_ref=lambda: "faster-whisper",
         mlx_repo_ref=lambda: None,
+        history=Mock(),
     )
     return engine
 
 
 def test_hotkey_press_does_not_open_stream_on_calling_thread(monkeypatch):
     """The (pynput) calling thread must return without touching PortAudio."""
-    baseline = set(threading.enumerate())
     probe = _ConcurrencyProbe()
     engine = _make_engine(monkeypatch, probe)
 
@@ -129,19 +149,20 @@ def test_hotkey_press_does_not_open_stream_on_calling_thread(monkeypatch):
         "stream lifecycle ran on the hotkey callback thread"
     )
     engine._stop_recording(discard=True)
-    _drain_worker_threads(baseline)
 
 
 def test_stop_before_stream_opens_still_closes_stream(monkeypatch):
     """Press/release faster than the stream opens: no leaked live stream."""
-    baseline = set(threading.enumerate())
     probe = _ConcurrencyProbe()
     open_gate = threading.Event()
     engine = _make_engine(monkeypatch, probe, open_gate=open_gate)
 
     engine._start_recording()
-    engine._stop_recording(discard=True)  # guaranteed before the open finishes
-    open_gate.set()  # now let the worker's stream open complete
+    try:
+        assert probe.open_entered.wait(5), "Worker never reached stream opening"
+        engine._stop_recording(discard=True)
+    finally:
+        open_gate.set()
 
     # Whatever the interleaving, the engine must settle on: not recording,
     # no stored stream, and any opened stream closed.
@@ -158,7 +179,6 @@ def test_stop_before_stream_opens_still_closes_stream(monkeypatch):
     opened = [c for c in probe.calls if c[0] == "open"]
     closed = [c for c in probe.calls if c[0] == "close"]
     assert not opened or closed, "stream opened after stop was never closed"
-    _drain_worker_threads(baseline)
 
 
 def test_stale_worker_from_superseded_press_never_stores_its_stream(monkeypatch):
@@ -167,7 +187,6 @@ def test_stale_worker_from_superseded_press_never_stores_its_stream(monkeypatch)
     The first (stale) worker must not attach its stream to the second
     session — that would leak a live microphone capture (#462 family).
     """
-    baseline = set(threading.enumerate())
     probe = _ConcurrencyProbe()
     open_gate = threading.Event()
     engine = _make_engine(monkeypatch, probe, open_gate=open_gate)
@@ -201,39 +220,44 @@ def test_stale_worker_from_superseded_press_never_stores_its_stream(monkeypatch)
     assert len(closed) >= 1, "stale worker's stream was never closed"
 
     engine._stop_recording(discard=True)
-    _drain_worker_threads(baseline)
 
 
 def test_lifecycle_calls_are_serialised_with_portaudio_lock(monkeypatch):
     """No lifecycle call may overlap another thread holding portaudio_lock."""
-    baseline = set(threading.enumerate())
     probe = _ConcurrencyProbe()
     engine = _make_engine(monkeypatch, probe)
 
-    stop = threading.Event()
+    competitor_entered = threading.Event()
+    release_competitor = threading.Event()
 
     def competitor():
-        # Simulates any other subsystem (listener, TTS, tune player) doing
-        # guarded lifecycle work in a tight loop.
-        while not stop.is_set():
-            with portaudio_lock:
-                probe.enter("competitor-lifecycle")
+        with portaudio_lock:
+            probe.enter("competitor-lifecycle")
+            competitor_entered.set()
+            try:
+                assert release_competitor.wait(5), "Test did not release competitor"
+            finally:
                 probe.exit()
 
-    t = threading.Thread(target=competitor, daemon=True)
-    t.start()
+    thread = threading.Thread(target=competitor)
+    thread.start()
     try:
-        for _ in range(5):
-            engine._start_recording()
-            deadline = time.time() + 5
-            while time.time() < deadline and engine._stream is None:
-                time.sleep(0.005)
-            engine._stop_recording(discard=True)
+        assert competitor_entered.wait(5)
+        engine._start_recording()
+        assert not probe.open_entered.wait(0.1), "Stream opened while another lifecycle held the lock"
+        release_competitor.set()
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and engine._stream is None:
+            time.sleep(0.005)
+        assert engine._stream is not None, "Dictation stream never opened"
+        engine._stop_recording(discard=True)
     finally:
-        stop.set()
-        t.join(timeout=5)
+        release_competitor.set()
+        thread.join(timeout=5)
+        engine._stop_recording(discard=True)
 
+    assert any(name == "open" for name, _ in probe.calls)
+    assert any(name == "close" for name, _ in probe.calls)
     assert probe.max_active == 1, (
         f"PortAudio lifecycle calls overlapped (max concurrency {probe.max_active})"
     )
-    _drain_worker_threads(baseline)

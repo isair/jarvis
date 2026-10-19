@@ -11,7 +11,7 @@ on:
     # the release would otherwise never be published automatically.
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref_name }}
+  group: ${{ github.workflow }}-${{ github.ref_name }}-${{ github.ref_name == 'develop' && github.run_id || 'stable' }}
   cancel-in-progress: true
 
 jobs:
@@ -44,16 +44,24 @@ jobs:
             @semantic-release/github@9 \
             conventional-changelog-conventionalcommits@7
 
+      - name: 🧪 Verify staged release publication
+        run: node tests/release_publication.mjs "$(npm root -g)/@semantic-release/github"
+
       - name: 🏷️ Semantic Release
         id: semantic
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          npx semantic-release --debug > release_output.log 2>&1 || true
+          release_status=0
+          npx semantic-release --debug > release_output.log 2>&1 || release_status=$?
+          cat release_output.log
+          if [ "$release_status" -ne 0 ]; then
+            exit "$release_status"
+          fi
 
           if grep -q "Published release" release_output.log; then
             echo "new_release_published=true" >> $GITHUB_OUTPUT
-            VERSION=$(grep "Published release" release_output.log | sed -n 's/.*Published release \([0-9]\+\.[0-9]\+\.[0-9]\+\).*/\1/p')
+            VERSION=$(grep "Published release" release_output.log | sed -nE 's/.*Published release ([0-9]+\.[0-9]+\.[0-9]+).*/\1/p')
             echo "new_release_version=$VERSION" >> $GITHUB_OUTPUT
             echo "new_release_git_tag=v$VERSION" >> $GITHUB_OUTPUT
             echo "✅ Released version $VERSION"
@@ -62,11 +70,31 @@ jobs:
             echo "ℹ️ No release created (no releasable changes found)"
           fi
 
-          cat release_output.log
-
-  # ── Build desktop apps (develop only; main builds stable-stamped below) ─
-  build-desktop:
+  desktop-changes:
     if: github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      required: ${{ steps.changes.outputs.required }}
+    steps:
+      - name: 📥 Checkout complete history
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: 🔎 Check installer changes
+        id: changes
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+        run: python3 scripts/desktop_release_changes.py
+
+  # Only qualifying builds share cancellation; test-only runs cannot interrupt them.
+  build-desktop:
+    needs: [desktop-changes]
+    if: github.ref == 'refs/heads/develop' && needs.desktop-changes.outputs.required == 'true'
+    concurrency:
+      group: ${{ github.workflow }}-develop-build
+      cancel-in-progress: true
     uses: ./.github/workflows/build-desktop.yml
     with:
       version: dev-${{ github.sha }}
@@ -175,7 +203,7 @@ jobs:
   release-develop:
     needs: [build-desktop]
     runs-on: ubuntu-latest
-    if: always() && github.ref == 'refs/heads/develop'
+    if: always() && github.ref == 'refs/heads/develop' && needs.build-desktop.result == 'success'
 
     permissions:
       contents: write

@@ -55,6 +55,8 @@ from .mcp_client import MCPClient
 _DEFAULT_INVOKE_TIMEOUT_SEC = 120.0
 _SETUP_TIMEOUT_SEC = 30.0
 _SHUTDOWN_THREAD_JOIN_SEC = 5.0
+_SHUTDOWN_GRACE_SEC = 0.25
+_SHUTDOWN_CLEANUP_SEC = 2.0
 
 def _resolve_invoke_timeout(server_cfg: Dict[str, Any]) -> float:
     """Return the invoke timeout for ``server_cfg``: its ``timeout_sec``
@@ -140,10 +142,17 @@ class _PersistentMCPRuntime:
                 self._loop.run_forever()
             finally:
                 try:
-                    # Cancel any leftover tasks before closing.
+                    # Give cancellation a running loop in which to release resources.
                     pending = asyncio.all_tasks(self._loop)
                     for task in pending:
-                        task.cancel()
+                        if not task.cancelling():
+                            task.cancel()
+                    if pending:
+                        _, remaining = self._loop.run_until_complete(
+                            asyncio.wait(pending, timeout=_SHUTDOWN_CLEANUP_SEC)
+                        )
+                        if remaining:
+                            debug_log('MCP runtime cleanup exceeded its deadline', 'mcp')
                 except Exception as e:  # noqa: BLE001
                     debug_log(f"MCP runtime task cleanup error: {e}", "mcp")
                 try:
@@ -522,35 +531,33 @@ class _ServerWorker:
             raise
 
     def shutdown(self) -> None:
-        """Best-effort graceful stop, falling back to task cancellation."""
-        was_alive = self.alive
+        """Let the session exit, cancelling wedged work within a bounded wait."""
         self.alive = False
-        if not was_alive:
-            return
-        # Try the polite path first: enqueue a sentinel so the worker
-        # exits its loop after the current call (if any).
-        if self._queue is not None:
-            try:
-                asyncio.run_coroutine_threadsafe(
-                    self._queue.put(None), self._loop
-                ).result(timeout=2)
-            except Exception as e:  # noqa: BLE001
-                debug_log(
-                    f"MCP worker '{self._server_name}' sentinel enqueue error: {e}",
-                    "mcp",
-                )
-        # If the worker is wedged inside ``call_tool`` it will not see
-        # the sentinel. Cancel the task so the loop can stop and the
-        # subprocess exits.
         task = self._task
-        if task is not None and not task.done():
-            try:
-                self._loop.call_soon_threadsafe(task.cancel)
-            except Exception as e:  # noqa: BLE001
-                debug_log(
-                    f"MCP worker '{self._server_name}' task cancel error: {e}",
-                    "mcp",
-                )
+        if task is None or task.done():
+            return
+
+        async def stop() -> None:
+            if self._queue is not None:
+                self._queue.put_nowait(None)
+            _, pending = await asyncio.wait({task}, timeout=_SHUTDOWN_GRACE_SEC)
+            if pending:
+                if not task.cancelling():
+                    task.cancel()
+                _, pending = await asyncio.wait({task}, timeout=_SHUTDOWN_CLEANUP_SEC)
+                if pending:
+                    debug_log(
+                        f"MCP worker '{self._server_name}' cleanup exceeded its deadline", 'mcp'
+                    )
+
+        try:
+            asyncio.run_coroutine_threadsafe(stop(), self._loop).result(
+                timeout=_SHUTDOWN_GRACE_SEC + _SHUTDOWN_CLEANUP_SEC + 1
+            )
+        except Exception as error:  # noqa: BLE001
+            debug_log(
+                f"MCP worker '{self._server_name}' shutdown error: {type(error).__name__}", 'mcp'
+            )
 
 
 class _IdleTimeout(Exception):

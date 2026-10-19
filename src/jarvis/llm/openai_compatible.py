@@ -27,10 +27,17 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
 import json
+import time
 import requests
 
 from ..debug import debug_log
-from .backend import LLMBackend, ToolsNotSupportedError, strip_nonstandard_message_fields
+from . import http
+from .errors import is_timeout_error
+from .streaming import check_stream_deadline, iter_stream_lines
+from .backend import (
+    LLMBackend, ToolsNotSupportedError, response_is_incomplete,
+    strip_nonstandard_message_fields,
+)
 
 
 @dataclass
@@ -54,11 +61,7 @@ def _normalise_response(data: Dict[str, Any]) -> Dict[str, Any]:
     If the server already returns Ollama's shape (some hybrid servers
     expose both endpoints), the response is passed through unchanged.
 
-    Scope: this helper is OpenAI-shape-specific. Other providers
-    (Anthropic, etc.) need their own normaliser inside their own
-    backend module — Anthropic's content-block + ``tool_use`` shape
-    diverges enough that sharing one normaliser would be more
-    confusing than useful. Keep one normaliser per backend.
+    Response normalisation stays inside the provider backend.
     """
     if "message" in data and isinstance(data["message"], dict):
         return data
@@ -85,8 +88,8 @@ def _normalise_response(data: Dict[str, Any]) -> Dict[str, Any]:
                             try:
                                 decoded_func["arguments"] = json.loads(args)
                             except (json.JSONDecodeError, ValueError):
-                                # Leave as-is; the engine's content-mode
-                                # parser may still recover something.
+                                # Retain malformed data for the reply
+                                # engine to reject without execution.
                                 pass
                         decoded_tc["function"] = decoded_func
                     decoded_calls.append(decoded_tc)
@@ -147,7 +150,7 @@ class OpenAICompatibleBackend(LLMBackend):
             payload["max_tokens"] = max_tokens
 
         try:
-            with requests.post(
+            with http.post(
                 f"{self._base_url}/chat/completions",
                 json=payload,
                 headers=self._headers(),
@@ -158,6 +161,9 @@ class OpenAICompatibleBackend(LLMBackend):
 
             normalised = _normalise_response(data) if isinstance(data, dict) else None
             if normalised:
+                if response_is_incomplete(normalised):
+                    debug_log("OpenAICompatibleBackend.direct: incomplete generation", "llm")
+                    return None
                 msg = normalised.get("message")
                 if isinstance(msg, dict):
                     content = msg.get("content")
@@ -197,8 +203,9 @@ class OpenAICompatibleBackend(LLMBackend):
             "stream": True,
         }
 
+        deadline = time.monotonic() + timeout_sec
         try:
-            with requests.post(
+            with http.post(
                 f"{self._base_url}/chat/completions",
                 json=payload,
                 headers=self._headers(),
@@ -208,7 +215,7 @@ class OpenAICompatibleBackend(LLMBackend):
                 resp.raise_for_status()
 
                 full_response: List[str] = []
-                for raw in resp.iter_lines():
+                for raw in iter_stream_lines(resp, deadline):
                     if not raw:
                         continue
                     line = raw.decode("utf-8", errors="ignore") if isinstance(raw, bytes) else raw
@@ -234,9 +241,11 @@ class OpenAICompatibleBackend(LLMBackend):
                         if on_token:
                             on_token(content)
 
+                check_stream_deadline(deadline)
                 result = "".join(full_response)
                 return result if result.strip() else None
         except requests.exceptions.Timeout:
+            debug_log(f"openai_compatible streaming: timeout after {timeout_sec}s", "llm")
             return None
         except Exception:
             return None
@@ -245,27 +254,38 @@ class OpenAICompatibleBackend(LLMBackend):
     def _encode_tool_call_arguments(
         messages: List[Dict[str, Any]],
     ) -> List[Dict[str, Any]]:
-        """JSON-encode ``tool_calls[*].function.arguments`` in assistant messages.
+        """Return copied messages with tool-call arguments encoded for the wire.
 
-        The OpenAI API spec requires ``arguments`` to be a JSON string, but
-        ``normalise_openai_response`` decodes it to a dict for internal use.
-        When that assistant message is sent back to the server on the next
-        turn, we must re-encode it.
+        The provider requires ``arguments`` to be a JSON string. Response
+        normalisation decodes JSON values for the reply engine, so outbound
+        history re-encodes every non-string value. Invalid object shapes
+        retain their values in failed-call history rather than breaking the
+        provider's wire format. Caller-owned messages and decoded responses
+        retain their original tool-call values, including when a request fails.
         """
+        encoded_messages = []
         for msg in messages:
+            encoded_msg = dict(msg)
+            encoded_messages.append(encoded_msg)
             if msg.get("role") != "assistant":
                 continue
             tc_list = msg.get("tool_calls")
             if not isinstance(tc_list, list):
                 continue
+            encoded_calls = []
             for tc in tc_list:
                 func = tc.get("function")
+                encoded_call = dict(tc)
+                encoded_calls.append(encoded_call)
                 if not isinstance(func, dict):
                     continue
-                args = func.get("arguments")
-                if isinstance(args, dict):
-                    func["arguments"] = json.dumps(args)
-        return messages
+                encoded_func = dict(func)
+                args = func.get("arguments", {})
+                if not isinstance(args, str):
+                    encoded_func["arguments"] = json.dumps(args)
+                encoded_call["function"] = encoded_func
+            encoded_msg["tool_calls"] = encoded_calls
+        return encoded_messages
 
     def chat(
         self,
@@ -305,7 +325,7 @@ class OpenAICompatibleBackend(LLMBackend):
             payload["tools"] = tools
 
         try:
-            with requests.post(
+            with http.post(
                 f"{self._base_url}/chat/completions",
                 json=payload,
                 headers=self._headers(),
@@ -316,9 +336,13 @@ class OpenAICompatibleBackend(LLMBackend):
             if isinstance(data, dict):
                 return _normalise_response(data)
         except requests.exceptions.Timeout:
-            print("  ⏱️ LLM request timed out", flush=True)
+            print(f"  ⏱️ LLM request timed out (configured timeout: {timeout_sec:g}s)", flush=True)
             return None
-        except requests.exceptions.ConnectionError:
+        except requests.exceptions.ConnectionError as exc:
+            if is_timeout_error(exc):
+                debug_log("chat response read timed out (wrapped transport timeout)", "llm")
+                print(f"  ⏱️ LLM request timed out (configured timeout: {timeout_sec:g}s)", flush=True)
+                return None
             # ConnectionError messages embed the configured URL via the
             # underlying urllib3 exception, which can leak account-bearing
             # query strings to stdout. Print only the failure mode and
@@ -354,40 +378,40 @@ class OpenAICompatibleBackend(LLMBackend):
         timeout_sec: float = 15.0,
     ) -> Optional[List[float]]:
         try:
-            resp = requests.post(
+            with http.post(
                 f"{self._base_url}/embeddings",
                 json={"model": model, "input": text},
                 headers=self._headers(),
                 timeout=timeout_sec,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            arr = data.get("data") if isinstance(data, dict) else None
-            if isinstance(arr, list) and arr and isinstance(arr[0], dict):
-                vec = arr[0].get("embedding")
-                if isinstance(vec, list):
-                    return [float(x) for x in vec]
+            ) as resp:
+                resp.raise_for_status()
+                data = resp.json()
+                arr = data.get("data") if isinstance(data, dict) else None
+                if isinstance(arr, list) and arr and isinstance(arr[0], dict):
+                    vec = arr[0].get("embedding")
+                    if isinstance(vec, list):
+                        return [float(x) for x in vec]
         except Exception:
             return None
         return None
 
     def list_models(self, timeout_sec: float = 5.0) -> List[str]:
         try:
-            resp = requests.get(
+            with http.get(
                 f"{self._base_url}/models",
                 headers=self._headers(),
                 timeout=timeout_sec,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            arr = data.get("data", []) if isinstance(data, dict) else []
-            names: List[str] = []
-            for m in arr:
-                if isinstance(m, dict):
-                    name = m.get("id")
-                    if isinstance(name, str) and name:
-                        names.append(name)
-            return names
+            ) as resp:
+                resp.raise_for_status()
+                data = resp.json()
+                arr = data.get("data", []) if isinstance(data, dict) else []
+                names: List[str] = []
+                for m in arr:
+                    if isinstance(m, dict):
+                        name = m.get("id")
+                        if isinstance(name, str) and name:
+                            names.append(name)
+                return names
         except Exception:
             return []
 
@@ -435,7 +459,7 @@ class OpenAICompatibleBackend(LLMBackend):
             "stream": False,
         }
         try:
-            with requests.post(
+            with http.post(
                 f"{self._base_url}/chat/completions",
                 json=payload,
                 headers=self._headers(),

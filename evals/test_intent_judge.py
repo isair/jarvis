@@ -1,16 +1,16 @@
 """
 Evals for the Intent Judge LLM.
 
-Deduplicated suite: 22 cases covering all behaviour axes from the original 59.
-See PR description / commit message for the dedup rationale.
+Single-utterance and transcript-context cases cover engagement, echo,
+interruption and directedness classification through the selected evaluation backend.
 """
 
 import pytest
 from unittest.mock import patch, MagicMock
 from dataclasses import dataclass
-from typing import Optional, List, Union
+from typing import Optional, List
 
-from helpers import JUDGE_MODEL, JUDGE_BASE_URL, is_judge_llm_available
+from evals.helpers import is_judge_llm_available, voice_config
 
 
 # =============================================================================
@@ -26,14 +26,12 @@ class IntentJudgeTestCase:
     in_hot_window: bool
     wake_timestamp: Optional[float]
     expected_directed: bool
-    expected_query_contains: Optional[Union[str, List[str]]]
-    expected_query_not_contains: Optional[Union[str, List[str]]] = None
     expected_stop: bool = False
 
 
 # Single-segment cases - one per distinct behaviour axis.
 INTENT_JUDGE_TEST_CASES = [
-    # Wake word + simple question (canonical directed+extract)
+    # Wake word with a simple question
     IntentJudgeTestCase(
         name="wake_word_simple_question",
         transcript="Jarvis what time is it",
@@ -41,8 +39,6 @@ INTENT_JUDGE_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1000.5,
         expected_directed=True,
-        expected_query_contains="time",
-        expected_query_not_contains="jarvis",
     ),
     # Wake word at sentence end, adjacent to a named entity. Regression guard:
     # the judge previously left "Jarvis" in the query, causing the reply engine
@@ -54,8 +50,6 @@ INTENT_JUDGE_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1001.5,
         expected_directed=True,
-        expected_query_contains="possessor",
-        expected_query_not_contains="jarvis",
     ),
     # Wake word mid-sentence (not at start, not at end). Ensures the judge
     # removes every occurrence, not just the leading one.
@@ -66,8 +60,6 @@ INTENT_JUDGE_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1000.3,
         expected_directed=True,
-        expected_query_contains="weather",
-        expected_query_not_contains="jarvis",
     ),
     # Wake word + command/imperative addressed to the assistant (not a question)
     IntentJudgeTestCase(
@@ -77,8 +69,6 @@ INTENT_JUDGE_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1000.5,
         expected_directed=True,
-        expected_query_contains="timer",
-        expected_query_not_contains="jarvis",
     ),
     # Wake word + statement/command to remember something
     IntentJudgeTestCase(
@@ -88,7 +78,6 @@ INTENT_JUDGE_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1000.5,
         expected_directed=True,
-        expected_query_contains="mum",
     ),
     # Wake word + casual share-of-information statement (no explicit command
     # or question). Regression guard: the judge previously rejected these as
@@ -102,8 +91,6 @@ INTENT_JUDGE_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1000.5,
         expected_directed=True,
-        expected_query_contains="burger",
-        expected_query_not_contains="jarvis",
     ),
     IntentJudgeTestCase(
         name="wake_word_share_statement_feeling",
@@ -112,8 +99,6 @@ INTENT_JUDGE_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1000.5,
         expected_directed=True,
-        expected_query_contains="tired",
-        expected_query_not_contains="jarvis",
     ),
     # Wake word at the END of a declarative statement. Position of the wake
     # word must not affect directedness — this pattern must also be directed.
@@ -124,8 +109,6 @@ INTENT_JUDGE_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1001.5,
         expected_directed=True,
-        expected_query_contains="flight",
-        expected_query_not_contains="jarvis",
     ),
     # Wake word at the END of a declarative statement that contains a
     # capitalised brand/product name immediately before "Jarvis". Regression:
@@ -139,8 +122,6 @@ INTENT_JUDGE_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1001.5,
         expected_directed=True,
-        expected_query_contains="big Mac",
-        expected_query_not_contains="jarvis",
     ),
     # Self-contained imperative with an intentionally open subject ("something",
     # "anything", "a joke") — these are valid queries and must not be treated
@@ -155,8 +136,6 @@ INTENT_JUDGE_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1000.5,
         expected_directed=True,
-        expected_query_contains="say something",
-        expected_query_not_contains="jarvis",
     ),
     IntentJudgeTestCase(
         name="wake_word_open_imperative_tell_me_a_joke",
@@ -165,8 +144,6 @@ INTENT_JUDGE_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1000.5,
         expected_directed=True,
-        expected_query_contains="joke",
-        expected_query_not_contains="jarvis",
     ),
     IntentJudgeTestCase(
         name="wake_word_open_imperative_tell_me_anything",
@@ -175,8 +152,6 @@ INTENT_JUDGE_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1000.5,
         expected_directed=True,
-        expected_query_contains="anything",
-        expected_query_not_contains="jarvis",
     ),
     IntentJudgeTestCase(
         name="wake_word_open_imperative_give_me_advice",
@@ -185,8 +160,6 @@ INTENT_JUDGE_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1000.5,
         expected_directed=True,
-        expected_query_contains="advice",
-        expected_query_not_contains="jarvis",
     ),
     IntentJudgeTestCase(
         name="wake_word_open_imperative_surprise_me",
@@ -195,8 +168,6 @@ INTENT_JUDGE_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1000.5,
         expected_directed=True,
-        expected_query_contains="surprise",
-        expected_query_not_contains="jarvis",
     ),
     # Same-segment context synthesis (distinct from simple wake+Q)
     IntentJudgeTestCase(
@@ -206,7 +177,6 @@ INTENT_JUDGE_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1000.8,
         expected_directed=True,
-        expected_query_contains="weather",
     ),
     # Echo + user follow-up in hot window
     IntentJudgeTestCase(
@@ -216,7 +186,6 @@ INTENT_JUDGE_TEST_CASES = [
         in_hot_window=True,
         wake_timestamp=None,
         expected_directed=True,
-        expected_query_contains="more",
     ),
     # Stop command during TTS
     IntentJudgeTestCase(
@@ -226,7 +195,6 @@ INTENT_JUDGE_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=None,
         expected_directed=True,
-        expected_query_contains=None,
         expected_stop=True,
     ),
     # No wake word, not hot window -> not directed
@@ -237,7 +205,6 @@ INTENT_JUDGE_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=None,
         expected_directed=False,
-        expected_query_contains=None,
     ),
     # Wake word only mentioned in narrative -> not directed
     IntentJudgeTestCase(
@@ -247,7 +214,6 @@ INTENT_JUDGE_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1000.8,
         expected_directed=False,
-        expected_query_contains=None,
     ),
     # Hot window simple follow-up
     IntentJudgeTestCase(
@@ -257,7 +223,6 @@ INTENT_JUDGE_TEST_CASES = [
         in_hot_window=True,
         wake_timestamp=None,
         expected_directed=True,
-        expected_query_contains="next week",
     ),
 ]
 
@@ -271,8 +236,6 @@ class MultiSegmentTestCase:
     in_hot_window: bool
     wake_timestamp: Optional[float]
     expected_directed: bool
-    expected_query_contains: Optional[Union[str, List[str]]]
-    expected_query_not_contains: Optional[Union[str, List[str]]] = None
     expected_stop: bool = False
     aliases: Optional[List[str]] = None
 
@@ -290,8 +253,6 @@ MULTI_SEGMENT_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1004.5,
         expected_directed=True,
-        expected_query_contains="movies",
-        expected_query_not_contains="weather",
     ),
     # Hot window with echo in buffer + user follow-up
     MultiSegmentTestCase(
@@ -304,8 +265,6 @@ MULTI_SEGMENT_TEST_CASES = [
         in_hot_window=True,
         wake_timestamp=None,
         expected_directed=True,
-        expected_query_contains="weekend",
-        expected_query_not_contains="sunny",
     ),
     # Stop command with TTS echoes in buffer
     MultiSegmentTestCase(
@@ -319,7 +278,6 @@ MULTI_SEGMENT_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1002.0,
         expected_directed=True,
-        expected_query_contains=None,
         expected_stop=True,
     ),
     # No wake word in multi-segment buffer
@@ -332,7 +290,6 @@ MULTI_SEGMENT_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=None,
         expected_directed=False,
-        expected_query_contains=None,
     ),
     # Context synthesis with prior ambient speech that must be filtered
     MultiSegmentTestCase(
@@ -346,8 +303,6 @@ MULTI_SEGMENT_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1004.0,
         expected_directed=True,
-        expected_query_contains="dish",
-        expected_query_not_contains="game",
     ),
     # Multi-person conversation: context synthesis across speakers without explicit pronoun
     MultiSegmentTestCase(
@@ -361,7 +316,6 @@ MULTI_SEGMENT_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1004.0,
         expected_directed=True,
-        expected_query_contains="weather",
     ),
     # Multi-person + vague reference ("that" = iPhone from earlier segment)
     MultiSegmentTestCase(
@@ -375,7 +329,6 @@ MULTI_SEGMENT_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1004.0,
         expected_directed=True,
-        expected_query_contains="iphone",
     ),
     # User statement follow-up in hot window (not an echo of TTS question)
     MultiSegmentTestCase(
@@ -390,8 +343,6 @@ MULTI_SEGMENT_TEST_CASES = [
         in_hot_window=True,
         wake_timestamp=None,
         expected_directed=True,
-        expected_query_contains="absurdism",
-        expected_query_not_contains="what are your thoughts",
     ),
     # Cross-segment vague reference ("that" -> dinosaurs)
     MultiSegmentTestCase(
@@ -404,7 +355,6 @@ MULTI_SEGMENT_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1002.5,
         expected_directed=True,
-        expected_query_contains="dinosaur",
     ),
     # Imperative resolution: "answer that" -> re-issue prior question
     MultiSegmentTestCase(
@@ -417,8 +367,6 @@ MULTI_SEGMENT_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1002.5,
         expected_directed=True,
-        expected_query_contains="weather",
-        expected_query_not_contains="answer that",
     ),
     # Imperative resolution with unrelated noise between Q and imperative
     MultiSegmentTestCase(
@@ -432,8 +380,6 @@ MULTI_SEGMENT_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1004.5,
         expected_directed=True,
-        expected_query_contains="everest",
-        expected_query_not_contains="answer that",
     ),
     # Whisper tense variant of imperative ("answered that")
     MultiSegmentTestCase(
@@ -446,8 +392,6 @@ MULTI_SEGMENT_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1002.5,
         expected_directed=True,
-        expected_query_contains="weather",
-        expected_query_not_contains="answered that",
     ),
     # Multi-word imperative variant
     MultiSegmentTestCase(
@@ -460,8 +404,6 @@ MULTI_SEGMENT_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1002.5,
         expected_directed=True,
-        expected_query_contains="portugal",
-        expected_query_not_contains="go ahead and answer",
     ),
     # Imperative superseded by new explicit question in same segment
     MultiSegmentTestCase(
@@ -474,8 +416,6 @@ MULTI_SEGMENT_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1002.5,
         expected_directed=True,
-        expected_query_contains="time",
-        expected_query_not_contains="weather",
     ),
     # Cross-segment follow-up in hot window (topic extension)
     MultiSegmentTestCase(
@@ -488,7 +428,6 @@ MULTI_SEGMENT_TEST_CASES = [
         in_hot_window=True,
         wake_timestamp=None,
         expected_directed=True,
-        expected_query_contains="germany",
     ),
     # Alias (Whisper mishearing) should be treated as the wake word. Without
     # alias normalisation the small model sees "Jervis" and decides the user
@@ -502,7 +441,6 @@ MULTI_SEGMENT_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1000.8,
         expected_directed=True,
-        expected_query_contains="time",
         aliases=["jervis", "jaivis", "jervis", "javis"],
     ),
     # Alias mid-utterance after narrative context — the model must still
@@ -518,7 +456,6 @@ MULTI_SEGMENT_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1004.0,
         expected_directed=True,
-        expected_query_contains="iphone",
         aliases=["jervis", "jaivis", "jervis", "javis"],
     ),
     # Buried target sentence amid interleaved unrelated chatter (multi-topic
@@ -539,8 +476,6 @@ MULTI_SEGMENT_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1008.5,
         expected_directed=True,
-        expected_query_contains="iphone",
-        expected_query_not_contains="yankees",
     ),
     # Same buried-target disambiguation, but the wake-word question has no
     # explicit pronoun ("what's the price" instead of "how much does it cost").
@@ -563,8 +498,6 @@ MULTI_SEGMENT_TEST_CASES = [
         # Parent-noun rule: resolving to a sub-item ("pro model") must also
         # include the parent noun/brand ("iPhone") — "pro model" alone is
         # not self-contained.
-        expected_query_contains=["iphone", "pro"],
-        expected_query_not_contains="ball game",
     ),
     # Vague reference "they" — the AirPods are the only plural antecedent
     # that can be cost-queried, so "how much do they cost" must resolve to
@@ -580,7 +513,6 @@ MULTI_SEGMENT_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1006.5,
         expected_directed=True,
-        expected_query_contains="airpods",
     ),
     # Hot-window override: a topic-less follow-up ("tell me more") in hot
     # window must stay directed=true even though a topic-rich earlier buffer
@@ -597,7 +529,6 @@ MULTI_SEGMENT_TEST_CASES = [
         in_hot_window=True,
         wake_timestamp=None,
         expected_directed=True,
-        expected_query_contains=None,
     ),
     # Wake word mid-utterance after narrative buffer, addressing the assistant.
     # Real-world case: user was discussing Mata Hari in the background, then
@@ -617,7 +548,6 @@ MULTI_SEGMENT_TEST_CASES = [
         in_hot_window=False,
         wake_timestamp=1004.5,
         expected_directed=True,
-        expected_query_contains="mata hari",
     ),
 ]
 
@@ -631,13 +561,6 @@ KNOWN_FAILING_CASES: set = set()
 # Helper Functions
 # =============================================================================
 
-def _as_substring_list(value):
-    """Normalise an expected_query_contains / _not_contains value to a list."""
-    if value is None:
-        return []
-    if isinstance(value, str):
-        return [value]
-    return list(value)
 
 
 def create_transcript_segment(
@@ -662,9 +585,11 @@ def run_intent_judge(case: IntentJudgeTestCase):
     """Run the intent judge on a test case."""
     from jarvis.listening.intent_judge import IntentJudge, IntentJudgeConfig
 
+    cfg = voice_config()
     judge = IntentJudge(IntentJudgeConfig(
         assistant_name="Jarvis",
-        model="gemma4:e2b",
+        cfg=cfg,
+        model=cfg.fast_model,
         timeout_sec=10.0,
     ))
 
@@ -687,10 +612,12 @@ def run_intent_judge_multi_segment(case: "MultiSegmentTestCase"):
     """Run the intent judge on a multi-segment test case."""
     from jarvis.listening.intent_judge import IntentJudge, IntentJudgeConfig
 
+    cfg = voice_config()
     judge = IntentJudge(IntentJudgeConfig(
         assistant_name="Jarvis",
         aliases=list(case.aliases or []),
-        model="gemma4:e2b",
+        model=cfg.fast_model,
+        cfg=cfg,
         timeout_sec=10.0,
     ))
 
@@ -723,39 +650,78 @@ def run_intent_judge_multi_segment(case: "MultiSegmentTestCase"):
 
 
 def is_intent_judge_available() -> bool:
-    """Check if the intent judge model is available."""
-    import requests
-    try:
-        resp = requests.get("http://127.0.0.1:11434/api/tags", timeout=2)
-        if resp.status_code != 200:
-            return False
-        data = resp.json()
-        models = [m.get("name", "") for m in data.get("models", [])]
-        return any("gemma4" in m for m in models)
-    except Exception:
-        return False
-
-
-def _skip_if_not_intent_judge_phase():
-    """Intent judge tests are fixed to gemma4:e2b and would run twice under the
-    multi-model eval matrix. Skip during the large-model phase to keep runtime
-    down; they still run once during the small-model (gemma4) phase."""
-    if "gemma4" not in JUDGE_MODEL:
-        pytest.skip(f"Intent judge tests only run in the gemma4 phase (current: {JUDGE_MODEL})")
+    """Check the selected evaluation model through its configured transport."""
+    return is_judge_llm_available()
 
 
 # =============================================================================
 # Tests
 # =============================================================================
 
+# Addressing another person about the assistant is a mention, including aliases.
+MENTION_ADDRESS_CASES = [
+    ("partner_alias", "I'm talking to Jairus not you.", False, ["jairus"]),
+    ("partner_primary", "I'm talking to Jarvis, not you.", False, []),
+    ("partner_question", "Did you think I was talking to you? I'm talking to Jarvis, not you.", False, []),
+    ("partner_turkish", "Jarvis'le konuşuyorum, seninle değil.", False, []),
+    ("partner_spanish", "Estoy hablando con Jarvis, no contigo.", False, []),
+    ("direct_statement", "Jarvis, I'm feeling tired today.", True, []),
+    ("direct_alias", "Jairus, what time is it?", True, ["jairus"]),
+    ("direct_about_assistant", "Jarvis, tell me about yourself.", True, []),
+    ("direct_hearing", "Jarvis, can you hear me?", True, []),
+]
+
+
+class TestMentionVersusAddress:
+    @pytest.mark.parametrize('name,text,directed,aliases', MENTION_ADDRESS_CASES,
+                             ids=[case[0] for case in MENTION_ADDRESS_CASES])
+    def test_mention_versus_address(self, name, text, directed, aliases):
+        if not is_intent_judge_available():
+            pytest.skip("🎤 Selected voice evaluation model is unavailable")
+        case = MultiSegmentTestCase(name=name, segments=[(text, False)], last_tts_text='',
+            in_hot_window=False, wake_timestamp=1000.5, expected_directed=directed,
+            aliases=aliases)
+        result = run_intent_judge_multi_segment(case)
+        assert result is not None, 'Intent judge did not return a usable decision'
+        assert result.directed is directed, result
+        assert result.stop is False, result
+        assert not hasattr(result, 'query'), 'Intent classification cannot rewrite speech'
+
+
+class TestHotWindowAddressee:
+    @pytest.mark.parametrize('text,directed', [
+        ("I'm talking to Jarvis, not you.", False),
+        ("Sarah, can you pass me your phone?", False),
+        ("Estoy hablando con mi pareja, no contigo, Jarvis.", False),
+        ("Jarvis, seninle değil eşimle konuşuyorum.", False),
+        ("And tomorrow?", True),
+        ("Don't you already know where I live?", True),
+        ("I think absurdism is better.", True),
+        ("Thanks.", True),
+        ("You are currently in T-Ballista Georgia and what do you think about Joseph Stalin and communism in general?", True),
+    ])
+    def test_current_addressee_in_hot_window(self, text, directed):
+        if not is_intent_judge_available():
+            pytest.skip('🎤 Selected voice evaluation model is unavailable')
+        case = MultiSegmentTestCase(name='hot_window_addressee', segments=[(text, False)],
+            last_tts_text='Tomorrow in London is forecast to be cloudy.',
+            in_hot_window=True, wake_timestamp=None, expected_directed=directed)
+        result = run_intent_judge_multi_segment(case)
+        assert result is not None, 'Intent judge did not return a usable decision'
+        assert result.directed is directed, result
+        assert result.stop is False, result
+
+        if not directed:
+            assert result.confidence == 'high', 'A clear other-person verdict must prevent fallback admission'
+
+
 class TestIntentJudgeAccuracy:
     """Evals for intent judge accuracy."""
 
     @pytest.mark.parametrize("case", INTENT_JUDGE_TEST_CASES, ids=lambda c: c.name)
     def test_intent_judge_case(self, case: IntentJudgeTestCase):
-        _skip_if_not_intent_judge_phase()
         if not is_intent_judge_available():
-            pytest.skip("Intent judge model (gemma4) not available")
+            pytest.skip("🎤 Selected voice evaluation model is unavailable")
 
         if case.name in KNOWN_FAILING_CASES:
             pytest.xfail(f"Known issue: {case.name} needs prompt improvement")
@@ -771,7 +737,7 @@ class TestIntentJudgeAccuracy:
         print(f"TTS: {case.last_tts_text[:50]}..." if case.last_tts_text else "TTS: None")
         print(f"Mode: {'hot_window' if case.in_hot_window else 'wake_word'}")
         print(f"{'='*60}")
-        print(f"Result: directed={result.directed}, query='{result.query}', stop={result.stop}")
+        print(f"Result: directed={result.directed}, stop={result.stop}")
         print(f"Confidence: {result.confidence}")
         print(f"Reasoning: {result.reasoning}")
         print(f"{'='*60}")
@@ -784,17 +750,6 @@ class TestIntentJudgeAccuracy:
             f"Expected stop={case.expected_stop}, got {result.stop}. "
             f"Reasoning: {result.reasoning}"
         )
-        for needle in _as_substring_list(case.expected_query_contains):
-            assert needle.lower() in (result.query or "").lower(), (
-                f"Expected query to contain '{needle}', "
-                f"got '{result.query}'. Reasoning: {result.reasoning}"
-            )
-        if result.query:
-            for needle in _as_substring_list(case.expected_query_not_contains):
-                assert needle.lower() not in result.query.lower(), (
-                    f"Expected query to NOT contain '{needle}', "
-                    f"got '{result.query}'. Reasoning: {result.reasoning}"
-                )
 
 
 class TestIntentJudgePromptQuality:
@@ -833,14 +788,23 @@ class TestIntentJudgePromptQuality:
 
         assert "nice and sunny" in prompt
 
-    def test_system_prompt_has_echo_guidance(self):
+    @pytest.mark.parametrize('hot', [False, True])
+    def test_echo_reference_and_current_speech_are_distinct(self, hot):
+        import json
         from jarvis.listening.intent_judge import IntentJudge
-
         judge = IntentJudge()
-        prompt = judge._build_system_prompt()
-
-        assert "echo" in prompt.lower()
-        assert "(during TTS)" in prompt
+        spoken, current = 'The weather is sunny.', 'What about tomorrow?'
+        echo = create_transcript_segment(spoken)
+        echo.is_during_tts = True
+        user = create_transcript_segment(current)
+        prompt = judge._build_user_prompt([echo, user], None, spoken, 999.0,
+                                          hot, current)
+        data = json.loads(prompt.split('<<<BEGIN SPEECH>>>\n')[1].split('\n<<<END SPEECH>>>')[0])
+        assert data['current_utterance'] == current
+        assert data['last_TTS_output'] == spoken
+        assert [(item['text'], item['during_tts']) for item in data['transcript']] == [
+            (spoken, True), (current, False),
+        ]
 
 
 class TestIntentJudgeFallback:
@@ -849,10 +813,10 @@ class TestIntentJudgeFallback:
     def test_returns_none_when_ollama_unavailable(self):
         from jarvis.listening.intent_judge import IntentJudge, IntentJudgeConfig
 
-        judge = IntentJudge(IntentJudgeConfig(
-            ollama_base_url="http://127.0.0.1:99999",
-            timeout_sec=1.0,
-        ))
+        cfg = voice_config()
+        cfg.llm_provider = "ollama"
+        cfg.ollama_base_url = "http://127.0.0.1:1"
+        judge = IntentJudge(IntentJudgeConfig(cfg=cfg, timeout_sec=1.0))
 
         segments = [create_transcript_segment("test")]
         result = judge.judge(segments)
@@ -865,9 +829,8 @@ class TestIntentJudgeMultiSegment:
 
     @pytest.mark.parametrize("case", MULTI_SEGMENT_TEST_CASES, ids=lambda c: c.name)
     def test_multi_segment_case(self, case: MultiSegmentTestCase):
-        _skip_if_not_intent_judge_phase()
         if not is_intent_judge_available():
-            pytest.skip("Intent judge model (gemma4) not available")
+            pytest.skip("🎤 Selected voice evaluation model is unavailable")
 
         if case.name in KNOWN_FAILING_CASES:
             pytest.xfail(f"Known issue: {case.name} needs prompt improvement")
@@ -886,7 +849,7 @@ class TestIntentJudgeMultiSegment:
         print(f"TTS: {case.last_tts_text[:50]}..." if case.last_tts_text else "TTS: None")
         print(f"Mode: {'hot_window' if case.in_hot_window else 'wake_word'}")
         print(f"{'='*60}")
-        print(f"Result: directed={result.directed}, query='{result.query}', stop={result.stop}")
+        print(f"Result: directed={result.directed}, stop={result.stop}")
         print(f"Confidence: {result.confidence}")
         print(f"Reasoning: {result.reasoning}")
         print(f"{'='*60}")
@@ -899,32 +862,20 @@ class TestIntentJudgeMultiSegment:
             f"Expected stop={case.expected_stop}, got {result.stop}. "
             f"Reasoning: {result.reasoning}"
         )
-        for needle in _as_substring_list(case.expected_query_contains):
-            assert needle.lower() in (result.query or "").lower(), (
-                f"Expected query to contain '{needle}', "
-                f"got '{result.query}'. Reasoning: {result.reasoning}"
-            )
-        if result.query:
-            for needle in _as_substring_list(case.expected_query_not_contains):
-                assert needle.lower() not in result.query.lower(), (
-                    f"Expected query to NOT contain '{needle}', "
-                    f"got '{result.query}'. Reasoning: {result.reasoning}"
-                )
 
 
 class TestProcessedSegmentFiltering:
     """Tests for processed segment filtering in intent judge."""
 
     def test_processed_segment_not_reextracted(self):
-        _skip_if_not_intent_judge_phase()
         if not is_intent_judge_available():
-            pytest.skip("Intent judge model (gemma4) not available")
+            pytest.skip("🎤 Selected voice evaluation model is unavailable")
 
         from jarvis.listening.intent_judge import IntentJudge, IntentJudgeConfig
 
+        cfg = voice_config()
         judge = IntentJudge(IntentJudgeConfig(
-            assistant_name="Jarvis",
-            model="gemma4:e2b",
+            assistant_name="Jarvis", cfg=cfg, model=cfg.fast_model,
             timeout_sec=10.0,
         ))
 
@@ -952,11 +903,6 @@ class TestProcessedSegmentFiltering:
 
         assert result is not None
         assert result.directed is True
-        assert "random" in result.query.lower() or "topic" in result.query.lower(), (
-            f"Expected query about 'random topic', got '{result.query}'."
-        )
-        assert "weather" not in result.query.lower(), (
-            f"Query contains 'weather' from processed segment: '{result.query}'"
-        )
+        assert not hasattr(result, "query")
 
-        print(f"\n✅ Correctly extracted new query: '{result.query}'")
+        print("✅ Current speech classified without synthesising a query")

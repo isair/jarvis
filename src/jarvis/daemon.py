@@ -37,7 +37,6 @@ if sys.platform == 'win32' and not getattr(sys, 'frozen', False):
         pass
 
 from typing import Optional
-from faster_whisper import WhisperModel
 
 from .config import load_settings
 from .memory.db import Database
@@ -47,6 +46,19 @@ from .tools.registry import initialize_mcp_tools
 from .debug import debug_log
 from .listening.listener import VoiceListener
 from .utils.location import get_location_context, is_location_available
+
+
+def _start_tts_engine(tts) -> None:
+    """Start local speech output and report its runtime availability."""
+    if not tts.enabled:
+        print("  🔇 TTS disabled", flush=True)
+        return
+    tts.start()
+    if tts.enabled:
+        print("✅ TTS engine started", flush=True)
+    else:
+        print("  ⚠️ Speech output unavailable. Check the voice model settings and restart Jarvis.", flush=True)
+
 
 # Global instances for coordination between modules
 _global_dialogue_memory: Optional[DialogueMemory] = None
@@ -59,6 +71,7 @@ _global_task_manager = None
 # submission path so voice and text are one conversation against one store.
 _global_cfg = None
 _global_db = None
+_global_voice_listener = None
 
 # Shutdown timeout for diary update (shorter than normal to allow reasonable quit time)
 # Desktop app's stop_daemon() should wait at least this long + buffer
@@ -101,7 +114,40 @@ CHAT_CANCEL_IPC_PREFIX = "__CHAT_CANCEL__"
 CHAT_NEW_SESSION_IPC_PREFIX = "__CHAT_NEW_SESSION__"
 CHAT_REWIND_IPC_PREFIX = "__CHAT_REWIND__:"
 CHAT_RESTORE_IPC_PREFIX = "__CHAT_RESTORE__:"
+VOICE_PAUSE_IPC_PREFIX = "__VOICE_PAUSE__:"
+VOICE_STATUS_IPC_PREFIX = "__VOICE_STATUS__:"
 
+
+def set_voice_listening_paused(paused: bool) -> Optional[bool]:
+    """Apply a user capture pause, returning None when no live voice path exists."""
+    if not isinstance(paused, bool):
+        raise ValueError("Voice pause requires a Boolean")
+    voice = _global_voice_listener
+    if voice is None or _global_stop_requested or not voice.is_alive() or voice._should_stop:
+        return None
+    voice.set_capture_paused('user', paused)
+    return voice.is_capture_paused('user')
+
+
+def handle_voice_pause_stdin_line(line: str) -> bool:
+    """Apply a validated capture request and acknowledge its applied state."""
+    if not line.startswith(VOICE_PAUSE_IPC_PREFIX):
+        return False
+    import json
+    try:
+        payload = json.loads(line[len(VOICE_PAUSE_IPC_PREFIX):])
+        if not isinstance(payload, dict) or not isinstance(payload.get('paused'), bool):
+            raise ValueError("Invalid voice pause state")
+        request_id = payload.get('request_id')
+        if not isinstance(request_id, str) or not request_id or len(request_id) > 128:
+            raise ValueError("Invalid voice pause identity")
+        paused = set_voice_listening_paused(payload['paused'])
+        _emit_ipc_event(VOICE_STATUS_IPC_PREFIX, 'status', {
+            'request_id': request_id, 'available': paused is not None, 'paused': paused,
+        }, 'voice_control')
+    except Exception as exc:
+        debug_log(f"voice pause request rejected ({type(exc).__name__})", 'voice')
+    return True
 
 def request_stop() -> None:
     """Request the daemon to stop gracefully."""
@@ -411,8 +457,9 @@ def submit_text_query(
             # Done inside the worker's try/except so a redaction failure fails
             # open (complete(None)) and the shared lock is released in finally
             # rather than leaking and blocking every future submission.
-            from .utils.redact import redact
+            from .utils.redact import redact, scrub_secrets
             display_query = redact(text)
+            print(f'⌨️ Typed: "{display_query}"', flush=True)
             _notify_chat("start", display_query, callbacks=callbacks, use_ipc=use_ipc)
             from .reply.engine import run_reply_engine
             reply = run_reply_engine(
@@ -427,6 +474,11 @@ def submit_text_query(
             if cancel_event.is_set():
                 debug_log("chat query cancelled, dropping reply", "chat")
                 reply = None
+            if reply:
+                logged_reply = "\n".join(
+                    "  " + line for line in scrub_secrets(reply).splitlines()
+                )
+                print(f"\n🤖 Jarvis\n{logged_reply}\n", flush=True)
             _notify_chat("complete", reply, callbacks=callbacks, use_ipc=use_ipc)
         except Exception as exc:
             debug_log(f"chat query worker error: {exc}", "chat")
@@ -779,19 +831,51 @@ def _check_and_update_diary(
 def main(smoke_test: bool = False) -> None:
     """Main daemon entry point.
 
+    The per-user OS lock covers initialisation, the event loop and cleanup.
+    Contenders return before any runtime globals or stop flags are changed.
+
     Args:
         smoke_test: If True, initialise all components, print a success
             marker, and return without entering the main event loop.
             Used by CI smoke tests to verify the build is not broken.
     """
+    global _global_voice_listener
+    from .daemon_lock import acquire_daemon_lock, lock_holder_pid, release_daemon_lock
+
+    lock = acquire_daemon_lock()
+    if lock is None:
+        pid = lock_holder_pid()
+        print(
+            f"⚠️ Another Jarvis daemon is already running{f' (pid {pid})' if pid else ''}. "
+            "Stop it before starting Jarvis again.",
+            flush=True,
+        )
+        debug_log("daemon start refused: another daemon holds the lock", "jarvis")
+        if smoke_test:
+            raise RuntimeError("Another Jarvis daemon is already running; smoke initialisation was not performed")
+        return
+    try:
+        _run_daemon(smoke_test)
+    finally:
+        _global_voice_listener = None
+        release_daemon_lock(lock)
+
+
+def _run_daemon(smoke_test: bool = False) -> None:
+    """Initialise and run the daemon while holding its single-instance lock."""
     global _global_dialogue_memory, _global_stop_requested, _global_tts_engine, _global_dictation_engine
     global _global_task_manager
     global _warm_profile_graph_listener
+    global _global_voice_listener
 
-    # Reset stop flag at start (in case of restart)
+    # The lock prevents contenders from resetting a stopping runtime.
     _global_stop_requested = False
 
     _install_signal_handlers()
+
+    from . import get_version
+    version, release_channel = get_version()
+    print(f"📦 Jarvis {version} ({release_channel})", flush=True)
 
     cfg = load_settings()
     db = Database(cfg.db_path, cfg.sqlite_vss_path)
@@ -900,21 +984,21 @@ def main(smoke_test: bool = False) -> None:
             "memory",
         )
 
-    # Knowledge graph: wipe + re-seed if the on-disk shape predates the
-    # User/Directives/World taxonomy. Non-destructive to the diary —
-    # users can re-import via the memory viewer.
+    # Bootstrap missing graph branches and preserve all saved content.
     try:
         from .memory.graph import GraphMemoryStore
-        _graph_store_boot = GraphMemoryStore(cfg.db_path)
-        if _graph_store_boot.migrate_legacy_shape():
-            print("🧹 Wiped legacy knowledge graph; re-seeded User / Directives / World branches", flush=True)
-            print("   📥 Open the memory viewer and use 'Import from Diary' to repopulate.", flush=True)
-        _graph_store_boot.close()
+        with contextlib.closing(GraphMemoryStore(cfg.db_path)) as graph_store:
+            if graph_store.has_unclassified_root_content():
+                debug_log("knowledge graph contains unclassified root content; preserving saved memory", "memory")
+                print("🧠 Saved memory includes unclassified notes. All saved knowledge is preserved.", flush=True)
+                print("   📂 Review root-level notes in the Memory Viewer.", flush=True)
     except Exception as e:
-        debug_log(f"graph legacy-shape migration failed (non-fatal): {e}", "memory")
+        debug_log(f"graph startup inspection failed (non-fatal): {e}", "memory")
 
     # Check location detection status
-    if cfg.location_enabled:
+    if cfg.location_enabled and not is_location_available():
+        print("⚠️ 📍 Optional location features unavailable. Add a GeoLite2 database in Setup → Location.", flush=True)
+    elif cfg.location_enabled:
         location_context = get_location_context(
             config_ip=cfg.location_ip_address,
             auto_detect=cfg.location_auto_detect,
@@ -956,11 +1040,7 @@ def main(smoke_test: bool = False) -> None:
         piper_sentence_silence=cfg.tts_piper_sentence_silence,
     )
     _global_tts_engine = tts  # Expose for face widget speaking animation
-    if tts.enabled:
-        tts.start()
-        print("✓ TTS engine started", flush=True)
-    else:
-        print("  TTS disabled", flush=True)
+    _start_tts_engine(tts)
 
     from .tasks import TaskManager
     _global_task_manager = TaskManager(
@@ -973,11 +1053,13 @@ def main(smoke_test: bool = False) -> None:
     print("📋 Task service ready", flush=True)
 
     # Initialize voice listening (only if dependencies available)
-    print("🎤 Initializing voice listener (this may take a moment to load Whisper model)...", flush=True)
+    print("🎤 Preparing speech recognition in the background...", flush=True)
     voice_thread: Optional[threading.Thread] = None
-    voice_thread = VoiceListener(db, cfg, tts, _global_dialogue_memory)
+    voice_thread = VoiceListener(
+        db, cfg, tts, _global_dialogue_memory,
+    )
     voice_thread.start()
-    print("✓ Voice listener thread started (loading Whisper model in background)", flush=True)
+    _global_voice_listener = voice_thread
 
     # Initialize dictation engine (hold-to-dictate)
     dictation = None
@@ -986,7 +1068,7 @@ def main(smoke_test: bool = False) -> None:
             from .dictation.dictation_engine import DictationEngine as _DE  # noqa: F811
 
             def _on_dictation_start():
-                voice_thread._dictation_active = True
+                voice_thread.set_capture_paused('dictation', True)
                 try:
                     from desktop_app.face_widget import JarvisState, get_jarvis_state
                     get_jarvis_state().set_state(JarvisState.DICTATING)
@@ -1003,7 +1085,7 @@ def main(smoke_test: bool = False) -> None:
                 debug_log("dictation processing started — transcribing captured audio", "dictation")
 
             def _on_dictation_end():
-                voice_thread._dictation_active = False
+                voice_thread.set_capture_paused('dictation', False)
                 try:
                     from desktop_app.face_widget import JarvisState, get_jarvis_state
                     get_jarvis_state().set_state(JarvisState.IDLE)
@@ -1123,6 +1205,8 @@ def main(smoke_test: bool = False) -> None:
                     continue
                 # Chat query-in (subprocess mode). Returns False for any other
                 # line, which we silently ignore.
+                if handle_voice_pause_stdin_line(stripped):
+                    continue
                 if handle_chat_cancel_stdin_line(stripped):
                     continue
                 if handle_chat_new_session_stdin_line(stripped):

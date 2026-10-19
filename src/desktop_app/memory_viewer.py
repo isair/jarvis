@@ -498,6 +498,7 @@ def graph_import_diary() -> Response:
     from jarvis.llm import resolve_model, Tier
 
     def generate():
+        db = None
         try:
             settings = load_settings()
             db_path = _get_db_path()
@@ -564,11 +565,12 @@ def graph_import_diary() -> Response:
                 "total_facts": total_facts,
             }) + "\n"
 
-            db.close()
-
         except Exception as e:
             debug_log(f"graph import failed: {e}", "memory")
             yield json.dumps({"type": "error", "message": str(e)}) + "\n"
+        finally:
+            if db is not None:
+                db.close()
 
     return Response(
         generate(),
@@ -848,9 +850,6 @@ def index() -> str:
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>🧠 Jarvis Memory</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
         :root {
             /* Deep space theme with amber accents */
@@ -894,7 +893,7 @@ def index() -> str:
         }
 
         body {
-            font-family: 'Outfit', '.AppleSystemUIFont', 'Segoe UI', sans-serif;
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
             background: var(--bg-primary);
             color: var(--text-primary);
             min-height: 100vh;
@@ -1021,7 +1020,7 @@ def index() -> str:
         }
 
         .stat-badge .value {
-            font-family: 'JetBrains Mono', monospace;
+            font-family: ui-monospace, 'SFMono-Regular', Consolas, monospace;
             font-weight: 600;
             color: var(--accent-secondary);
         }
@@ -1117,7 +1116,7 @@ def index() -> str:
             border: 1px solid var(--border-color);
             border-radius: var(--radius-sm);
             color: var(--text-primary);
-            font-family: 'JetBrains Mono', monospace;
+            font-family: ui-monospace, 'SFMono-Regular', Consolas, monospace;
             font-size: 0.85rem;
         }
 
@@ -1162,7 +1161,7 @@ def index() -> str:
         }
 
         .topic-count {
-            font-family: 'JetBrains Mono', monospace;
+            font-family: ui-monospace, 'SFMono-Regular', Consolas, monospace;
             font-size: 0.7rem;
             color: var(--text-muted);
         }
@@ -1217,7 +1216,7 @@ def index() -> str:
             display: flex;
             align-items: center;
             gap: 0.5rem;
-            font-family: 'JetBrains Mono', monospace;
+            font-family: ui-monospace, 'SFMono-Regular', Consolas, monospace;
             font-size: 0.85rem;
             color: var(--accent-secondary);
         }
@@ -1274,7 +1273,7 @@ def index() -> str:
             border-radius: var(--radius-sm);
             font-size: 0.75rem;
             color: var(--text-muted);
-            font-family: 'JetBrains Mono', monospace;
+            font-family: ui-monospace, 'SFMono-Regular', Consolas, monospace;
         }
 
         /* Empty state */
@@ -1407,7 +1406,7 @@ def index() -> str:
         }
 
         .meal-time {
-            font-family: 'JetBrains Mono', monospace;
+            font-family: ui-monospace, 'SFMono-Regular', Consolas, monospace;
             font-size: 0.8rem;
             color: var(--text-muted);
         }
@@ -1425,7 +1424,7 @@ def index() -> str:
         }
 
         .macro-value {
-            font-family: 'JetBrains Mono', monospace;
+            font-family: ui-monospace, 'SFMono-Regular', Consolas, monospace;
             font-weight: 600;
             font-size: 1rem;
             color: var(--accent-secondary);
@@ -1530,7 +1529,7 @@ def index() -> str:
             background: var(--bg-secondary);
             border: 1px solid var(--border-color);
             border-radius: var(--radius-sm);
-            font-family: 'JetBrains Mono', monospace;
+            font-family: ui-monospace, 'SFMono-Regular', Consolas, monospace;
             font-size: 0.8rem;
             color: var(--accent-secondary);
         }
@@ -1644,7 +1643,7 @@ def index() -> str:
         }
 
         .tree-node-count {
-            font-family: 'JetBrains Mono', monospace;
+            font-family: ui-monospace, 'SFMono-Regular', Consolas, monospace;
             font-size: 0.65rem;
             color: var(--text-muted);
             margin-left: auto;
@@ -1785,7 +1784,7 @@ def index() -> str:
         }
 
         .detail-data {
-            font-family: 'JetBrains Mono', monospace;
+            font-family: ui-monospace, 'SFMono-Regular', Consolas, monospace;
             font-size: 0.8rem;
             line-height: 1.7;
             color: var(--text-secondary);
@@ -1819,7 +1818,7 @@ def index() -> str:
         }
 
         .detail-meta-value {
-            font-family: 'JetBrains Mono', monospace;
+            font-family: ui-monospace, 'SFMono-Regular', Consolas, monospace;
             font-size: 0.85rem;
             font-weight: 600;
             color: var(--accent-secondary);
@@ -1911,7 +1910,7 @@ def index() -> str:
         }
 
         textarea.detail-edit-field {
-            font-family: 'JetBrains Mono', monospace;
+            font-family: ui-monospace, 'SFMono-Regular', Consolas, monospace;
             font-size: 0.8rem;
             min-height: 80px;
         }
@@ -2217,6 +2216,13 @@ def index() -> str:
                       .replace(/"/g, '&quot;').replace(/'/g, '&#039;');
         }
 
+        function appendProgressLog(log, text) {
+            const row = document.createElement('div');
+            row.textContent = text;
+            log.appendChild(row);
+            log.scrollTop = log.scrollHeight;
+        }
+
         // API calls
         async function fetchMemories() {
             const params = new URLSearchParams();
@@ -2373,7 +2379,7 @@ def index() -> str:
                 <div class="meal-card" data-id="${meal.id}">
                     <div class="meal-info">
                         <div class="meal-header">
-                            <h3>${meal.description}</h3>
+                            <h3>${escapeHtml(meal.description)}</h3>
                             <button class="action-btn delete meal-delete" title="Delete meal">🗑️</button>
                         </div>
                         <div class="meal-time">${new Date(meal.ts_utc).toLocaleString()}</div>
@@ -2847,7 +2853,7 @@ def index() -> str:
 
                 // Label
                 const fontSize = Math.max(10, 12 / graphZoom);
-                ctx.font = `500 ${fontSize}px Outfit, sans-serif`;
+                ctx.font = `500 ${fontSize}px system-ui, sans-serif`;
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'middle';
                 ctx.fillStyle = isSelected ? '#fef3c7' : '#f4f4f5';
@@ -3221,12 +3227,12 @@ def index() -> str:
                     <div id="import-progress" style="display: none;">
                         <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
                             <span id="import-status" style="color: var(--text-secondary); font-size: 0.85em;">Processing…</span>
-                            <span id="import-count" style="color: var(--accent-primary); font-size: 0.85em; font-family: 'JetBrains Mono', monospace;">0/0</span>
+                            <span id="import-count" style="color: var(--accent-primary); font-size: 0.85em; font-family: ui-monospace, 'SFMono-Regular', Consolas, monospace;">0/0</span>
                         </div>
                         <div style="background: var(--bg-tertiary); border-radius: 6px; height: 8px; overflow: hidden;">
                             <div id="import-bar" style="background: var(--accent-primary); height: 100%; width: 0%; transition: width 0.3s ease; border-radius: 6px;"></div>
                         </div>
-                        <div id="import-log" style="margin-top: 12px; max-height: 200px; overflow-y: auto; font-size: 0.8em; font-family: 'JetBrains Mono', monospace; color: var(--text-muted); line-height: 1.6;"></div>
+                        <div id="import-log" style="margin-top: 12px; max-height: 200px; overflow-y: auto; font-size: 0.8em; font-family: ui-monospace, 'SFMono-Regular', Consolas, monospace; color: var(--text-muted); line-height: 1.6;"></div>
                     </div>
                     <div class="modal-actions" id="import-actions">
                         <button class="modal-btn secondary" id="btn-cancel-import">${cancelLabel}</button>
@@ -3276,8 +3282,7 @@ def index() -> str:
                                     const log = document.getElementById('import-log');
                                     const icon = msg.error ? '❌' : '📅';
                                     const detail = msg.error ? `error: ${msg.error}` : `${msg.facts} fact${msg.facts !== 1 ? 's' : ''}`;
-                                    log.innerHTML += `<div>${icon} ${msg.date} — ${detail}</div>`;
-                                    log.scrollTop = log.scrollHeight;
+                                    appendProgressLog(log, `${icon} ${msg.date}: ${detail}`);
                                 } else if (msg.type === 'complete') {
                                     document.getElementById('import-status').textContent = msg.message;
                                     document.getElementById('import-bar').style.width = '100%';
@@ -3327,12 +3332,12 @@ def index() -> str:
                     <div id="consolidate-progress" style="display: none;">
                         <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
                             <span id="consolidate-status" style="color: var(--text-secondary); font-size: 0.85em;">Processing…</span>
-                            <span id="consolidate-count" style="color: var(--accent-primary); font-size: 0.85em; font-family: 'JetBrains Mono', monospace;">0 nodes</span>
+                            <span id="consolidate-count" style="color: var(--accent-primary); font-size: 0.85em; font-family: ui-monospace, 'SFMono-Regular', Consolas, monospace;">0 nodes</span>
                         </div>
                         <div style="background: var(--bg-tertiary); border-radius: 6px; height: 8px; overflow: hidden;">
                             <div id="consolidate-bar" style="background: var(--accent-primary); height: 100%; width: 0%; transition: width 0.3s ease; border-radius: 6px;"></div>
                         </div>
-                        <div id="consolidate-log" style="margin-top: 12px; max-height: 200px; overflow-y: auto; font-size: 0.8em; font-family: 'JetBrains Mono', monospace; color: var(--text-muted); line-height: 1.6;"></div>
+                        <div id="consolidate-log" style="margin-top: 12px; max-height: 200px; overflow-y: auto; font-size: 0.8em; font-family: ui-monospace, 'SFMono-Regular', Consolas, monospace; color: var(--text-muted); line-height: 1.6;"></div>
                     </div>
                     <div class="modal-actions" id="consolidate-actions">
                         <button class="modal-btn secondary" id="btn-cancel-consolidate">Cancel</button>
@@ -3386,8 +3391,7 @@ def index() -> str:
                                     document.getElementById('consolidate-status').textContent = `Consolidating ${msg.node}…`;
                                     const log = document.getElementById('consolidate-log');
                                     const arrow = msg.delta < 0 ? '⬇️' : (msg.delta > 0 ? '⬆️' : '➖');
-                                    log.innerHTML += `<div>${arrow} ${msg.node} — ${msg.before} → ${msg.after} lines (Δ${msg.delta})</div>`;
-                                    log.scrollTop = log.scrollHeight;
+                                    appendProgressLog(log, `${arrow} ${msg.node}: ${msg.before} → ${msg.after} lines (Δ${msg.delta})`);
                                     // Real progress when the total is known; fall back to indeterminate pulse otherwise.
                                     const pct = totalNodes
                                         ? Math.min(100, Math.round((nodeCount / totalNodes) * 100))
@@ -3456,12 +3460,12 @@ def index() -> str:
                     <div id="scrub-progress" style="display: none;">
                         <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
                             <span id="scrub-status" style="color: var(--text-secondary); font-size: 0.85em;">Processing…</span>
-                            <span id="scrub-count" style="color: var(--accent-primary); font-size: 0.85em; font-family: 'JetBrains Mono', monospace;">0 entries</span>
+                            <span id="scrub-count" style="color: var(--accent-primary); font-size: 0.85em; font-family: ui-monospace, 'SFMono-Regular', Consolas, monospace;">0 entries</span>
                         </div>
                         <div style="background: var(--bg-tertiary); border-radius: 6px; height: 8px; overflow: hidden;">
                             <div id="scrub-bar" style="background: var(--accent-primary); height: 100%; width: 0%; transition: width 0.3s ease; border-radius: 6px;"></div>
                         </div>
-                        <div id="scrub-log" style="margin-top: 12px; max-height: 200px; overflow-y: auto; font-size: 0.8em; font-family: 'JetBrains Mono', monospace; color: var(--text-muted); line-height: 1.6;"></div>
+                        <div id="scrub-log" style="margin-top: 12px; max-height: 200px; overflow-y: auto; font-size: 0.8em; font-family: ui-monospace, 'SFMono-Regular', Consolas, monospace; color: var(--text-muted); line-height: 1.6;"></div>
                     </div>
                     <div class="modal-actions" id="scrub-actions">
                         <button class="modal-btn secondary" id="btn-cancel-scrub">Cancel</button>
@@ -3641,12 +3645,12 @@ def index() -> str:
                     <div id="optimise-progress" style="display: none;">
                         <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
                             <span id="optimise-status" style="color: var(--text-secondary); font-size: 0.85em;">Processing…</span>
-                            <span id="optimise-count" style="color: var(--accent-primary); font-size: 0.85em; font-family: 'JetBrains Mono', monospace;">0 entries</span>
+                            <span id="optimise-count" style="color: var(--accent-primary); font-size: 0.85em; font-family: ui-monospace, 'SFMono-Regular', Consolas, monospace;">0 entries</span>
                         </div>
                         <div style="background: var(--bg-tertiary); border-radius: 6px; height: 8px; overflow: hidden;">
                             <div id="optimise-bar" style="background: var(--accent-primary); height: 100%; width: 0%; transition: width 0.3s ease; border-radius: 6px;"></div>
                         </div>
-                        <div id="optimise-log" style="margin-top: 12px; max-height: 200px; overflow-y: auto; font-size: 0.8em; font-family: 'JetBrains Mono', monospace; color: var(--text-muted); line-height: 1.6;"></div>
+                        <div id="optimise-log" style="margin-top: 12px; max-height: 200px; overflow-y: auto; font-size: 0.8em; font-family: ui-monospace, 'SFMono-Regular', Consolas, monospace; color: var(--text-muted); line-height: 1.6;"></div>
                     </div>
                     <div class="modal-actions" id="optimise-actions">
                         <button class="modal-btn secondary" id="btn-cancel-optimise">Cancel</button>

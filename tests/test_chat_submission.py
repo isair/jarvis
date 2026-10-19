@@ -26,6 +26,11 @@ import pytest
 from jarvis import daemon
 from jarvis.memory.conversation import DialogueMemory
 
+_REDACTABLE_QUERIES = [
+    ('my email is test@example.com', 'test@example.com', '[REDACTED_EMAIL]'),
+    ('check http://alice:short@localhost:8080/v1', 'alice:short', 'http://localhost:8080/v1'),
+]
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -66,18 +71,21 @@ def _wait_for_complete(events, timeout=5.0):
 
 def _wait_for_ipc_complete(capsys, timeout=5.0):
     """Block until a ``__CHAT__:`` ``complete`` event appears on stdout."""
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        out = capsys.readouterr().out
-        chat_lines = [
-            ln for ln in out.splitlines()
-            if ln.startswith(daemon.CHAT_IPC_PREFIX)
-        ]
-        for ln in chat_lines:
+    deadline = time.monotonic() + timeout
+    pending = ""
+    chat_lines = []
+    while time.monotonic() < deadline:
+        pending += capsys.readouterr().out
+        lines = pending.split("\n")
+        pending = lines.pop()
+        for line in lines:
+            if not line.startswith(daemon.CHAT_IPC_PREFIX):
+                continue
             try:
-                payload = json.loads(ln[len(daemon.CHAT_IPC_PREFIX):])
+                payload = json.loads(line[len(daemon.CHAT_IPC_PREFIX):])
             except json.JSONDecodeError:
                 continue
+            chat_lines.append(line)
             if payload.get("type") == "complete":
                 return chat_lines
         time.sleep(0.02)
@@ -128,11 +136,8 @@ class TestSubmitTextQueryContract:
         assert captured["language"] is None
         assert captured["text"] == "hi there"
 
-    def test_engine_called_with_quiet_so_reply_stays_out_of_logs(self, monkeypatch):
-        """Chat queries must run the engine in quiet mode: the engine prints
-        the reply to stdout, which subprocess mode forwards to the desktop
-        app's general log viewer — a surface outside the chat redaction
-        invariant. ``quiet=True`` suppresses that print."""
+    def test_engine_called_quietly_so_worker_owns_reply_logging(self, monkeypatch):
+        """The worker logs the scrubbed delivered reply once, after cancellation."""
         _install_dialogue_memory(cfg=object(), db=object())
         captured = {}
 
@@ -300,24 +305,25 @@ class TestSubmitTextQueryContract:
         _wait_for_complete(events)
         assert events[-1] == ("complete", None)
 
-    def test_start_event_carries_redacted_query(self, monkeypatch):
+    @pytest.mark.parametrize('query,secret,label', _REDACTABLE_QUERIES)
+    def test_start_event_carries_redacted_query(self, monkeypatch, query, secret, label):
         """on_start receives the redacted query, not the raw input. Verifies the
-        privacy boundary with a redactable pattern (email)."""
+        privacy boundary with structurally recognised secrets."""
         _install_dialogue_memory(cfg=object(), db=object())
         monkeypatch.setattr(
             "jarvis.reply.engine.run_reply_engine", lambda *a, **k: "ok"
         )
         events = []
         daemon.submit_text_query(
-            "my email is test@example.com",
+            query,
             on_start=lambda q: events.append(("start", q)),
             on_complete=lambda r: events.append(("complete", r)),
         )
         _wait_for_complete(events)
         start_query = next((e[1] for e in events if e[0] == "start"), None)
         assert start_query is not None
-        assert "test@example.com" not in start_query
-        assert "[REDACTED_EMAIL]" in start_query
+        assert secret not in start_query
+        assert label in start_query
 
     def test_redaction_failure_releases_lock_and_fails_open(self, monkeypatch):
         """If redact() raises on the caller's thread, submit_text_query must
@@ -489,7 +495,8 @@ class TestSubmitTextQueryIPC:
         )
         assert start_payload["data"] == "hello world"
 
-    def test_ipc_start_event_carries_redacted_query(self, monkeypatch, capsys):
+    @pytest.mark.parametrize('query,secret,label', _REDACTABLE_QUERIES)
+    def test_ipc_start_event_carries_redacted_query(self, monkeypatch, capsys, query, secret, label):
         """The start event carries the redacted query (the daemon redacts before
         the worker starts), so a redactable pattern never appears in the IPC
         stream. Verifies the spec's privacy boundary for the subprocess path."""
@@ -497,12 +504,12 @@ class TestSubmitTextQueryIPC:
         monkeypatch.setattr(
             "jarvis.reply.engine.run_reply_engine", lambda *a, **k: "ok"
         )
-        daemon.submit_text_query("my email is test@example.com", use_ipc=True)
+        daemon.submit_text_query(query, use_ipc=True)
         chat_lines = _wait_for_ipc_complete(capsys)
         start_line = next(ln for ln in chat_lines if '"start"' in ln)
         payload = json.loads(start_line[len(daemon.CHAT_IPC_PREFIX):])
-        assert "test@example.com" not in json.dumps(payload["data"])
-        assert "@" not in json.dumps(payload["data"])
+        assert secret not in payload["data"]
+        assert label in payload["data"]
 
 
 @pytest.mark.unit
@@ -757,3 +764,105 @@ class TestChatSessionControlsLockGuard:
         # Once the lock is free the same calls apply.
         assert daemon.rewind_chat_to_user(2) is True
         assert len(dm.all_messages()) == 2
+
+
+@pytest.mark.unit
+@pytest.mark.usefixtures("no_network")
+@pytest.mark.parametrize("background_wait", [False, True])
+@pytest.mark.parametrize('split', ['between-events', 'within-start', 'within-complete', 'empty-poll'])
+def test_ipc_capture_preserves_the_complete_event_sequence(monkeypatch, split, background_wait):
+    """Polling retains earlier events and reconstructs lines split by capture reads."""
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    prefix = daemon.CHAT_IPC_PREFIX
+    start = prefix + json.dumps({'type': 'start', 'data': 'hello'}) + '\n'
+    complete = prefix + json.dumps({'type': 'complete', 'data': 'reply'}) + '\n'
+    if split == 'between-events':
+        chunks = [start, complete]
+    elif split == 'within-start':
+        chunks = [start[:len(prefix) + 5], start[len(prefix) + 5:], complete]
+    elif split == 'within-complete':
+        chunks = [start + complete[:len(prefix) + 5], complete[len(prefix) + 5:]]
+    else:
+        chunks = [start, '', complete]
+    reads = iter(['unrelated log line\n'] + chunks)
+    capture = SimpleNamespace(readouterr=lambda: SimpleNamespace(out=next(reads, '')))
+    waits = []
+    polling_clock = Mock(wraps=time)
+    polling_clock.sleep.side_effect = waits.append
+    monkeypatch.setattr(sys.modules[__name__], 'time', polling_clock)
+
+    lines = _wait_for_ipc_complete(capture, timeout=0.1)
+    payloads = [json.loads(line[len(prefix):]) for line in lines]
+    assert payloads == [
+        {'type': 'start', 'data': 'hello'},
+        {'type': 'complete', 'data': 'reply'},
+    ]
+
+    if background_wait:
+        from concurrent.futures import ThreadPoolExecutor
+        import time as worker_clock
+
+        polling_waits = list(waits)
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            pool.submit(worker_clock.sleep, 0.001).result(timeout=5)
+        assert waits == polling_waits, "IPC polling intercepted an unrelated worker's wait"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("use_ipc", [False, True], ids=["bundled", "subprocess"])
+@pytest.mark.parametrize("outcome", ["reply", "cancelled", "empty"])
+def test_chat_activity_log_records_accepted_exchange(monkeypatch, capsys, use_ipc, outcome):
+    from jarvis.utils.redact import redact, scrub_secrets
+
+    _reset_daemon_globals()
+    _install_dialogue_memory(cfg=object(), db=object())
+    query = "What about alice@example.org?\nAnd London?"
+    reply = "Contact bob@example.org\nThe weather looks pleasant."
+    finished = threading.Event()
+
+    def engine(*args, **kwargs):
+        if outcome == "cancelled":
+            daemon.cancel_active_chat_query()
+        return None if outcome == "empty" else reply
+
+    monkeypatch.setattr("jarvis.reply.engine.run_reply_engine", engine)
+    daemon.submit_text_query(
+        query, use_ipc=use_ipc,
+        on_complete=lambda result: finished.set(),
+    )
+    try:
+        assert finished.wait(5)
+        for worker in threading.enumerate():
+            if worker.name == "jarvis-chat-query":
+                worker.join(timeout=5)
+                assert not worker.is_alive()
+        output = capsys.readouterr().out
+        activity = "\n".join(line for line in output.splitlines()
+                             if not line.startswith(daemon.CHAT_IPC_PREFIX))
+        assert activity.count("⌨️ Typed:") == 1
+        assert redact(query) in activity
+        assert "alice@example.org" not in activity
+        assert "bob@example.org" not in activity
+        if outcome == "reply":
+            assert activity.count("🤖 Jarvis") == 1
+            assert "\n".join("  " + line for line in scrub_secrets(reply).splitlines()) in activity
+        else:
+            assert "🤖 Jarvis" not in activity
+            assert "weather looks pleasant" not in activity
+    finally:
+        _reset_daemon_globals()
+
+
+@pytest.mark.unit
+def test_rejected_chat_submission_does_not_log_an_accepted_query(capsys):
+    _reset_daemon_globals()
+    _install_dialogue_memory(cfg=object(), db=object())
+    daemon._chat_query_lock.acquire()
+    try:
+        daemon.submit_text_query("rejected message")
+        assert "Typed:" not in capsys.readouterr().out
+    finally:
+        daemon._chat_query_lock.release()
+        _reset_daemon_globals()

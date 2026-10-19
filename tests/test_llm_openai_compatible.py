@@ -13,9 +13,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+pytestmark = pytest.mark.unit
+
 
 def _make_response(*, json_data=None, iter_lines=None, status_code=200, raise_http=None):
     resp = MagicMock()
+    resp.__enter__.return_value = resp
     resp.status_code = status_code
     if json_data is not None:
         resp.json.return_value = json_data
@@ -36,7 +39,7 @@ def _make_response(*, json_data=None, iter_lines=None, status_code=200, raise_ht
 
 
 class TestOpenAICompatibleDirect:
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_returns_assistant_text_from_choices(self, mock_post):
         from jarvis.llm import OpenAICompatibleBackend
 
@@ -47,7 +50,7 @@ class TestOpenAICompatibleDirect:
 
         assert backend.direct("any-model", "sys", "user") == "hello"
 
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_posts_to_chat_completions_endpoint(self, mock_post):
         from jarvis.llm import OpenAICompatibleBackend
 
@@ -60,7 +63,7 @@ class TestOpenAICompatibleDirect:
         url = mock_post.call_args[0][0]
         assert url == "http://localhost:1234/v1/chat/completions"
 
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_sends_authorization_header_when_api_key_set(self, mock_post):
         from jarvis.llm import OpenAICompatibleBackend
 
@@ -73,7 +76,7 @@ class TestOpenAICompatibleDirect:
         headers = mock_post.call_args.kwargs.get("headers") or {}
         assert headers.get("Authorization") == "Bearer sk-test"
 
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_omits_authorization_header_when_no_key(self, mock_post):
         from jarvis.llm import OpenAICompatibleBackend
 
@@ -86,7 +89,7 @@ class TestOpenAICompatibleDirect:
         headers = mock_post.call_args.kwargs.get("headers") or {}
         assert "Authorization" not in headers
 
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_temperature_and_model_in_payload(self, mock_post):
         from jarvis.llm import OpenAICompatibleBackend
 
@@ -104,7 +107,7 @@ class TestOpenAICompatibleDirect:
             {"role": "user", "content": "user"},
         ]
 
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_returns_none_on_failure(self, mock_post):
         from jarvis.llm import OpenAICompatibleBackend
 
@@ -113,7 +116,7 @@ class TestOpenAICompatibleDirect:
 
         assert backend.direct("any", "sys", "user") is None
 
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_temperature_omitted_when_none(self, mock_post):
         from jarvis.llm import OpenAICompatibleBackend
 
@@ -134,7 +137,7 @@ class TestOpenAICompatibleDirect:
 
 
 class TestOpenAICompatibleStreaming:
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_invokes_on_token_per_sse_chunk_and_returns_full_text(self, mock_post):
         from jarvis.llm import OpenAICompatibleBackend
 
@@ -154,7 +157,7 @@ class TestOpenAICompatibleStreaming:
         assert seen == ["hel", "lo"]
         assert result == "hello"
 
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_works_without_on_token_callback(self, mock_post):
         from jarvis.llm import OpenAICompatibleBackend
 
@@ -167,7 +170,7 @@ class TestOpenAICompatibleStreaming:
 
         assert backend.streaming("any", "sys", "user") == "x"
 
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_skips_keepalive_and_invalid_lines(self, mock_post):
         from jarvis.llm import OpenAICompatibleBackend
 
@@ -182,7 +185,7 @@ class TestOpenAICompatibleStreaming:
 
         assert backend.streaming("any", "sys", "user") == "ok"
 
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_returns_none_on_timeout(self, mock_post):
         import requests
         from jarvis.llm import OpenAICompatibleBackend
@@ -192,7 +195,7 @@ class TestOpenAICompatibleStreaming:
 
         assert backend.streaming("any", "sys", "user") is None
 
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_returns_none_on_connection_error(self, mock_post):
         import requests
         from jarvis.llm import OpenAICompatibleBackend
@@ -202,7 +205,7 @@ class TestOpenAICompatibleStreaming:
 
         assert backend.streaming("any", "sys", "user") is None
 
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_returns_none_on_http_error(self, mock_post):
         import requests
         from jarvis.llm import OpenAICompatibleBackend
@@ -221,7 +224,7 @@ class TestOpenAICompatibleStreaming:
 
 
 class TestOpenAICompatibleChat:
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_lifts_choices_message_to_top_level(self, mock_post):
         """The reply engine reads ``resp['message']['content']``;
         OpenAI returns ``choices[0].message.content``. The backend must
@@ -237,7 +240,7 @@ class TestOpenAICompatibleChat:
         assert result is not None
         assert result["message"]["content"] == "hello"
 
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_decodes_tool_call_arguments_string_to_dict(self, mock_post):
         """OpenAI returns ``tool_calls[*].function.arguments`` as a JSON
         string; Ollama returns it as a dict, and the reply engine
@@ -272,7 +275,7 @@ class TestOpenAICompatibleChat:
         assert tc["function"]["name"] == "getWeather"
         assert tc["function"]["arguments"] == {"location": "Tbilisi"}
 
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_passes_tools_in_payload(self, mock_post):
         from jarvis.llm import OpenAICompatibleBackend
 
@@ -289,7 +292,7 @@ class TestOpenAICompatibleChat:
         sent = mock_post.call_args.kwargs["json"]
         assert sent["tools"][0]["function"]["name"] == "x"
 
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_raises_tools_not_supported_on_400_with_tools(self, mock_post):
         import requests
         from jarvis.llm import OpenAICompatibleBackend, ToolsNotSupportedError
@@ -306,7 +309,7 @@ class TestOpenAICompatibleChat:
                 tools=[{"type": "function", "function": {"name": "x"}}],
             )
 
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_returns_none_on_400_without_tools(self, mock_post):
         import requests
         from jarvis.llm import OpenAICompatibleBackend
@@ -318,7 +321,7 @@ class TestOpenAICompatibleChat:
 
         assert backend.chat("any", [{"role": "user", "content": "hi"}]) is None
 
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_propagates_connection_error(self, mock_post):
         """``chat`` re-raises ``ConnectionError`` so callers can distinguish
         an unreachable server from a transient HTTP failure."""
@@ -331,7 +334,7 @@ class TestOpenAICompatibleChat:
         with pytest.raises(requests.exceptions.ConnectionError):
             backend.chat("any", [{"role": "user", "content": "hi"}])
 
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_returns_none_on_http_500_even_with_tools(self, mock_post):
         """Only HTTP 400 with tools means "model rejects native tools" —
         500 is a server-side failure that should degrade gracefully."""
@@ -352,7 +355,7 @@ class TestOpenAICompatibleChat:
             is None
         )
 
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_returns_none_on_timeout(self, mock_post):
         import requests
         from jarvis.llm import OpenAICompatibleBackend
@@ -362,7 +365,7 @@ class TestOpenAICompatibleChat:
 
         assert backend.chat("any", [{"role": "user", "content": "hi"}]) is None
 
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_returns_none_on_generic_exception(self, mock_post):
         from jarvis.llm import OpenAICompatibleBackend
 
@@ -389,7 +392,7 @@ class TestOpenAICompatibleErrorMessagesDoNotLeakUrls:
 
     _SECRET_URL = "http://internal-server.example.com:1234/v1"
 
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_http_error_message_does_not_leak_endpoint_url(self, mock_post, capsys):
         import requests
         from jarvis.llm import OpenAICompatibleBackend
@@ -414,7 +417,7 @@ class TestOpenAICompatibleErrorMessagesDoNotLeakUrls:
         # Status code must still be visible so users can diagnose 401 vs 5xx.
         assert "401" in captured.out
 
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_connection_error_message_does_not_leak_endpoint_url(self, mock_post, capsys):
         import requests
         from jarvis.llm import OpenAICompatibleBackend
@@ -438,7 +441,7 @@ class TestOpenAICompatibleErrorMessagesDoNotLeakUrls:
         )
         assert "sk-secret" not in captured.out
 
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_generic_exception_message_does_not_leak_url_or_key(self, mock_post, capsys):
         from jarvis.llm import OpenAICompatibleBackend
 
@@ -453,7 +456,7 @@ class TestOpenAICompatibleErrorMessagesDoNotLeakUrls:
         assert self._SECRET_URL not in captured.out
         assert "sk-secret" not in captured.out
 
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_extra_options_merge_at_payload_root(self, mock_post):
         """OpenAI takes ``temperature`` / ``max_tokens`` at the payload
         root, not under an ``options`` nest like Ollama. The merge must
@@ -485,11 +488,12 @@ class TestOpenAICompatibleErrorMessagesDoNotLeakUrls:
 
 
 class TestOpenAICompatibleEmbed:
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_returns_vector_from_data_array(self, mock_post):
         from jarvis.llm import OpenAICompatibleBackend
 
         resp = MagicMock()
+        resp.__enter__.return_value = resp
         resp.json.return_value = {"data": [{"embedding": [0.1, 0.2, 0.3]}]}
         resp.raise_for_status = MagicMock()
         mock_post.return_value = resp
@@ -497,7 +501,7 @@ class TestOpenAICompatibleEmbed:
 
         assert backend.embed("hello", "text-embedding-3-small") == [0.1, 0.2, 0.3]
 
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_returns_none_on_error(self, mock_post):
         from jarvis.llm import OpenAICompatibleBackend
 
@@ -506,11 +510,12 @@ class TestOpenAICompatibleEmbed:
 
         assert backend.embed("hello", "text-embedding-3-small") is None
 
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_sends_authorization_when_api_key_set(self, mock_post):
         from jarvis.llm import OpenAICompatibleBackend
 
         resp = MagicMock()
+        resp.__enter__.return_value = resp
         resp.json.return_value = {"data": [{"embedding": [0.1]}]}
         resp.raise_for_status = MagicMock()
         mock_post.return_value = resp
@@ -527,11 +532,12 @@ class TestOpenAICompatibleEmbed:
 
 
 class TestOpenAICompatibleListModels:
-    @patch("jarvis.llm.requests.get")
+    @patch("jarvis.llm.http.get")
     def test_returns_model_ids(self, mock_get):
         from jarvis.llm import OpenAICompatibleBackend
 
         resp = MagicMock()
+        resp.__enter__.return_value = resp
         resp.json.return_value = {
             "data": [
                 {"id": "gpt-4o-mini"},
@@ -546,7 +552,7 @@ class TestOpenAICompatibleListModels:
 
         assert names == ["gpt-4o-mini", "lmstudio-community/gemma-3-4b-it-GGUF"]
 
-    @patch("jarvis.llm.requests.get")
+    @patch("jarvis.llm.http.get")
     def test_returns_empty_list_on_failure(self, mock_get):
         from jarvis.llm import OpenAICompatibleBackend
 
@@ -555,11 +561,12 @@ class TestOpenAICompatibleListModels:
 
         assert backend.list_models() == []
 
-    @patch("jarvis.llm.requests.get")
+    @patch("jarvis.llm.http.get")
     def test_returns_empty_list_when_data_field_missing(self, mock_get):
         from jarvis.llm import OpenAICompatibleBackend
 
         resp = MagicMock()
+        resp.__enter__.return_value = resp
         resp.json.return_value = {}
         resp.raise_for_status = MagicMock()
         mock_get.return_value = resp
@@ -582,8 +589,8 @@ class TestOpenAICompatibleWarmUp:
     the listener can warn the user early instead of the first real
     request paying cold-start latency."""
 
-    @patch("jarvis.llm.requests.post")
-    @patch("jarvis.llm.requests.get")
+    @patch("jarvis.llm.http.post")
+    @patch("jarvis.llm.http.get")
     def test_warmup_accepts_keep_alive_kwarg_and_ignores_it(self, mock_get, mock_post):
         """The shared ``warm_up_chat_model`` helper always passes
         ``keep_alive`` (Ollama parity). The OpenAI-compatible backend must
@@ -592,6 +599,7 @@ class TestOpenAICompatibleWarmUp:
         from jarvis.llm import OpenAICompatibleBackend
 
         get_resp = MagicMock()
+        get_resp.__enter__.return_value = get_resp
         get_resp.json.return_value = {"data": [{"id": "gpt-4o-mini"}]}
         get_resp.raise_for_status = MagicMock()
         mock_get.return_value = get_resp
@@ -606,8 +614,8 @@ class TestOpenAICompatibleWarmUp:
         _, kwargs = mock_post.call_args
         assert "keep_alive" not in kwargs["json"]
 
-    @patch("jarvis.llm.requests.post")
-    @patch("jarvis.llm.requests.get")
+    @patch("jarvis.llm.http.post")
+    @patch("jarvis.llm.http.get")
     def test_warm_up_chat_model_helper_works_on_openai_compatible(
         self, mock_get, mock_post
     ):
@@ -618,6 +626,7 @@ class TestOpenAICompatibleWarmUp:
         from jarvis.listening.intent_judge import warm_up_chat_model
 
         get_resp = MagicMock()
+        get_resp.__enter__.return_value = get_resp
         get_resp.json.return_value = {"data": [{"id": "gpt-4o-mini"}]}
         get_resp.raise_for_status = MagicMock()
         mock_get.return_value = get_resp
@@ -637,13 +646,14 @@ class TestOpenAICompatibleWarmUp:
 
     # ── success paths ─────────────────────────────────────────────────
 
-    @patch("jarvis.llm.requests.post")
-    @patch("jarvis.llm.requests.get")
+    @patch("jarvis.llm.http.post")
+    @patch("jarvis.llm.http.get")
     def test_warmup_succeeds_when_both_phases_pass(self, mock_get, mock_post):
         """GET /models succeeds and POST /chat/completions returns 200."""
         from jarvis.llm import OpenAICompatibleBackend
 
         get_resp = MagicMock()
+        get_resp.__enter__.return_value = get_resp
         get_resp.json.return_value = {"data": [{"id": "gpt-4o-mini"}]}
         get_resp.raise_for_status = MagicMock()
         mock_get.return_value = get_resp
@@ -656,13 +666,14 @@ class TestOpenAICompatibleWarmUp:
         assert backend.warm_up("gpt-4o-mini") is True
         mock_post.assert_called_once()
 
-    @patch("jarvis.llm.requests.post")
-    @patch("jarvis.llm.requests.get")
+    @patch("jarvis.llm.http.post")
+    @patch("jarvis.llm.http.get")
     def test_warmup_inference_payload_is_minimal(self, mock_get, mock_post):
         """The inference request uses max_tokens=1 and a short message."""
         from jarvis.llm import OpenAICompatibleBackend
 
         get_resp = MagicMock()
+        get_resp.__enter__.return_value = get_resp
         get_resp.json.return_value = {"data": [{"id": "gpt-4o-mini"}]}
         get_resp.raise_for_status = MagicMock()
         mock_get.return_value = get_resp
@@ -683,8 +694,8 @@ class TestOpenAICompatibleWarmUp:
 
     # ── failure in phase 1 (reachability) ─────────────────────────────
 
-    @patch("jarvis.llm.requests.post")
-    @patch("jarvis.llm.requests.get")
+    @patch("jarvis.llm.http.post")
+    @patch("jarvis.llm.http.get")
     def test_warmup_fails_when_server_unreachable(self, mock_get, mock_post):
         """GET fails — phase 2 (POST) should never be attempted."""
         from jarvis.llm import OpenAICompatibleBackend
@@ -695,8 +706,8 @@ class TestOpenAICompatibleWarmUp:
         assert backend.warm_up("gpt-4o-mini") is False
         mock_post.assert_not_called()
 
-    @patch("jarvis.llm.requests.post")
-    @patch("jarvis.llm.requests.get")
+    @patch("jarvis.llm.http.post")
+    @patch("jarvis.llm.http.get")
     def test_warmup_fails_when_model_list_empty(self, mock_get, mock_post):
         """An empty list means the server is up but no model is loaded —
         the first chat call would fail, so warmup must report ``False``
@@ -704,6 +715,7 @@ class TestOpenAICompatibleWarmUp:
         from jarvis.llm import OpenAICompatibleBackend
 
         resp = MagicMock()
+        resp.__enter__.return_value = resp
         resp.json.return_value = {"data": []}
         resp.raise_for_status = MagicMock()
         mock_get.return_value = resp
@@ -712,13 +724,14 @@ class TestOpenAICompatibleWarmUp:
         assert backend.warm_up("gpt-4o-mini") is False
         mock_post.assert_not_called()
 
-    @patch("jarvis.llm.requests.post")
-    @patch("jarvis.llm.requests.get")
+    @patch("jarvis.llm.http.post")
+    @patch("jarvis.llm.http.get")
     def test_warmup_fails_on_get_http_error(self, mock_get, mock_post):
         """GET /models raises — phase 2 not attempted."""
         from jarvis.llm import OpenAICompatibleBackend
 
         resp = MagicMock()
+        resp.__enter__.return_value = resp
         resp.raise_for_status.side_effect = RuntimeError("500 server error")
         mock_get.return_value = resp
         backend = OpenAICompatibleBackend("http://localhost:1234/v1")
@@ -728,13 +741,14 @@ class TestOpenAICompatibleWarmUp:
 
     # ── failure in phase 2 (inference) ────────────────────────────────
 
-    @patch("jarvis.llm.requests.post")
-    @patch("jarvis.llm.requests.get")
+    @patch("jarvis.llm.http.post")
+    @patch("jarvis.llm.http.get")
     def test_warmup_fails_when_inference_returns_non_200(self, mock_get, mock_post):
         """GET succeeds but POST returns a non-200 status."""
         from jarvis.llm import OpenAICompatibleBackend
 
         get_resp = MagicMock()
+        get_resp.__enter__.return_value = get_resp
         get_resp.json.return_value = {"data": [{"id": "gpt-4o-mini"}]}
         get_resp.raise_for_status = MagicMock()
         mock_get.return_value = get_resp
@@ -746,13 +760,14 @@ class TestOpenAICompatibleWarmUp:
         backend = OpenAICompatibleBackend("http://localhost:1234/v1")
         assert backend.warm_up("gpt-4o-mini") is False
 
-    @patch("jarvis.llm.requests.post")
-    @patch("jarvis.llm.requests.get")
+    @patch("jarvis.llm.http.post")
+    @patch("jarvis.llm.http.get")
     def test_warmup_fails_when_inference_raises(self, mock_get, mock_post):
         """GET succeeds but POST raises an exception."""
         from jarvis.llm import OpenAICompatibleBackend
 
         get_resp = MagicMock()
+        get_resp.__enter__.return_value = get_resp
         get_resp.json.return_value = {"data": [{"id": "gpt-4o-mini"}]}
         get_resp.raise_for_status = MagicMock()
         mock_get.return_value = get_resp
@@ -763,13 +778,14 @@ class TestOpenAICompatibleWarmUp:
 
     # ── timeout budget calculation ─────────────────────────────────────
 
-    @patch("jarvis.llm.requests.post")
-    @patch("jarvis.llm.requests.get")
+    @patch("jarvis.llm.http.post")
+    @patch("jarvis.llm.http.get")
     def test_warmup_timeout_split_at_60s_default(self, mock_get, mock_post):
         """At default 60s, GET gets 5s (capped) and POST gets 55s."""
         from jarvis.llm import OpenAICompatibleBackend
 
         get_resp = MagicMock()
+        get_resp.__enter__.return_value = get_resp
         get_resp.json.return_value = {"data": [{"id": "gpt-4o-mini"}]}
         get_resp.raise_for_status = MagicMock()
         mock_get.return_value = get_resp
@@ -786,13 +802,14 @@ class TestOpenAICompatibleWarmUp:
         assert get_kwargs["timeout"] == 5.0
         assert post_kwargs["timeout"] == 55.0
 
-    @patch("jarvis.llm.requests.post")
-    @patch("jarvis.llm.requests.get")
+    @patch("jarvis.llm.http.post")
+    @patch("jarvis.llm.http.get")
     def test_warmup_timeout_split_when_very_small(self, mock_get, mock_post):
         """Below 2s, both phases floor to 1s each."""
         from jarvis.llm import OpenAICompatibleBackend
 
         get_resp = MagicMock()
+        get_resp.__enter__.return_value = get_resp
         get_resp.json.return_value = {"data": [{"id": "gpt-4o-mini"}]}
         get_resp.raise_for_status = MagicMock()
         mock_get.return_value = get_resp
@@ -809,13 +826,14 @@ class TestOpenAICompatibleWarmUp:
         assert get_kwargs["timeout"] == 1.0
         assert post_kwargs["timeout"] == 0.1
 
-    @patch("jarvis.llm.requests.post")
-    @patch("jarvis.llm.requests.get")
+    @patch("jarvis.llm.http.post")
+    @patch("jarvis.llm.http.get")
     def test_warmup_timeout_split_at_intermediate(self, mock_get, mock_post):
         """At 20s, GET has 5s (25%→5 capped) and POST has 15s."""
         from jarvis.llm import OpenAICompatibleBackend
 
         get_resp = MagicMock()
+        get_resp.__enter__.return_value = get_resp
         get_resp.json.return_value = {"data": [{"id": "gpt-4o-mini"}]}
         get_resp.raise_for_status = MagicMock()
         mock_get.return_value = get_resp
@@ -834,13 +852,14 @@ class TestOpenAICompatibleWarmUp:
 
     # ── warmup POST header behaviour ──────────────────────────────────
 
-    @patch("jarvis.llm.requests.post")
-    @patch("jarvis.llm.requests.get")
+    @patch("jarvis.llm.http.post")
+    @patch("jarvis.llm.http.get")
     def test_warmup_sends_auth_header_when_api_key_set(self, mock_get, mock_post):
         """When an API key is configured, the inference POST carries it."""
         from jarvis.llm import OpenAICompatibleBackend
 
         get_resp = MagicMock()
+        get_resp.__enter__.return_value = get_resp
         get_resp.json.return_value = {"data": [{"id": "gpt-4o-mini"}]}
         get_resp.raise_for_status = MagicMock()
         mock_get.return_value = get_resp
@@ -858,13 +877,14 @@ class TestOpenAICompatibleWarmUp:
         post_headers = mock_post.call_args[1]["headers"]
         assert post_headers["Authorization"] == "Bearer sk-test"
 
-    @patch("jarvis.llm.requests.post")
-    @patch("jarvis.llm.requests.get")
+    @patch("jarvis.llm.http.post")
+    @patch("jarvis.llm.http.get")
     def test_warmup_omits_auth_header_when_no_key(self, mock_get, mock_post):
         """When no API key is set, the inference POST has no Auth header."""
         from jarvis.llm import OpenAICompatibleBackend
 
         get_resp = MagicMock()
+        get_resp.__enter__.return_value = get_resp
         get_resp.json.return_value = {"data": [{"id": "gpt-4o-mini"}]}
         get_resp.raise_for_status = MagicMock()
         mock_get.return_value = get_resp
@@ -884,7 +904,7 @@ class TestOpenAICompatibleWarmUp:
 
     # ── guard cases ───────────────────────────────────────────────────
 
-    @patch("jarvis.llm.requests.get")
+    @patch("jarvis.llm.http.get")
     def test_warmup_fails_for_empty_base_url(self, mock_get):
         from jarvis.llm import OpenAICompatibleBackend
 
@@ -892,7 +912,7 @@ class TestOpenAICompatibleWarmUp:
         assert backend.warm_up("gpt-4o-mini") is False
         assert not mock_get.called
 
-    @patch("jarvis.llm.requests.get")
+    @patch("jarvis.llm.http.get")
     def test_warmup_fails_for_empty_model(self, mock_get):
         from jarvis.llm import OpenAICompatibleBackend
 
@@ -991,7 +1011,7 @@ class TestOpenAICompatibleSanitizesMessages:
     """OpenAICompatibleBackend.chat() strips non-standard fields from
     messages before sending them to the wire."""
 
-    @patch("jarvis.llm.openai_compatible.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_tool_name_not_in_wire_payload(self, mock_post):
         from jarvis.llm import OpenAICompatibleBackend
 
@@ -1027,7 +1047,7 @@ class TestOpenAICompatibleSanitizesMessages:
         assert "tool_name" not in tool_msg, "tool_name field must be stripped"
         assert "tool_failed" not in tool_msg, "tool_failed field must be stripped"
 
-    @patch("jarvis.llm.openai_compatible.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_system_is_context_injected_stripped(self, mock_post):
         from jarvis.llm import OpenAICompatibleBackend
 

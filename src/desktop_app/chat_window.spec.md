@@ -19,6 +19,13 @@ The core `jarvis` package exposes a text-submission entry point with no
 knowledge of the desktop app. It mirrors the diary-callbacks pattern already
 used for end-of-session UI updates.
 
+Optional audio and speech-recognition import failures do not prevent daemon
+initialisation or text submission. The listener owns audio and speech-backend
+availability and reports the affected dependency; typed replies do not require
+microphone capture, array processing, VAD or Whisper.
+Pausing voice listening keeps text submission and its daemon lifecycle state
+available. User and dictation capture pauses do not stop or restart text chat.
+
 ### `submit_text_query(text: str) -> None` (in `jarvis.daemon`)
 
 - Fire-and-forget: spawns a worker thread and returns immediately so the
@@ -111,8 +118,7 @@ Event shapes (mirrors the diary IPC):
 ```
 
 `__CHAT__:` lines must never contain unredacted user text. The `start` event
-carries the already-redacted query (redaction happens before the worker thread
-starts, so the IPC payload is safe to log).
+carries the query redacted inside the worker before notification or logging.
 
 ### Subprocess query-in channel (desktop → daemon)
 
@@ -144,17 +150,33 @@ itself is dropped so a re-submission does not duplicate it. Malformed
 rewind lines are swallowed (consumed, ignored), mirroring
 `__CHAT_QUERY__:` handling.
 
-Chat IPC lines are routed to the chat window and then **not** emitted to the
-general log viewer. The ``complete`` event carries the whole assistant reply,
-which can echo back whatever the user typed, and the log window is outside the
-redaction invariant the chat path maintains. Diary IPC still reaches the log
-viewer, which is what it is for.
+Chat IPC lines are routed to the chat window and excluded from the general
+log viewer. The daemon emits separate readable activity lines in both bundled
+and subprocess modes: `⌨️ Typed:` with the redacted accepted query, followed by
+`🤖 Jarvis` and the delivered reply with structural secrets scrubbed and
+multiline formatting preserved. The quiet engine leaves reply logging to the
+worker, after the cancellation check. Busy or invalid submissions do not create
+accepted-query entries; cancelled and empty replies do not create reply entries.
+An accepted query remains in the activity log if its reply fails or is cancelled.
+Diary IPC still reaches the log viewer.
 
 ## Desktop window
 
 ### `ChatWindow` (in `desktop_app.chat_window`)
 
-A `QMainWindow` styled like an SMS thread with a single contact:
+A `QMainWindow` styled as a futuristic phone with a single contact:
+
+- A translucent, frameless window with a rounded graphite chassis, inset
+  display and amber accents from the shared theme. Its initial portrait size
+  is capped by the available screen, with a 380 × 560 minimum usable size.
+- A draggable top bar with accessible minimise and close controls. Double-click
+  toggles maximise/restore; a bottom-right resize grip resizes the window.
+  The platform close shortcut also hides the chat without ending the conversation.
+- A vector amber core emblem, compact chat capsule and home indicator complete
+  the phone shell. No remote assets, network requests or decorative animations
+  are required.
+- An empty conversation shows an introductory panel, never a fabricated message.
+  It disappears as soon as a typed, seeded, assistant or local notice arrives.
 
 - A contact header (avatar, "Jarvis", and a presence line such as "Online" or
   "Typing…" while a query is in flight).
@@ -163,10 +185,17 @@ A `QMainWindow` styled like an SMS thread with a single contact:
   bubbles, Jarvis's replies are left-aligned dark bubbles, and local notices
   are small centred lines. Each bubble carries a small muted timestamp. Sent
   messages additionally carry a subtle `⟲` rewind button (see **Rewind**
-  below) to the left of the bubble. The transcript mirrors the single
-  conversation's message list and is rebuilt atomically on rewind.
+  below) to the left of the bubble. Whenever any user, assistant, or local
+  notice message is added, the transcript scrolls to the bottom after layout
+  so the latest message stays visible. Initial and rebuilt transcripts share
+  one layout whose size constraints preserve usable message heights as rows
+  are added, allowing the scroll area to track growing content. The transcript
+  mirrors the single conversation's message list and is rebuilt atomically on rewind.
 - A multi-line input box with send button. Enter sends; Shift+Enter inserts a
   newline (multi-line input).
+- The inset composer uses labelled, keyboard-accessible icon controls and a
+  separate keyboard hint. Message bodies and local notices are selectable plain
+  text, including strings that resemble HTML. Bubbles resize with the window.
 - A "Stop" button. It marks the exchange abandoned locally, routes the
   cancellation to whichever process is running the query (see Cancellation),
   and resets the thinking indicator immediately. It is distinct from `request_stop` (full
@@ -223,7 +252,8 @@ cannot write to a dead pipe.
 
 ### Theme
 
-All styling uses `JARVIS_THEME_STYLESHEET` from `desktop_app.themes`. No
+All styling uses `JARVIS_THEME_STYLESHEET`, `CHAT_THEME_STYLESHEET` and the shared
+palette from `desktop_app.themes`. No
 hardcoded colours. The window is dark-themed and consistent with the rest of
 the app.
 
@@ -254,12 +284,13 @@ the app.
   context.
 - The transcript area shows the user's local echo (what they just typed) so
   the conversation reads naturally. The transcript is in-memory only and is
-  never persisted to disk; the diary remains the single durable record,
-  written through the existing `update_diary_from_dialogue_memory` path at
-  session end, and that path sees only the redacted query.
-- The `__CHAT__:` IPC lines carry only the redacted query (in the `start`
-  event) and event metadata, so the subprocess stdout stream (which the
-  desktop app captures for the log viewer) never leaks raw user input.
+  retained in memory. Redacted accepted queries and scrubbed delivered replies
+  also appear in the activity log, which users can export for diagnostics.
+  The diary is written through `update_diary_from_dialogue_memory` at session
+  end and sees only the redacted query.
+- The `__CHAT__:` IPC `start` event carries the redacted query. Activity-log
+  messages use the same redacted query and scrub secrets from replies.
+  Reply IPC events are delivered to the chat window without logging them.
 
 ## What the system does not do
 

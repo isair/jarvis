@@ -20,11 +20,18 @@ def _cfg() -> SimpleNamespace:
         llm_provider="ollama",
         llm_base_url="http://localhost:11434",
         llm_chat_model="test",
-        embedding_model="test",
+        embedding_model="",
         ollama_base_url="http://localhost:11434",
         ollama_chat_model="test",
         ollama_embed_model="test",
     )
+
+
+@pytest.fixture(autouse=True)
+def isolate_graph_inference(monkeypatch):
+    """Exercise diary persistence and FTS without unrelated graph inference."""
+    monkeypatch.setattr('jarvis.memory.graph_ops.update_graph_from_dialogue',
+                        lambda **kwargs: SimpleNamespace(stored=[], skipped=0))
 
 
 @pytest.mark.integration

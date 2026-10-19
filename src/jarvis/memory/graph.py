@@ -11,6 +11,8 @@ See graph.spec.md for the full specification.
 
 from __future__ import annotations
 
+import codecs
+from contextlib import contextmanager
 import re
 import sqlite3
 import threading
@@ -90,7 +92,6 @@ SPLIT_THRESHOLD = 1500       # tokens — when to split a node into children
 MERGE_THRESHOLD = 200        # tokens — when to collapse sparse children back
 RECENT_NODES_COUNT = 10      # number of recently-accessed nodes to track
 TOP_NODES_COUNT = 15         # most-accessed nodes to surface
-TOP_NODES_WINDOW_DAYS = 30   # time window for top-nodes ranking (legacy, kept for compat)
 MAX_TRAVERSAL_DEPTH = 8      # safety limit on graph traversal
 SUMMARY_MAX_LENGTH = 300     # max characters for a node description
 DECAY_HALF_LIFE_DAYS = 14    # days until a node's access score halves
@@ -233,7 +234,37 @@ CREATE TABLE IF NOT EXISTS memory_nodes (
 CREATE INDEX IF NOT EXISTS idx_nodes_parent ON memory_nodes(parent_id);
 CREATE INDEX IF NOT EXISTS idx_nodes_last_accessed ON memory_nodes(last_accessed DESC);
 CREATE INDEX IF NOT EXISTS idx_nodes_access_count ON memory_nodes(access_count DESC);
+
+CREATE TABLE IF NOT EXISTS memory_graph_revisions (
+    name TEXT PRIMARY KEY,
+    revision INTEGER NOT NULL DEFAULT 0
+);
 """
+
+
+_WARM_PROFILE_TRIGGERS_SQL = "\n".join(
+    f"""CREATE TRIGGER IF NOT EXISTS warm_profile_{name}
+    {event} ON memory_nodes
+    WHEN EXISTS (
+        WITH RECURSIVE ancestry(id, parent_id) AS (
+            SELECT id, parent_id FROM memory_nodes WHERE id = {row}.id
+            UNION
+            SELECT parent.id, parent.parent_id FROM memory_nodes AS parent
+            JOIN ancestry ON parent.id = ancestry.parent_id
+        )
+        SELECT 1 FROM ancestry WHERE id IN ('{BRANCH_USER}', '{BRANCH_DIRECTIVES}')
+    )
+    BEGIN
+        UPDATE memory_graph_revisions SET revision = revision + 1 WHERE name = 'warm_profile';
+    END;"""
+    for name, event, row in (
+        ('insert_old', 'BEFORE INSERT', 'NEW'),
+        ('insert', 'AFTER INSERT', 'NEW'),
+        ('delete', 'BEFORE DELETE', 'OLD'),
+        ('update_old', 'BEFORE UPDATE OF id, name, description, data, parent_id', 'OLD'),
+        ('update_new', 'AFTER UPDATE OF id, name, description, data, parent_id', 'NEW'),
+    )
+)
 
 
 # ── Graph Memory Store ──────────────────────────────────────────────────────
@@ -246,23 +277,38 @@ class GraphMemoryStore:
     for fast retrieval: recent nodes, top nodes, and the root node.
     """
 
-    def __init__(self, db_path: str) -> None:
+    def __init__(self, db_path: str, *, read_only: bool = False) -> None:
         from pathlib import Path
-        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+        path = Path(db_path)
+        if not read_only:
+            path.parent.mkdir(parents=True, exist_ok=True)
 
         self.db_path = db_path
-        self.conn = sqlite3.connect(db_path, check_same_thread=False)
+        target = path.resolve().as_uri() + '?mode=ro' if read_only else db_path
+        self.conn = sqlite3.connect(target, uri=read_only, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self._lock = threading.RLock()
-        self._init_schema()
-        self._ensure_root()
+        if not read_only:
+            try:
+                self._init_schema()
+                self._ensure_root()
+            except BaseException:
+                self.conn.close()
+                debug_log("graph bootstrap failed: connection released", "memory")
+                raise
 
     # ── Schema & bootstrap ──────────────────────────────────────────────
 
     def _init_schema(self) -> None:
         with self._lock:
             self.conn.execute("PRAGMA foreign_keys = ON")
-            self.conn.executescript(_GRAPH_SCHEMA_SQL)
+            self.conn.executescript(_GRAPH_SCHEMA_SQL + _WARM_PROFILE_TRIGGERS_SQL)
+            if self.conn.execute(
+                "SELECT 1 FROM memory_graph_revisions WHERE name = 'warm_profile'"
+            ).fetchone() is None:
+                self.conn.execute(
+                    "INSERT OR IGNORE INTO memory_graph_revisions(name, revision) VALUES('warm_profile', 0)"
+                )
             self.conn.commit()
 
     def _ensure_root(self) -> None:
@@ -291,78 +337,67 @@ class GraphMemoryStore:
                 self.conn.commit()
                 debug_log("Created root memory node", "memory")
 
-            # Seed fixed top-level branches under root. Each row is
-            # inserted with INSERT OR IGNORE keyed on the stable id so
-            # repeated boots are no-ops.
+            branch_ids = tuple(branch_id for branch_id, _, _ in FIXED_BRANCHES)
+            placeholders = ','.join('?' for _ in branch_ids)
+            existing_ids = {row['id'] for row in self.conn.execute(
+                f"SELECT id FROM memory_nodes WHERE id IN ({placeholders})",
+                branch_ids,
+            )}
+            # Existing branches require no writer lock. The insertion guard
+            # also prevents duplicate writes when another owner seeds first.
             for branch_id, name, description in FIXED_BRANCHES:
+                if branch_id in existing_ids:
+                    continue
                 self.conn.execute(
                     """INSERT OR IGNORE INTO memory_nodes
                        (id, name, description, data, parent_id,
                         access_count, last_accessed, created_at, updated_at,
                         data_token_count)
-                       VALUES (?, ?, ?, '', 'root', 0, ?, ?, ?, 0)""",
-                    (branch_id, name, description, now, now, now),
+                       SELECT ?, ?, ?, '', 'root', 0, ?, ?, ?, 0
+                       WHERE NOT EXISTS (SELECT 1 FROM memory_nodes WHERE id = ?)""",
+                    (branch_id, name, description, now, now, now, branch_id),
                 )
             self.conn.commit()
 
-    def migrate_legacy_shape(self) -> bool:
-        """Wipe the graph if it has a non-conforming (pre-taxonomy) shape.
+    def has_unclassified_root_content(self) -> bool:
+        """Report root-level content without changing saved memory.
 
-        The purpose-driven taxonomy (root → User / Directives / World)
-        is a hard reorganisation: pre-existing nodes under root that
-        don't match this shape would sit invisible to the warm profile
-        forever.
-        Rather than carrying them as dead weight, we wipe on daemon
-        start-up and let the diary re-import repopulate with correctly
-        classified facts.
-
-        Called ONLY from the daemon start-up path — the memory viewer
-        instantiates ``GraphMemoryStore`` read-mostly and must not
-        trigger a wipe mid-session.
-
-        Non-conforming shape is defined as:
-          - root has a direct child whose id is not in ``FIXED_BRANCHES``
-          - OR root's own ``data`` column is non-empty (cold-start writes
-            that landed on root before the taxonomy existed).
-
-        Returns True if a wipe happened, False if the graph was already
-        in the expected shape.
+        Root facts and children outside the fixed branches can be manually
+        created or imported. Their shape does not establish their age or
+        classification, so they remain available for explicit organisation.
         """
-        expected_ids = FIXED_BRANCH_IDS
         with self._lock:
             root_row = self.conn.execute(
                 "SELECT data FROM memory_nodes WHERE id = 'root'"
             ).fetchone()
             root_has_data = bool(root_row and (root_row["data"] or "").strip())
-
-            rogue_child = self.conn.execute(
+            root_child = self.conn.execute(
                 "SELECT id FROM memory_nodes "
                 "WHERE parent_id = 'root' AND id NOT IN ({}) LIMIT 1".format(
-                    ",".join("?" * len(expected_ids))
+                    ",".join("?" * len(FIXED_BRANCH_IDS))
                 ),
-                tuple(expected_ids),
+                tuple(FIXED_BRANCH_IDS),
             ).fetchone()
-
-            if not root_has_data and rogue_child is None:
-                return False
-
-            reason = (
-                "root holds pre-taxonomy data"
-                if root_has_data
-                else f"found non-conforming root child: {rogue_child['id']!r}"
-            )
-            debug_log(
-                f"wiping knowledge graph ({reason}); will re-seed fixed branches",
-                "memory",
-            )
-            self.conn.execute("DELETE FROM memory_nodes")
-            self.conn.commit()
-
-        # Re-seed root + fixed branches from scratch.
-        self._ensure_root()
-        return True
+            return root_has_data or root_child is not None
 
     # ── CRUD ────────────────────────────────────────────────────────────
+
+    def get_warm_profile_revision(self) -> Optional[int]:
+        """Read the profile revision, or None when its metadata is absent."""
+        with self._lock:
+            try:
+                row = self.conn.execute(
+                    "SELECT revision FROM memory_graph_revisions WHERE name = 'warm_profile'"
+                ).fetchone()
+            except sqlite3.OperationalError:
+                table = self.conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+                    "AND name = 'memory_graph_revisions' COLLATE NOCASE"
+                ).fetchone()
+                if table is not None:
+                    raise
+                return None
+        return row["revision"] if row is not None else None
 
     def get_node(self, node_id: str) -> Optional[MemoryNode]:
         """Fetch a single node by ID."""
@@ -373,6 +408,42 @@ class GraphMemoryStore:
             if row is None:
                 return None
             return self._row_to_node(row)
+
+    @contextmanager
+    def open_node_text(self, node_id: str):
+        """Yield decoded text chunks from one node snapshot, or None if absent.
+
+        Only bounded chunks enter Python. The read savepoint binds the row
+        identity to its BLOB and leaves any caller transaction uncommitted.
+        """
+        with self._lock:
+            self.conn.execute("SAVEPOINT graph_text_read")
+            try:
+                row = self.conn.execute(
+                    "SELECT rowid FROM memory_nodes WHERE id = ?", (node_id,),
+                ).fetchone()
+                if row is None:
+                    yield None
+                    return
+                encoding = self.conn.execute("PRAGMA encoding").fetchone()[0]
+                decoder = codecs.getincrementaldecoder(encoding)()
+                with self.conn.blobopen("memory_nodes", "data", row[0], readonly=True) as data:
+                    def chunks():
+                        while data.tell() < len(data):
+                            raw = data.read(4096)
+                            yield decoder.decode(raw, final=data.tell() == len(data))
+                    yield chunks()
+            finally:
+                self.conn.execute("RELEASE graph_text_read")
+
+    def get_child_ids(self, node_id: str) -> list[str]:
+        """Read child identifiers in decayed-access order without note payloads."""
+        score = _decay_score_sql()
+        with self._lock:
+            return [row[0] for row in self.conn.execute(
+                f"SELECT id FROM memory_nodes WHERE parent_id = ? ORDER BY {score} DESC",
+                (node_id,),
+            )]
 
     def get_children(self, node_id: str) -> list[MemoryNode]:
         """Get all direct children of a node, ordered by decayed access score."""
@@ -435,39 +506,61 @@ class GraphMemoryStore:
             if parent is None:
                 raise ValueError(f"Parent node '{parent_id}' does not exist")
 
-        # Enforce description length limit from spec
-        if len(description) > SUMMARY_MAX_LENGTH:
-            description = description[:SUMMARY_MAX_LENGTH]
+        with self._lock, self.conn:
+            node = self._insert_node(name, description, data, parent_id)
+            branch = self._resolve_branch(parent_id)
 
+        debug_log(f"Created memory node '{name}' ({node.id[:8]})", "memory")
+        _notify_graph_mutation("create", node.id, branch)
+        return node
+
+    def _insert_node(
+        self, name: str, description: str, data: str, parent_id: Optional[str],
+    ) -> MemoryNode:
+        """Insert a new node inside the caller's locked write transaction."""
+        description = description[:SUMMARY_MAX_LENGTH]
         node_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
         token_count = _estimate_tokens(data)
-
-        with self._lock:
-            self.conn.execute(
-                """INSERT INTO memory_nodes
-                   (id, name, description, data, parent_id,
-                    access_count, last_accessed, created_at, updated_at,
-                    data_token_count)
-                   VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?)""",
-                (node_id, name, description, data, parent_id, now, now, now, token_count),
-            )
-            self.conn.commit()
-
-        debug_log(f"Created memory node '{name}' ({node_id[:8]})", "memory")
-        _notify_graph_mutation("create", node_id, self._resolve_branch(parent_id))
-        return MemoryNode(
-            id=node_id,
-            name=name,
-            description=description,
-            data=data,
-            parent_id=parent_id,
-            access_count=0,
-            last_accessed=now,
-            created_at=now,
-            updated_at=now,
-            data_token_count=token_count,
+        self.conn.execute(
+            """INSERT INTO memory_nodes
+               (id, name, description, data, parent_id,
+                access_count, last_accessed, created_at, updated_at,
+                data_token_count)
+               VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?)""",
+            (node_id, name, description, data, parent_id, now, now, now, token_count),
         )
+        return MemoryNode(
+            id=node_id, name=name, description=description, data=data,
+            parent_id=parent_id, access_count=0, last_accessed=now,
+            created_at=now, updated_at=now, data_token_count=token_count,
+        )
+
+    def split_node(
+        self, source: MemoryNode, *, children: list[tuple[str, str, str]], summary: str,
+    ) -> bool:
+        """Commit children and the parent summary only from current source input."""
+        with self._lock, self.conn:
+            self.conn.execute("BEGIN IMMEDIATE")
+            current = self.get_node(source.id)
+            if current is None or (current.name, current.description, current.data) != (
+                source.name, source.description, source.data,
+            ):
+                debug_log(f"graph split: rejected stale input for {source.id}", "memory")
+                return False
+            created = [self._insert_node(name, description, data, source.id)
+                       for name, description, data in children]
+            current.data = ""
+            current.data_token_count = 0
+            current.description = summary[:SUMMARY_MAX_LENGTH]
+            current.updated_at = datetime.now(timezone.utc).isoformat()
+            self._persist_node(current)
+            branch = self._resolve_branch(source.id)
+
+        for child in created:
+            _notify_graph_mutation("create", child.id, branch)
+        _notify_graph_mutation("update", source.id, branch)
+        return True
 
     def update_node(
         self,
@@ -476,40 +569,69 @@ class GraphMemoryStore:
         name: Optional[str] = None,
         description: Optional[str] = None,
         data: Optional[str] = None,
+        expected_data: Optional[str] = None,
         parent_id: Optional[str] = ...,  # type: ignore[assignment]
     ) -> Optional[MemoryNode]:
-        """Update fields on an existing node. Returns the updated node."""
-        node = self.get_node(node_id)
-        if node is None:
-            return None
+        """Return the committed node, or None if absent, stale or invalid.
 
-        now = datetime.now(timezone.utc).isoformat()
-        if name is not None:
-            node.name = name
-        if description is not None:
-            if len(description) > SUMMARY_MAX_LENGTH:
-                description = description[:SUMMARY_MAX_LENGTH]
-            node.description = description
-        if data is not None:
-            node.data = data
-            node.data_token_count = _estimate_tokens(data)
-        if parent_id is not ...:
-            node.parent_id = parent_id
-        node.updated_at = now
+        expected_data conditionally accepts a write only while its source
+        data matches the current row inside the write transaction.
+        """
+        with self._lock, self.conn:
+            self.conn.execute("BEGIN IMMEDIATE")
+            node = self.get_node(node_id)
+            if node is None:
+                return None
+            if expected_data is not None and node.data != expected_data:
+                debug_log(f"graph update: rejected stale data for {node_id}", "memory")
+                return None
+            if parent_id is not ... and parent_id != node.parent_id:
+                if not self._valid_parent(node_id, parent_id):
+                    debug_log(f"graph update: rejected invalid parent for {node_id}", "memory")
+                    return None
 
-        with self._lock:
-            self.conn.execute(
-                """UPDATE memory_nodes
-                   SET name = ?, description = ?, data = ?, parent_id = ?,
-                       updated_at = ?, data_token_count = ?
-                   WHERE id = ?""",
-                (node.name, node.description, node.data, node.parent_id,
-                 node.updated_at, node.data_token_count, node_id),
-            )
-            self.conn.commit()
+            if name is not None:
+                node.name = name
+            if description is not None:
+                node.description = description[:SUMMARY_MAX_LENGTH]
+            if data is not None:
+                node.data = data
+                node.data_token_count = _estimate_tokens(data)
+            if parent_id is not ...:
+                node.parent_id = parent_id
+            node.updated_at = datetime.now(timezone.utc).isoformat()
+            self._persist_node(node)
+            branch = self._resolve_branch(node_id)
 
-        _notify_graph_mutation("update", node_id, self._resolve_branch(node_id))
+        _notify_graph_mutation("update", node_id, branch)
         return node
+
+    def _valid_parent(self, node_id: str, parent_id: Optional[str]) -> bool:
+        """Check parent ancestry inside the caller's locked write transaction."""
+        if node_id == "root" or node_id in FIXED_BRANCH_IDS:
+            return False
+        visited = {node_id}
+        current_id = parent_id
+        while current_id is not None:
+            if current_id in visited:
+                return False
+            visited.add(current_id)
+            current = self.get_node(current_id)
+            if current is None:
+                return False
+            current_id = current.parent_id
+        return True
+
+    def _persist_node(self, node: MemoryNode) -> None:
+        """Write a node snapshot inside the caller's locked write transaction."""
+        self.conn.execute(
+            """UPDATE memory_nodes
+               SET name = ?, description = ?, data = ?, parent_id = ?,
+                   updated_at = ?, data_token_count = ?
+               WHERE id = ?""",
+            (node.name, node.description, node.data, node.parent_id,
+             node.updated_at, node.data_token_count, node.id),
+        )
 
     def delete_node(self, node_id: str) -> bool:
         """Delete a node. Children are orphaned (parent_id set to NULL by FK).
@@ -523,59 +645,73 @@ class GraphMemoryStore:
         # Resolve branch BEFORE the delete so listeners get a meaningful
         # branch attribution even though the row is about to vanish.
         branch = self._resolve_branch(node_id)
-        with self._lock:
+        with self._lock, self.conn:
             cur = self.conn.execute(
                 "DELETE FROM memory_nodes WHERE id = ?", (node_id,)
             )
-            self.conn.commit()
             deleted = cur.rowcount > 0
         if deleted:
             _notify_graph_mutation("delete", node_id, branch)
         return deleted
 
-    def node_contains_fact(self, node_id: str, fact: str) -> bool:
-        """True if ``fact`` matches any line of the node's data after
-        ``normalise_fact`` folding. Used to dedupe graph appends when the
-        cumulative daily summary re-seeds the same facts across diary flushes.
-        """
-        node = self.get_node(node_id)
-        if node is None or not node.data:
-            return False
-        target = normalise_fact(fact)
-        if not target:
-            return False
-        for line in node.data.split("\n"):
-            if normalise_fact(line) == target:
-                return True
-        return False
+    def get_branch_fact_keys(self, branch_id: str) -> set[str]:
+        """Snapshot folded fact lines from a fixed branch and all descendants."""
+        if branch_id not in FIXED_BRANCH_IDS:
+            return set()
+        with self._lock:
+            rows = self.conn.execute(
+                """WITH RECURSIVE branch_nodes(id) AS (
+                    SELECT id FROM memory_nodes WHERE id = ?
+                    UNION
+                    SELECT child.id FROM memory_nodes AS child
+                    JOIN branch_nodes AS parent ON child.parent_id = parent.id
+                )
+                SELECT data FROM memory_nodes
+                WHERE id IN (SELECT id FROM branch_nodes)""",
+                (branch_id,),
+            ).fetchall()
+        return {key for row in rows for line in row["data"].splitlines()
+                if (key := normalise_fact(line))}
 
-    def append_to_node(self, node_id: str, text: str) -> bool:
-        """Append text to a node's data field.
+    def append_to_node(self, node_id: str, text: str) -> Optional[MemoryNode]:
+        """Append text and return the committed node, or None if absent."""
+        with self._lock, self.conn:
+            self.conn.execute("BEGIN IMMEDIATE")
+            node = self.get_node(node_id)
+            if node is None:
+                return None
 
-        Returns True if the node's data_token_count now exceeds SPLIT_THRESHOLD.
-        """
-        node = self.get_node(node_id)
-        if node is None:
-            return False
+            separator = "\n" if node.data else ""
+            node.data += separator + text
+            node.data_token_count = _estimate_tokens(node.data)
+            node.updated_at = datetime.now(timezone.utc).isoformat()
+            self._persist_node(node)
+            branch = self._resolve_branch(node_id)
 
-        separator = "\n" if node.data else ""
-        new_data = node.data + separator + text
-        self.update_node(node_id, data=new_data)
-
-        updated = self.get_node(node_id)
-        return updated is not None and updated.data_token_count > SPLIT_THRESHOLD
+        _notify_graph_mutation("update", node_id, branch)
+        return node
 
     def touch_node(self, node_id: str) -> None:
-        """Increment access_count and update last_accessed."""
+        """Track access without waiting for a writer or interrupting retrieval."""
         now = datetime.now(timezone.utc).isoformat()
         with self._lock:
-            self.conn.execute(
-                """UPDATE memory_nodes
-                   SET access_count = access_count + 1, last_accessed = ?
-                   WHERE id = ?""",
-                (now, node_id),
-            )
-            self.conn.commit()
+            if self.conn.in_transaction:
+                debug_log("Graph access tracking skipped: caller transaction active", "memory")
+                return
+            wait_ms = self.conn.execute("PRAGMA busy_timeout").fetchone()[0]
+            try:
+                self.conn.execute("PRAGMA busy_timeout = 0")
+                with self.conn:
+                    self.conn.execute(
+                        """UPDATE memory_nodes
+                           SET access_count = access_count + 1, last_accessed = ?
+                           WHERE id = ?""",
+                        (now, node_id),
+                    )
+            except sqlite3.DatabaseError as exc:
+                debug_log(f"Graph access tracking skipped: {exc}", "memory")
+            finally:
+                self.conn.execute(f"PRAGMA busy_timeout = {int(wait_ms)}")
 
     # ── Entry points ────────────────────────────────────────────────────
 
@@ -591,17 +727,12 @@ class GraphMemoryStore:
             ).fetchall()
             return [self._row_to_node(r) for r in rows]
 
-    def get_top_nodes(
-        self,
-        limit: int = TOP_NODES_COUNT,
-        window_days: int = TOP_NODES_WINDOW_DAYS,
-    ) -> list[MemoryNode]:
+    def get_top_nodes(self, limit: int = TOP_NODES_COUNT) -> list[MemoryNode]:
         """Get nodes with the highest time-decayed access score.
 
         Uses hyperbolic decay so frequently accessed nodes that haven't
         been touched in a while naturally fall off without needing a hard
-        window cutoff. The ``window_days`` parameter is kept for backward
-        compatibility but is no longer used for filtering.
+        window cutoff.
         """
         score = _decay_score_sql()
         with self._lock:

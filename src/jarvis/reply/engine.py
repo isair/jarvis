@@ -6,6 +6,12 @@ Handles memory enrichment, tool planning and execution.
 
 from __future__ import annotations
 from typing import Optional, TYPE_CHECKING
+import json
+from hashlib import sha256
+from contextlib import closing
+
+from ..tools.types import ToolExecutionResult
+from ..memory.conversation import DialogueMemory, is_tool_message
 
 from ..utils.redact import redact
 from ..system_prompt import build_system_prompt
@@ -62,7 +68,6 @@ from .planner import (
     resolve_next_tool_call as _resolve_plan_step,
 )
 from ..tools.selection import select_tools, ToolSelectionStrategy
-import json
 import re
 import uuid
 from datetime import datetime, timezone
@@ -71,6 +76,73 @@ from ..utils.time_context import format_time_context
 
 if TYPE_CHECKING:
     from ..memory.db import Database
+    from ..listening.speech_context import SpeechContext
+
+
+_PLAN_RECOVERY_HINT = (
+    "\n\n[Reassess the unfinished tasks in the original request using the tool "
+    "outcomes. An unexecuted or failed tool is not a completed task. "
+    "Try a different allowed "
+    "approach or corrected arguments when the available information supports "
+    "one. If information or access is missing, ask the user or explain the "
+    "blocker. Do not perform a dependent action until its prerequisite succeeds, "
+    "and do not claim an unsuccessful action happened.]"
+)
+
+
+_EMPTY_REPLY_RECOVERY_HINT = (
+    "[Model recovery] Produce a visible answer or valid tool call for the user's "
+    "original request. Use the current tool protocol and available tools, "
+    "preserving the user's requested values and actual prior tool results. "
+    "Do not invent readings or claim an unexecuted action happened."
+)
+
+
+_NON_COMPLETION_HINT = (
+    ' If no action tool has run for this request and information is missing, '
+    'return exactly {"question": "your clarification question"}. If execution '
+    'is blocked, return exactly {"blocker": "the reason it cannot be performed"}. '
+    'These objects describe non-completion; do not put a completion claim in them.'
+)
+
+
+_UNEXECUTED_ACTION_HINT = (
+    "[Execution status] No action tool has run for the current request. "
+    "Your previous reply was not delivered. Execute the requested action "
+    "through the available tool_calls protocol before confirming it. Do not "
+    "guess missing arguments."
+) + _NON_COMPLETION_HINT
+
+_UNEXECUTED_ACTION_REPLY = (
+    "I couldn't execute the requested action. Please try again or provide the missing details."
+)
+
+_FAILED_TOOL_FOLLOWUP_HINT = (
+    "[Execution status] This follow-up continues a request whose tool failed. "
+    "There is no successful action-tool result for this follow-up. Your previous "
+    "reply was not delivered. Use the supplied information to retry the tool "
+    "or obtain the requested result through another available tool. Do not "
+    "invent readings or claim that the earlier failed call completed the task. "
+    "Do not write a final answer yet: emit an actual tool_calls block using "
+    "the declared argument names and values grounded in the current request "
+    "and its dialogue context."
+) + _NON_COMPLETION_HINT
+
+
+def _handoff_non_completion_reply(content: str) -> Optional[str]:
+    """Read an explicit clarification or blocker without accepting free prose."""
+    if not content.lstrip().startswith("{"):
+        return None
+    try:
+        pairs = json.loads(content, object_pairs_hook=lambda pairs: pairs)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(pairs, list) or len(pairs) != 1:
+        return None
+    key, value = pairs[0]
+    if key in {"question", "blocker"} and isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -103,7 +175,7 @@ def _validate_tool_args_against_schema(
     """Return a short error string when args don't satisfy the input schema.
 
     Lightweight check limited to the failure modes that matter for direct-exec:
-    unknown argument keys (the main evaluator-hallucination case) and missing
+    unknown argument keys and missing
     required keys. Type-checking is intentionally not enforced here — the
     tool implementations own that — because a stricter pre-check would
     reject too many borderline cases and force fallbacks unnecessarily.
@@ -189,10 +261,10 @@ def _text_tool_call_guidance(allowed_names: list[str]) -> str:
         "\nExact tool-call syntax (copy this shape — emit nothing else on a "
         "tool-calling turn):\n"
         'tool_calls: [{"id": "call_1", "type": "function", "function": '
-        '{"name": "webSearch", "arguments": "{\\"search_query\\": '
-        '\\"example query\\"}"}}]\n'
+        '{"name": "webSearch", "arguments": {"search_query": "example query"}}}]\n'
         "Notes:\n"
-        "- `arguments` is a JSON STRING (quotes escaped), not a bare object.\n"
+        "- `arguments` is a JSON object containing the tool's input fields. "
+        "Copy the object shape above without double-encoding it as a string.\n"
         "- Never emit just a tool name by itself (e.g. `webSearch` or `web`) — "
         "a bare name is not a valid call and the tool will not run.\n"
         "- Never invoke tools that are not in the list above. The ONLY tools "
@@ -293,12 +365,46 @@ def _is_malformed_model_output(content: str) -> bool:
     return False
 
 
+def _decode_tool_arguments(raw):
+    """Decode an argument object without substituting defaults on failure."""
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        try:
+            decoded = json.loads(raw)
+        except (ValueError, TypeError):
+            return None
+        return decoded if isinstance(decoded, dict) else None
+    return None
+
+
+def _recover_unterminated_argument_string(raw):
+    """Recover a complete object inside a missing outer string terminator."""
+    if not raw.startswith('"'):
+        return None
+    escaped = raw[1:]
+    suffix_start = len(escaped.rstrip(' \t\r\n}]'))
+    for end in range(suffix_start + 1, len(escaped) + 1):
+        if escaped[end - 1] != '}':
+            continue
+        try:
+            unwrapped = json.loads('"' + escaped[:end] + '"')
+        except (ValueError, TypeError):
+            continue
+        decoded = _decode_tool_arguments(unwrapped)
+        if decoded is not None:
+            return decoded
+    return None
+
+
 def _extract_text_tool_call(content_field: str, known_names: set):
     """Parse a tool call out of a content-mode LLM response.
 
     Small models emit several shapes when instructed to use text-based tool
     calling; this helper attempts each in order and returns (name, args, id)
     on the first match, or (None, None, None) if nothing parses.
+    An identified call with invalid arguments returns (name, None, id) so
+    the engine can request correction without executing empty defaults.
 
     Supported shapes:
       1. `tool_calls: [{"id": ..., "function": {"name": ..., "arguments": ...}}]`
@@ -325,39 +431,36 @@ def _extract_text_tool_call(content_field: str, known_names: set):
         try:
             data = json.loads(fence_match.group(1).strip())
             name = str(data.get("name", "")).strip()
-            args = data.get("arguments", data.get("args", {}))
+            args = _decode_tool_arguments(data.get("arguments", data.get("args", {})))
             if name:
-                return name, (args if isinstance(args, dict) else {}), f"call_{uuid.uuid4().hex[:8]}"
+                return name, args, f"call_{uuid.uuid4().hex[:8]}"
         except Exception:
             pass
 
     # Form: `tool_calls: [...]` JSON array literal
     tc_literal = re.search(
-        r"tool_calls\s*:\s*(\[.+?\])",
+        r"tool_calls\s*:\s*(\[)",
         content_field,
         re.DOTALL,
     )
     if tc_literal:
-        raw_literal = tc_literal.group(1)
+        raw_literal = content_field[tc_literal.start(1):]
         try:
-            arr = json.loads(raw_literal)
+            arr, _ = json.JSONDecoder().raw_decode(raw_literal)
             if isinstance(arr, list) and arr:
                 first = arr[0]
                 if isinstance(first, dict) and isinstance(first.get("function"), dict):
                     func = first["function"]
                     name = str(func.get("name", "")).strip()
-                    raw_args = func.get("arguments")
-                    if isinstance(raw_args, str):
+                    raw_args = func.get("arguments", {})
+                    parsed_args = _decode_tool_arguments(raw_args)
+                    # The text protocol also accepts a literal search string.
+                    if (parsed_args is None and isinstance(raw_args, str)
+                            and raw_args.strip() and raw_args.lstrip()[0] not in '{["'):
                         try:
-                            parsed_args = json.loads(raw_args)
-                            if not isinstance(parsed_args, dict):
-                                parsed_args = {"query": raw_args}
-                        except Exception:
+                            json.loads(raw_args)
+                        except ValueError:
                             parsed_args = {"query": raw_args}
-                    elif isinstance(raw_args, dict):
-                        parsed_args = raw_args
-                    else:
-                        parsed_args = {}
                     tool_call_id = first.get("id") or f"call_{uuid.uuid4().hex[:8]}"
                     if name:
                         return name, parsed_args, tool_call_id
@@ -374,30 +477,28 @@ def _extract_text_tool_call(content_field: str, known_names: set):
             if name_match:
                 name = name_match.group(1).strip()
                 if name in known_names:
+                    id_match = re.search(r'"id"\s*:\s*"([^"]+)"', raw_literal)
+                    tool_call_id = id_match.group(1) if id_match else f"call_{uuid.uuid4().hex[:8]}"
+                    if len(re.findall(r'"function"\s*:', raw_literal)) > 1:
+                        return name, None, tool_call_id
                     args_match = re.search(
                         r'"arguments"\s*:\s*(\{.*?\}|"(?:[^"\\]|\\.)*")',
                         raw_literal,
                         re.DOTALL,
                     )
-                    parsed_args: dict = {}
+                    parsed_args = None
                     if args_match:
                         raw = args_match.group(1)
                         def _lenient_json_object(candidate: str) -> dict | None:
-                            """Parse a JSON object, trimming trailing garbage."""
+                            """Accept a complete object with surplus closing braces."""
                             candidate = candidate.strip()
-                            # Greedy-trim trailing chars until a balanced
-                            # object parses cleanly. Handles the common
-                            # small-model "extra closing braces" bug.
-                            for end in range(len(candidate), 0, -1):
-                                chunk = candidate[:end]
-                                if not chunk.endswith("}"):
-                                    continue
-                                try:
-                                    parsed = json.loads(chunk)
-                                    if isinstance(parsed, dict):
-                                        return parsed
-                                except Exception:
-                                    continue
+                            try:
+                                parsed, end = json.JSONDecoder().raw_decode(candidate)
+                                remainder = candidate[end:].strip()
+                                if isinstance(parsed, dict) and not remainder.strip('}'):
+                                    return parsed
+                            except (ValueError, TypeError):
+                                pass
                             return None
 
                         if raw.startswith('"'):
@@ -412,24 +513,32 @@ def _extract_text_tool_call(content_field: str, known_names: set):
                                 if inner is not None:
                                     parsed_args = inner
                                 else:
-                                    parsed_args = {"query": unwrapped}
+                                    parsed_args = None
                             elif isinstance(unwrapped, dict):
                                 parsed_args = unwrapped
                         else:
                             lenient = _lenient_json_object(raw)
                             if lenient is not None:
                                 parsed_args = lenient
-                    id_match = re.search(r'"id"\s*:\s*"([^"]+)"', raw_literal)
-                    tool_call_id = id_match.group(1) if id_match else f"call_{uuid.uuid4().hex[:8]}"
+                    else:
+                        start = re.search(r'"arguments"\s*:\s*', raw_literal)
+                        if start:
+                            parsed_args = _recover_unterminated_argument_string(
+                                raw_literal[start.end():]
+                            )
                     return name, parsed_args, tool_call_id
 
     if not known_names:
         return None, None, None
 
     stripped = content_field.strip()
+    # Registered names are literal identifiers, including MCP namespaces.
+    name_prefix = r"^(" + "|".join(
+        re.escape(name) for name in sorted(known_names, key=len, reverse=True)
+    ) + r")\s*"
 
     # Form: `toolName: key: value` — only accept if the first segment is a known tool.
-    m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.*)$", stripped, re.DOTALL)
+    m = re.match(name_prefix + r":\s*(.*)$", stripped, re.DOTALL)
     if m and m.group(1) in known_names:
         name = m.group(1)
         rest = m.group(2).strip()
@@ -446,7 +555,7 @@ def _extract_text_tool_call(content_field: str, known_names: set):
         return name, args, f"call_{uuid.uuid4().hex[:8]}"
 
     # Form: `toolName(...)`
-    m2 = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*\((.*)\)\s*$", stripped, re.DOTALL)
+    m2 = re.match(name_prefix + r"\((.*)\)\s*$", stripped, re.DOTALL)
     if m2 and m2.group(1) in known_names:
         name = m2.group(1)
         inside = m2.group(2).strip()
@@ -456,10 +565,13 @@ def _extract_text_tool_call(content_field: str, known_names: set):
                 candidate = json.loads(inside)
                 if isinstance(candidate, dict):
                     parsed_args = candidate
+                elif isinstance(candidate, str):
+                    parsed_args = {"query": candidate}
                 else:
-                    parsed_args = {"query": str(candidate)}
+                    parsed_args = None
             except Exception:
-                parsed_args = {"query": inside.strip().strip('"').strip("'")}
+                parsed_args = (None if inside.lstrip().startswith(('{', '['))
+                               else {"query": inside.strip().strip('"').strip("'")})
         return name, parsed_args, f"call_{uuid.uuid4().hex[:8]}"
 
     return None, None, None
@@ -543,6 +655,7 @@ def _maybe_digest_tool_result(
     query: str,
     tool_name: str,
     raw_tool_result: str,
+    transcript_context: str = "",
 ) -> str:
     """Return the effective tool-role message content, digested if applicable.
 
@@ -581,6 +694,7 @@ def _maybe_digest_tool_result(
     try:
         digested = digest_tool_result_for_query(
             query=query,
+            transcript_context=transcript_context,
             tool_name=tool_name,
             tool_result=raw_tool_result,
             cfg=cfg,
@@ -632,6 +746,84 @@ def _maybe_digest_tool_result(
     return raw_tool_result
 
 
+# Exact resource identity is carried independently of lossy prose digests.
+_RESOURCE_REFERENCE_LIMIT = 8
+_RESOURCE_LABEL_CHAR_LIMIT = 200
+
+
+def _bounded_resource_records(references) -> list[dict]:
+    """Copy a bounded, serialisable set of record identities without inventing IDs."""
+    records = []
+    if not isinstance(references, (list, tuple)):
+        return records
+    for ref in references[-_RESOURCE_REFERENCE_LIMIT:]:
+        if not isinstance(ref, dict):
+            continue
+        kind, identity, label = ref.get("kind"), ref.get("id"), ref.get("label")
+        if not isinstance(kind, str) or not kind or len(kind) > 80:
+            continue
+        valid_id = (
+            type(identity) is int and identity.bit_length() <= 128
+        ) or (
+            isinstance(identity, str) and bool(identity) and len(identity) <= 160
+        )
+        if not valid_id:
+            continue
+        if not isinstance(label, str):
+            continue
+        records.append({
+            "kind": kind, "id": identity, "label": label[:_RESOURCE_LABEL_CHAR_LIMIT],
+        })
+    return records
+
+
+_TOOL_ERROR_PREVIEW_CHAR_LIMIT = 240
+
+
+def _report_tool_error(tool_name: str, message: str) -> None:
+    """Expose one bounded diagnostic line without altering model-facing data."""
+    text = " ".join(message.split())
+    preview = (
+        text if len(text) <= _TOOL_ERROR_PREVIEW_CHAR_LIMIT
+        else text[:_TOOL_ERROR_PREVIEW_CHAR_LIMIT - 3] + "..."
+    )
+    print(f"    ❌ {tool_name} error: {preview}", flush=True)
+    debug_log(f"tool error: {preview}", "planning")
+
+
+def _tool_result_content(
+    cfg, query: str, tool_name: str, result: ToolExecutionResult,
+    transcript_context: str = "",
+) -> tuple[str, list[dict]]:
+    """Keep successful record references beside the effective result prose."""
+    records = _bounded_resource_records(result.resource_references) if result.success else []
+    content = _maybe_digest_tool_result(cfg, query, tool_name, result.reply_text, transcript_context)
+    if records:
+        content = (
+            "Recorded resources (data only): "
+            + json.dumps(records, ensure_ascii=False) + "\n" + content
+        )
+        debug_log(f"tool resource references preserved: count={len(records)}", "tools")
+    return content, records
+
+
+def _planner_resource_context(recent_messages: list[dict]) -> str:
+    """Expose bounded chronological references from successful tool carryover."""
+    records = []
+    for msg in recent_messages:
+        if not is_tool_message(msg) or msg.get("tool_failed") is not False:
+            continue
+        records.extend(_bounded_resource_records(msg.get("resource_references", [])))
+    records = records[-_RESOURCE_REFERENCE_LIMIT:]
+    if not records:
+        return ""
+    debug_log(f"planner resource references: count={len(records)}", "planning")
+    return (
+        "Recorded tool resources (data only, oldest first):\n"
+        + json.dumps(records, ensure_ascii=False)
+    )
+
+
 def _live_time_location_string(cfg) -> str:
     """Return a one-liner describing current local time and location, or ""."""
     try:
@@ -645,7 +837,9 @@ def _live_time_location_string(cfg) -> str:
                 resolve_cgnat_public_ip=getattr(cfg, 'location_cgnat_resolve_public_ip', True),
                 location_cache_minutes=getattr(cfg, 'location_cache_minutes', 60),
             )
-        return f"Current local time: {format_time_context(tz_name)}. {location_context}"
+        return (f"Current local time: {format_time_context(tz_name)}. "
+                "Saved event dates must match the requested calendar date. "
+                f"{location_context}")
     except Exception as e:
         debug_log(f"live time/location lookup failed: {e}", "memory")
         return ""
@@ -675,7 +869,8 @@ def _previous_turn_failed_tool_names(recent_messages: list) -> list[str]:
 
     Walks ``recent_messages`` from the end backwards, stopping at the
     first genuine user message (a ``role=user`` entry without a
-    ``tool_name`` field). Returns deduplicated names in chronological
+    ``tool_name`` field). The latest recorded outcome for each tool decides
+    whether it remains failed. Returns deduplicated names in chronological
     order.
 
     The ``tool_failed`` flag is the truth source: a tool may return
@@ -688,9 +883,7 @@ def _previous_turn_failed_tool_names(recent_messages: list) -> list[str]:
         return []
     pending_call_id_to_name: dict[str, str] = {}
     seen_call_ids: set[str] = set()
-    failed_call_ids: set[str] = set()
-    failed_names_text_tool: list[str] = []
-    seen: set[str] = set()
+    result_messages: list[dict] = []
     for msg in reversed(recent_messages):
         if not isinstance(msg, dict):
             continue
@@ -715,20 +908,22 @@ def _previous_turn_failed_tool_names(recent_messages: list) -> list[str]:
             cid = msg.get("tool_call_id")
             if isinstance(cid, str) and cid:
                 seen_call_ids.add(cid)
-                if msg.get("tool_failed"):
-                    failed_call_ids.add(cid)
+                result_messages.append(msg)
         elif role == "user" and msg.get("tool_name"):
-            if msg.get("tool_failed"):
-                name = msg.get("tool_name")
-                if isinstance(name, str) and name and name not in seen:
-                    failed_names_text_tool.append(name)
-                    seen.add(name)
-    # Resolve native-mode failed call ids to names.
-    failed_names_native: list[str] = []
-    for cid, name in pending_call_id_to_name.items():
-        if cid in failed_call_ids and name not in seen:
-            failed_names_native.append(name)
-            seen.add(name)
+            cid = msg.get("tool_call_id")
+            if isinstance(cid, str) and cid:
+                seen_call_ids.add(cid)
+            result_messages.append(msg)
+
+    # Results are newest first: a corrected success supersedes an older
+    # failure, while a later failure remains eligible for continuation.
+    latest_outcomes: dict[str, bool] = {}
+    for msg in result_messages:
+        name = (pending_call_id_to_name.get(msg.get("tool_call_id"))
+                if msg.get("role") == "tool" else msg.get("tool_name"))
+        failed = msg.get("tool_failed")
+        if isinstance(name, str) and name and isinstance(failed, bool):
+            latest_outcomes.setdefault(name, failed)
     # Diagnose dropped or unmatched tool turns: an assistant tool_call
     # without ANY corresponding role=tool result (success or failure)
     # indicates upstream data loss (truncation, scrub, eviction). The
@@ -745,9 +940,13 @@ def _previous_turn_failed_tool_names(recent_messages: list) -> list[str]:
             f"(call_ids={_orphan_call_ids[:3]}{'…' if len(_orphan_call_ids) > 3 else ''})",
             "planning",
         )
-    # Text-tool walked end-to-front, native order follows assistant-message
-    # walk; both are reversed back to chronological for stable output.
-    return list(reversed(failed_names_text_tool)) + failed_names_native
+    return [name for name, failed in reversed(latest_outcomes.items()) if failed]
+
+
+def _conversation_cache_key(namespace: str, inputs: dict) -> str:
+    """Fingerprint JSON data inputs without retaining large prompt payloads."""
+    payload = json.dumps(inputs, sort_keys=True, separators=(",", ":"))
+    return f"{namespace}:{sha256(payload.encode('utf-8')).hexdigest()}"
 
 
 def _build_enrichment_context_hint(cfg, recent_messages: list) -> Optional[str]:
@@ -781,7 +980,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     text: str, dialogue_memory: "DialogueMemory",
                     language: Optional[str] = None,
                     quiet: bool = False,
-                    cancel_event=None) -> Optional[str]:
+                    speech_context: Optional["SpeechContext"] = None,
+                    *, cancel_event=None) -> Optional[str]:
     """
     Main entry point for reply generation.
 
@@ -796,11 +996,10 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             web_search can pick locale-appropriate resources (e.g. the
             right Wikipedia host). None when invoked outside the voice
             path — tools then fall back to their own default.
-        quiet: When True, the reply is not printed to stdout. The text-chat
-            path sets this so chat replies never land in the daemon's
-            stdout, which subprocess mode forwards to the desktop app's
-            general log viewer (a surface outside the chat redaction
-            invariant). Voice replies keep printing for terminal UX.
+        speech_context: Immutable voice reference data scoped to this reply.
+        quiet: When True, the engine does not print the reply to stdout.
+            The text-chat worker owns logging of scrubbed delivered replies
+            after its cancellation check. Voice replies print here.
 
     Returns:
         Generated reply text or None
@@ -810,6 +1009,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
     # Step 1: Redact sensitive information
     redacted = redact(text)
+    transcript_context = speech_context.render() if speech_context else ""
+    context_signature = sha256(transcript_context.encode()).hexdigest() if transcript_context else ""
 
     # Step 2: Check for recent dialogue context
     recent_messages = []
@@ -851,7 +1052,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         except Exception as e:
             debug_log(f"MCP refresh on new conversation failed: {e}", "mcp")
 
-    # Load MCP tools cache now so the planner sees the full catalog.
+    # Load MCP definitions for routing and the planner catalogue.
     mcp_tools: dict = {}
     if getattr(cfg, "mcps", {}):
         try:
@@ -862,7 +1063,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             mcp_tools = {}
 
     # ── Step 3: Pre-flight planner ─────────────────────────────────────
-    # The planner runs FIRST, before any memory lookup or tool routing.
+    # The planner runs after routing and before memory lookup.
     # Its job is to decide up front what preparation this turn needs:
     #
     #   - Does answering require information the user shared in prior
@@ -870,9 +1071,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     #     ``searchMemory topic='...'`` directive and we run diary + graph
     #     enrichment; otherwise we skip the keyword-extraction LLM call,
     #     the diary/graph queries, and the memory-digest LLM call.
-    #   - Are any external tools needed? The tool names the planner
-    #     references become the allow-list directly — we skip the
-    #     separate tool-router LLM call.
+    #   - Are any external tools needed? Tool names referenced by the
+    #     planner augment the router's selection for the reply loop.
     #
     # Fail-open: if the planner returns ``[]`` (short query, disabled,
     # LLM timeout, empty response), we fall through to the legacy safe
@@ -885,12 +1085,16 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     _full_catalog_names = _all_builtin_names + _all_mcp_names
 
     _dialogue_lines: list[str] = []
-    for _m in (recent_messages or [])[-6:]:
+    for _m in (recent_messages or []):
         _role = _m.get("role", "")
         _content = (_m.get("content") or "").strip().replace("\n", " ")
-        if _role in ("user", "assistant") and _content:
-            _dialogue_lines.append(f"{_role}: {_content[:200]}")
-    _dialogue_ctx = "\n".join(_dialogue_lines)
+        if _role in ("user", "assistant") and _content and not is_tool_message(_m):
+            _dialogue_lines.append(f"{_role}: {_content[:_HINT_MESSAGE_CHAR_LIMIT]}")
+    _dialogue_ctx = "\n".join(_dialogue_lines[-_HINT_RECENT_MESSAGES:])
+    debug_log(f"planner dialogue: {min(len(_dialogue_lines), _HINT_RECENT_MESSAGES)} non-empty dialogue messages", "planning")
+    _resource_context = _planner_resource_context(recent_messages)
+    if _resource_context:
+        _dialogue_ctx = (_dialogue_ctx + "\n\n" + _resource_context).strip()
 
     # Step 2a: Tool routing FIRST.
     #
@@ -905,18 +1109,21 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         strategy = ToolSelectionStrategy(getattr(cfg, "tool_selection_strategy", "llm"))
     except ValueError:
         strategy = ToolSelectionStrategy.LLM
-    # Hot-window cache: router output for the same redacted query and
-    # tool catalogue is reused within one conversation. Catalogue
-    # signature includes builtin + MCP tool names so a mid-window MCP
-    # refresh invalidates the cache. context_hint is intentionally not
-    # part of the key — time/location drift inside one hot window
-    # rarely changes the tool pick.
-    _router_cache_key = (
-        f"router:{redacted}|"
-        f"{strategy.value}|"
-        f"{','.join(sorted(BUILTIN_TOOLS.keys()))}|"
-        f"{','.join(sorted((mcp_tools or {}).keys()))}"
-    )
+    # Routing depends on live facts, recent dialogue and tool definitions.
+    # Stable JSON fingerprints keep keys bounded and ignore object-key order.
+    _router_cache_key = _conversation_cache_key("router", {
+        "query": redacted,
+        "strategy": strategy.value,
+        "context_hint": context_hint,
+        "speech_context": context_signature,
+        "catalogue": {
+            source: {
+                name: {"description": tool.description, "inputSchema": tool.inputSchema}
+                for name, tool in tools.items()
+            }
+            for source, tools in (("builtin", BUILTIN_TOOLS), ("mcp", mcp_tools or {}))
+        },
+    })
     _cached_routed = (
         dialogue_memory.hot_cache_get(_router_cache_key)
         if dialogue_memory and hasattr(dialogue_memory, "hot_cache_get") else None
@@ -937,16 +1144,10 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             embed_model=cfg.embedding_model,
             embed_timeout_sec=float(getattr(cfg, "llm_embedding_timeout_sec", 10.0)),
             context_hint=context_hint,
+            transcript_context=transcript_context,
         )
-        # Don't cache the router's "fall open to all tools" fallback. That
-        # path fires when the LLM router times out, returns empty, or emits
-        # a response no token of which matches a known tool name — i.e. the
-        # router gave up. Caching its "give up = expose everything" output
-        # for the rest of the conversation pins ``allowed_tools`` to the
-        # full catalogue, overwhelms the planner (which then paraphrases
-        # tool steps as prose), and starves a small chat model into
-        # producing the empty-reply fallback. Re-rolling the router on the
-        # next turn is cheap and almost always recovers.
+        # Full-catalogue results do not provide a narrowed selection. Retry
+        # routing rather than persisting that exposure for identical inputs.
         _router_returned_full_catalog = (
             routed_tools is not None
             and len(routed_tools) == len(_full_catalog_names)
@@ -977,9 +1178,19 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     # Engine-side per-turn overlay: the cache above stores only the raw
     # router output, so this never poisons the cache.
     routed_tools = list(routed_tools or [])
+    _previous_failed_names = (
+        _previous_turn_failed_tool_names(recent_messages) if recent_messages else []
+    )
+    # Only a narrowed routing decision establishes continuation intent.
+    # Carry-over exposure and an all-tools fallback do not make that decision.
+    _selected_failed_followup = (
+        set(routed_tools) & set(_previous_failed_names) & set(_full_catalog_names)
+    ) - {"stop", "toolSearchTool"}
+    if set(routed_tools) == set(_full_catalog_names):
+        _selected_failed_followup.clear()
     _carryover_names: list[str] = []
     if recent_messages:
-        for _name in _previous_turn_failed_tool_names(recent_messages):
+        for _name in _previous_failed_names:
             if _name in _full_catalog_names and _name not in routed_tools:
                 _carryover_names.append(_name)
         if _carryover_names:
@@ -1045,6 +1256,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 cfg=cfg,
                 query=redacted,
                 dialogue_context=_dialogue_ctx,
+                transcript_context=transcript_context,
                 tools=_planner_tool_catalog,
             )
         except Exception as _plan_exc:  # pragma: no cover — defensive
@@ -1098,62 +1310,48 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             if _memory_topic_hint:
                 break
 
-    # Step 3.5: Warm profile — pull the User + Directives branches of
-    # the knowledge graph into a compact, query-agnostic block that gets
-    # injected into the system prompt on every turn. These two branches
-    # are bounded by design (identity + standing rules), don't depend on
-    # the query, and changing rarely — so loading them unconditionally
-    # is the right tradeoff. No LLM call, just a SQLite traversal.
-    #
-    # This is the architectural pivot that lets the planner stop routing
-    # personalisation queries through searchMemory: "news that might
-    # interest me" can be answered directly when the model already sees
-    # the user's interests in its system prompt.
+    # Step 3.5: Query-agnostic User/Directives profile. Compare the persisted
+    # revision and rebuild from one read-only snapshot, so external writes
+    # invalidate the conversation cache without bootstrapping every turn.
     warm_profile_block = ""
-    # Conversation-scoped cache: warm profile is query-agnostic and the
-    # User / Directives branches change rarely, so reusing the block for
-    # the lifetime of the conversation saves the SQLite BFS on every
-    # follow-up turn. The cache is invalidated on:
-    #   - new conversation entry (cleared above with the full hot cache),
-    #   - the stop signal (also clears the full hot cache),
-    #   - any User/Directives graph mutation (via the listener registered
-    #     in daemon.py, which calls ``invalidate_warm_profile`` on the
-    #     active DialogueMemory).
-    _wp_cache_key = getattr(
-        type(dialogue_memory),
-        "WARM_PROFILE_CACHE_KEY",
-        "warm_profile_block",
-    ) if dialogue_memory else "warm_profile_block"
-    _wp_cached = (
-        dialogue_memory.hot_cache_get(_wp_cache_key)
-        if dialogue_memory and hasattr(dialogue_memory, "hot_cache_get") else None
-    )
-    if isinstance(_wp_cached, str):
-        warm_profile_block = _wp_cached
-        debug_log("warm profile served from conversation cache", "memory")
-    else:
-        try:
-            from ..memory.graph import GraphMemoryStore
-            from ..memory.graph_ops import build_warm_profile, format_warm_profile_block
-            _graph_store_warm = GraphMemoryStore(cfg.db_path)
-            _warm_profile = build_warm_profile(_graph_store_warm)
-            warm_profile_block = format_warm_profile_block(_warm_profile)
-            if warm_profile_block:
-                _user_len = len(_warm_profile.get("user", ""))
-                _dir_len = len(_warm_profile.get("directives", ""))
-                print(
-                    f"  🪴 Warm profile: {_user_len} user chars, "
-                    f"{_dir_len} directive chars",
-                    flush=True,
-                )
-                debug_log(
-                    f"warm profile loaded: user={_user_len} directives={_dir_len}",
-                    "memory",
-                )
-            if dialogue_memory and hasattr(dialogue_memory, "hot_cache_put"):
-                dialogue_memory.hot_cache_put(_wp_cache_key, warm_profile_block)
-        except Exception as e:
-            debug_log(f"warm profile load failed (non-fatal): {e}", "memory")
+    try:
+        from ..memory.graph import GraphMemoryStore
+        from ..memory.graph_ops import build_warm_profile, format_warm_profile_block
+        with closing(GraphMemoryStore(cfg.db_path, read_only=True)) as _graph_store_warm:
+            _graph_store_warm.conn.execute('BEGIN')
+            revision = _graph_store_warm.get_warm_profile_revision()
+            signature = (cfg.db_path, revision) if revision is not None else None
+            if signature is None and dialogue_memory:
+                dialogue_memory.invalidate_warm_profile()
+                debug_log("warm profile revision unavailable: rebuilding without cache", "memory")
+            cached_profile = (
+                dialogue_memory.hot_cache_get(DialogueMemory.WARM_PROFILE_CACHE_KEY)
+                if dialogue_memory and signature is not None else None
+            )
+            if cached_profile is not None and cached_profile[0] == signature:
+                warm_profile_block = cached_profile[1]
+                debug_log("warm profile served from current graph revision cache", "memory")
+            else:
+                profile = build_warm_profile(_graph_store_warm)
+                warm_profile_block = format_warm_profile_block(profile)
+                if warm_profile_block:
+                    user_len = len(profile.get("user", ""))
+                    directives_len = len(profile.get("directives", ""))
+                    print(
+                        f"  🪴 Warm profile: {user_len} user chars, "
+                        f"{directives_len} directive chars",
+                        flush=True,
+                    )
+                    debug_log(
+                        f"warm profile loaded: user={user_len} directives={directives_len}",
+                        "memory",
+                    )
+                if dialogue_memory and signature is not None:
+                    dialogue_memory.hot_cache_put(
+                        DialogueMemory.WARM_PROFILE_CACHE_KEY, (signature, warm_profile_block),
+                    )
+    except Exception as error:
+        debug_log(f"warm profile load failed (non-fatal): {error}", "memory")
 
     # Step 4: Memory enrichment — controlled by cfg.memory_enrichment_source
     # "all" = diary + graph, "diary" = diary only, "graph" = graph only
@@ -1186,11 +1384,12 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 # keyword selection tracks what the planner actually
                 # wanted to look up, not just the surface utterance.
                 _extractor_query = f"{redacted}\n[Memory topic: {_memory_topic_hint}]"
-            # Hot-window cache: extractor output is a pure function of
-            # the (query, topic-hint) pair, so identical follow-ups within
-            # one conversation reuse the keywords/questions/from/to dict
-            # and skip the LLM call entirely.
-            _extractor_cache_key = f"enrichment:{_extractor_query}"
+            # Follow-up referents and time bounds depend on the live hint.
+            _extractor_cache_key = _conversation_cache_key("enrichment", {
+                "query": _extractor_query,
+                "context_hint": context_hint,
+                "speech_context": context_signature,
+            })
             _cached_params = (
                 dialogue_memory.hot_cache_get(_extractor_cache_key)
                 if dialogue_memory and hasattr(dialogue_memory, "hot_cache_get") else None
@@ -1203,7 +1402,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     _extractor_query, cfg, resolve_model(cfg, Tier.FAST),
                     timeout_sec=float(getattr(cfg, 'llm_tools_timeout_sec', 8.0)),
                     thinking=getattr(cfg, 'llm_thinking_enabled', False),
-                    context_hint=context_hint,
+                    context_hint="\n\n".join(filter(None, (context_hint, transcript_context))),
                 )
                 if dialogue_memory and hasattr(dialogue_memory, "hot_cache_put"):
                     dialogue_memory.hot_cache_put(_extractor_cache_key, search_params)
@@ -1265,53 +1464,53 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         else:
             try:
                 from ..memory.graph import GraphMemoryStore
-                graph_store = GraphMemoryStore(cfg.db_path)
+                with closing(GraphMemoryStore(cfg.db_path)) as graph_store:
 
-                graph_parts: list[str] = []
-                # Track node name + matched question for user-facing logs
-                node_annotations: list[tuple[str, str]] = []  # (node_name, matched_question)
+                    graph_parts: list[str] = []
+                    # Track node name + matched question for user-facing logs
+                    node_annotations: list[tuple[str, str]] = []  # (node_name, matched_question)
 
-                # Build search text from the questions, stripped of stop words so
-                # LIKE matching keys off the content words.
-                question_words: list[str] = []
-                seen: set[str] = set()
-                for q in questions:
-                    for w in q.lower().split():
-                        w = w.strip("?.,!'\"")
-                        if _is_content_word(w) and w not in seen:
-                            seen.add(w)
-                            question_words.append(w)
+                    # Build search text from the questions, stripped of stop words so
+                    # LIKE matching keys off the content words.
+                    question_words: list[str] = []
+                    seen: set[str] = set()
+                    for q in questions:
+                        for w in q.lower().split():
+                            w = w.strip("?.,!'\"")
+                            if _is_content_word(w) and w not in seen:
+                                seen.add(w)
+                                question_words.append(w)
 
-                # Fewer than 2 meaningful words produces noisy LIKE matches against
-                # a single generic term — skip rather than surface irrelevant hits.
-                if len(question_words) < 2:
-                    debug_log(f"skipping graph search: <2 content words after stopwords ({question_words})", "memory")
-                else:
-                    graph_nodes = graph_store.search_nodes(" ".join(question_words), limit=5)
-                    for node in graph_nodes:
-                        ancestors = graph_store.get_ancestors(node.id)
-                        path = " > ".join(a.name for a in ancestors)
-                        data_preview = node.data[:300] if node.data else ""
-                        if data_preview:
-                            graph_parts.append(f"[{path}] {data_preview}")
-                            matched_q = _match_question(data_preview, questions)
-                            node_annotations.append((node.name or path.split(" > ")[-1], matched_q))
-                            debug_log(f"graph hit: [{path}] ({node.data_token_count} tokens)", "memory")
+                    # Fewer than 2 meaningful words produces noisy LIKE matches against
+                    # a single generic term — skip rather than surface irrelevant hits.
+                    if len(question_words) < 2:
+                        debug_log(f"skipping graph search: <2 content words after stopwords ({question_words})", "memory")
+                    else:
+                        graph_nodes = graph_store.search_nodes(" ".join(question_words), limit=5)
+                        for node in graph_nodes:
+                            ancestors = graph_store.get_ancestors(node.id)
+                            path = " > ".join(a.name for a in ancestors)
+                            data_preview = node.data[:300] if node.data else ""
+                            if data_preview:
+                                graph_parts.append(f"[{path}] {data_preview}")
+                                matched_q = _match_question(data_preview, questions)
+                                node_annotations.append((node.name or path.split(" > ")[-1], matched_q))
+                                debug_log(f"graph hit: [{path}] ({node.data_token_count} tokens)", "memory")
 
-                if graph_parts:
-                    raw_graph_parts = list(graph_parts)
-                    graph_context = (
-                        "Information the user has shared with you in prior conversations "
-                        "(you have access to this — it is part of what the user has told "
-                        "you, just not in the current session):\n" + "\n".join(graph_parts)
-                    )
-                    names_str = ", ".join(name for name, _ in node_annotations[:4] if name)
-                    print(f"  🧠 Knowledge: {len(graph_parts)} nodes — {names_str}", flush=True)
-                    for name, reason in node_annotations[:4]:
-                        if reason:
-                            print(f"     · {name} → {reason}", flush=True)
-                        else:
-                            print(f"     · {name}", flush=True)
+                    if graph_parts:
+                        raw_graph_parts = list(graph_parts)
+                        graph_context = (
+                            "Information the user has shared with you in prior conversations "
+                            "(you have access to this — it is part of what the user has told "
+                            "you, just not in the current session):\n" + "\n".join(graph_parts)
+                        )
+                        names_str = ", ".join(name for name, _ in node_annotations[:4] if name)
+                        print(f"  🧠 Knowledge: {len(graph_parts)} nodes — {names_str}", flush=True)
+                        for name, reason in node_annotations[:4]:
+                            if reason:
+                                print(f"     · {name} → {reason}", flush=True)
+                            else:
+                                print(f"     · {name}", flush=True)
             except Exception as e:
                 debug_log(f"graph enrichment failed: {e}", "memory")
 
@@ -1339,6 +1538,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             digest = digest_memory_for_query(
                 query=redacted,
                 diary_entries=raw_diary_entries,
+                transcript_context=transcript_context,
                 graph_parts=raw_graph_parts,
                 cfg=cfg,
                 chat_model=cfg.llm_chat_model,
@@ -1468,10 +1668,14 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
     _assistant_name = str(getattr(cfg, "wake_word", "jarvis") or "jarvis").strip().capitalize()
     _persona_prompt = build_system_prompt(_assistant_name)
+    _plan_in_recovery = False
+    _plan_recovery_record = ""
+    _recovery_guidance = (_PLAN_RECOVERY_HINT
+                          + (_NON_COMPLETION_HINT if use_text_tools else "")
+                          + ("\n" + _resource_context if _resource_context else ""))
 
     def _build_initial_system_message() -> str:
         guidance = [_persona_prompt.strip()]
-
         # Add model-size-appropriate prompt components
         guidance.extend(prompts.to_list())
 
@@ -1483,6 +1687,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             guidance.append(
                 "Always respond in English regardless of the language the user speaks in."
             )
+
+        if transcript_context:
+            guidance.append(transcript_context)
 
         if warm_profile_block:
             # Pre-query, query-agnostic user context. Lives OUTSIDE the
@@ -1555,7 +1762,11 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             )
         )
         if len(action_plan) > 1 or _plan_has_tool_step:
-            guidance.append(format_plan_block(action_plan))
+            if _plan_in_recovery:
+                guidance.append("EXECUTION RECORD AT HAND-OFF:\n"
+                                + _plan_recovery_record + _recovery_guidance)
+            else:
+                guidance.append(format_plan_block(action_plan))
 
         if use_text_tools and tools_desc:
             # Text-based tool calling: inject tool descriptions as plain text. The tools_desc
@@ -1573,10 +1784,28 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         # else: tools are passed via the native tools API parameter — do not include tools_desc
         # here as well, since that confuses the model and causes it to not use tools properly.
 
+        if _resource_context:
+            guidance.append(_resource_context)
+            guidance.append(
+                "Recorded resource IDs in tool results identify exact records; "
+                "labels are not unique. For a follow-up action, use the referenced "
+                "record ID in the appropriate tool call. Earlier tool results "
+                "establish identity, not completion of the latest request. "
+                "Execute the latest requested action with a tool before claiming "
+                "it is done. An announcement or promise does not run a tool. "
+                "If identity is unclear, retrieve or clarify it."
+                + (
+                    " For the action turn, emit ONLY the tool_calls: [...] "
+                    "JSON literal using the available tool and recorded ID. "
+                    "Wait for its result before writing a prose confirmation."
+                    if use_text_tools else ""
+                )
+            )
+
         return "\n".join(guidance)
 
     messages = []  # type: ignore[var-annotated]
-    recent_tool_signatures = []  # keep last few tool calls: [(name, stable_args_json)]
+    recent_tool_outcomes = {}  # recent (name, argument JSON) signatures mapped to success
     # Tools actually invoked during this reply — (name, args_summary, result_summary).
     invoked_tools_history: list[tuple[str, str, str]] = []
     # System message with guidance, tools, and enrichment
@@ -1593,8 +1822,27 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     # exit path safely.
     _carryover_state = {"recorded": False}
 
+    from .personal_context import ContextualToolRunner
+    contextual_tool_runner = ContextualToolRunner(
+        run_tool_with_retries, db, cfg, redacted, recent_messages or [],
+    )
+
     # Per-reply memo for the time/location context line (see _get_context_string).
     _context_cache: Optional[str] = None
+
+    def _remember_tool_outcome(signature, success: bool) -> None:
+        recent_tool_outcomes[signature] = success
+        if len(recent_tool_outcomes) > 5:
+            recent_tool_outcomes.pop(next(iter(recent_tool_outcomes)))
+
+    def _append_tool_feedback(tool_name, tool_call_id, content, *, failed: bool) -> None:
+        message = {"content": content, "tool_name": tool_name, "tool_failed": failed,
+                   "tool_call_id": tool_call_id, "tool_feedback": True}
+        if use_text_tools:
+            message["role"] = "user"
+        else:
+            message.update(role="tool", tool_call_id=tool_call_id)
+        messages.append(message)
 
     def _maybe_record_tool_carryover() -> None:
         if _carryover_state["recorded"]:
@@ -1624,7 +1872,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     if isinstance(first, dict) and isinstance(first.get("function"), dict):
                         func = first["function"]
                         name = str(func.get("name", "")).strip()
-                        args = func.get("arguments")
+                        args = _decode_tool_arguments(func.get("arguments", {}))
                         tool_call_id = first.get("id")  # Extract tool_call_id
                         if not tool_call_id:
                             # Generate a shorthand ID if LLM didn't provide one
@@ -1635,13 +1883,13 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                             # Extract from nested structure: {'tool': {'args': {...}, 'name': ...}}
                             tool_info = args.get("tool", {})
                             if isinstance(tool_info, dict):
-                                actual_args = tool_info.get("args", {})
+                                actual_args = _decode_tool_arguments(tool_info.get("args", {}))
                                 actual_name = tool_info.get("name", name)
                                 if actual_name:
-                                    return actual_name, (actual_args if isinstance(actual_args, dict) else {}), tool_call_id
+                                    return actual_name, actual_args, tool_call_id, False
 
                         if name:
-                            return name, (args if isinstance(args, dict) else {}), tool_call_id
+                            return name, args, tool_call_id, False
 
                 # Content-mode tool-call parsing: the model returned prose that may
                 # encode a tool call in one of several shapes (markdown fence,
@@ -1652,7 +1900,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 known_names = known_tool_names
                 name, args, tool_call_id = _extract_text_tool_call(content_field, known_names)
                 if name:
-                    return name, args, tool_call_id
+                    return name, args, tool_call_id, True
 
                 # Diagnostic: if the content LOOKS like a botched tool call (starts
                 # with a known tool name, or contains `tool_calls:`, or is suspiciously
@@ -1680,7 +1928,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
         except Exception:
             pass
-        return None, None, None
+        return None, None, None, False
 
     def _get_context_string() -> str:
         """Get current time and location context as a string.
@@ -1807,6 +2055,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     last_candidate_reply: Optional[str] = None
     max_turns = cfg.agentic_max_turns
     turn = 0
+    empty_response_retry_used = False
 
     # Per-reply session id used to group prompt dumps on disk when
     # JARVIS_DUMP_PROMPTS=1 is set. Generated unconditionally so the
@@ -1819,11 +2068,52 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     print(f"  💬 Generating response...", flush=True)
     debug_log(f"Starting LLM conversation loop (max {max_turns} turns)...", "planning")
 
+    def _is_executed_tool_result(message: dict) -> bool:
+        return bool(message.get("tool_name")) and not message.get("tool_feedback", False)
+
     # Baseline: number of tool_name messages already in the message list from
     # dialogue carryover (prior queries in the same session). The direct-exec
     # counter must ignore these — they belong to earlier plan executions, not
     # to the steps of the current plan.
-    _plan_steps_baseline = sum(1 for m in messages if m.get("tool_name"))
+    _plan_steps_baseline = sum(1 for m in messages if _is_executed_tool_result(m))
+    _unexecuted_reply_retried = False
+
+    def _completion_evidence_missing() -> bool:
+        current_results = messages[user_msg_index + 1:]
+        plan_without_outcome = use_text_tools and _plan_in_recovery and not any(
+            _is_executed_tool_result(message)
+            and message.get("tool_name") in _full_catalog_names
+            and message.get("tool_name") not in {"stop", "toolSearchTool"}
+            for message in current_results
+        )
+        followup_without_result = bool(_selected_failed_followup) and not any(
+            _is_executed_tool_result(message)
+            and message.get("tool_name") in _full_catalog_names
+            and message.get("tool_name") not in {"stop", "toolSearchTool"}
+            and message.get("tool_failed") is False
+            for message in current_results
+        )
+        return plan_without_outcome or followup_without_result
+
+    def _enter_plan_recovery() -> None:
+        nonlocal _plan_in_recovery, _plan_recovery_record
+        if not action_plan or _plan_in_recovery:
+            return
+        successful_tools = [
+            message["tool_name"]
+            for message in messages[user_msg_index + 1:]
+            if _is_executed_tool_result(message) and message.get("tool_failed") is False
+        ]
+        _plan_recovery_record = (
+            "Successful tool results for this request: "
+            + json.dumps(successful_tools)
+            + ". Earlier results may supply information or recorded identifiers, "
+            "but are not proof of a new action."
+        )
+        _plan_in_recovery = True
+        messages[0] = {"role": "system", "content": _build_initial_system_message()}
+        debug_log("planned execution incomplete, returning unfinished task decisions to the reply model", "planning")
+        print("    ⚠️ Planned task needs recovery before continuing.", flush=True)
 
     while turn < max_turns:
         if cancel_event is not None and cancel_event.is_set():
@@ -1832,26 +2122,18 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         debug_log(f"🔁 messages loop turn {turn}", "planning")
         print(f"  🔁 Turn {turn}/{max_turns}", flush=True)
 
-        # Plan-driven direct-exec. When a pre-loop action plan exists and
-        # has more tool steps than tool results seen so far, resolve the
-        # next step into a concrete tool call and execute it IN THIS TURN
-        # without asking the chat model. Small models (gemma4:e2b) don't
-        # reliably substitute discovered entities into subsequent tool
-        # calls; driving plan steps via a short resolver LLM call against
-        # prior tool results lifts that responsibility off the chat model
-        # entirely. After each step we ``continue`` so the next iteration
-        # resolves the step after — the chat model is only invoked once
-        # all plan tool steps are exhausted, at which point it synthesises
-        # a final reply from the accumulated results.
-        # See planner.spec.md.
+        # Execute concrete plan steps while their outcomes succeed. A
+        # failed prerequisite returns unfinished task decisions to the
+        # reply model within the same bounded conversation loop.
         _plan_tool_steps = tool_steps_of(action_plan)
         if (
             use_text_tools
             and _plan_tool_steps
             and not _plan_under_specified
+            and not _plan_in_recovery
         ):
             _tool_results_so_far = (
-                sum(1 for m in messages if m.get("tool_name"))
+                sum(1 for m in messages if _is_executed_tool_result(m))
                 - _plan_steps_baseline
             )
             if 0 <= _tool_results_so_far < len(_plan_tool_steps):
@@ -1861,9 +2143,14 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     _resolved = _resolve_plan_step(
                         cfg=cfg,
                         next_step_text=_plan_tool_steps[_tool_results_so_far],
+                        original_query=redacted,
                         prior_results=_prior,
                         tools_schema=tools_json_schema or [],
+                        transcript_context=transcript_context,
                     )
+                    if cancel_event is not None and cancel_event.is_set():
+                        debug_log("reply cancelled after plan-step resolution", "planning")
+                        return None
                     if _resolved is not None:
                         _name, _args = _resolved
                         try:
@@ -1884,7 +2171,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                         _plan_exec_ok = (
                             _name in allowed_tools
                             and _name != "toolSearchTool"
-                            and _cand_sig not in recent_tool_signatures
+                            and _cand_sig not in recent_tool_outcomes
                         )
                         if _plan_exec_ok:
                             debug_log(
@@ -1911,21 +2198,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                             _plan_call_id = (
                                 f"call_plan_{uuid.uuid4().hex[:8]}"
                             )
-                            messages.append({
-                                "role": "assistant",
-                                "content": "",
-                                "tool_calls": [
-                                    {
-                                        "id": _plan_call_id,
-                                        "type": "function",
-                                        "function": {
-                                            "name": _name,
-                                            "arguments": _args,
-                                        },
-                                    }
-                                ],
-                            })
-                            _plan_result = run_tool_with_retries(
+                            _plan_result = contextual_tool_runner(
                                 db=db,
                                 cfg=cfg,
                                 tool_name=_name,
@@ -1935,30 +2208,29 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                                 redacted_text=redacted,
                                 max_retries=1,
                                 language=language,
+                                transcript_context=transcript_context,
                             )
+                            if not _plan_result.success or not _plan_result.reply_text:
+                                _report_tool_error(
+                                    _name, _plan_result.error_message
+                                    or _plan_result.reply_text or "(no result)",
+                                )
                             if _plan_result.reply_text:
-                                _plan_text = _maybe_digest_tool_result(
-                                    cfg=cfg,
-                                    query=redacted,
-                                    tool_name=_name,
-                                    raw_tool_result=_plan_result.reply_text,
+                                _plan_text, _plan_resources = _tool_result_content(
+                                    cfg, redacted, _name, _plan_result, transcript_context,
                                 )
                             else:
                                 _plan_err = (
                                     _plan_result.error_message or "(no result)"
                                 )
-                                _plan_err_preview = (
-                                    _plan_err
-                                    if len(_plan_err) <= 240
-                                    else _plan_err[:237] + "..."
-                                )
-                                print(
-                                    f"    ❌ {_name} error: {_plan_err_preview}",
-                                    flush=True,
-                                )
                                 _plan_text = f"Error: {_plan_err}"
+                                _plan_resources = []
+                            if not _plan_result.success:
+                                _enter_plan_recovery()
                             _plan_tool_results_after = _tool_results_so_far + 1
-                            if action_plan:
+                            if _plan_in_recovery:
+                                _plan_hint = _recovery_guidance
+                            elif action_plan:
                                 _plan_hint = progress_nudge(
                                     action_plan,
                                     _plan_tool_results_after,
@@ -1973,12 +2245,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                                 ),
                                 "tool_name": _name,
                                 "tool_failed": not _plan_result.success,
+                                "resource_references": _plan_resources,
                             })
-                            recent_tool_signatures.append(_cand_sig)
-                            if len(recent_tool_signatures) > 5:
-                                recent_tool_signatures = (
-                                    recent_tool_signatures[-5:]
-                                )
+                            _remember_tool_outcome(_cand_sig, bool(_plan_result.success))
                             invoked_tools_history.append(
                                 (_name, _cand_sig[1], _plan_text)
                             )
@@ -1987,7 +2256,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                             debug_log(
                                 f"planner: rejected plan step exec "
                                 f"({_name!r}: allow_list={_name in allowed_tools}, "
-                                f"dup={_cand_sig in recent_tool_signatures})",
+                                f"dup={_cand_sig in recent_tool_outcomes})",
                                 "planning",
                             )
                 except Exception as _pe:  # pragma: no cover — defensive
@@ -1997,6 +2266,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     )
                 if _plan_exec_handled:
                     continue
+                _enter_plan_recovery()
 
         # Update the system message with fresh context (time/location) before each LLM call.
         # The block sits at the END of the system message's dynamic region (computed once per
@@ -2040,6 +2310,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 response=llm_resp,
             )
         except ToolsNotSupportedError:
+            if cancel_event is not None and cancel_event.is_set():
+                debug_log("reply cancelled before tool-protocol fallback", "planning")
+                return None
             # Model doesn't support the native tools API — switch to text-based tool calling
             # for the rest of this session and rebuild the system message to include tool
             # descriptions as plain text with markdown fence instructions.
@@ -2069,6 +2342,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 use_text_tools=True,
                 response=llm_resp,
             )
+        if cancel_event is not None and cancel_event.is_set():
+            debug_log("reply cancelled after model response", "planning")
+            return None
         if not llm_resp:
             debug_log("  ❌ LLM returned no response", "planning")
             break
@@ -2100,9 +2376,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             debug_log(f"  💭 LLM thinking: '{thinking[:300]}{'...' if len(thinking) > 300 else ''}'", "planning")
 
         # Extract tool call if present
-        t_name, t_args, t_call_id = _extract_structured_tool_call(llm_resp)
+        t_name, t_args, t_call_id, text_tool_request = _extract_structured_tool_call(llm_resp)
 
-        # ALWAYS append the assistant's response to messages exactly as received
+        # Keep the assistant's content and the identity of its recognised request.
         assistant_msg = {"role": "assistant", "content": content}
 
         # Preserve all fields from the LLM response
@@ -2114,6 +2390,14 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 if "tool_calls" in msg and msg["tool_calls"]:
                     assistant_msg["tool_calls"] = msg["tool_calls"]
 
+        if text_tool_request:
+            t_call_id = f"call_{uuid.uuid4().hex}"
+            assistant_msg["tool_calls"] = [{
+                "id": t_call_id, "type": "function",
+                "function": {"name": t_name, "arguments": t_args},
+            }]
+            debug_log("Text tool request retained with its result identity", "planning")
+
         messages.append(assistant_msg)
 
         # Check if we're stuck (no content, no tool call)
@@ -2123,16 +2407,27 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 debug_log("  🧠 Thinking step (no action needed)", "planning")
                 continue
 
-            debug_log("  ⚠️ Empty assistant response with no tool calls", "planning")
-            if turn > 3:
-                debug_log("  🚨 Force exit - too many empty responses", "planning")
+            empty_message = llm_resp.get("message") if isinstance(llm_resp, dict) else None
+            recoverable_empty = (
+                isinstance(empty_message, dict)
+                and isinstance(empty_message.get("content"), str)
+                and empty_message.get("role", "assistant") == "assistant"
+                and not empty_message.get("tool_calls")
+            )
+            if recoverable_empty and not empty_response_retry_used and turn < max_turns:
+                empty_response_retry_used = True
+                messages.append({"role": "user", "content": _EMPTY_REPLY_RECOVERY_HINT})
+                debug_log("empty assistant response, requesting one recovery turn within the reply budget", "planning")
+                print("    🔁 Empty model response, requesting one recovery turn.", flush=True)
+                continue
+            debug_log("no usable assistant output; empty-response recovery unavailable or exhausted", "planning")
             break
 
         if t_name:
             tool_name, tool_args, tool_call_id = t_name, t_args, t_call_id
             debug_log(f"🛠️ tool requested: {tool_name}", "planning")
             try:
-                _args_preview = json.dumps(tool_args or {}, ensure_ascii=False)
+                _args_preview = json.dumps(tool_args, ensure_ascii=False)
             except Exception:
                 _args_preview = str(tool_args)
             if len(_args_preview) > 160:
@@ -2144,11 +2439,27 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 debug_log(f"  ⚠️ tool not allowed: {tool_name}", "planning")
                 print(f"    ⚠️ Tool '{tool_name}' not in allow-list", flush=True)
                 # Use tool response instead of system message to maintain native tool calling compatibility
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call_id,
-                    "content": f"Error: Tool '{tool_name}' is not available. Available tools: {', '.join(allowed_tools[:5])}{'...' if len(allowed_tools) > 5 else ''}"
-                })
+                _append_tool_feedback(
+                    tool_name, tool_call_id,
+                    f"Error: Tool '{tool_name}' is not available. Available tools: {', '.join(allowed_tools[:5])}{'...' if len(allowed_tools) > 5 else ''}",
+                    failed=True,
+                )
+                continue
+
+            if not isinstance(tool_args, dict):
+                _enter_plan_recovery()
+                debug_log(f"invalid argument object for {tool_name}; tool not executed", "planning")
+                print(f"    ⚠️ Invalid arguments for {tool_name}; tool not executed.", flush=True)
+                error = (
+                    "Arguments must be a complete JSON object. This tool was not executed. "
+                    "Emit a corrected call preserving the user's requested values; "
+                    "do not replace malformed arguments with empty defaults."
+                )
+                _append_tool_feedback(
+                    tool_name, tool_call_id,
+                    f"[Tool error: {tool_name}] {error}" if use_text_tools else error,
+                    failed=True,
+                )
                 continue
 
             # Cap toolSearchTool usage per reply so a confused model can't
@@ -2164,17 +2475,11 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     "toolSearchTool has been used the maximum number of times "
                     "this turn; make a decision with the tools already available."
                 )
-                if use_text_tools:
-                    messages.append({
-                        "role": "user",
-                        "content": f"[Tool error: {tool_name}] {cap_msg}",
-                    })
-                else:
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tool_call_id,
-                        "content": f"Error: {cap_msg}",
-                    })
+                _append_tool_feedback(
+                    tool_name, tool_call_id,
+                    f"[Tool error: {tool_name}] {cap_msg}" if use_text_tools else f"Error: {cap_msg}",
+                    failed=True,
+                )
                 continue
 
             if tool_name == "toolSearchTool":
@@ -2187,33 +2492,21 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             except Exception:
                 signature = (tool_name, "__unserializable_args__")
 
-            if signature in recent_tool_signatures:
+            if signature in recent_tool_outcomes:
                 debug_log(f"  ⚠️ Duplicate {tool_name} call - returning cached guidance", "planning")
-                if use_text_tools:
-                    messages.append({"role": "user", "content": f"[Tool: {tool_name}] You already called this tool with these arguments. Use the results from the previous tool call to answer the user."})
-                else:
-                    messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": f"You already called {tool_name} with these exact arguments. The results are in the previous messages. Please use those results to answer the user."})
-                continue
-
-            # Check if we already have results for this type of tool (prevents tool call loops).
-            # In native-tools mode results carry role="tool"; in text-tools mode they carry
-            # role="user" with a "tool_name" key — check both to make the guard effective
-            # in small-model paths where direct-exec is most likely to loop.
-            duplicate_tool_count = sum(
-                1 for msg in messages[-10:]
-                if msg.get("tool_name") == tool_name
-                and msg.get("role") in ("tool", "user")
-            )
-            if duplicate_tool_count >= 2:
-                debug_log(f"  ⚠️ Too many {tool_name} calls ({duplicate_tool_count}) - returning guidance", "planning")
-                if use_text_tools:
-                    messages.append({"role": "user", "content": f"[Tool: {tool_name}] You have already called this tool {duplicate_tool_count} times. Use the results from those calls to answer the user's question."})
-                else:
-                    messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": f"You have already called {tool_name} {duplicate_tool_count} times. Please use the results from those calls to answer the user's question."})
+                feedback = (
+                    f"[Tool: {tool_name}] You already called this tool with these arguments. Use the results from the previous tool call to answer the user."
+                    if use_text_tools else
+                    f"You already called {tool_name} with these exact arguments. The results are in the previous messages. Please use those results to answer the user."
+                )
+                _append_tool_feedback(
+                    tool_name, tool_call_id, feedback,
+                    failed=not recent_tool_outcomes[signature],
+                )
                 continue
 
             # Execute tool
-            result = run_tool_with_retries(
+            result = contextual_tool_runner(
                 db=db,
                 cfg=cfg,
                 tool_name=tool_name,
@@ -2223,6 +2516,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 redacted_text=redacted,
                 max_retries=1,
                 language=language,
+                transcript_context=transcript_context,
             )
 
             # Handle stop tool - end conversation without response
@@ -2262,6 +2556,14 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 return None
 
             # Append tool result
+            if not result.success or not result.reply_text:
+                _report_tool_error(
+                    tool_name, result.error_message or result.reply_text or "(no result)",
+                )
+            if not result.success:
+                _enter_plan_recovery()
+            recovery_hint = _recovery_guidance if _plan_in_recovery else ""
+
             if result.reply_text:
                 # toolSearchTool is an escape hatch: merge the surfaced tool
                 # names into the per-turn allow-list so the chat model can
@@ -2341,11 +2643,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 # push ~2B models into "describe the structure back" or
                 # prior-confabulation failure modes. The helper encapsulates
                 # the gating, distil round-trip, NONE fallback, and logging.
-                effective_result = _maybe_digest_tool_result(
-                    cfg=cfg,
-                    query=redacted,
-                    tool_name=tool_name,
-                    raw_tool_result=result.reply_text,
+                effective_result, resource_records = _tool_result_content(
+                    cfg, redacted, tool_name, result, transcript_context,
                 )
 
                 if use_text_tools:
@@ -2359,10 +2658,12 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     # not the one that just ran. The direct-exec path above uses
                     # `_tool_results_so_far + 1` for the same reason.
                     tool_results_so_far = (
-                        sum(1 for m in messages if m.get("tool_name"))
+                        sum(1 for m in messages if _is_executed_tool_result(m))
                         - _plan_steps_baseline
                     ) + 1
-                    if action_plan:
+                    if action_plan and _plan_in_recovery:
+                        remainder_hint = _recovery_guidance
+                    elif action_plan:
                         remainder_hint = progress_nudge(
                             action_plan, tool_results_so_far
                         )
@@ -2386,30 +2687,25 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     messages.append({
                         "role": "user",
                         "content": f"[Tool result: {tool_name}]\n{effective_result}{remainder_hint}",
+                        "tool_call_id": tool_call_id,
                         "tool_name": tool_name,  # kept for duplicate detection
                         "tool_failed": not result.success,
+                        "resource_references": resource_records,
                     })
                 else:
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tool_call_id,
                         "tool_name": tool_name,  # Include tool_name for duplicate detection
-                        "content": effective_result,
+                        "content": effective_result + recovery_hint,
                         "tool_failed": not result.success,
+                        "resource_references": resource_records,
                     })
                 debug_log(f"    ✅ tool result appended ({len(effective_result)} chars)", "planning")
 
                 # Note: We don't add a guidance system message here because adding system messages
                 # after the conversation starts breaks native tool calling in models like Llama 3.2.
                 # The model should naturally decide to answer, chain tools, or ask for clarification.
-                # Record signature after a successful tool response
-                try:
-                    recent_tool_signatures.append(signature)
-                    # Keep short memory of last 5
-                    if len(recent_tool_signatures) > 5:
-                        recent_tool_signatures = recent_tool_signatures[-5:]
-                except Exception:
-                    pass
                 # Record invoked tool history.
                 try:
                     invoked_tools_history.append(
@@ -2423,12 +2719,11 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     pass
             else:
                 err = result.error_message or "(no result)"
-                _err_preview = err if len(err) <= 240 else err[:237] + "..."
-                print(f"    ❌ {tool_name} error: {_err_preview}", flush=True)
                 if use_text_tools:
                     messages.append({
                         "role": "user",
-                        "content": f"[Tool error: {tool_name}] {err}",
+                        "content": f"[Tool error: {tool_name}] {err}" + recovery_hint,
+                        "tool_call_id": tool_call_id,
                         "tool_name": tool_name,
                         "tool_failed": True,
                     })
@@ -2437,12 +2732,31 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                         "role": "tool",
                         "tool_call_id": tool_call_id,
                         "tool_name": tool_name,
-                        "content": f"Error: {err}",
+                        "content": f"Error: {err}" + recovery_hint,
                         "tool_failed": True,
                     })
-                debug_log(f"    ❌ tool error: {err}", "planning")
+            # Reuse outcomes for identical calls, including error-only results.
+            _remember_tool_outcome(signature, bool(result.success))
             # Loop continues to let the agent produce the next step/final reply
             continue
+
+        # Plans and prior errors cannot establish a current completed result.
+        if _completion_evidence_missing():
+            non_completion_reply = _handoff_non_completion_reply(content)
+            if non_completion_reply is not None:
+                content = non_completion_reply
+            elif not _unexecuted_reply_retried and turn < max_turns:
+                _unexecuted_reply_retried = True
+                hint = _FAILED_TOOL_FOLLOWUP_HINT if _selected_failed_followup else _UNEXECUTED_ACTION_HINT
+                # An undelivered draft is not a conversation fact to build on.
+                messages.pop()
+                messages.append({"role": "user", "content": hint
+                                 + ("\n" + _resource_context if _resource_context else "")})
+                debug_log("missing execution evidence: requesting one grounded recovery turn", "planning")
+                continue
+            else:
+                content = _UNEXECUTED_ACTION_REPLY
+                debug_log("missing execution evidence: delivering an honest execution blocker", "planning")
 
         # Natural-language content from the model. Normalise and deliver.
         extracted = _extract_text_from_json_response(content)
@@ -2468,6 +2782,10 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         last_candidate_reply = candidate_reply
         break
 
+    if not reply and _completion_evidence_missing():
+        reply = _UNEXECUTED_ACTION_REPLY
+        debug_log("unexecuted planned action: turn budget exhausted without execution", "planning")
+
     # Step 9: Handle error case - return error message if no reply
     if not reply or not reply.strip():
         # Max-turn backstop: the loop exhausted its turns without producing
@@ -2478,6 +2796,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             digested = digest_loop_for_max_turns(
                 user_query=redacted,
                 loop_messages=messages[user_msg_index + 1:],
+                transcript_context=transcript_context,
                 cfg=cfg,
             )
         except Exception as e:
@@ -2530,9 +2849,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         safe_reply = "Sorry, I had trouble processing that. Could you try again?"
         reply = safe_reply
     if safe_reply:
-        # Print reply with appropriate header. Quiet mode (text chat) skips
-        # this entirely so the reply never reaches the daemon stdout that
-        # the desktop app forwards to the general log viewer.
+        # Quiet callers own delivery and activity logging of the reply.
         try:
             if not quiet and not getattr(cfg, "voice_debug", False):
                 print(f"\n🤖 Jarvis\n  {_indent_text(safe_reply)}\n", flush=True)

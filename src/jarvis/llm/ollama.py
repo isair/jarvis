@@ -1,26 +1,26 @@
-"""Ollama implementation of :class:`LLMBackend`.
+"""Ollama HTTP transport for chat, native tools and embeddings.
 
-This module owns the original behaviour of the previous flat
-``src/jarvis/llm.py``: HTTP calls against ``/api/chat``,
-``/api/embeddings`` and ``/api/tags``, native tool calling with the
-``tools`` parameter (Ollama 0.4+), and the same fail-soft error
-handling (return ``None`` on timeouts / connection errors;
-:class:`ToolsNotSupportedError` on HTTP 400 with tools).
-
-Nothing about the wire shape, defaults, or response parsing has
-changed in this PR — the file is the previous implementation reshaped
-into a class so future PRs can drop in OpenAI-compatible and
-Anthropic-compatible siblings without touching call sites.
+Chat requests use local Ollama endpoints, optional reasoning controls and
+prompt caching. Responses expose assistant content separately from reasoning.
+Timeouts and unavailable services fail softly; unsupported native tools raise
+``ToolsNotSupportedError`` for the reply engine's text-based fallback.
 """
 
 from __future__ import annotations
 from typing import Any, Callable, Dict, List, Optional
 
 import json
+import time
 import requests
 
 from ..debug import debug_log
-from .backend import LLMBackend, ToolsNotSupportedError, strip_nonstandard_message_fields
+from . import http
+from .errors import is_timeout_error
+from .streaming import check_stream_deadline, iter_stream_lines
+from .backend import (
+    LLMBackend, ToolsNotSupportedError, response_is_incomplete,
+    strip_nonstandard_message_fields,
+)
 
 
 def check_version(base_url: str, timeout: float = 5.0) -> tuple[bool, str | None]:
@@ -28,16 +28,16 @@ def check_version(base_url: str, timeout: float = 5.0) -> tuple[bool, str | None
     endpoint responds as an Ollama server, or ``(False, None)`` on failure or
     non-Ollama response."""
     try:
-        resp = requests.get(f"{base_url}/api/version", timeout=timeout)
-        if resp.status_code != 200:
-            return False, None
-        data = resp.json()
-        if not isinstance(data, dict):
-            return False, None
-        version = data.get("version")
-        if not isinstance(version, str) or not version:
-            return False, None
-        return True, version
+        with http.get(f"{base_url}/api/version", timeout=timeout) as resp:
+            if resp.status_code != 200:
+                return False, None
+            data = resp.json()
+            if not isinstance(data, dict):
+                return False, None
+            version = data.get("version")
+            if not isinstance(version, str) or not version:
+                return False, None
+            return True, version
     except Exception:
         return False, None
 
@@ -73,6 +73,16 @@ def extract_text_from_response(data: Dict[str, Any]) -> Optional[str]:
             return content
 
     return None
+
+
+def _thinking_level(chat_model: str, thinking: bool | str) -> bool | str:
+    """Translate boolean controls to GPT-OSS's supported reasoning levels."""
+    model_name = chat_model.rsplit("/", 1)[-1].partition(":")[0]
+    if model_name.casefold() == "gpt-oss" and isinstance(thinking, bool):
+        level = "high" if thinking else "low"
+        debug_log(f"GPT-OSS reasoning level: {level}", "llm")
+        return level
+    return thinking
 
 
 class OllamaBackend(LLMBackend):
@@ -135,17 +145,20 @@ class OllamaBackend(LLMBackend):
             "stream": False,
             "cache_prompt": True,
             "options": options,
-            "think": thinking,
+            "think": _thinking_level(chat_model, thinking),
         }
 
         try:
-            with requests.post(
+            with http.post(
                 f"{self._base_url}/api/chat", json=payload, timeout=timeout_sec
             ) as resp:
                 resp.raise_for_status()
                 data = resp.json()
 
             if isinstance(data, dict):
+                if response_is_incomplete(data):
+                    debug_log("OllamaBackend.direct: incomplete generation", "llm")
+                    return None
                 content = extract_text_from_response(data)
                 if isinstance(content, str) and content.strip():
                     return content
@@ -157,7 +170,7 @@ class OllamaBackend(LLMBackend):
             debug_log(f"OllamaBackend.direct: timeout after {timeout_sec}s", "llm")
             return None
         except Exception as e:
-            debug_log(f"OllamaBackend.direct: request failed — {e}", "llm")
+            debug_log(f"OllamaBackend.direct: request failed ({type(e).__name__})", "llm")
             return None
 
         return None
@@ -175,7 +188,7 @@ class OllamaBackend(LLMBackend):
         received. Returns the complete response text, or ``None`` on
         error / empty stream.
 
-        Uses ``with requests.post(...)`` so the streaming response (and
+        Uses ``with http.post(...)`` so the streaming response (and
         the underlying TCP connection) is released even if iteration
         exits early via an exception or the caller stops consuming.
         Without this, an aborted stream pinned the connection until GC,
@@ -193,11 +206,12 @@ class OllamaBackend(LLMBackend):
             "stream": True,
             "cache_prompt": True,
             "options": {"num_ctx": 4096},
-            "think": thinking,
+            "think": _thinking_level(chat_model, thinking),
         }
 
+        deadline = time.monotonic() + timeout_sec
         try:
-            with requests.post(
+            with http.post(
                 f"{self._base_url}/api/chat",
                 json=payload,
                 timeout=timeout_sec,
@@ -206,7 +220,7 @@ class OllamaBackend(LLMBackend):
                 resp.raise_for_status()
 
                 full_response: List[str] = []
-                for line in resp.iter_lines():
+                for line in iter_stream_lines(resp, deadline):
                     if line:
                         try:
                             data = json.loads(line)
@@ -219,10 +233,12 @@ class OllamaBackend(LLMBackend):
                         except json.JSONDecodeError:
                             continue
 
+                check_stream_deadline(deadline)
                 result = "".join(full_response)
                 return result if result.strip() else None
 
         except requests.exceptions.Timeout:
+            debug_log(f"ollama streaming: timeout after {timeout_sec}s", "llm")
             return None
         except Exception:
             return None
@@ -277,11 +293,13 @@ class OllamaBackend(LLMBackend):
                 else:
                     payload["options"][key] = value
 
+        payload["think"] = _thinking_level(chat_model, payload["think"])
+
         if tools and isinstance(tools, list) and len(tools) > 0:
             payload["tools"] = tools
 
         try:
-            with requests.post(
+            with http.post(
                 f"{self._base_url}/api/chat", json=payload, timeout=timeout_sec
             ) as resp:
                 resp.raise_for_status()
@@ -289,9 +307,13 @@ class OllamaBackend(LLMBackend):
             if isinstance(data, dict):
                 return data
         except requests.exceptions.Timeout:
-            print("  ⏱️ LLM request timed out", flush=True)
+            print(f"  ⏱️ LLM request timed out (configured timeout: {timeout_sec:g}s)", flush=True)
             return None
-        except requests.exceptions.ConnectionError:
+        except requests.exceptions.ConnectionError as exc:
+            if is_timeout_error(exc):
+                debug_log("chat response read timed out (wrapped transport timeout)", "llm")
+                print(f"  ⏱️ LLM request timed out (configured timeout: {timeout_sec:g}s)", flush=True)
+                return None
             # Bubble out so callers (e.g. the intent judge) can distinguish
             # "server unreachable" from a transient error and apply their own
             # back-off policy.
@@ -321,16 +343,16 @@ class OllamaBackend(LLMBackend):
     ) -> Optional[List[float]]:
         """Embed ``text`` via Ollama's ``/api/embeddings``."""
         try:
-            resp = requests.post(
+            with http.post(
                 f"{self._base_url}/api/embeddings",
                 json={"model": model, "prompt": text},
                 timeout=timeout_sec,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            vec = data.get("embedding")
-            if isinstance(vec, list):
-                return [float(x) for x in vec]
+            ) as resp:
+                resp.raise_for_status()
+                data = resp.json()
+                vec = data.get("embedding")
+                if isinstance(vec, list):
+                    return [float(x) for x in vec]
         except Exception:
             return None
         return None
@@ -338,17 +360,17 @@ class OllamaBackend(LLMBackend):
     def list_models(self, timeout_sec: float = 5.0) -> List[str]:
         """List installed Ollama models via ``GET /api/tags``."""
         try:
-            resp = requests.get(f"{self._base_url}/api/tags", timeout=timeout_sec)
-            resp.raise_for_status()
-            data = resp.json()
-            models = data.get("models", []) if isinstance(data, dict) else []
-            names: List[str] = []
-            for m in models:
-                if isinstance(m, dict):
-                    name = m.get("name")
-                    if isinstance(name, str) and name:
-                        names.append(name)
-            return names
+            with http.get(f"{self._base_url}/api/tags", timeout=timeout_sec) as resp:
+                resp.raise_for_status()
+                data = resp.json()
+                models = data.get("models", []) if isinstance(data, dict) else []
+                names: List[str] = []
+                for m in models:
+                    if isinstance(m, dict):
+                        name = m.get("name")
+                        if isinstance(name, str) and name:
+                            names.append(name)
+                return names
         except Exception:
             return []
 
@@ -380,7 +402,7 @@ class OllamaBackend(LLMBackend):
                 return False
 
             remaining = max(1.0, timeout_sec - version_to)
-            resp = requests.post(
+            with http.post(
                 f"{self._base_url}/api/chat",
                 json={
                     "model": model,
@@ -393,7 +415,7 @@ class OllamaBackend(LLMBackend):
                     "options": {"num_predict": 1, "temperature": 0.0},
                 },
                 timeout=remaining,
-            )
-            return resp.status_code == 200
+            ) as resp:
+                return resp.status_code == 200
         except Exception:
             return False

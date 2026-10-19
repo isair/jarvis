@@ -1,6 +1,4 @@
 from __future__ import annotations
-import io
-import struct
 import threading
 import time
 from typing import Optional
@@ -61,7 +59,7 @@ def _generate_thinking_pad_samples() -> tuple[np.ndarray, int]:
     # Exponential decay from 1.0 down to effectively 0 over the tone body.
     decay = np.exp(-4.0 * np.arange(decay_len) / decay_len)
     one_cycle[attack_len:tone_len] = decay
-    # Tile three cycles across the 9s buffer (matches duration_s exactly).
+    # Tile complete pulse cycles across the sample buffer.
     num_cycles = n // cycle_len
     envelope = np.zeros(n, dtype=np.float64)
     for i in range(num_cycles):
@@ -83,48 +81,7 @@ def _generate_thinking_pad_samples() -> tuple[np.ndarray, int]:
     return samples, sample_rate
 
 
-def _generate_thinking_pad_wav() -> bytes:
-    """WAV-wrapped version of the thinking pad (kept for test coverage)."""
-    samples, sample_rate = _generate_thinking_pad_samples()
-    num_samples = samples.size
-
-    wav_buffer = io.BytesIO()
-    num_channels = 1
-    bits_per_sample = 16
-    byte_rate = sample_rate * num_channels * bits_per_sample // 8
-    block_align = num_channels * bits_per_sample // 8
-    data_size = num_samples * block_align
-
-    wav_buffer.write(b'RIFF')
-    wav_buffer.write(struct.pack('<I', 36 + data_size))
-    wav_buffer.write(b'WAVE')
-
-    wav_buffer.write(b'fmt ')
-    wav_buffer.write(struct.pack('<I', 16))
-    wav_buffer.write(struct.pack('<H', 1))
-    wav_buffer.write(struct.pack('<H', num_channels))
-    wav_buffer.write(struct.pack('<I', sample_rate))
-    wav_buffer.write(struct.pack('<I', byte_rate))
-    wav_buffer.write(struct.pack('<H', block_align))
-    wav_buffer.write(struct.pack('<H', bits_per_sample))
-
-    wav_buffer.write(b'data')
-    wav_buffer.write(struct.pack('<I', data_size))
-    wav_buffer.write(samples.tobytes())
-
-    return wav_buffer.getvalue()
-
-
-_THINKING_PAD_WAV: Optional[bytes] = None
 _THINKING_PAD_SAMPLES: Optional[tuple[np.ndarray, int]] = None
-
-
-def _get_thinking_pad_wav() -> bytes:
-    """Get cached thinking-pad WAV data, generating on first call."""
-    global _THINKING_PAD_WAV
-    if _THINKING_PAD_WAV is None:
-        _THINKING_PAD_WAV = _generate_thinking_pad_wav()
-    return _THINKING_PAD_WAV
 
 
 def _get_thinking_pad_samples() -> tuple[np.ndarray, int]:
@@ -154,27 +111,34 @@ class TunePlayer:
     uses. This matters: if the tune held the audio output device via a
     separate path (e.g. afplay subprocess killed mid-stream), macOS
     CoreAudio could take seconds to release the device, stalling TTS.
-    Using one API means clean release — stop returns in milliseconds and
-    TTS can open the device immediately after.
+    The owning worker releases the device; stop uses a bounded wait and
+    another tune starts only after teardown finishes.
     """
 
     def __init__(self, enabled: bool = True) -> None:
         self.enabled = enabled
         self._thread: Optional[threading.Thread] = None
+        self._lifecycle_lock = threading.Lock()
         self._stop_event = threading.Event()
         self._is_playing = threading.Event()
 
     def start_tune(self) -> None:
-        if not self.enabled or self._thread is not None:
-            return
+        with self._lifecycle_lock:
+            if not self.enabled or self._thread is not None:
+                return
 
-        debug_log("thinking tune: start", category="tune")
-        self._stop_event.clear()
-        self._thread = threading.Thread(target=self._play_tune, daemon=True)
-        self._thread.start()
+            debug_log("thinking tune: start", category="tune")
+            self._stop_event.clear()
+            self._thread = threading.Thread(target=self._play_tune, daemon=True)
+            try:
+                self._thread.start()
+            except Exception as exc:
+                self._thread = None
+                debug_log(f"thinking tune: worker creation failed: {exc!r}", category="tune")
+                raise
 
     def stop_tune(self) -> None:
-        """Stop the tune immediately, releasing the audio device.
+        """Request stop and wait briefly for audio teardown.
 
         We deliberately do NOT call ``stream.abort()`` from this thread —
         only the tune thread (`_play_tune`'s finally block) touches the
@@ -185,14 +149,17 @@ class TunePlayer:
         stop event is enough — `stream.close()` discards pending buffers
         as if abort() had been called.
         """
-        if self._thread is None:
-            return
+        with self._lifecycle_lock:
+            thread = self._thread
+            if thread is None:
+                return
+            debug_log("thinking tune: stop", category="tune")
+            self._stop_event.set()
 
-        debug_log("thinking tune: stop", category="tune")
-        self._stop_event.set()
-        self._thread.join(timeout=1.0)
-        self._thread = None
-        self._is_playing.clear()
+        thread.join(timeout=1.0)
+        with self._lifecycle_lock:
+            if self._thread is thread:
+                debug_log("thinking tune: audio teardown pending; restart deferred", category="tune")
 
     def is_playing(self) -> bool:
         return self._is_playing.is_set()
@@ -265,7 +232,10 @@ class TunePlayer:
                 except Exception as exc:
                     debug_log(f"thinking tune: stream close failed: {exc!r}", category="tune")
         finally:
-            self._is_playing.clear()
+            with self._lifecycle_lock:
+                self._thread = None
+                self._is_playing.clear()
+            debug_log("thinking tune: worker finished", category="tune")
 
     def _play_fallback_tune(self) -> None:
         """Fallback for environments without a usable audio output."""
