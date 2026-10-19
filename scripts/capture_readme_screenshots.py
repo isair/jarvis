@@ -56,13 +56,15 @@ def main():
         stack.enter_context(patch.object(socket.socket, 'connect', side_effect=AssertionError('Screenshots must be offline')))
         from desktop_app.qt_worker import KeepAliveWorker
         stack.enter_context(patch.object(KeepAliveWorker, 'start', side_effect=AssertionError('Screenshots must not start workers')))
+        from jarvis import activity
+        from jarvis.activity import JarvisState
         from desktop_app import face_widget
-        stack.enter_context(patch.object(face_widget, '_get_jarvis_state_file',
+        stack.enter_context(patch.object(activity, '_get_jarvis_state_file',
             return_value=str(Path(temporary) / 'face-state')))
-        stack.enter_context(patch.object(face_widget, '_jarvis_state_instance', None))
+        stack.enter_context(patch.object(activity, '_jarvis_state_instance', None))
         face = face_widget.FaceWindow()
         face.face._animation_timer.stop()
-        face.face._state_manager.set_state(face_widget.JarvisState.IDLE)
+        face.face._state_manager.set_state(JarvisState.IDLE)
         face.face._animate()
         face.face._activation_level = 1.0
         capture(face, 'face.png')

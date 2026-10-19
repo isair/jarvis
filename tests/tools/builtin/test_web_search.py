@@ -1212,7 +1212,7 @@ class TestLanguagePlumbingEndToEnd:
         listener._clear_audio_buffers = Mock()
         listener._stop_thinking_tune = Mock()
 
-        with patch("desktop_app.face_widget.get_jarvis_state", return_value=Mock()), \
+        with patch("jarvis.activity.get_jarvis_state", return_value=Mock()), \
                 patch("jarvis.reply.engine.run_reply_engine", return_value="") as run_reply:
             with patch("jarvis.daemon.query_lock", return_value=nullcontext()):
                 listener._dispatch_query("istanbul", language="tr", generation=listener._capture_generation)

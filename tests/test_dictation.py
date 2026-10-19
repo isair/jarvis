@@ -632,23 +632,23 @@ class TestFaceWidgetDictatingState:
     """Tests that the DICTATING state exists and is handled."""
 
     def test_jarvis_state_has_dictating(self):
-        from desktop_app.face_widget import JarvisState
+        from jarvis.activity import JarvisState
         assert hasattr(JarvisState, "DICTATING")
         assert JarvisState.DICTATING.value == "dictating"
 
     def test_dictating_state_round_trips(self):
         """State manager should accept DICTATING state."""
-        from desktop_app.face_widget import JarvisState
+        from jarvis.activity import JarvisState
         state = JarvisState("dictating")
         assert state == JarvisState.DICTATING
 
     def test_jarvis_state_has_dictation_processing(self):
-        from desktop_app.face_widget import JarvisState
+        from jarvis.activity import JarvisState
         assert hasattr(JarvisState, "DICTATION_PROCESSING")
         assert JarvisState.DICTATION_PROCESSING.value == "dictation_processing"
 
     def test_dictation_processing_state_round_trips(self):
-        from desktop_app.face_widget import JarvisState
+        from jarvis.activity import JarvisState
         state = JarvisState("dictation_processing")
         assert state == JarvisState.DICTATION_PROCESSING
 

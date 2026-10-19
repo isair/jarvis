@@ -3,7 +3,8 @@ import pytest
 from PyQt6.QtCore import Qt, QPoint, QPointF
 from PyQt6.QtGui import QContextMenuEvent, QMouseEvent
 from PyQt6.QtWidgets import QMenu
-from desktop_app.face_widget import Expression, JarvisState
+from desktop_app.face_widget import Expression
+from jarvis.activity import JarvisState
 
 pytestmark = pytest.mark.unit
 
@@ -11,8 +12,9 @@ pytestmark = pytest.mark.unit
 @pytest.fixture
 def face(qapp, monkeypatch, tmp_path):
     from desktop_app import face_widget
-    monkeypatch.setattr(face_widget, '_get_jarvis_state_file', lambda: str(tmp_path / 'state'))
-    monkeypatch.setattr(face_widget, '_jarvis_state_instance', None)
+    from jarvis import activity
+    monkeypatch.setattr(activity, '_get_jarvis_state_file', lambda: str(tmp_path / 'state'))
+    monkeypatch.setattr(activity, '_jarvis_state_instance', None)
     window = face_widget.FaceWindow()
     window.show()
     qapp.processEvents()
@@ -77,7 +79,7 @@ def test_empty_corners_do_not_occupy_the_native_input_region(face):
 
 
 def test_resting_presence_is_quieter_than_active_states(face):
-    from desktop_app.face_widget import JarvisState
+    from jarvis.activity import JarvisState
     manager = face.face._state_manager
     manager.set_state(JarvisState.ASLEEP)
     face.face._animate()
@@ -106,7 +108,7 @@ def test_tray_show_does_not_request_focus(face):
 
 def test_subprocess_state_file_updates_presence_without_a_qt_signal(face):
     from pathlib import Path
-    from desktop_app.face_widget import JarvisState
+    from jarvis.activity import JarvisState
     before = face.windowOpacity()
     Path(face.face._state_manager._state_file).write_text(JarvisState.LISTENING.value)
     face.face._animate()

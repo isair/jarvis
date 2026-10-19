@@ -671,7 +671,7 @@ class ChatterboxTTS:
         """
         # Import here to avoid circular dependencies
         try:
-            from desktop_app.face_widget import get_jarvis_state, JarvisState
+            from jarvis.activity import get_jarvis_state, JarvisState
             state_manager = get_jarvis_state()
             if is_speaking:
                 debug_log("setting face state to SPEAKING (chatterbox)", "tts")
@@ -1067,7 +1067,7 @@ class PiperTTS:
     def _notify_speaking_state(self, is_speaking: bool) -> None:
         """Notify the face widget of speaking state changes."""
         try:
-            from desktop_app.face_widget import get_jarvis_state, JarvisState
+            from jarvis.activity import get_jarvis_state, JarvisState
             state_manager = get_jarvis_state()
             if is_speaking:
                 debug_log("setting face state to SPEAKING (piper)", "tts")

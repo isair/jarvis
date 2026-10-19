@@ -1807,7 +1807,7 @@ class TestListeningWindowVisibility:
         manager that factory returns.
         """
         import desktop_app.face_widget as face_widget_mod
-        from desktop_app.face_widget import JarvisState
+        from jarvis.activity import JarvisState
 
         fake_state = MagicMock()
         monkeypatch.setattr(

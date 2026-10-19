@@ -582,7 +582,7 @@ class VoiceListener(threading.Thread):
             self._tune_player.stop_tune()
             self._tune_player = None
             try:
-                from desktop_app.face_widget import get_jarvis_state, JarvisState
+                from jarvis.activity import get_jarvis_state, JarvisState
                 if not self.is_capture_paused('dictation'):
                     get_jarvis_state().set_state(JarvisState.IDLE)
             except ImportError:
@@ -593,7 +593,7 @@ class VoiceListener(threading.Thread):
     def _set_face_state_listening(self) -> None:
         """Set the desktop face widget to LISTENING state."""
         try:
-            from desktop_app.face_widget import get_jarvis_state, JarvisState
+            from jarvis.activity import get_jarvis_state, JarvisState
             get_jarvis_state().set_state(JarvisState.LISTENING)
         except ImportError:
             pass
@@ -1048,7 +1048,7 @@ class VoiceListener(threading.Thread):
 
         # Set face state to THINKING
         try:
-            from desktop_app.face_widget import get_jarvis_state, JarvisState
+            from jarvis.activity import get_jarvis_state, JarvisState
             state_manager = get_jarvis_state()
             state_manager.set_state(JarvisState.THINKING)
             debug_log("face state set to THINKING (dispatch_query)", "voice")
@@ -2325,7 +2325,7 @@ class VoiceListener(threading.Thread):
 
             # Set face state to IDLE (awake and ready, waiting for wake word)
             try:
-                from desktop_app.face_widget import get_jarvis_state, JarvisState
+                from jarvis.activity import get_jarvis_state, JarvisState
                 state_manager = get_jarvis_state()
                 state_manager.set_state(JarvisState.IDLE)
             except Exception:

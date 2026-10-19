@@ -99,7 +99,7 @@ class StateManager:
 
         # Set face state to LISTENING
         try:
-            from desktop_app.face_widget import get_jarvis_state, JarvisState
+            from jarvis.activity import get_jarvis_state, JarvisState
             face_state_manager = get_jarvis_state()
             face_state_manager.set_state(JarvisState.LISTENING)
             debug_log("face state set to LISTENING (collection started)", "state")
@@ -332,7 +332,7 @@ class StateManager:
 
                 # Set face state to IDLE
                 try:
-                    from desktop_app.face_widget import get_jarvis_state, JarvisState
+                    from jarvis.activity import get_jarvis_state, JarvisState
                     face_state_manager = get_jarvis_state()
                     face_state_manager.set_state(JarvisState.IDLE)
                     debug_log("face state set to IDLE (hot window timer expiry)", "state")
@@ -402,7 +402,7 @@ class StateManager:
 
                 # Set face state to LISTENING
                 try:
-                    from desktop_app.face_widget import get_jarvis_state, JarvisState
+                    from jarvis.activity import get_jarvis_state, JarvisState
                     face_state_manager = get_jarvis_state()
                     face_state_manager.set_state(JarvisState.LISTENING)
                     debug_log("face state set to LISTENING (hot window activated)", "state")
@@ -466,7 +466,7 @@ class StateManager:
 
                 # Set face state to IDLE (awake and ready, waiting for wake word)
                 try:
-                    from desktop_app.face_widget import get_jarvis_state, JarvisState
+                    from jarvis.activity import get_jarvis_state, JarvisState
                     face_state_manager = get_jarvis_state()
                     face_state_manager.set_state(JarvisState.IDLE)
                     debug_log("face state set to IDLE (hot window poll expiry)", "state")
@@ -504,7 +504,7 @@ class StateManager:
 
                 # Set face state to IDLE (awake and ready, waiting for wake word)
                 try:
-                    from desktop_app.face_widget import get_jarvis_state, JarvisState
+                    from jarvis.activity import get_jarvis_state, JarvisState
                     face_state_manager = get_jarvis_state()
                     face_state_manager.set_state(JarvisState.IDLE)
                     debug_log("face state set to IDLE (hot window manually expired)", "state")

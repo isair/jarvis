@@ -23,7 +23,7 @@ def synthetic_listener(monkeypatch, silent_thinking_tunes):
     monkeypatch.setattr(capture, '_load_faster_whisper_model', lambda *a, **kw: MagicMock())
     monkeypatch.setattr(VoiceListener, '_decode_faster_whisper', lambda *a: ([], None))
     monkeypatch.setattr(VoiceListener, '_start_llm_warmup', lambda _self: [])
-    monkeypatch.setattr('desktop_app.face_widget.get_jarvis_state', lambda: MagicMock())
+    monkeypatch.setattr('jarvis.activity.get_jarvis_state', lambda: MagicMock())
     obj = VoiceListener(MagicMock(), cfg, None, None)
 
     class Stream:
