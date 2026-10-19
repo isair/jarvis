@@ -15,13 +15,26 @@ unchanged; restarting Jarvis creates a fresh engine that can load a repaired mod
 
 ## Queued utterance ownership
 
-Each queued utterance owns its preprocessed text, duration callback and
-completion callback. Later submissions, including submissions made by a
-callback, cannot replace or clear another utterance's callbacks. Synthesis
+Each speech submission returns a cancellable `SpeechRequest` that owns its
+preprocessed text, duration callback, success callback and terminal callback.
+The terminal callback receives exactly one outcome: `completed`, `cancelled`,
+`interrupted`, `failed` or `rejected`. Disabled or empty submissions release
+ownership as rejected; synthesis and playback errors do not report success.
+Cancelling pending work prevents its playback and releases it immediately.
+Cancelling active work interrupts it and releases ownership after the worker
+finishes that request. Terminal callback failures cannot prevent later work.
+Success callbacks run before terminal release only for completed playback.
+Piper requires a normal final-buffer drain, rather than stream inactivity alone,
+and treats unexpected native callback failures as failed playback. Created
+output streams are closed before terminal release, including failed startup.
+Interruption
+and cancellation are resolved atomically with the terminal outcome.
+Both local backends share the same admission and queue ownership lifecycle.
+Later submissions, including submissions made by a callback, cannot replace or clear another utterance's callbacks. Synthesis
 reports its exact duration to that utterance's listener, and completion reports
 only that utterance's completion. An interrupted utterance does not report
-successful completion. Callback failures remain isolated from later work. The worker releases the
-completed request and its callback references before waiting for more speech.
+successful completion. Callback failures remain isolated from later work. The
+worker releases the completed request and its callback references before waiting for more speech.
 
 ## Piper voice downloads
 
@@ -45,9 +58,11 @@ Download diagnostics use `debug_log` without recording user speech or reply text
 
 ## Shutdown and restart
 
-Stopping speech interrupts the active utterance and discards queued utterances
-and their callbacks. A worker still synthesising after the bounded join retains
-its shutdown state and ownership until it exits. Speech submitted while that
+Stopping speech interrupts the active utterance and cancels queued utterances.
+Queued requests release their terminal ownership without running their success
+callbacks. Callback references are released after termination; reentrant user
+callbacks run outside the worker lifecycle lock. A worker still synthesising
+after the bounded join retains its shutdown state and ownership until it exits. Speech submitted while that
 worker drains is discarded; no second worker starts beside it. Stopped synthesis
 does not begin playback or report completion. Once the worker exits, a new
 submission can start a fresh worker without replaying discarded speech.

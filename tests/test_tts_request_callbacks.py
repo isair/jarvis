@@ -38,16 +38,21 @@ def voice(request, monkeypatch):
         active = False
 
         def __init__(self, **kwargs):
-            pass
+            self.callback = kwargs['callback']
 
         def start(self):
-            pass
+            self.active = True
+            try:
+                while self.active:
+                    self.callback(np.zeros((1024, 1), dtype=np.int16), 1024, None, None)
+            except (sounddevice.CallbackStop, sounddevice.CallbackAbort):
+                self.active = False
 
         def abort(self):
-            pass
+            self.active = False
 
         def close(self):
-            pass
+            self.active = False
 
     import sounddevice
     monkeypatch.setattr(sounddevice, 'OutputStream', SilentStream)
@@ -508,3 +513,287 @@ def test_cancelled_model_load_cannot_submit_stale_speech(voice, monkeypatch, new
             worker.join(timeout=3)
             assert not worker.is_alive()
         assert not starter.is_alive()
+
+
+@pytest.mark.parametrize('reason', ['disabled', 'empty'])
+def test_rejected_speech_releases_ownership_without_success(voice, reason):
+    outcomes = []
+    completed = []
+    if reason == 'disabled':
+        voice.enabled = False
+    request = voice.speak(
+        '' if reason == 'empty' else 'first',
+        completion_callback=lambda: completed.append(True),
+        terminal_callback=outcomes.append,
+    )
+    assert outcomes == ['rejected']
+    assert completed == []
+    request.cancel()
+    assert outcomes == ['rejected']
+
+
+def test_success_releases_each_request_after_its_success_callback(voice):
+    events = []
+    for text in ('first', 'second'):
+        voice.speak(
+            text, completion_callback=lambda text=text: events.append((text, 'success')),
+            terminal_callback=lambda outcome, text=text: events.append((text, outcome)),
+        )
+    voice._run()
+    assert events == [('first', 'success'), ('first', 'completed'),
+                      ('second', 'success'), ('second', 'completed')]
+
+
+def test_failed_synthesis_releases_ownership_without_success(voice):
+    outcomes = []
+    completed = []
+
+    def failed(*args, **kwargs):
+        raise RuntimeError('Owned synthesis failure')
+
+    if isinstance(voice, speech.PiperTTS):
+        voice._voice.synthesize = failed
+    else:
+        voice._model.generate = failed
+    voice.speak('first', completion_callback=lambda: completed.append(True),
+                terminal_callback=outcomes.append)
+    voice._run()
+    assert completed == []
+    assert outcomes == ['failed']
+
+
+def test_stopping_releases_queued_ownership_exactly_once(voice):
+    completed = []
+    outcomes = []
+    request = voice.speak('first', completion_callback=lambda: completed.append(True),
+                          terminal_callback=outcomes.append)
+    voice.stop()
+    voice.stop()
+    request.cancel()
+    assert completed == []
+    assert outcomes == ['cancelled']
+
+
+def test_cancelling_one_pending_request_keeps_later_speech(voice):
+    outcomes = []
+    completed = []
+    first = voice.speak('first', completion_callback=lambda: completed.append('first'),
+                        terminal_callback=lambda outcome: outcomes.append(('first', outcome)))
+    voice.speak('second', completion_callback=lambda: completed.append('second'),
+                terminal_callback=lambda outcome: outcomes.append(('second', outcome)))
+    first.cancel()
+    assert outcomes == [('first', 'cancelled')]
+    voice._run()
+    assert completed == ['second']
+    assert outcomes == [('first', 'cancelled'), ('second', 'completed')]
+
+
+@pytest.mark.parametrize("action", ["cancel", "interrupt"])
+def test_cancellation_between_claim_and_synthesis_cannot_start_playback(voice, monkeypatch, action):
+    import threading
+
+    claimed = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+    playback = []
+    outcomes = []
+    completed = []
+    original = voice._speak_once
+
+    def paused(request):
+        claimed.set()
+        assert release.wait(timeout=5)
+        return original(request)
+
+    voice._q = queue.Queue()
+    monkeypatch.setattr(voice, '_start_if_current', type(voice)._start_if_current.__get__(voice))
+    monkeypatch.setattr(voice, '_speak_once', paused)
+    monkeypatch.setattr(sys.modules['sounddevice'].OutputStream, 'start', lambda self: playback.append('piper'))
+    monkeypatch.setattr(sys.modules['pygame'].mixer.music, 'play', lambda: playback.append('chatterbox'))
+
+    def terminal(outcome):
+        outcomes.append(outcome)
+        finished.set()
+
+    request = voice.speak('first', completion_callback=lambda: completed.append(True),
+                          terminal_callback=terminal)
+    worker = voice._thread
+    try:
+        assert claimed.wait(timeout=3)
+        request.cancel() if action == "cancel" else voice.interrupt()
+        assert outcomes == [], 'Active ownership was released before its worker ended'
+        release.set()
+        assert finished.wait(timeout=3)
+        assert playback == []
+        assert completed == []
+        assert outcomes == ['cancelled' if action == 'cancel' else 'interrupted']
+    finally:
+        release.set()
+        voice.stop()
+        worker.join(timeout=3)
+        assert not worker.is_alive()
+
+
+def test_terminal_callback_can_enqueue_and_fail_without_stealing_ownership(voice):
+    events = []
+
+    def terminal(outcome):
+        events.append(('first', outcome))
+        voice.speak('second', terminal_callback=lambda outcome: events.append(('second', outcome)))
+        raise RuntimeError('Owned terminal callback failure')
+
+    voice.speak('first', terminal_callback=terminal)
+    voice._run()
+    assert events == [('first', 'completed'), ('second', 'completed')]
+
+
+@pytest.mark.parametrize('voice', [speech.PiperTTS], indirect=True)
+@pytest.mark.parametrize('mode', ['callback-error', 'premature-stop'])
+def test_native_callback_failure_cannot_report_success(voice, monkeypatch, mode):
+    completed = []
+    outcomes = []
+
+    class BrokenOutput:
+        def __setitem__(self, key, value):
+            raise ValueError('Owned output callback failure')
+
+    class FailedNativeStream:
+        active = False
+
+        def __init__(self, **kwargs):
+            self.callback = kwargs['callback']
+
+        def start(self):
+            # Native callback threads terminate playback without propagating
+            # callback exceptions to the thread waiting on stream.active.
+            try:
+                if mode == "callback-error":
+                    self.callback(BrokenOutput(), 1024, None, None)
+            except Exception:
+                pass
+
+        def close(self):
+            pass
+
+        def abort(self):
+            pass
+
+    monkeypatch.setattr(sys.modules['sounddevice'], 'OutputStream', FailedNativeStream)
+    voice.speak('first', completion_callback=lambda: completed.append(True),
+                terminal_callback=outcomes.append)
+    voice._run()
+    assert completed == []
+    assert outcomes == ['failed']
+
+
+def test_interrupt_before_terminal_commit_prevents_success(voice, monkeypatch):
+    import threading
+
+    playback_returned = threading.Event()
+    observed = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+    completed = []
+    outcomes = []
+    original = voice._speak_once
+
+    class PausedCompletionCheck(threading.Event):
+        def is_set(self):
+            result = super().is_set()
+            if playback_returned.is_set() and not observed.is_set():
+                observed.set()
+                assert release.wait(timeout=5)
+            return result
+
+    def playback(request):
+        result = original(request)
+        playback_returned.set()
+        return result
+
+    def terminal(outcome):
+        outcomes.append(outcome)
+        finished.set()
+
+    voice._q = queue.Queue()
+    voice._should_interrupt = PausedCompletionCheck()
+    monkeypatch.setattr(voice, '_start_if_current', type(voice)._start_if_current.__get__(voice))
+    monkeypatch.setattr(voice, '_speak_once', playback)
+    voice.speak('first', completion_callback=lambda: completed.append(True), terminal_callback=terminal)
+    worker = voice._thread
+    try:
+        assert observed.wait(timeout=3)
+        voice.interrupt()
+        release.set()
+        assert finished.wait(timeout=3)
+        assert completed == []
+        assert outcomes == ['interrupted']
+    finally:
+        release.set()
+        voice.stop()
+        worker.join(timeout=3)
+        assert not worker.is_alive()
+
+
+def test_interrupt_at_terminal_entry_keeps_active_request_ownership(voice, monkeypatch):
+    import threading
+
+    entered = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+    completed = []
+    outcomes = []
+    original = speech.SpeechRequest._finish
+
+    def paused(request, outcome):
+        if request.text == 'first' and outcome == 'completed':
+            entered.set()
+            assert release.wait(timeout=5)
+        original(request, outcome)
+
+    def terminal(outcome):
+        outcomes.append(outcome)
+        finished.set()
+
+    voice._q = queue.Queue()
+    monkeypatch.setattr(voice, '_start_if_current', type(voice)._start_if_current.__get__(voice))
+    monkeypatch.setattr(speech.SpeechRequest, '_finish', paused)
+    voice.speak('first', completion_callback=lambda: completed.append(True), terminal_callback=terminal)
+    worker = voice._thread
+    try:
+        assert entered.wait(timeout=3)
+        voice.interrupt()
+        release.set()
+        assert finished.wait(timeout=3)
+        assert completed == []
+        assert outcomes == ['interrupted']
+    finally:
+        release.set()
+        voice.stop()
+        worker.join(timeout=3)
+        assert not worker.is_alive()
+
+
+@pytest.mark.parametrize('voice', [speech.PiperTTS], indirect=True)
+def test_failed_audio_start_closes_stream_before_terminal_release(voice, monkeypatch):
+    events = []
+
+    class FailedStart:
+        active = False
+
+        def __init__(self, **kwargs):
+            pass
+
+        def start(self):
+            raise RuntimeError('Owned audio start failure')
+
+        def close(self):
+            events.append('closed')
+
+        def abort(self):
+            pass
+
+    monkeypatch.setattr(sys.modules['sounddevice'], 'OutputStream', FailedStart)
+    voice.speak('first', completion_callback=lambda: events.append('success'),
+                terminal_callback=events.append)
+    voice._run()
+    assert events == ['closed', 'failed']

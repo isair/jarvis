@@ -12,7 +12,7 @@ import sys
 import time
 import warnings
 from pathlib import Path
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, Callable
 from urllib.parse import urlparse
 
@@ -384,16 +384,222 @@ def _preprocess_for_speech(text: str) -> str:
     return result
 
 
-@dataclass(frozen=True)
-class _SpeechRequest:
-    """One queued utterance and the callbacks that own its notifications."""
+@dataclass(eq=False)
+class SpeechRequest:
+    """One cancellable utterance with success and terminal ownership callbacks."""
 
     text: str
     completion_callback: Optional[Callable[[], None]] = None
     duration_callback: Optional[Callable[[float], None]] = None
+    terminal_callback: Optional[Callable[[str], None]] = None
+    _cancel_callback: Optional[Callable[['SpeechRequest'], None]] = None
+    _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
+    _active: bool = field(default=False, init=False)
+    _cancelled: bool = field(default=False, init=False)
+    _interrupted: bool = field(default=False, init=False)
+    _finished: bool = field(default=False, init=False)
+
+    def _claim(self) -> bool:
+        with self._lock:
+            if self._finished or self._cancelled:
+                return False
+            self._active = True
+            return True
+
+    @property
+    def abandoned(self) -> bool:
+        with self._lock:
+            return self._cancelled or self._interrupted
+
+    def _interrupt(self) -> None:
+        with self._lock:
+            self._interrupted = True
+
+    def cancel(self) -> None:
+        with self._lock:
+            if self._finished:
+                return
+            self._cancelled = True
+            active, interrupt = self._active, self._cancel_callback
+        try:
+            if active and interrupt is not None:
+                interrupt(self)
+        finally:
+            if not active:
+                self._finish('cancelled')
+
+    def _finish(self, outcome: str) -> None:
+        with self._lock:
+            if self._finished:
+                return
+            self._finished = True
+            if self._cancelled:
+                outcome = 'cancelled'
+            elif self._interrupted:
+                outcome = 'interrupted'
+            complete, terminal = self.completion_callback, self.terminal_callback
+            self.completion_callback = self.duration_callback = self.terminal_callback = None
+            self._cancel_callback = None
+        try:
+            if outcome == 'completed' and complete is not None:
+                complete()
+        except Exception as exc:
+            debug_log(f'Speech completion callback failed: {exc}', 'tts')
+        finally:
+            try:
+                if terminal is not None:
+                    terminal(outcome)
+            except Exception as exc:
+                debug_log(f'Speech terminal callback failed: {exc}', 'tts')
 
 
-class ChatterboxTTS:
+class _QueuedSpeech:
+    """Own worker admission and request release independently of synthesis."""
+
+    def __init__(self) -> None:
+        self._q: queue.Queue[Optional[SpeechRequest]] = queue.Queue()
+        self._thread: Optional[threading.Thread] = None
+        self._lifecycle_lock = threading.RLock()
+        self._lifecycle_generation = 0
+        self._stop = threading.Event()
+        self._is_speaking = threading.Event()
+        self._last_spoken_text = ''
+        self._should_interrupt = threading.Event()
+        self._active_request: Optional[SpeechRequest] = None
+
+    def start(self) -> None:
+        with self._lifecycle_lock:
+            generation = self._lifecycle_generation
+        self._start_if_current(generation)
+
+    def _start_if_current(self, generation: int) -> None:
+        with self._lifecycle_lock:
+            if (generation != self._lifecycle_generation or not self.enabled
+                    or (self._thread is not None and self._thread.is_alive())):
+                return
+        available, error = self._prepare_speech()
+        with self._lifecycle_lock:
+            if (generation != self._lifecycle_generation or not self.enabled
+                    or (self._thread is not None and self._thread.is_alive())):
+                return
+            if not available:
+                self.enabled = False
+                message = f'{type(self).__name__} speech output unavailable: {error}'
+                print(f'  ⚠️ {message}', flush=True)
+                debug_log(message, 'tts')
+                return
+            discarded = self._drain_pending_speech()
+            self._stop.clear()
+            self._thread = threading.Thread(target=self._run, daemon=True)
+            self._thread.start()
+        for request in discarded:
+            request._finish('cancelled')
+
+    def _drain_pending_speech(self) -> list[SpeechRequest]:
+        requests = []
+        while True:
+            try:
+                request = self._q.get_nowait()
+            except queue.Empty:
+                return requests
+            if request is not None:
+                requests.append(request)
+
+    def stop(self) -> None:
+        with self._lifecycle_lock:
+            self._lifecycle_generation += 1
+            self._stop.set()
+            self.interrupt()
+            discarded = self._drain_pending_speech()
+            worker = self._thread
+            if worker is not None:
+                self._q.put_nowait(None)
+        for request in discarded:
+            request._finish('cancelled')
+        if worker is None:
+            return
+        if worker is not threading.current_thread():
+            worker.join(timeout=2.0)
+        with self._lifecycle_lock:
+            if self._thread is worker and not worker.is_alive():
+                self._thread = None
+            elif worker.is_alive():
+                debug_log('Speech worker is draining after stop', 'tts')
+
+    def speak(self, text: str, completion_callback: Optional[Callable[[], None]] = None,
+              duration_callback: Optional[Callable[[float], None]] = None, *,
+              terminal_callback: Optional[Callable[[str], None]] = None) -> SpeechRequest:
+        request = SpeechRequest(text, completion_callback, duration_callback,
+                                terminal_callback, self._cancel_request)
+        admitted = False
+        outcome = 'rejected'
+        try:
+            if not self.enabled or not text.strip():
+                return request
+            with self._lifecycle_lock:
+                generation = self._lifecycle_generation
+            outcome = 'failed'
+            self._start_if_current(generation)
+            with self._lifecycle_lock:
+                if generation != self._lifecycle_generation or self._stop.is_set():
+                    outcome = 'cancelled'
+                    return request
+                if not self.enabled:
+                    outcome = 'rejected'
+                    return request
+                request.text = _preprocess_for_speech(text)
+                self._q.put_nowait(request)
+                admitted = True
+            return request
+        finally:
+            if not admitted:
+                request._finish(outcome)
+
+    def _interrupt_active_request(self) -> None:
+        with self._lifecycle_lock:
+            if self._active_request is not None:
+                self._active_request._interrupt()
+            self._should_interrupt.set()
+
+    def _cancel_request(self, request: SpeechRequest) -> None:
+        with self._lifecycle_lock:
+            if self._active_request is request:
+                self.interrupt()
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            try:
+                request = self._q.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            if request is None:
+                continue
+            outcome = 'cancelled'
+            try:
+                with self._lifecycle_lock:
+                    active = not self._stop.is_set() and request._claim()
+                    if active:
+                        self._active_request = request
+                if active:
+                    outcome = 'completed' if self._speak_once(request) is True else 'failed'
+                    if self._stop.is_set():
+                        outcome = 'cancelled'
+                    elif self._should_interrupt.is_set():
+                        outcome = 'interrupted'
+            except Exception as exc:
+                outcome = 'failed'
+                debug_log(f'Speech worker failed: {exc}', 'tts')
+            finally:
+                try:
+                    request._finish(outcome)
+                finally:
+                    # Replacement waits for this worker; retain its request
+                    # identity until terminal commitment and callback release.
+                    self._active_request = None
+                    del request
+
+
+class ChatterboxTTS(_QueuedSpeech):
     """Experimental TTS implementation using Resemble AI's Chatterbox model."""
 
     def __init__(self, enabled: bool = True, voice: Optional[str] = None, rate: Optional[int] = None,
@@ -407,15 +613,7 @@ class ChatterboxTTS:
         self.exaggeration = exaggeration
         self.cfg_weight = cfg_weight
 
-        # Threading and queue setup (same as TextToSpeech)
-        self._q: queue.Queue[Optional[_SpeechRequest]] = queue.Queue()
-        self._thread: Optional[threading.Thread] = None
-        self._lifecycle_lock = threading.RLock()
-        self._lifecycle_generation = 0
-        self._stop = threading.Event()
-        self._is_speaking = threading.Event()
-        self._last_spoken_text: str = ""
-        self._should_interrupt = threading.Event()
+        super().__init__()
 
         # Chatterbox model (eagerly loaded during initialization)
         self._model = None
@@ -481,100 +679,21 @@ class ChatterboxTTS:
             return False
         return False
 
-    def start(self) -> None:
-        with self._lifecycle_lock:
-            generation = self._lifecycle_generation
-        self._start_if_current(generation)
-
-    def _start_if_current(self, generation: int) -> None:
-        with self._lifecycle_lock:
-            if (generation != self._lifecycle_generation or not self.enabled
-                    or (self._thread is not None and self._thread.is_alive())):
-                return
-        available = self._ensure_model()
-        with self._lifecycle_lock:
-            if (generation != self._lifecycle_generation or not self.enabled
-                    or (self._thread is not None and self._thread.is_alive())):
-                return
-            if not available:
-                self.enabled = False
-                message = f"Chatterbox speech output unavailable: {self._model_error}"
-                print(f"  ⚠️ {message}", flush=True)
-                debug_log(message, "tts")
-                return
-            self._discard_pending_speech()
-            self._stop.clear()
-            self._thread = threading.Thread(target=self._run, daemon=True)
-            self._thread.start()
-
-    def _discard_pending_speech(self) -> None:
-        while True:
-            try:
-                self._q.get_nowait()
-            except queue.Empty:
-                return
-
-    def stop(self) -> None:
-        with self._lifecycle_lock:
-            self._lifecycle_generation += 1
-            self._stop.set()
-            self.interrupt()
-            self._discard_pending_speech()
-            worker = self._thread
-            if worker is None:
-                return
-            self._q.put_nowait(None)
-        if worker is not threading.current_thread():
-            worker.join(timeout=2.0)
-        with self._lifecycle_lock:
-            if self._thread is worker and not worker.is_alive():
-                self._thread = None
-            elif worker.is_alive():
-                debug_log("Chatterbox speech worker is draining after stop", "tts")
-
-    def speak(self, text: str, completion_callback: Optional[Callable[[], None]] = None,
-              duration_callback: Optional[Callable[[float], None]] = None) -> None:
-        if not self.enabled or not text.strip():
-            return
-        with self._lifecycle_lock:
-            generation = self._lifecycle_generation
-        self._start_if_current(generation)
-        with self._lifecycle_lock:
-            if generation != self._lifecycle_generation:
-                debug_log("Discarding speech request cancelled by shutdown", "tts")
-                return
-            if not self.enabled or self._stop.is_set():
-                return
-            processed_text = _preprocess_for_speech(text)
-            self._q.put_nowait(_SpeechRequest(processed_text, completion_callback, duration_callback))
+    def _prepare_speech(self) -> tuple[bool, Optional[str]]:
+        return self._ensure_model(), self._model_error
 
     def interrupt(self) -> None:
-        """Stop current speech immediately"""
-        self._should_interrupt.set()
+        """Stop current speech immediately."""
+        self._interrupt_active_request()
 
-    def _run(self) -> None:
-        while not self._stop.is_set():
-            try:
-                request = self._q.get(timeout=0.5)
-            except queue.Empty:
-                continue
-            try:
-                if not self._stop.is_set() and request is not None and request.text:
-                    self._speak_once(request)
-            except Exception:
-                continue
-            finally:
-                del request
-
-    def _speak_once(self, request: _SpeechRequest) -> None:
+    def _speak_once(self, request: SpeechRequest) -> bool:
         text = request.text
         with self._lifecycle_lock:
-            if self._stop.is_set():
-                return
+            if self._stop.is_set() or request.abandoned:
+                return False
             self._is_speaking.set()
             self._last_spoken_text = text
             self._should_interrupt.clear()
-        interrupted = False
         
         # Signal speaking state to face widget
         self._notify_speaking_state(True)
@@ -584,7 +703,7 @@ class ChatterboxTTS:
             if not self._ensure_model():
                 # Fall back to system TTS if Chatterbox fails
                 warnings.warn("Chatterbox TTS not available, skipping speech synthesis")
-                return
+                return False
 
             # Generate audio using Chatterbox
             import tempfile
@@ -600,7 +719,7 @@ class ChatterboxTTS:
             )
 
             if self._stop.is_set() or self._should_interrupt.is_set():
-                return
+                return False
 
             # Calculate exact duration from audio samples
             exact_duration = wav.shape[-1] / self._model.sr
@@ -627,14 +746,13 @@ class ChatterboxTTS:
                 pygame.mixer.music.load(tmp_path)
                 with self._lifecycle_lock:
                     if self._stop.is_set() or self._should_interrupt.is_set():
-                        return
+                        return False
                     pygame.mixer.music.play()
 
                 # Wait for playback to complete or interruption
                 while pygame.mixer.music.get_busy():
                     if self._should_interrupt.is_set():
                         pygame.mixer.music.stop()
-                        interrupted = True
                         break
                     pygame.time.wait(100)  # Check every 100ms
 
@@ -646,6 +764,8 @@ class ChatterboxTTS:
                 except Exception:
                     pass
 
+            return True
+
         except Exception as e:
             warnings.warn(f"Chatterbox TTS error: {e}")
         finally:
@@ -653,14 +773,7 @@ class ChatterboxTTS:
             
             # Signal speaking stopped to face widget
             self._notify_speaking_state(False)
-            
-            # Call completion callback if set and not interrupted
-            if (request.completion_callback is not None and not interrupted
-                    and not self._should_interrupt.is_set() and not self._stop.is_set()):
-                try:
-                    request.completion_callback()
-                except Exception:
-                    pass
+        return False
     
     def _notify_speaking_state(self, is_speaking: bool) -> None:
         """Notify the face widget of speaking state changes.
@@ -691,7 +804,7 @@ class ChatterboxTTS:
         return self._last_spoken_text
 
 
-class PiperTTS:
+class PiperTTS(_QueuedSpeech):
     """TTS implementation using Piper (local neural TTS with exact duration).
 
     Piper generates actual audio samples, enabling precise duration calculation
@@ -721,15 +834,7 @@ class PiperTTS:
         self.noise_w = noise_w
         self.sentence_silence = sentence_silence
 
-        # Threading and queue setup (same pattern as other TTS engines)
-        self._q: queue.Queue[Optional[_SpeechRequest]] = queue.Queue()
-        self._thread: Optional[threading.Thread] = None
-        self._lifecycle_lock = threading.RLock()
-        self._lifecycle_generation = 0
-        self._stop = threading.Event()
-        self._is_speaking = threading.Event()
-        self._last_spoken_text: str = ""
-        self._should_interrupt = threading.Event()
+        super().__init__()
 
         # Piper voice (lazy loaded)
         self._voice = None
@@ -823,76 +928,13 @@ class PiperTTS:
             self._initialized = True
             return self._voice is not None
 
-    def start(self) -> None:
-        with self._lifecycle_lock:
-            generation = self._lifecycle_generation
-        self._start_if_current(generation)
 
-    def _start_if_current(self, generation: int) -> None:
-        with self._lifecycle_lock:
-            if (generation != self._lifecycle_generation or not self.enabled
-                    or (self._thread is not None and self._thread.is_alive())):
-                return
-        available = self._ensure_initialized()
-        with self._lifecycle_lock:
-            if (generation != self._lifecycle_generation or not self.enabled
-                    or (self._thread is not None and self._thread.is_alive())):
-                return
-            if not available:
-                self.enabled = False
-                message = f"Piper speech output unavailable: {self._init_error}"
-                print(f"  ⚠️ {message}", flush=True)
-                debug_log(message, "tts")
-                return
-            self._discard_pending_speech()
-            self._stop.clear()
-            self._thread = threading.Thread(target=self._run, daemon=True)
-            self._thread.start()
-
-    def _discard_pending_speech(self) -> None:
-        while True:
-            try:
-                self._q.get_nowait()
-            except queue.Empty:
-                return
-
-    def stop(self) -> None:
-        with self._lifecycle_lock:
-            self._lifecycle_generation += 1
-            self._stop.set()
-            self.interrupt()
-            self._discard_pending_speech()
-            worker = self._thread
-            if worker is None:
-                return
-            self._q.put_nowait(None)
-        if worker is not threading.current_thread():
-            worker.join(timeout=2.0)
-        with self._lifecycle_lock:
-            if self._thread is worker and not worker.is_alive():
-                self._thread = None
-            elif worker.is_alive():
-                debug_log("Piper speech worker is draining after stop", "tts")
-
-    def speak(self, text: str, completion_callback: Optional[Callable[[], None]] = None,
-              duration_callback: Optional[Callable[[float], None]] = None) -> None:
-        if not self.enabled or not text.strip():
-            return
-        with self._lifecycle_lock:
-            generation = self._lifecycle_generation
-        self._start_if_current(generation)
-        with self._lifecycle_lock:
-            if generation != self._lifecycle_generation:
-                debug_log("Discarding speech request cancelled by shutdown", "tts")
-                return
-            if not self.enabled or self._stop.is_set():
-                return
-            processed_text = _preprocess_for_speech(text)
-            self._q.put_nowait(_SpeechRequest(processed_text, completion_callback, duration_callback))
+    def _prepare_speech(self) -> tuple[bool, Optional[str]]:
+        return self._ensure_initialized(), self._init_error
 
     def interrupt(self) -> None:
         """Stop current speech immediately."""
-        self._should_interrupt.set()
+        self._interrupt_active_request()
         with self._audio_lock:
             if self._audio_stream is not None:
                 try:
@@ -901,30 +943,15 @@ class PiperTTS:
                 except Exception:
                     pass
 
-    def _run(self) -> None:
-        while not self._stop.is_set():
-            try:
-                request = self._q.get(timeout=0.5)
-            except queue.Empty:
-                continue
-            try:
-                if not self._stop.is_set() and request is not None and request.text:
-                    self._speak_once(request)
-            except Exception as e:
-                debug_log(f"Piper TTS error in _speak_once: {e}", "tts")
-                continue
-            finally:
-                del request
 
-    def _speak_once(self, request: _SpeechRequest) -> None:
+    def _speak_once(self, request: SpeechRequest) -> bool:
         text = request.text
         with self._lifecycle_lock:
-            if self._stop.is_set():
-                return
+            if self._stop.is_set() or request.abandoned:
+                return False
             self._is_speaking.set()
             self._last_spoken_text = text
             self._should_interrupt.clear()
-        interrupted = False
 
         # Signal speaking state to face widget
         self._notify_speaking_state(True)
@@ -934,7 +961,7 @@ class PiperTTS:
             if not self._ensure_initialized():
                 if self._init_error:
                     print(f"  ⚠️ Piper TTS: {self._init_error}", flush=True)
-                return
+                return False
 
             import sounddevice as sd
             import numpy as np
@@ -946,7 +973,7 @@ class PiperTTS:
             # Check for interruption before synthesis
             if self._should_interrupt.is_set():
                 debug_log("Piper TTS interrupted before synthesis", "tts")
-                return
+                return False
 
             # Synthesize audio - synthesize() returns an iterable of AudioChunks
             from piper.config import SynthesisConfig
@@ -960,24 +987,24 @@ class PiperTTS:
             for chunk in self._voice.synthesize(text, syn_config):
                 if self._should_interrupt.is_set():
                     debug_log("Piper TTS interrupted during synthesis", "tts")
-                    return
+                    return False
                 audio_chunks.append(chunk.audio_int16_array)
 
             # Check for interruption after synthesis
             if self._should_interrupt.is_set():
                 debug_log("Piper TTS interrupted after synthesis", "tts")
-                return
+                return False
 
             # Concatenate all audio chunks
             if not audio_chunks:
                 debug_log("Piper TTS: no audio chunks generated", "tts")
-                return
+                return False
 
             full_audio = np.concatenate(audio_chunks)
 
             if len(full_audio) == 0:
                 debug_log("Piper TTS: no audio generated", "tts")
-                return
+                return False
 
             # Calculate exact duration from actual samples
             exact_duration = len(full_audio) / self._sample_rate
@@ -994,42 +1021,48 @@ class PiperTTS:
             play_position = [0]
             blocksize = 1024  # Small blocks for responsive interruption
 
+            drained = threading.Event()
+            callback_failed = threading.Event()
+
             def audio_callback(outdata, frames, time_info, status):
-                if self._should_interrupt.is_set():
-                    raise sd.CallbackAbort()
+                try:
+                    if self._should_interrupt.is_set():
+                        raise sd.CallbackAbort()
 
-                start = play_position[0]
-                end = start + frames
-                chunk = full_audio[start:end]
+                    start = play_position[0]
+                    end = start + frames
+                    chunk = full_audio[start:end]
 
-                if len(chunk) < frames:
-                    # Pad with zeros if we're at the end
-                    outdata[:len(chunk), 0] = chunk
-                    outdata[len(chunk):, 0] = 0
-                    raise sd.CallbackStop()
-                else:
+                    if len(chunk) < frames:
+                        outdata[:len(chunk), 0] = chunk
+                        outdata[len(chunk):, 0] = 0
+                        drained.set()
+                        raise sd.CallbackStop()
                     outdata[:, 0] = chunk
+                    play_position[0] = end
+                except (sd.CallbackAbort, sd.CallbackStop):
+                    raise
+                except Exception:
+                    callback_failed.set()
+                    raise sd.CallbackAbort() from None
 
-                play_position[0] = end
-
-            with self._lifecycle_lock, self._audio_lock:
-                if self._stop.is_set() or self._should_interrupt.is_set():
-                    return
-                with portaudio_lock:
-                    self._audio_stream = sd.OutputStream(
-                        samplerate=self._sample_rate,
-                        channels=1,
-                        dtype='int16',
-                        blocksize=blocksize,
-                        callback=audio_callback,
-                    )
-                    self._audio_stream.start()
-
-            # Wait for playback to complete
             try:
+                with self._lifecycle_lock, self._audio_lock:
+                    if self._stop.is_set() or self._should_interrupt.is_set():
+                        return False
+                    with portaudio_lock:
+                        self._audio_stream = sd.OutputStream(
+                            samplerate=self._sample_rate,
+                            channels=1,
+                            dtype='int16',
+                            blocksize=blocksize,
+                            callback=audio_callback,
+                        )
+                        self._audio_stream.start()
+
+                # Wait for playback to complete
                 while self._audio_stream is not None and self._audio_stream.active:
                     if self._should_interrupt.is_set():
-                        interrupted = True
                         with self._audio_lock:
                             if self._audio_stream is not None:
                                 with portaudio_lock:
@@ -1047,7 +1080,9 @@ class PiperTTS:
                         self._audio_stream = None
 
             actual_duration = time.time() - start_time
-            debug_log(f"Piper TTS complete: actual={actual_duration:.2f}s (audio={exact_duration:.2f}s)", "tts")
+            successful = drained.is_set() and not callback_failed.is_set()
+            debug_log(f"Piper playback ended: successful={successful}, actual={actual_duration:.2f}s (audio={exact_duration:.2f}s)", "tts")
+            return successful
 
         except Exception as e:
             debug_log(f"Piper TTS error: {e}", "tts")
@@ -1055,14 +1090,7 @@ class PiperTTS:
         finally:
             self._is_speaking.clear()
             self._notify_speaking_state(False)
-
-            # Call completion callback if set and not interrupted
-            if (request.completion_callback is not None and not interrupted
-                    and not self._should_interrupt.is_set() and not self._stop.is_set()):
-                try:
-                    request.completion_callback()
-                except Exception as e:
-                    print(f"  ⚠️ Piper TTS completion callback error: {e}", flush=True)
+        return False
 
     def _notify_speaking_state(self, is_speaking: bool) -> None:
         """Notify the face widget of speaking state changes."""
