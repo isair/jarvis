@@ -1074,6 +1074,7 @@ class VoiceListener(threading.Thread):
                     self.db, self.cfg, None, query, self.dialogue_memory,
                     language=language,
                     speech_context=speech_context,
+                    spoken_output=bool(self.tts and self.tts.enabled),
                 )
         except Exception as e:
             # Log the error visibly - this should never happen silently
