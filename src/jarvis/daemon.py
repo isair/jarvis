@@ -443,6 +443,12 @@ def submit_text_query(
         debug_log("chat query rejected: another query is running", "chat")
         return
 
+    if is_stop_requested():
+        _chat_query_lock.release()
+        _notify_chat("complete", None, callbacks=callbacks, use_ipc=use_ipc)
+        debug_log("chat query rejected during shutdown admission", "chat")
+        return
+
     # Per-query cancellation flag. The Stop button sets this so the worker
     # drops the reply instead of displaying it.
     global _chat_cancel_event
@@ -612,15 +618,15 @@ def wait_for_chat_worker(timeout_sec: float = 5.0) -> bool:
     writes to dialogue memory.
 
     Returns True when the worker finished (or none was running), False on
-    timeout — in which case the caller proceeds anyway rather than
-    hanging the quit, which is the lesser of the two failures.
+    timeout. A timeout does not release ownership of the query's resources;
+    final cleanup must still acquire the shared query lock.
     """
     acquired = _chat_query_lock.acquire(timeout=timeout_sec)
     if acquired:
         _chat_query_lock.release()
         return True
     debug_log(
-        f"chat worker still running after {timeout_sec}s, shutting down anyway",
+        f"chat worker still running after {timeout_sec}s; retaining resources until it drains",
         "chat",
     )
     return False
@@ -1139,6 +1145,7 @@ def _run_daemon(smoke_test: bool = False) -> None:
         print("🎙️ Dictation disabled", flush=True)
 
     if smoke_test:
+        request_stop()
         print("SMOKE_TEST_INIT_OK", flush=True)
         debug_log("smoke test: all components initialised successfully", "jarvis")
 
@@ -1161,19 +1168,20 @@ def _run_daemon(smoke_test: bool = False) -> None:
             _global_task_manager.shutdown(wait=True)
             _global_task_manager = None
 
-        if tts is not None:
+        with query_lock():
+            if tts is not None:
+                try:
+                    tts.stop()
+                except Exception:
+                    pass
+
             try:
-                tts.stop()
+                from .tools.external.mcp_runtime import shutdown_runtime
+                shutdown_runtime()
             except Exception:
                 pass
 
-        try:
-            from .tools.external.mcp_runtime import shutdown_runtime
-            shutdown_runtime()
-        except Exception:
-            pass
-
-        db.close()
+            db.close()
 
         if _warm_profile_graph_listener is not None:
             try:
@@ -1295,44 +1303,42 @@ def _run_daemon(smoke_test: bool = False) -> None:
             _global_task_manager.shutdown(wait=True)
             _global_task_manager = None
 
-        # A chat worker that started just before the stop request is still
-        # inside run_reply_engine, holding the database connection the
-        # diary pass below is about to use and the one db.close() will
-        # shut. Wait for it, bounded: quitting a moment late beats a
-        # closed-handle raise or a diary pass racing its writes.
+        # The grace-period warning does not retire a live query's resources.
+        # Final cleanup acquires their shared owner lock before saving or closing.
         wait_for_chat_worker(timeout_sec=5.0)
 
-        # Final diary update before shutdown
-        debug_log("performing final diary update (force=True)...", "jarvis")
-        print("📝 Updating diary before shutdown...", flush=True)
+        with query_lock():
+            # Final diary update before shutdown
+            debug_log("performing final diary update (force=True)...", "jarvis")
+            print("📝 Updating diary before shutdown...", flush=True)
 
-        # Check dialogue memory status
-        if _global_dialogue_memory is None:
-            print("⚠️ Dialogue memory is None - nothing to save", flush=True)
-        else:
-            # Display-only count; actual save uses the atomic snapshot path.
-            pending = _global_dialogue_memory.get_pending_chunks()
-            print(f"💬 Found {len(pending)} pending conversation chunks", flush=True)
+            # Check dialogue memory status
+            if _global_dialogue_memory is None:
+                print("⚠️ Dialogue memory is None - nothing to save", flush=True)
+            else:
+                # Display-only count; actual save uses the atomic snapshot path.
+                pending = _global_dialogue_memory.get_pending_chunks()
+                print(f"💬 Found {len(pending)} pending conversation chunks", flush=True)
 
-        # Use callbacks if they were set by desktop app (for live UI updates in bundled mode)
-        # Use IPC (stdout events) if callbacks not set (subprocess mode)
-        use_callbacks = any(_diary_update_callbacks.values())
-        use_ipc = not use_callbacks  # Subprocess mode - emit events to stdout
-        _check_and_update_diary(db, cfg, verbose=True, force=True, timeout_sec=SHUTDOWN_DIARY_TIMEOUT_SEC, use_callbacks=use_callbacks, use_ipc=use_ipc)
-        print("✅ Diary update complete", flush=True)
-        debug_log("diary update complete", "jarvis")
+            # Use callbacks if they were set by desktop app (for live UI updates in bundled mode)
+            # Use IPC (stdout events) if callbacks not set (subprocess mode)
+            use_callbacks = any(_diary_update_callbacks.values())
+            use_ipc = not use_callbacks  # Subprocess mode - emit events to stdout
+            _check_and_update_diary(db, cfg, verbose=True, force=True, timeout_sec=SHUTDOWN_DIARY_TIMEOUT_SEC, use_callbacks=use_callbacks, use_ipc=use_ipc)
+            print("✅ Diary update complete", flush=True)
+            debug_log("diary update complete", "jarvis")
 
-        if tts is not None:
-            tts.stop()
+            if tts is not None:
+                tts.stop()
 
-        # Tear down persistent MCP sessions after task workers have stopped.
-        try:
-            from .tools.external.mcp_runtime import shutdown_runtime
-            shutdown_runtime()
-        except Exception as _e:
-            debug_log(f"MCP runtime shutdown error: {_e}", "jarvis")
+            # Tear down persistent MCP sessions after task workers have stopped.
+            try:
+                from .tools.external.mcp_runtime import shutdown_runtime
+                shutdown_runtime()
+            except Exception as _e:
+                debug_log(f"MCP runtime shutdown error: {_e}", "jarvis")
 
-        db.close()
+            db.close()
 
         # Drop the warm-profile graph listener so the module registry does
         # not retain a closure pointing at this run's DialogueMemory after
