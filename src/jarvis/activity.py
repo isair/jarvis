@@ -76,9 +76,7 @@ class JarvisStateManager:
         """Set the Jarvis state (thread-safe, cross-process)."""
         with self._state_lock:
             self._state = state
-
-        # Write to file for cross-process communication
-        self._write_state(state)
+            self._write_state(state)
 
 
 # Module-level singleton instance
