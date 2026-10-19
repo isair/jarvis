@@ -11,14 +11,17 @@ description: >
 # Triage Skill
 
 You are triaging open issues and discussions on `isair/jarvis`. Work from data,
-not memory. Stay friendly, specific, and short.
+not memory. Stay friendly, specific, and short. Follow `AGENTS.md` and the
+current user's publication and closure authorisation. Examples in this skill do
+not grant permission to post, edit or delete public messages, close items, or
+reset user configuration. Keep replies as private drafts when required.
 
 ## Step 1. Pull the state
 
-Run these as parallel Bash tool calls (one message, two tool uses), not as chained shell commands:
+Fetch issues and discussions independently:
 
 ```bash
-gh issue list --state open --limit 50 --json number,title,author,createdAt,updatedAt,labels,comments \
+gh issue list --repo isair/jarvis --state open --limit 1000 --json number,title,author,createdAt,updatedAt,labels,comments \
   --jq '[.[] | {number, title, author: .author.login, labels: [.labels[].name], commentCount: (.comments|length), updatedAt}]'
 ```
 
@@ -26,6 +29,12 @@ gh issue list --state open --limit 50 --json number,title,author,createdAt,updat
 gh api graphql -f query='{repository(owner:"isair",name:"jarvis"){discussions(first:30,states:OPEN,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{id number title author{login} category{name} updatedAt comments(last:5){totalCount nodes{id author{login} createdAt body replies(last:10){nodes{id author{login} createdAt body}}}}}}}}' \
   --jq '.data.repository.discussions.nodes'
 ```
+
+Fetch the complete issue queue with pagination. If a result reaches its limit,
+continue fetching rather than treating the first page as the backlog. The
+discussion query is a discovery snapshot; paginate the open discussion queue
+and each reviewed discussion's comments and replies before deciding who last
+responded.
 
 **Important**: GitHub Discussions are threaded. The top-level `comments` list does
 not include sub-replies, so a fresh reporter question that lives under an owner
@@ -39,9 +48,9 @@ levels deep, and you'll miss it if you only look at the top-level list.
 Classify each thread into one of:
 
 - **Untriaged**: no owner (`isair`) reply yet. Act now.
-- **Awaiting reporter**: labelled `question` or the last comment is from the owner asking for details. Leave it unless the reporter has replied with new info. Per repo policy, do not close for silence before 2 weeks of reporter inactivity.
-- **Owner tracking**: filed by `isair` as an internal task. Skip unless a non-owner has commented with a question or new information, in which case treat it like a normal untriaged thread.
-- **Resolved-pending-release**: fix is on `develop`. Never close manually. Release (`git merge --ff-only develop` → `main`) auto-closes via `Closes #NNN`. Detect this by scanning recent `develop` commits (`gh pr list --base develop --state merged --limit 20`) for references to the issue number before you reply, so you can tell the reporter "this is fixed in the next release" rather than asking for more info.
+- **Awaiting reporter**: a published clarifying question still needs an answer after reading the complete thread. A `question` label or an unsent draft alone does not establish that anyone was asked. Review new information when it arrives; do not close for silence before two weeks after the actual published question and the latest reporter activity.
+- **Owner tracking**: filed by `isair` as an internal task. Assess its current implementation and next action under the maintenance loop; do not invent a reporter troubleshooting request. New community information still needs review.
+- **Resolved-pending-release**: a verified fix is on `develop`. Compare the report with the actual implementation and linked changes, not just a title or commit reference. Recent merged PRs are discovery leads; extend the search when needed. Never close manually merely because the fix landed on `develop`. The release fast-forwards `main` and auto-closes references written as `Closes #NNN`. Draft the verified release status rather than requesting evidence already supplied.
 
 ## Step 2. Fetch details for the untriaged
 
@@ -67,129 +76,59 @@ ten lines later. Always scroll to the end to check for `📝 Heard:`, `🧠 Inte
 judge:`, or `❌ Failed` lines before diagnosing.
 
 **Scan for `📝 Heard:` lines first.** They are the most actionable signal in any
-log. If a `Heard:` line exists, the system detected speech — the question is
-what it heard and whether it matches the wake word. Do not ask "did it hear
-you?" when a `Heard:` line proves it did.
+log. A `Heard:` line proves that recognition produced a transcript. Compare it
+with the reported utterance and subsequent filtering and intent decisions; it
+does not prove that a person spoke.
 
-## Step 3. Diagnose from the log
+## Step 3. Diagnose from evidence
 
-Read every line of the log. Do not skip what looks like normal startup — the
-answer is almost always there. Follow this diagnosis flow:
+A transcript records what speech recognition produced, not proof of the words a
+person said. Whisper can produce transcripts from silence, background sound or
+assistant speech. Read the complete log before deciding whether the problem is
+capture, recognition, intent, model availability, tool execution or playback.
 
-### Quick-reference symptom table
+| Evidence in the log | Supported conclusion and next action |
+|---------------------|--------------------------------------|
+| Wake name without an accompanying request | The transcript contains no request. Confirm what the person intended before diagnosing microphone or model failure. |
+| Wake name transcribed differently | Recognition and the reported utterance may differ. Check the configured wake name/aliases and ask what was actually said; do not tell the person they used the wrong name based only on ASR output. |
+| Intent or reply request exceeds its logged timeout | That request did not finish in time. Check provider availability, selected models and resource evidence. A Whisper CUDA warning does not establish the LLM backend's device. |
+| Repeated unrelated or multilingual transcripts with no reported speech | Possible recognition hallucinations or background/echo capture. Check readiness, input selection, confidence and speech/echo filtering; do not assume a broken microphone. |
+| Only low-confidence lines | Audio reached the recogniser but was filtered. The log alone does not prove a person spoke or that a command was missed. |
+| No transcripts | The log does not distinguish no speech, missing capture, loading, backlog or filtering. Check the end of startup and ask for a short attempted interaction with fresh logs. |
+| Warmup failure | The probe failed at that time. Follow the later interaction before attributing an unanswered request to warmup; warmup is not a full-request timing test. |
+| Piper or Whisper download error | Identify the downloader, exact exception and platform. Connection, TLS, cache, permission and timeout failures need different remedies. Ollama pulls do not repair Whisper or Piper downloads. |
+| Download progress ends before completion | Completion is not shown. Check later lines before calling it stuck or successful. Ask for the outcome if the log ends during loading. |
+| Empty report or cleared logs | There is insufficient evidence. Request a brief description and fresh logs covering the failure. |
+| Application Control names a blocked native library | Windows policy blocked that file. Consider the named policy and packaging/signing evidence; do not advise disabling organisational controls. |
+| Native abort during a window opening | Preserve the crash location, OS/build details and native crash report. Python startup logs alone may not identify the native fault. |
+| Optional location data unavailable | Location setup is incomplete, not necessarily the cause of the reported failure. Read the failing interaction first. |
 
-| Symptom in log | Likely cause | Action |
-|----------------|--------------|--------|
-| `📝 Heard: "Jarvis."` then `🧠 Intent (wake word): not directed (Wake word detected, but no query followed it.)` | User said the wake word but didn't follow with a command. The wake word alone does nothing. | Explain that they need to say a command after the wake word (e.g. "Jarvis, what time is it?"). |
-| `📝 Heard: "...George..."` or `"...Georg..."` | Wake word "Jarvis" misheard as "George" by Whisper (very common phonetic confusion). | Tell them to use the correct wake word. |
-| `📝 Heard: "Jarvis, ..."` then `🧠 Intent judge: unavailable (timeout)` | Intent judge model too slow for hardware. Usually CPU-only or large model mismatch. | Advise running setup wizard lowest option. |
-| `📝 Heard: "Jarvis, ..."` then `⏱️ LLM request timed out` | Chat model too slow for hardware. Same root cause as above. | Advise running setup wizard lowest option. |
-| Repeated `📝 Heard: "Thank you."` / `"you..."` / `"Thanks for watching!"` / garbled text (e.g. Devanagari characters, random phrases like "Mission success!") with no real commands | Whisper hallucinations on near-silent audio. Wrong default mic or broken mic/driver. | Check input level in OS sound settings; confirm intended mic. If garbled text appears in a different script, it's still a hallucination — the script doesn't matter. |
-| `Low confidence` lines only, no `Heard:` ever | Mic captures audio but utterances are under the confidence floor. Wrong device or mic placement. | Same as above. |
-| `⚠️  Chat model '...' warmup failed` + `⚠️  Intent judge '...' warmup failed` | Two different model variants loaded (e.g. gemma4:e4b for chat, gemma4:e2b for intent). The `ℹ️ CUDA not available` warning in the log is Whisper-only (STT speed), but the LLM models (intent judge, chat) are served by Ollama and may also be on CPU. Two variants competing on CPU overwhelms most machines. | Run setup wizard lowest option to use one model for everything. |
-| Normal startup log, zero interaction lines (`📝 Heard:`, `🧠 Intent judge:`, `💬 Generating`) | User never spoke after launch, or didn't use the wake word. This is by far the most common. | Ask what they said and whether they said "Jarvis" first. |
-| `huggingface_hub.snapshot_download` crash (thread pool / ssl.create_default_context) | Platform-specific download crash. | Manual `ollama pull ...` workaround. |
-| `LLM connection error: ... RemoteDisconnected` | Ollama process crashed or unreachable. | `ollama run <model>` health check; Ollama version. |
-| `⚠️  large-v3-turbo is not supported by the installed Whisper engine, using large-v3 instead` | User selected `large-v3-turbo` as Whisper model but the installed engine doesn't support it. Falls back to `large-v3`, which is much larger and slower. | Run setup wizard and pick a supported model like `medium` or `small`. |
-| Piper voice download stuck (percentage stops advancing) | First-run ~60 MB TTS voice download with slow/unstable connection. Check the log fully — if download reached 100%, this isn't the issue. | Wait or relaunch; check internet. |
-| `❌ Failed to load Whisper model: ConnectTimeout` | HF blocked by firewall (common in China). | `HF_ENDPOINT=https://hf-mirror.com` env var or VPN. |
-| `❌ Microphone permission check failed: Error querying device -1` | No microphone detected on Windows. | Check Windows Sound Settings for input devices. |
-| `🔊 Downloading Piper voice` line at startup, nothing after | First launch — Piper voice is still downloading. Normal, just slow. | Reassure, ask them to wait or relaunch. |
-| `🗑️ Logs Cleared` or empty bug template | User cleared logs before filing, or the template was submitted unfilled. No data to diagnose. | Label `bug,question`, ask for description and fresh logs. |
-| `📍 Location features are not available` | Not an error. Location is optional. | Reassure, point at MaxMind GeoLite2 signup if they want it. |
-| `Fatal Python error: Aborted` during setup wizard launch | macOS app bundle crash during first-run wizard. | Ask for macOS version, system crash reports, Ollama status. |
-| `Fatal Python error: Illegal instruction` in pynput | macOS dictation keyboard listener incompatibility. | Suggest disabling dictation in settings. |
-| `mkl_malloc: failed to allocate memory` when loading Whisper | Intel MKL memory allocation failure. | Try CPU-only mode or run setup wizard again. |
+### Follow the actual interaction
 
-### Diagnosis flow (read in this order)
+- Compare reported speech with the transcript, then inspect echo/confidence
+  filtering, intent and the reply/tool outcome. Do not ask whether recognition
+  produced anything when the log already contains the relevant transcript.
+- The configured wake name can occur at the start or end of a request. A brief
+  hot window allows directed follow-ups without repeating it; unrelated
+  conversation is not automatically addressed to Jarvis.
+- Ask only for evidence still missing. Successful loading or a model pull proves
+  that operation succeeded then, not that the current provider, microphone or
+  complete request is healthy. Respect the chosen provider rather than assuming
+  every installation uses Ollama.
+- Use the current model catalogue, computed setup recommendations and logged
+  limits as the source of truth. Avoid stale model tags, fixed size rules or a
+  blanket instruction to use one tiny model for every role.
+- Distinguish speech recognition, model language understanding and TTS language
+  support. A multilingual chat model does not prove the configured voice can
+  speak that language.
+- Reopen Setup from the tray when setup needs completing. Preserve saved choices
+  and data. Do not recommend deleting configuration or memory as routine
+  troubleshooting, and do not disable TLS verification to bypass a download
+  failure.
 
-**1. Check for `📝 Heard:` lines.** These are the most actionable signal.
-
-- **No `📝 Heard:` line at all** — the user never spoke to Jarvis, or their
-  mic isn't capturing speech. Either:
-  - They don't know to use the wake word (common — log shows healthy startup,
-    no interaction)
-  - Mic is wrong/broken (check for "Error querying device" or "Low confidence")
-  - Mic permissions denied
-  → Ask what they said and whether they used the wake word. Explain that
-    the wake word only needs to appear once in the first utterance, and can
-    be at the start or end of the sentence (e.g. "What time is it, Jarvis?").
-    After that, during the hot window, you can keep talking without repeating
-    it — even a long tangent, as long as you started with the wake word.
-
-- **`📝 Heard:` line exists** — the system detected speech. Check *what* it heard:
-  - **"George" / "Georg"** — the wake word "Jarvis" was misheard by Whisper.
-    Point it out directly.
-  - **Wake word present** (e.g. "Jarvis, open Chrome" or "What do you think,
-    Jarvis?") — good. Move to step 2. The wake word can be at the start **or
-    end** of the sentence.
-  - **Random words, no wake word** — user didn't use the wake word. Explain
-    that only the first utterance needs it; within the hot window (follow-up
-    period after a response) you can keep talking without repeating it.
-  - **"Thank you" / "you..." / "Thanks for watching"** — Whisper hallucinating
-    on silent audio. Wrong mic device. Troubleshoot mic.
-
-**2. Check what happened after the `Heard:` line.**
-
-- **`🧠 Intent judge: unavailable (timeout after 15.0s)`** — the intent judge
-  model is too slow for the hardware. Usually CPU-only or large model mismatch.
-  → Advise setup wizard lowest option.
-
-- **`⏱️ LLM request timed out`** — the chat model is too slow. Same cause.
-  → Same advice: setup wizard lowest option.
-
-- **`✨ Working on it:` followed by a response** — everything worked. The issue
-  may be intermittent. Ask for the exact scenario that failed.
-
-- **Nothing after `Heard:`** — log truncated or cleared. Ask for fresh logs.
-
-**3. Check startup for model loading issues.**
-
-- `⚠️ ... warmup failed` with **two different models** loaded
-  (e.g. `gemma4:e4b` for chat, `gemma4:e2b` for intent): two variants
-  competing on CPU overwhelms most machines. The `ℹ️ CUDA not available`
-  warning in the log is Whisper-only (STT speed); the LLM models are served
-  by Ollama and may be on CPU too, but those are separate systems.
-  → Advise setup wizard lowest option to unify on `gemma4:2b`.
-
-- `⚠️ ... warmup failed` but everything else healthy and no interaction lines:
-  warmup failures are non-fatal (models load on first use). The real issue is
-  likely step 1 (no wake word). Focus on that, not the warnings.
-
-**4. Check for download failures (common on first run).**
-
-- Piper voice stuck: first-run ~60 MB download, slow connection.
-- Whisper model download timeout: HF blocked (China) or slow network.
-- HuggingFace hub errors.
-
-**5. Startup looks perfectly normal, no errors, no interaction lines.**
-
-This is the most common pattern. Everything loaded and is listening, but zero
-`📝 Heard:` or `🧠 Intent judge:` lines. The user almost certainly never tried
-speaking, or didn't use the wake word.
-  → Do not ask about warmup warnings or model config. Ask what they said and
-    whether they said "Jarvis" first.
-
-**Do not ask obviously-answered questions.** If the log shows the wizard was
-pulling models, Ollama is by definition installed and running. If Whisper
-loaded, Whisper is installed. If a `📝 Heard:` line exists, the system heard
-speech — do not ask "did it hear you?". Read the log, identify the branch, and
-diagnose.
-
-**If you realise you were wrong, edit — do not stack.** A single clean comment
-with the correct diagnosis is always better than the original plus two
-follow-ups saying "actually..." and "scratch that...". If you're not confident
-in the diagnosis, re-read the log before posting rather than guessing and
-correcting later. The thread is public and every "sorry, let me correct myself"
-undermines trust in the triage.
-
-### Other recurring user-environment answers
-
-- **Windows "Error 4551: Application Control policy has blocked this file"**: WDAC / AppLocker / corporate MDM, not Jarvis. Point at IT allow-listing, `secpol.msc`, or install-from-source.
-- **"missing AI models"**: `ollama pull gemma4:e2b` + `ollama pull nomic-embed-text`, or tray → 🔧 Setup Wizard.
-- **Setup wizard was closed early, nothing works**: tray → 🔧 Setup Wizard reopens it. Fallback: `rm -rf ~/.config/jarvis ~/.local/share/jarvis/config`.
-- **`gemma4:e2b` quality complaints**: it is a very small model. Suggest 7B+ if hardware allows, note that capability scales with model size.
-- **"Can Jarvis speak <language>?"**: yes if the chat model supports it; for voice, Whisper handles most languages. Point at README.
+If a diagnosis changes, prepare a concise correction to the existing reply when
+appropriate. Keep the evidence and uncertainty clear; do not hide mistakes by
+deleting a public correction trail.
 
 ## Step 4. Label, retitle, reply
 
@@ -197,21 +136,24 @@ Available labels: `bug`, `question`, `duplicate`, `enhancement`, `documentation`
 
 Conventions:
 
-- Empty-body or needs-info bug reports: label `bug,question`, retitle to `"<one-line symptom> (awaiting details)"` or similar so the backlog is scannable.
+- Empty-body or needs-info bug reports: label `bug,question`, retitle to `"<one-line symptom> (needs details)"` or similar so the backlog is scannable.
 - Duplicates: label `duplicate`, leave one short comment pointing at the canonical issue, close with `--reason "not planned"`.
 - Real confirmed crashes: label `bug` (and `voice` if audio-related), retitle to pin the failure site from the traceback (e.g. `"Crash on first-run setup wizard during model install (macOS, v1.26.0)"`).
 
 Reply tone:
 
-- Open with `Hi @user, thanks for filing this! 👋`
-- State the diagnosis (what the log shows) before the asks.
-- Use bullet lists with **bold labels** for asks. Keep to 3 to 5 asks max.
-- Friendly emojis: 👋 🙏 🚀 🧠 🎤 🔊 📝.
+- Thank the reporter briefly, state what the evidence shows, and ask only for missing details.
+- Match the current user's writing preferences rather than imposing a fixed greeting or formatting template.
+- Keep replies short and distinguish an observed failure from a hypothesis.
 - **No em dashes (—) anywhere in user-facing writing.** Use commas, full stops, colons, or parentheses.
 - **British English** (colour, behaviour, initialise).
 - Do not promise fixes or ETAs.
 
-## Step 5. Post the reply
+## Step 5. Apply authorised changes
+
+Use the following commands only within the user's current authorisation. When
+publication is not authorised, provide the exact reply and target as a private
+draft. Do not describe an unsent question as awaiting a reporter response.
 
 Issue comment:
 
@@ -239,7 +181,7 @@ Get the discussion `id` field from the Step 1 GraphQL output. It's the outer `id
    ```bash
    gh api graphql -f query='mutation($id:ID!){deleteDiscussionComment(input:{id:$id}){comment{id}}}' -F id=<comment node id>
    ```
-   Then repost with the correct discussion id.
+   Repost only within the existing publication authorisation, after verifying the correct discussion ID.
 
 To reply to a specific comment (threaded sub-reply) rather than at the top level, pass `replyToId` in the mutation input. Otherwise the reply goes to the root.
 
@@ -247,12 +189,10 @@ If a `body` you want to post starts with `@`, use `-f body="..."`, not `-F body=
 
 ## Step 6. Clean up your own past comments
 
-If a previous owner comment was premature, wrong, or asked an
-obviously-answered question, **edit it in place** and **delete any follow-up
-correction comments** you left. A clean thread beats a trail of
-self-corrections. If you stacked "actually..." or "scratch that..." comments
-after the original, delete them once the first comment is accurate — the thread
-should read as if you got it right the first time.
+When authorised to edit an existing owner comment, correct its diagnosis and
+keep any necessary correction clear. Otherwise prepare an edit draft with the
+comment ID and replacement text. Do not delete public messages merely to make
+the thread look as though the original diagnosis was correct.
 
 Issue comment edit:
 
