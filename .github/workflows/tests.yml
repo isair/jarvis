@@ -165,7 +165,8 @@ jobs:
                   "import os, pytest\nfrom pathlib import Path\n"
                   "data = Path(os.environ['WORKER_PROBE_ROOT'])\n"
                   "raise SystemExit(pytest.main(['-q', 'tests/test_mcp_configured_path.py', "
-                  "'--basetemp', str(data/'tests'), '-o', 'cache_dir='+str(data/'cache')]))\n"
+                  "'--basetemp', str(data/'tests'), '-o', 'cache_dir='+str(data/'cache'), "
+                  "'-o', 'log_file='+str(data/'pytest.log')]))\n"
               )
               env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1')
               subprocess.run([sys.executable, 'tests/fixtures/worker_probe.py',
