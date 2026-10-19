@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, Optional
 
 from ...debug import debug_log
-from ...memory.document_index import DocumentIndex
+if TYPE_CHECKING:
+    from ...memory.document_index import DocumentIndex
 from ..base import Tool, ToolContext
 from ..types import ToolExecutionResult
 
@@ -34,10 +35,12 @@ class DocumentSearchTool(Tool):
             "required": ["query"],
         }
 
-    def __init__(self, index_factory: Callable[..., DocumentIndex] = DocumentIndex) -> None:
+    def __init__(self, index_factory: Callable[..., DocumentIndex] | None = None) -> None:
         self._index_factory = index_factory
 
     def run(self, args: Optional[Dict[str, Any]], context: ToolContext) -> ToolExecutionResult:
+        if context.cancel_event is not None and context.cancel_event.is_set():
+            return ToolExecutionResult(False, "Document search was cancelled.")
         query = str((args or {}).get("query") or "").strip()
         if not query:
             return ToolExecutionResult(False, "documentSearch requires a search query.")
@@ -53,9 +56,19 @@ class DocumentSearchTool(Tool):
         except (TypeError, ValueError):
             top_k = 5
         try:
-            with self._index_factory(context.db, context.cfg) as index:
-                index.refresh()
-                hits = index.search(query, top_k=top_k)
+            factory = self._index_factory
+            if factory is None:
+                from ...memory.document_index import DocumentIndex
+                factory = DocumentIndex
+            with factory(context.db, context.cfg) as index:
+                index.refresh(cancel_event=context.cancel_event)
+                if context.cancel_event is not None and context.cancel_event.is_set():
+                    return ToolExecutionResult(False, "Document search was cancelled.")
+                hits = index.search(query, top_k=top_k, cancel_event=context.cancel_event)
+                coverage = index.coverage
+                status = "complete" if coverage.complete else "partial"
+                details = ", ".join(sorted(coverage.reasons)) or "none"
+                coverage_text = f"Index coverage: {status}. Incomplete coverage reasons: {details}.\n"
         except Exception as exc:
             debug_log(f"Local document search failed: {exc}", "documents")
             return ToolExecutionResult(False, f"Local document search failed: {exc}")
@@ -63,7 +76,7 @@ class DocumentSearchTool(Tool):
             debug_log("Local document search returned no matches", "documents")
             return ToolExecutionResult(
                 True,
-                f"No matching documents were found for '{query}'. Do not infer an answer from the empty index.",
+                coverage_text + f"No matching documents were found for '{query}'. Do not infer an answer from the empty index.",
             )
         excerpts = []
         for hit in hits:
@@ -73,6 +86,6 @@ class DocumentSearchTool(Tool):
             )
         return ToolExecutionResult(
             True,
-            f"Local document results for '{query}'. Use only these cited excerpts:\n"
+            coverage_text + f"Local document results for '{query}'. Use only these cited excerpts:\n"
             + "\n\n".join(excerpts),
         )

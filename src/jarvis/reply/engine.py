@@ -2247,6 +2247,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                                 max_retries=1,
                                 language=language,
                                 transcript_context=transcript_context,
+                                cancel_event=cancel_event,
                             )
                             if not _plan_result.success or not _plan_result.reply_text:
                                 _report_tool_error(
@@ -2555,6 +2556,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 max_retries=1,
                 language=language,
                 transcript_context=transcript_context,
+                cancel_event=cancel_event,
             )
 
             # Handle stop tool - end conversation without response

@@ -46,8 +46,10 @@ line range, and excerpt. Excerpts are wrapped in
 `UNTRUSTED LOCAL DOCUMENT` delimiters. Document text is data to quote or
 summarise, not instructions to follow.
 
-No configured folders, an empty index, or an embedding failure produces an
-honest result and never invents document content.
+Every result includes complete or partial index coverage and explicit reasons
+for incomplete coverage. Empty results do not establish that an unscanned source
+lacks the requested information. Query embedding failures return an error rather
+than a successful empty search. No result invents document content.
 
 ### Configuration
 

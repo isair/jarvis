@@ -75,7 +75,7 @@ The settings window uses a sidebar navigation pattern: a fixed-width `QListWidge
 10. Timing & Windows
 11. Memory & Dialogue
 12. Location
-13. Features (includes web search, Wikipedia fallback, low-power mode, startup tune, and dictation toggles)
+13. Features (includes web search, local document search and its allowed folders, Wikipedia fallback, low-power mode, startup tune, and dictation toggles)
 14. MCP Servers
 15. Advanced
 

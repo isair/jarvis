@@ -10,6 +10,7 @@ if sys.version_info < (3, 11):
 from .builtin.screenshot import ScreenshotTool
 from .builtin.web_search import WebSearchTool
 from .builtin.local_files import LocalFilesTool
+from .builtin.document_search import DocumentSearchTool
 from .builtin.fetch_web_page import FetchWebPageTool
 from .builtin.nutrition.log_meal import LogMealTool
 from .builtin.nutrition.fetch_meals import FetchMealsTool
@@ -30,6 +31,7 @@ BUILTIN_TOOLS = {
     "screenshot": ScreenshotTool(),
     "webSearch": WebSearchTool(),
     "localFiles": LocalFilesTool(),
+    "documentSearch": DocumentSearchTool(),
     "fetchWebPage": FetchWebPageTool(),
     "logMeal": LogMealTool(),
     "fetchMeals": FetchMealsTool(),
@@ -301,7 +303,10 @@ def run_tool_with_retries(
     max_retries: int = 1,
     language: Optional[str] = None,
     transcript_context: str = "",
+    cancel_event=None,
 ) -> ToolExecutionResult:
+    if cancel_event is not None and cancel_event.is_set():
+        return ToolExecutionResult(False, None, error_message="Tool execution was cancelled.")
     # Normalize tool name to canonical camelCase
     raw_name = (tool_name or "").strip()
     name = raw_name
@@ -349,6 +354,7 @@ def run_tool_with_retries(
             user_print=_user_print,
             language=language,
             transcript_context=transcript_context,
+            cancel_event=cancel_event,
         )
 
     # Unknown tool

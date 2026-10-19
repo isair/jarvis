@@ -16,6 +16,12 @@ Design principles enforced by the engine:
 - Language-Agnostic Design: Prompts and ASR guidance avoid language-specific phrasing.
 - Data Privacy: Inputs are redacted and logging is concise and purposeful via `debug_log`.
 
+The caller-owned cancellation event is forwarded through planned and model-issued
+tool dispatch into `ToolContext`. The registry rejects already cancelled calls;
+cooperative tools can stop between bounded work units. Document indexing checks
+this event before embeddings and atomic publication. In-flight transport calls
+retain their own deadlines.
+
 ### Entry and Inputs
 - Entry point: the reply engine receives a user query from the ingestion layer.
 - Inputs:

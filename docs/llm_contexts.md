@@ -11,7 +11,9 @@ cancellation stops later model/resource work. Returned router and extractor
 results are checked before conversation-cache publication. Cache misses recheck
 cancellation before starting routing/extraction inference. In-flight calls
 finish under their existing deadlines; no new timeout, model or prompt is
-introduced. Voice and text chat do not supply this task event.
+introduced. Tool dispatch forwards the event into cooperative tool contexts, including
+bounded document refresh and ranking. Voice and text chat do not supply this
+task event.
 
 **Shutdown admission and ownership.** Text submissions recheck shutdown after
 acquiring the shared query lock. Already admitted requests retain their

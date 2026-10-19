@@ -36,3 +36,27 @@ def test_refresh_does_not_return_unavailable_or_revoked_documents(tmp_path, chan
     finally:
         index.close()
         conn.close()
+
+
+def test_allowed_extensions_and_symlinks_keep_owned_content_separate(tmp_path):
+    root = tmp_path / 'documents'
+    root.mkdir()
+    outside = tmp_path / 'outside.txt'
+    outside.write_text('outside secret')
+    source = root / 'guide.md'
+    source.write_text('owned text')
+    (root / 'ignored.pdf').write_text('not an allowed source')
+    (root / 'escape.txt').symlink_to(outside)
+    (root / 'alias.txt').symlink_to(source)
+    cfg = SimpleNamespace(document_search_enabled=True, document_search_paths=[str(root)],
+                          embedding_model='owned-test', llm_embedding_timeout_sec=1)
+    with DocumentIndex(SimpleNamespace(db_path=str(tmp_path / 'diary.sqlite')), cfg,
+                       embedding_backend=Embeddings()) as index:
+        assert index.refresh().complete
+        assert [hit.text for hit in index.search('source', 10)] == ['owned text']
+        source.write_text('updated owned text')
+        index.refresh()
+        assert [hit.text for hit in index.search('source', 10)] == ['updated owned text']
+        source.unlink()
+        index.refresh()
+        assert index.search('source', 10) == []
