@@ -84,6 +84,12 @@ requests do not supply this event.
 - **Voice entry**: Captures reach recognition only when at least one native audio frame meets `voice_min_energy`; accepted captures retain softer speech and pre-roll. FIFO transcription results are processed serially on the listener thread. Accepted query collection carries text and the latest accepted segment’s detected language in one immutable snapshot. Rejected recognition, TTS echo, interruption-only controls and rejected intent decisions cannot replace that locale. Unknown accepted language records `None`; dispatch passes the captured language explicitly through the shared query lock. VAD and utterance assembly run on a separate worker, so this context does not block microphone-frame consumption. Voice dispatch checks its capture generation before and after waiting for the shared query lock. Independent user and dictation pause reasons invalidate queued or in-flight voice work; resume clears rolling transcript, query collection and hot-window context before fresh input. Collection timeout dispatch retains its input generation; invalidated speech completion cannot reopen a follow-up window. Shutdown or a capture pause suppresses speech from a reply that finishes afterwards; an in-flight reply retains its existing model deadline. Text chat remains available while voice is paused.
 - **Text-chat entry**: The desktop `ChatWindow` (see `src/desktop_app/chat_window.spec.md`) submits via `jarvis.daemon.submit_text_query`, which calls this same context on a worker thread with `tts=None` and `language=None` (no Whisper-detected language for typed input). Voice and text share the global `DialogueMemory` so they are one conversation. No new LLM context is introduced — the planner, router, enrichment, and digests all run unchanged. Text chat never speaks; the reply is returned to the UI via callbacks (bundled) or `__CHAT__:` IPC events (subprocess).
 
+Text tool-call prompts receive the complete canonical input schemas from
+`generate_tools_description`, shared with native function definitions. Parameter
+semantics and constraints remain available for built-in and selected MCP tools.
+Existing reply contexts retain their configured models, deadlines and generation
+limits.
+
 ## 2. Intent Judge
 
 - **File**: [src/jarvis/listening/intent_judge.py](src/jarvis/listening/intent_judge.py) — `IntentJudge.evaluate()`.
