@@ -171,3 +171,39 @@ jobs:
               env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1')
               subprocess.run([sys.executable, 'tests/fixtures/worker_probe.py',
                               str(owned), str(scenario)], env=env, check=True)
+
+  wizard-resources:
+    name: Wizard resources (macos-latest)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Install native wizard test dependencies
+        shell: python
+        run: |
+          from pathlib import Path
+          import subprocess
+          import sys
+          prefixes = ('PyQt6>=', 'psutil', 'pytest==', 'python-dotenv==', 'requests==', 'filelock')
+          dependencies = [line for line in Path('requirements.txt').read_text().splitlines()
+                          if line.startswith(prefixes)]
+          subprocess.run([sys.executable, '-m', 'pip', 'install', *dependencies,
+                          'pyobjc-framework-Cocoa'], check=True)
+      - name: 🧪 Open setup without optional system artwork
+        shell: python
+        run: |
+          import os
+          from pathlib import Path
+          import shutil
+          import subprocess
+          import sys
+          import tempfile
+          with tempfile.TemporaryDirectory(prefix='jarvis-wizard-resources-') as directory:
+              owned = Path(directory)
+              scenario = owned / 'scenario.py'
+              shutil.copyfile('tests/fixtures/wizard_resource_probe.py', scenario)
+              env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1', PYTHONPATH='src')
+              subprocess.run([sys.executable, 'tests/fixtures/worker_probe.py',
+                              str(owned), str(scenario)], env=env, check=True, timeout=30)
