@@ -69,7 +69,7 @@ def test_text_tool_call_preserves_declared_operation_and_scope(monkeypatch, quer
     tool = OwnedEntryManager()
     monkeypatch.setitem(registry.BUILTIN_TOOLS, tool.name, tool)
     monkeypatch.setattr(engine, 'select_tools', lambda *args, **kwargs: [tool.name, 'stop'])
-    cfg = replace(isolated_voice_settings(), location_enabled=False, mcps={},
+    cfg = replace(isolated_voice_settings(), location_enabled=False, mcps={}, planner_enabled=False,
                   llm_chat_timeout_sec=60, planner_timeout_sec=15)
     db = Database(':memory:')
     try:
