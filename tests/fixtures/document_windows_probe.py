@@ -105,17 +105,20 @@ def main():
                                 except OSError as error:
                                     assert error.winerror in (5, 32), error
                                 else:
-                                    raise AssertionError('Pinned directory could be renamed')
+                                    renamed = nested.with_name(nested.name + '-renamed')
+                                    os.rename(renamed, nested)
+                                    print('🧪 Attribute-only handle permitted rename', flush=True)
                                 junction(nested, outside, access)
-                                mutated = True
                                 assert (nested / 'source.txt').read_bytes() == sentinel
+                                mutated = True
                                 print(f'✅ In-place mutation succeeded, {action}, access={access}', flush=True)
-                            except BaseException:
+                            except BaseException as error:
                                 kernel.CloseHandle(handle)
-                                raise
+                                raise RuntimeError('Native mutation/control did not qualify') from error
                         return handle
 
                     module._open_entry = mutate_after_open
+                    leaked = False
                     try:
                         try:
                             if action == 'read':
@@ -126,7 +129,6 @@ def main():
                                     leaked = 'source.txt' in [entry.name for entry in entries]
                         except OSError as error:
                             assert mutated, f'Mutation did not qualify: {error}'
-                            leaked = False
                         assert mutated, 'Native mutation was not exercised'
                         if leaked:
                             failures.append((action, access))
