@@ -86,10 +86,7 @@ class TaskManager:
             raise ValueError("Task prompt cannot be empty")
         task = Task(id=uuid.uuid4().hex[:12], prompt=prompt)
         with self._lock:
-            active = sum(
-                item.status in {TaskStatus.QUEUED, TaskStatus.RUNNING}
-                for item in self._tasks.values()
-            )
+            active = sum(not future.done() for future in self._futures.values())
             if active >= self.max_queued_tasks:
                 raise RuntimeError("Task queue is full")
             self._tasks[task.id] = task
@@ -112,13 +109,10 @@ class TaskManager:
     def cancel(self, task_id: str) -> bool:
         with self._lock:
             task = self._tasks.get(task_id)
-            future = self._futures.get(task_id)
             if task is None or task.status in {
                 TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED,
             }:
                 return False
-            if future is not None:
-                future.cancel()
             self._cancel_events.setdefault(task.id, threading.Event()).set()
             task.status = TaskStatus.CANCELLED
             task.completed_at = time.time()
@@ -131,7 +125,7 @@ class TaskManager:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             with self._lock:
-                if all(task.status not in {TaskStatus.QUEUED, TaskStatus.RUNNING} for task in self._tasks.values()):
+                if all(future.done() for future in self._futures.values()):
                     return
             time.sleep(0.01)
         raise TimeoutError("Timed out waiting for task queue")
@@ -203,7 +197,7 @@ class TaskManager:
             (task for task in self._tasks.values()
              if task.status in {
                  TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED
-             }),
+             } and (task.id not in self._futures or self._futures[task.id].done())),
             key=lambda task: task.created_at,
         )
         for task in terminal[:-self.max_history]:

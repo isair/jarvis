@@ -13,6 +13,12 @@ model, and tool-loop steps. An external LLM or tool request already in
 progress cannot be forcibly interrupted; its result is discarded and the
 task remains cancelled.
 
+Queue admission counts submitted executor work until it has drained, including
+cancelled requests. Cancelling a queued request prevents its reply-engine call
+without removing its executor placeholder. Idle waits for executor completion,
+not only terminal client states. History pruning retains records still owned by
+unfinished executor work.
+
 Task records persist in Jarvis's local SQLite database. Stored prompt, result,
 and error text is redacted and length-limited, and tool payloads are not
 persisted. Tasks that were queued or running when the daemon stopped are

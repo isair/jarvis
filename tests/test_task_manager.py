@@ -8,6 +8,8 @@ import pytest
 from jarvis.memory.db import Database
 from jarvis.tasks import TaskManager, TaskStatus
 
+pytestmark = pytest.mark.unit
+
 
 def test_task_runs_reply_engine_and_reports_completion():
     events = []
@@ -149,3 +151,84 @@ def test_tasks_restore_from_local_database_without_persisting_secrets(tmp_path):
     assert "[REDACTED]" in task.prompt
     restored.shutdown()
     restored_db.close()
+
+
+@pytest.mark.parametrize('cancel_queued', [False, True])
+def test_cancellation_keeps_capacity_until_the_executor_drains(cancel_queued):
+    started, release = Event(), Event()
+    manager = TaskManager(object(), SimpleNamespace(), object(),
+                          max_queued_tasks=2 if cancel_queued else 1)
+
+    def blocked_reply(*args, **kwargs):
+        started.set()
+        assert release.wait(5)
+        return 'Finished'
+
+    with patch('jarvis.tasks.run_reply_engine', side_effect=blocked_reply):
+        try:
+            running = manager.submit('Running request')
+            assert started.wait(2)
+            cancelled = manager.submit('Queued request') if cancel_queued else running
+            assert manager.cancel(cancelled)
+            with pytest.raises(RuntimeError, match='queue is full'):
+                manager.submit('Another request')
+            release.set()
+            manager.wait_for_idle(timeout=2)
+            follow_up = manager.submit('A request after draining')
+            manager.wait_for_idle(timeout=2)
+            assert manager.get(follow_up).result == 'Finished'
+            assert manager.get(cancelled).status is TaskStatus.CANCELLED
+            assert manager.get(cancelled).result is None
+        finally:
+            release.set()
+            manager.shutdown()
+
+
+def test_idle_waits_for_a_cancelled_request_to_release_its_resources():
+    started, release = Event(), Event()
+    manager = TaskManager(object(), SimpleNamespace(), object())
+
+    def blocked_reply(*args, **kwargs):
+        started.set()
+        assert release.wait(5)
+        return 'Discarded'
+
+    with patch('jarvis.tasks.run_reply_engine', side_effect=blocked_reply):
+        try:
+            task = manager.submit('An in-flight request')
+            assert started.wait(2)
+            assert manager.cancel(task)
+            with pytest.raises(TimeoutError, match='Timed out'):
+                manager.wait_for_idle(timeout=0.02)
+            release.set()
+            manager.wait_for_idle(timeout=2)
+            assert manager.get(task).status is TaskStatus.CANCELLED
+            assert manager.get(task).result is None
+        finally:
+            release.set()
+            manager.shutdown()
+
+
+def test_history_pruning_preserves_cancelled_work_still_in_the_queue():
+    started, release = Event(), Event()
+    manager = TaskManager(object(), SimpleNamespace(), object(),
+                          max_queued_tasks=4, max_history=1)
+
+    def blocked_reply(*args, **kwargs):
+        started.set()
+        assert release.wait(5)
+        return 'Finished'
+
+    with patch('jarvis.tasks.run_reply_engine', side_effect=blocked_reply):
+        try:
+            manager.submit('Running request')
+            assert started.wait(2)
+            cancelled = []
+            for prompt in ['First queued request', 'Second queued request', 'Third queued request']:
+                task = manager.submit(prompt)
+                assert manager.cancel(task)
+                cancelled.append(task)
+            assert all(manager.get(task).status is TaskStatus.CANCELLED for task in cancelled)
+        finally:
+            release.set()
+            manager.shutdown()
