@@ -48,7 +48,7 @@ levels deep, and you'll miss it if you only look at the top-level list.
 Classify each thread into one of:
 
 - **Untriaged**: no owner (`isair`) reply yet. Act now.
-- **Awaiting reporter**: a published clarifying question still needs an answer after reading the complete thread. A `question` label or an unsent draft alone does not establish that anyone was asked. Review new information when it arrives; do not close for silence before two weeks after the actual published question and the latest reporter activity.
+- **Awaiting reporter**: a published clarifying question still needs an answer after reading the complete thread. A `question` label or an unsent draft alone does not establish that anyone was asked. Review new information when it arrives; do not close for silence before two weeks after the actual published question and the latest reporter activity. Elapsed time alone neither resolves a defect nor authorises closure.
 - **Owner tracking**: filed by `isair` as an internal task. Assess its current implementation and next action under the maintenance loop; do not invent a reporter troubleshooting request. New community information still needs review.
 - **Resolved-pending-release**: a verified fix is on `develop`. Compare the report with the actual implementation and linked changes, not just a title or commit reference. Recent merged PRs are discovery leads; extend the search when needed. Never close manually merely because the fix landed on `develop`. The release fast-forwards `main` and auto-closes references written as `Closes #NNN`. Draft the verified release status rather than requesting evidence already supplied.
 
@@ -61,9 +61,8 @@ gh issue view <N> --json title,body,author,labels,comments \
   --jq '{title, author: .author.login, labels: [.labels[].name], body, comments: [.comments[] | {author: .author.login, createdAt, body}]}'
 ```
 
-Read the **logs** and traceback carefully before replying. The vast majority of
-reports contain the answer in the log; the reporter just didn't know what to
-look for.
+Read the **logs** and traceback carefully before replying. Separate what the
+report demonstrates from what still needs investigating.
 
 **Always fetch the full issue body.** Do not truncate with `body[:N]` — the
 interaction lines (`📝 Heard:`) often appear near the bottom, past a 2000-char
@@ -90,7 +89,7 @@ capture, recognition, intent, model availability, tool execution or playback.
 | Evidence in the log | Supported conclusion and next action |
 |---------------------|--------------------------------------|
 | Wake name without an accompanying request | The transcript contains no request. Confirm what the person intended before diagnosing microphone or model failure. |
-| Wake name transcribed differently | Recognition and the reported utterance may differ. Check the configured wake name/aliases and ask what was actually said; do not tell the person they used the wrong name based only on ASR output. |
+| Wake name transcribed differently | Recognition and the reported utterance may differ. Check the configured wake name/aliases and ask what was actually said if the report does not say; do not tell the person they used the wrong name based only on ASR output. |
 | Intent or reply request exceeds its logged timeout | That request did not finish in time. Check provider availability, selected models and resource evidence. A Whisper CUDA warning does not establish the LLM backend's device. |
 | Repeated unrelated or multilingual transcripts with no reported speech | Possible recognition hallucinations or background/echo capture. Check readiness, input selection, confidence and speech/echo filtering; do not assume a broken microphone. |
 | Only low-confidence lines | Audio reached the recogniser but was filtered. The log alone does not prove a person spoke or that a command was missed. |
