@@ -3,8 +3,8 @@ Compound-query decomposition helper.
 
 Small models (text-based tool calling) struggle to multi-step when a user asks
 two questions joined by a conjunction — they answer one side and stop. The
-engine splits such queries upfront so it can inject a targeted "still
-unanswered" nudge after each tool result.
+engine supplies advisory request parts so the model can compare every part
+with the actual results before deciding whether more work remains.
 
 Language-aware: conjunction shape varies wildly across languages (whitespace
 boundaries for Latin/Cyrillic, character-level for CJK, enclitic particles
