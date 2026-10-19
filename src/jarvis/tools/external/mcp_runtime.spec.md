@@ -15,6 +15,9 @@ resident for the daemon's lifetime.
 - One process-wide singleton `_PersistentMCPRuntime` accessible via
   `get_runtime()`. Created lazily on first use; recreated after
   `shutdown_runtime()`.
+- The worker registry lock covers bookkeeping only. Per-server lifecycle
+  locks serialise startup, replacement and retirement for that server;
+  another server's readiness does not wait for those operations.
 - A single background thread runs an `asyncio` event loop
   (`JarvisMCPRuntime`). All MCP I/O happens on this loop.
 - Per server, a `_ServerWorker` task lives on that loop. The task
@@ -30,7 +33,7 @@ resident for the daemon's lifetime.
 | Event | Effect |
 |-------|--------|
 | First `get_runtime()` call | Spawns the background thread + loop. |
-| First call referencing a server | Creates a `_ServerWorker`, awaits `_ready` (the worker signals readiness once `session.initialize()` returns). |
+| First call referencing a server | Registers a `_ServerWorker` before setup and awaits `_ready` (signalled once `session.initialize()` returns). Shutdown owns pending setup. |
 | Server config equality holds | Subsequent calls reuse the cached worker. |
 | Server config changes | Old worker is shut down; a fresh worker replaces it. |
 | Worker raises `_WorkerDeadError` | Runtime drops it and retries the call once with a new worker. Second failure surfaces as `MCPServerSessionError` to the public layer. |
@@ -42,6 +45,14 @@ resident for the daemon's lifetime.
 - One in-flight `call_tool` per server at any time. Tool calls to the
   same server are serialised by the queue. Different servers run in
   parallel because each has its own worker.
+- Failed or timed-out startup joins asynchronous cleanup before retirement.
+  A worker whose setup or session still holds resources remains registered;
+  replacement fails as a session error until that instance has drained.
+- A stale failure retires only its own worker identity, preserving a newer
+  persistent session and its state.
+- Shutdown closes admission before collecting workers, including pending
+  startup. A stopped worker cannot schedule late setup. Concurrent stop
+  callers join the same teardown and retain the bounded cleanup policy.
 - A worker is never reused after `alive` flips to `False`. The
   finally-block in `_run` drains pending requests, resolving each
   outstanding future with `_WorkerDeadError` so callers do not hang.
