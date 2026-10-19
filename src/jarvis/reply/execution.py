@@ -81,12 +81,14 @@ class ExecutionControl:
 @dataclass(frozen=True)
 class ToolCall:
     name: str
-    args: dict
+    args: Optional[dict]
     call_id: str
 
 
 def is_read_only_call(call: ToolCall, mcp_tools: dict) -> bool:
     """Conservatively identify calls safe to overlap with independent reads."""
+    if not isinstance(call.args, dict):
+        return False
     if call.name in {"getTime", "getWeather", "webSearch", "fetchWebPage", "readTaskResult"}:
         return True
     if call.name == "localFiles":

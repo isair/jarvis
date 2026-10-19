@@ -302,12 +302,46 @@ def _is_malformed_model_output(content: str) -> bool:
     return False
 
 
+def _decode_tool_arguments(raw):
+    """Decode an argument object without substituting defaults on failure."""
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        try:
+            decoded = json.loads(raw)
+        except (ValueError, TypeError):
+            return None
+        return decoded if isinstance(decoded, dict) else None
+    return None
+
+
+def _recover_unterminated_argument_string(raw):
+    """Recover a complete object inside a missing outer string terminator."""
+    if not raw.startswith('"'):
+        return None
+    escaped = raw[1:]
+    suffix_start = len(escaped.rstrip(' \t\r\n}]'))
+    for end in range(suffix_start + 1, len(escaped) + 1):
+        if escaped[end - 1] != '}':
+            continue
+        try:
+            unwrapped = json.loads('"' + escaped[:end] + '"')
+        except (ValueError, TypeError):
+            continue
+        decoded = _decode_tool_arguments(unwrapped)
+        if decoded is not None:
+            return decoded
+    return None
+
+
 def _extract_text_tool_call(content_field: str, known_names: set):
     """Parse a tool call out of a content-mode LLM response.
 
     Small models emit several shapes when instructed to use text-based tool
     calling; this helper attempts each in order and returns (name, args, id)
     on the first match, or (None, None, None) if nothing parses.
+    An identified call with invalid arguments returns (name, None, id) so
+    the engine can request correction without executing empty defaults.
 
     Supported shapes:
       1. `tool_calls: [{"id": ..., "function": {"name": ..., "arguments": ...}}]`
@@ -334,39 +368,36 @@ def _extract_text_tool_call(content_field: str, known_names: set):
         try:
             data = json.loads(fence_match.group(1).strip())
             name = str(data.get("name", "")).strip()
-            args = data.get("arguments", data.get("args", {}))
+            args = _decode_tool_arguments(data.get("arguments", data.get("args", {})))
             if name:
-                return name, (args if isinstance(args, dict) else {}), f"call_{uuid.uuid4().hex[:8]}"
+                return name, args, f"call_{uuid.uuid4().hex[:8]}"
         except Exception:
             pass
 
     # Form: `tool_calls: [...]` JSON array literal
     tc_literal = re.search(
-        r"tool_calls\s*:\s*(\[.+?\])",
+        r"tool_calls\s*:\s*(\[)",
         content_field,
         re.DOTALL,
     )
     if tc_literal:
-        raw_literal = tc_literal.group(1)
+        raw_literal = content_field[tc_literal.start(1):]
         try:
-            arr = json.loads(raw_literal)
+            arr, _ = json.JSONDecoder().raw_decode(raw_literal)
             if isinstance(arr, list) and arr:
                 first = arr[0]
                 if isinstance(first, dict) and isinstance(first.get("function"), dict):
                     func = first["function"]
                     name = str(func.get("name", "")).strip()
-                    raw_args = func.get("arguments")
-                    if isinstance(raw_args, str):
+                    raw_args = func.get("arguments", {})
+                    parsed_args = _decode_tool_arguments(raw_args)
+                    # The text protocol also accepts a literal search string.
+                    if (parsed_args is None and isinstance(raw_args, str)
+                            and raw_args.strip() and raw_args.lstrip()[0] not in '{["'):
                         try:
-                            parsed_args = json.loads(raw_args)
-                            if not isinstance(parsed_args, dict):
-                                parsed_args = {"query": raw_args}
-                        except Exception:
+                            json.loads(raw_args)
+                        except ValueError:
                             parsed_args = {"query": raw_args}
-                    elif isinstance(raw_args, dict):
-                        parsed_args = raw_args
-                    else:
-                        parsed_args = {}
                     tool_call_id = first.get("id") or f"call_{uuid.uuid4().hex[:8]}"
                     if name:
                         return name, parsed_args, tool_call_id
@@ -383,30 +414,28 @@ def _extract_text_tool_call(content_field: str, known_names: set):
             if name_match:
                 name = name_match.group(1).strip()
                 if name in known_names:
+                    id_match = re.search(r'"id"\s*:\s*"([^"]+)"', raw_literal)
+                    tool_call_id = id_match.group(1) if id_match else f"call_{uuid.uuid4().hex[:8]}"
+                    if len(re.findall(r'"function"\s*:', raw_literal)) > 1:
+                        return name, None, tool_call_id
                     args_match = re.search(
                         r'"arguments"\s*:\s*(\{.*?\}|"(?:[^"\\]|\\.)*")',
                         raw_literal,
                         re.DOTALL,
                     )
-                    parsed_args: dict = {}
+                    parsed_args = None
                     if args_match:
                         raw = args_match.group(1)
                         def _lenient_json_object(candidate: str) -> dict | None:
-                            """Parse a JSON object, trimming trailing garbage."""
+                            """Accept a complete object with surplus closing braces."""
                             candidate = candidate.strip()
-                            # Greedy-trim trailing chars until a balanced
-                            # object parses cleanly. Handles the common
-                            # small-model "extra closing braces" bug.
-                            for end in range(len(candidate), 0, -1):
-                                chunk = candidate[:end]
-                                if not chunk.endswith("}"):
-                                    continue
-                                try:
-                                    parsed = json.loads(chunk)
-                                    if isinstance(parsed, dict):
-                                        return parsed
-                                except Exception:
-                                    continue
+                            try:
+                                parsed, end = json.JSONDecoder().raw_decode(candidate)
+                                remainder = candidate[end:].strip()
+                                if isinstance(parsed, dict) and not remainder.strip('}'):
+                                    return parsed
+                            except (ValueError, TypeError):
+                                pass
                             return None
 
                         if raw.startswith('"'):
@@ -421,24 +450,32 @@ def _extract_text_tool_call(content_field: str, known_names: set):
                                 if inner is not None:
                                     parsed_args = inner
                                 else:
-                                    parsed_args = {"query": unwrapped}
+                                    parsed_args = None
                             elif isinstance(unwrapped, dict):
                                 parsed_args = unwrapped
                         else:
                             lenient = _lenient_json_object(raw)
                             if lenient is not None:
                                 parsed_args = lenient
-                    id_match = re.search(r'"id"\s*:\s*"([^"]+)"', raw_literal)
-                    tool_call_id = id_match.group(1) if id_match else f"call_{uuid.uuid4().hex[:8]}"
+                    else:
+                        start = re.search(r'"arguments"\s*:\s*', raw_literal)
+                        if start:
+                            parsed_args = _recover_unterminated_argument_string(
+                                raw_literal[start.end():]
+                            )
                     return name, parsed_args, tool_call_id
 
     if not known_names:
         return None, None, None
 
     stripped = content_field.strip()
+    # Registered names are literal identifiers, including MCP namespaces.
+    name_prefix = r"^(" + "|".join(
+        re.escape(name) for name in sorted(known_names, key=len, reverse=True)
+    ) + r")\s*"
 
     # Form: `toolName: key: value` — only accept if the first segment is a known tool.
-    m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.*)$", stripped, re.DOTALL)
+    m = re.match(name_prefix + r":\s*(.*)$", stripped, re.DOTALL)
     if m and m.group(1) in known_names:
         name = m.group(1)
         rest = m.group(2).strip()
@@ -455,7 +492,7 @@ def _extract_text_tool_call(content_field: str, known_names: set):
         return name, args, f"call_{uuid.uuid4().hex[:8]}"
 
     # Form: `toolName(...)`
-    m2 = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*\((.*)\)\s*$", stripped, re.DOTALL)
+    m2 = re.match(name_prefix + r"\((.*)\)\s*$", stripped, re.DOTALL)
     if m2 and m2.group(1) in known_names:
         name = m2.group(1)
         inside = m2.group(2).strip()
@@ -465,30 +502,16 @@ def _extract_text_tool_call(content_field: str, known_names: set):
                 candidate = json.loads(inside)
                 if isinstance(candidate, dict):
                     parsed_args = candidate
+                elif isinstance(candidate, str):
+                    parsed_args = {"query": candidate}
                 else:
-                    parsed_args = {"query": str(candidate)}
+                    parsed_args = None
             except Exception:
-                parsed_args = {"query": inside.strip().strip('"').strip("'")}
+                parsed_args = (None if inside.lstrip().startswith(('{', '['))
+                               else {"query": inside.strip().strip('"').strip("'")})
         return name, parsed_args, f"call_{uuid.uuid4().hex[:8]}"
 
     return None, None, None
-
-
-# Stop words excluded from question→node matching (common words that inflate false matches).
-# The list is English-biased — the extractor prompt currently produces English questions. For
-# non-English questions nothing would be filtered here, which is a graceful degradation (noisier
-# but still functional matches) rather than a correctness issue. If the extractor starts emitting
-# other languages, either expand this set or switch to a language-detection-driven filter.
-_STOP_WORDS = frozenset({
-    "the", "a", "an", "is", "are", "was", "were", "do", "does", "did", "has", "have", "had",
-    "what", "where", "when", "who", "how", "which", "that", "this", "with", "for", "from",
-    "about", "user", "their", "they", "them", "and", "or", "but", "not", "any", "some",
-})
-
-# Tokens at or below this length (after stripping punctuation) are dropped even if not in the
-# stop-word set. Cheap language-agnostic backstop against generic 1–2 char noise.
-_MIN_CONTENT_WORD_LEN = 3
-
 
 def _is_content_word(word: str) -> bool:
     """True if `word` looks like a meaningful content token (not stop word, not too short)."""
@@ -730,6 +753,9 @@ def _previous_turn_failed_tool_names(recent_messages: list) -> list[str]:
                 if msg.get("tool_failed"):
                     failed_call_ids.add(cid)
         elif role == "user" and msg.get("tool_name"):
+            cid = msg.get("tool_call_id")
+            if isinstance(cid, str) and cid:
+                seen_call_ids.add(cid)
             if msg.get("tool_failed"):
                 name = msg.get("tool_name")
                 if isinstance(name, str) and name and name not in seen:
@@ -1564,6 +1590,12 @@ def _run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     # Per-reply memo for the time/location context line (see _get_context_string).
     _context_cache: Optional[str] = None
 
+    def _append_tool_feedback(tool_name, tool_call_id, content, *, failed: bool) -> None:
+        message = {"content": content, "tool_name": tool_name, "tool_failed": failed,
+                   "tool_call_id": tool_call_id, "tool_feedback": True}
+        message["role"] = "user" if use_text_tools else "tool"
+        messages.append(message)
+
     def _maybe_record_tool_carryover() -> None:
         if _carryover_state["recorded"]:
             return
@@ -1647,78 +1679,8 @@ def _run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             max_parallel_reads=int(getattr(cfg, "agentic_parallel_reads", 3)),
         )
 
-    def _extract_structured_tool_call(resp: dict):
-        try:
-            if isinstance(resp, dict) and isinstance(resp.get("message"), dict):
-                msg = resp["message"]
-
-                # First try: native tool_calls array from Ollama
-                tc = msg.get("tool_calls")
-                if isinstance(tc, list) and len(tc) > 0:
-                    first = tc[0]
-                    if isinstance(first, dict) and isinstance(first.get("function"), dict):
-                        func = first["function"]
-                        name = str(func.get("name", "")).strip()
-                        args = func.get("arguments")
-                        tool_call_id = first.get("id")  # Extract tool_call_id
-                        if not tool_call_id:
-                            # Generate a shorthand ID if LLM didn't provide one
-                            tool_call_id = f"call_{uuid.uuid4().hex[:8]}"
-
-                        # Handle malformed arguments where LLM nests tool info inside arguments
-                        if isinstance(args, dict) and "tool" in args:
-                            # Extract from nested structure: {'tool': {'args': {...}, 'name': ...}}
-                            tool_info = args.get("tool", {})
-                            if isinstance(tool_info, dict):
-                                actual_args = tool_info.get("args", {})
-                                actual_name = tool_info.get("name", name)
-                                if actual_name:
-                                    return actual_name, (actual_args if isinstance(actual_args, dict) else {}), tool_call_id
-
-                        if name:
-                            return name, (args if isinstance(args, dict) else {}), tool_call_id
-
-                # Content-mode tool-call parsing: the model returned prose that may
-                # encode a tool call in one of several shapes (markdown fence,
-                # `tool_calls: [...]` literal, `toolName: key: value`, or
-                # `toolName(...)`). Delegate to the module-level helper so the
-                # logic is unit-testable and shared across future callers.
-                content_field = msg.get("content", "") or ""
-                known_names = known_tool_names
-                name, args, tool_call_id = _extract_text_tool_call(content_field, known_names)
-                if name:
-                    return name, args, tool_call_id
-
-                # Diagnostic: if the content LOOKS like a botched tool call (starts
-                # with a known tool name, or contains `tool_calls:`, or is suspiciously
-                # short for a real reply), log the raw content so we can diagnose
-                # small-model format regressions from field logs. Without this, a
-                # user-visible reply of "web" gives no signal about what the model
-                # actually emitted.
-                if content_field:
-                    stripped_preview = content_field.strip()
-                    looks_malformed = (
-                        len(stripped_preview) <= 32
-                        and any(stripped_preview.lower().startswith(n.lower()) for n in known_names)
-                    ) or "tool_calls" in stripped_preview.lower() or (
-                        # bare prefix of a known tool name, e.g. "web" for "webSearch"
-                        known_names and len(stripped_preview) <= 20 and
-                        any(n.lower().startswith(stripped_preview.lower()) and stripped_preview
-                            for n in known_names)
-                    )
-                    if looks_malformed:
-                        debug_log(
-                            f"⚠️ tool-call parse failed on suspicious content "
-                            f"(len={len(stripped_preview)}): {stripped_preview!r}",
-                            "planning",
-                        )
-
-        except Exception:
-            pass
-        return None, None, None
-
     def _extract_all_tool_calls(resp: dict) -> list[ToolCall]:
-        """Keep every native call in the model's order."""
+        """Canonicalise native batches or one recognised textual request."""
         if isinstance(resp, dict) and isinstance(resp.get("message"), dict):
             raw_calls = resp["message"].get("tool_calls")
             if isinstance(raw_calls, list) and raw_calls:
@@ -1745,8 +1707,13 @@ def _run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                         name, arguments, call_id,
                     ))
                 return calls
-        name, arguments, call_id = _extract_structured_tool_call(resp)
-        return [ToolCall(name, arguments or {}, call_id or f"call_{uuid.uuid4().hex[:8]}")] if name else []
+        message = resp.get("message") if isinstance(resp, dict) else None
+        content = message.get("content", "") if isinstance(message, dict) else ""
+        name, arguments, _ = _extract_text_tool_call(content, known_tool_names)
+        if name:
+            debug_log("Text tool request retained with a unique result identity", "planning")
+            return [ToolCall(name, arguments, f"call_{uuid.uuid4().hex}")]
+        return []
 
     def _get_context_string() -> str:
         """Get current time and location context as a string.
@@ -2038,6 +2005,7 @@ def _run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                                     f"[Tool result: {_name}]\n"
                                     f"{_plan_text}{_plan_hint}"
                                 ),
+                                "tool_call_id": _plan_call_id,
                                 "tool_name": _name,
                                 "tool_failed": not _plan_result.success,
                             })
@@ -2186,7 +2154,7 @@ def _run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             if tool_calls else (None, None, None)
         )
 
-        # Native history uses the same validated calls and IDs as execution.
+        # Conversation history uses the same canonical calls and IDs as execution.
         assistant_msg = {"role": "assistant", "content": content}
 
         # Preserve all fields from the LLM response
@@ -2195,13 +2163,12 @@ def _run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             if isinstance(msg, dict):
                 if "thinking" in msg and msg["thinking"]:
                     assistant_msg["thinking"] = msg["thinking"]
-                if "tool_calls" in msg and msg["tool_calls"]:
-                    if tool_calls:
-                        assistant_msg["tool_calls"] = [
-                            {"id": call.call_id, "type": "function", "function": {
-                                "name": call.name, "arguments": call.args,
-                            }} for call in tool_calls
-                        ]
+        if tool_calls:
+            assistant_msg["tool_calls"] = [
+                {"id": call.call_id, "type": "function", "function": {
+                    "name": call.name, "arguments": call.args,
+                }} for call in tool_calls
+            ]
 
         messages.append(assistant_msg)
 
@@ -2305,6 +2272,7 @@ def _run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 if use_text_tools:
                     messages.append({
                         "role": "user", "tool_name": call.name,
+                        "tool_call_id": call.call_id, "tool_feedback": error is not None,
                         "tool_failed": not success,
                         "content": f"[Tool {'result' if success else 'error'}: {call.name}]\n{result_text}",
                     })
@@ -2336,11 +2304,19 @@ def _run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 debug_log(f"  ⚠️ tool not allowed: {tool_name}", "planning")
                 print(f"    ⚠️ Tool '{tool_name}' not in allow-list", flush=True)
                 # Use tool response instead of system message to maintain native tool calling compatibility
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call_id,
-                    "content": f"Error: Tool '{tool_name}' is not available. Available tools: {', '.join(allowed_tools[:5])}{'...' if len(allowed_tools) > 5 else ''}"
-                })
+                _append_tool_feedback(
+                    tool_name, tool_call_id,
+                    f"Error: Tool '{tool_name}' is not available. Available tools: {', '.join(allowed_tools[:5])}{'...' if len(allowed_tools) > 5 else ''}",
+                    failed=True,
+                )
+                continue
+
+            if not isinstance(tool_args, dict):
+                _append_tool_feedback(
+                    tool_name, tool_call_id,
+                    "Error: Tool arguments must be a complete JSON object. Correct the call without replacing the requested values with defaults.",
+                    failed=True,
+                )
                 continue
 
             # Cap toolSearchTool usage per reply so a confused model can't
@@ -2356,33 +2332,19 @@ def _run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     "toolSearchTool has been used the maximum number of times "
                     "this turn; make a decision with the tools already available."
                 )
-                if use_text_tools:
-                    messages.append({
-                        "role": "user",
-                        "content": f"[Tool error: {tool_name}] {cap_msg}",
-                    })
-                else:
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tool_call_id,
-                        "content": f"Error: {cap_msg}",
-                    })
+                _append_tool_feedback(tool_name, tool_call_id, f"Error: {cap_msg}", failed=True)
                 continue
 
             if tool_name == "toolSearchTool":
                 tool_search_calls += 1
 
-            call = ToolCall(tool_name, tool_args or {}, tool_call_id or "")
+            call = ToolCall(tool_name, tool_args, tool_call_id)
             signature = _tool_signature(call)
             stable_args = signature[1]
             if signature in successful_tool_results:
                 cached = successful_tool_results[signature]
                 guidance = f"[Cached result: {tool_name}]\n{cached}"
-                if use_text_tools:
-                    messages.append({"role": "user", "tool_name": tool_name, "content": guidance})
-                else:
-                    messages.append({"role": "tool", "tool_call_id": tool_call_id,
-                                     "tool_name": tool_name, "content": guidance})
+                _append_tool_feedback(tool_name, tool_call_id, guidance, failed=False)
                 no_progress_turns += 1
                 if no_progress_turns >= 3:
                     break
@@ -2390,25 +2352,14 @@ def _run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             if (task_store and task_store.signature_digest(f"{signature[0]}:{signature[1]}")
                     in completed_write_signatures):
                 guidance = "This write completed in the resumed task. Do not repeat it."
-                if use_text_tools:
-                    messages.append({"role": "user", "tool_name": tool_name,
-                                     "content": f"[Tool result: {tool_name}] {guidance}"})
-                else:
-                    messages.append({"role": "tool", "tool_call_id": tool_call_id,
-                                     "tool_name": tool_name, "content": guidance})
+                _append_tool_feedback(tool_name, tool_call_id, guidance, failed=False)
                 no_progress_turns += 1
                 if no_progress_turns >= 3:
                     break
                 continue
             if failed_tool_signatures.get(signature, 0) >= 2:
                 guidance = "This exact call failed twice. Try different arguments or a different source, or explain what is missing."
-                if use_text_tools:
-                    messages.append({"role": "user", "tool_name": tool_name,
-                                     "tool_failed": True, "content": f"[Tool error: {tool_name}] {guidance}"})
-                else:
-                    messages.append({"role": "tool", "tool_call_id": tool_call_id,
-                                     "tool_name": tool_name, "tool_failed": True,
-                                     "content": f"Error: {guidance}"})
+                _append_tool_feedback(tool_name, tool_call_id, guidance, failed=True)
                 no_progress_turns += 1
                 if no_progress_turns >= 3:
                     break
@@ -2590,6 +2541,7 @@ def _run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     messages.append({
                         "role": "user",
                         "content": f"[Tool result: {tool_name}]\n{effective_result}{remainder_hint}",
+                        "tool_call_id": tool_call_id,
                         "tool_name": tool_name,  # kept for duplicate detection
                         "tool_failed": not result.success,
                     })
@@ -2630,6 +2582,7 @@ def _run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     messages.append({
                         "role": "user",
                         "content": f"[Tool error: {tool_name}] {err}",
+                        "tool_call_id": tool_call_id,
                         "tool_name": tool_name,
                         "tool_failed": True,
                     })
