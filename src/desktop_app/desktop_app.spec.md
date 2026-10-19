@@ -151,7 +151,8 @@ Window visibility is user-controlled: starting or stopping the assistant never s
 
 ### Desktop face presence
 
-`jarvis.activity` owns the shared activity enum and file-backed state manager.
+[Shared assistant activity](../jarvis/activity.spec.md) owns the activity enum
+and file-backed state manager.
 It uses only the standard library, so core speech, listening, dictation and
 reply paths publish state without importing the desktop or Qt. The face
 observes that state during animation in both bundled and subprocess modes.
