@@ -1,14 +1,15 @@
 """Tests for local files tool."""
 
 import pytest
-from unittest.mock import Mock, patch, mock_open
-import tempfile
+from unittest.mock import Mock, patch
 import os
-from pathlib import Path
 
 from jarvis.tools.builtin.local_files import LocalFilesTool
 from jarvis.tools.base import ToolContext
 from jarvis.tools.types import ToolExecutionResult
+
+
+pytestmark = pytest.mark.unit
 
 
 class TestLocalFilesTool:
@@ -54,21 +55,17 @@ class TestLocalFilesTool:
         assert result.success is False
         assert "requires 'operation' and 'path'" in result.reply_text
 
-    @patch('pathlib.Path.exists')
-    @patch('pathlib.Path.is_file')
-    @patch('pathlib.Path.read_text')
-    def test_run_read_success(self, mock_read_text, mock_is_file, mock_exists):
-        """Test successful file read."""
-        mock_exists.return_value = True
-        mock_is_file.return_value = True
-        mock_read_text.return_value = "Test content"
+    @pytest.mark.parametrize("payload", [b"Test content", "café 🦦".encode("utf-8"), b"bad\xffUTF-8", b""])
+    def test_run_read_success(self, tmp_path, monkeypatch, payload):
+        """Read owned UTF-8 content, replacing invalid input without changing valid text."""
+        source = tmp_path / "test.txt"
+        source.write_bytes(payload)
+        expanduser = os.path.expanduser
+        monkeypatch.setattr(os.path, "expanduser", lambda path: str(tmp_path) if path == "~" else expanduser(path))
+        result = self.tool.run({"operation": "read", "path": str(source)}, self.context)
 
-        args = {"operation": "read", "path": "~/test.txt"}
-        result = self.tool.run(args, self.context)
-
-        assert isinstance(result, ToolExecutionResult)
-        assert result.success is True
-        assert "Test content" in result.reply_text
+        assert result.success
+        assert result.reply_text == payload.decode("utf-8", errors="replace")
 
     @patch('pathlib.Path.exists')
     def test_run_read_not_found(self, mock_exists):
