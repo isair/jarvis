@@ -47,7 +47,9 @@ ranking retains at most ten candidates in memory.
 Each embedding timeout is capped by the remaining pass deadline. Cancellation
 and deadlines are checked between directory entries, source files, embedding
 calls and publication. Current folder authority is rechecked before each source
-read and each new source embedding. Revocation stops admitting affected work
+read and each new source embedding. Revalidation checks the granting configured
+folder and its current resolved target, without repeatedly resolving unrelated
+folders. Independent grants to the same folder remain independently valid. Revocation stops admitting affected work
 and records partial coverage; already admitted transport calls may finish. Query inference checks interruption before invalidating
 cached vectors, so a cancelled or expired query preserves reusable excerpts.
 Cancellation during search produces an unsuccessful tool result. A cancelled file

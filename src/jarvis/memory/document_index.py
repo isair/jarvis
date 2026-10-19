@@ -85,6 +85,12 @@ class _Pass:
 
 
 @dataclass(frozen=True)
+class _RootGrant:
+    configured: str
+    path: Path
+
+
+@dataclass(frozen=True)
 class DocumentSearchHit:
     path: str
     start_line: int
@@ -163,7 +169,7 @@ class DocumentIndex:
     def _under_root(path: Path, root: Path) -> bool:
         return path.is_relative_to(root)
 
-    def _roots(self) -> list[Path]:
+    def _root_grants(self) -> list[_RootGrant]:
         if not self.cfg.document_search_enabled:
             return []
         roots = []
@@ -174,8 +180,7 @@ class DocumentIndex:
             try:
                 root = Path(raw).expanduser().resolve(strict=True)
                 if root.is_dir():
-                    if root not in roots:
-                        roots.append(root)
+                    roots.append(_RootGrant(str(raw), root))
                 else:
                     self.coverage.reasons.add('unavailable_root')
             except (OSError, ValueError, RuntimeError):
@@ -183,12 +188,31 @@ class DocumentIndex:
                 debug_log('Skipping an unavailable document root', 'documents')
         return roots
 
+    def _current_roots(self, path: Path, grants: list[_RootGrant]) -> list[Path]:
+        """Revalidate only a granting folder, including its current target."""
+        if not self.cfg.document_search_enabled:
+            return []
+        configured = self.cfg.document_search_paths[:self.limits.roots]
+        for grant in grants:
+            if grant.configured not in configured or not self._under_root(path, grant.path):
+                continue
+            try:
+                current = Path(grant.configured).expanduser().resolve(strict=True)
+                if current == grant.path and current.is_dir():
+                    return [current]
+            except (OSError, ValueError, RuntimeError):
+                pass
+        return []
+
     @staticmethod
     def _identity(value) -> str:
         return json.dumps([value.st_dev, value.st_ino, value.st_size,
                            value.st_mtime_ns, value.st_ctime_ns])
 
-    def _authorised_identity(self, path: Path, roots: list[Path]) -> str | None:
+    def _authorised_identity(self, path: Path, grants: list[_RootGrant]) -> str | None:
+        roots = self._current_roots(path, grants)
+        if not roots:
+            return None
         try:
             resolved = path.resolve(strict=True)
             if (resolved != path or resolved.suffix.lower() not in _ALLOWED_EXTENSIONS
@@ -200,20 +224,20 @@ class DocumentIndex:
             pass
         return None
 
-    def _has_current_authority(self, path: Path, work: _Pass) -> bool:
+    def _has_current_authority(self, path: Path, grants: list[_RootGrant], work: _Pass) -> bool:
         """Admit source work only while its folder remains explicitly authorised."""
-        if any(self._under_root(path, root) for root in self._roots()):
+        if self._current_roots(path, grants):
             return True
         work.coverage.reasons.add('authority')
         debug_log('Document source work stopped after folder authority changed', 'documents')
         return False
 
-    def _iter_allowed_files(self, roots: Iterable[Path], work: _Pass) -> Iterable[Path]:
+    def _iter_allowed_files(self, grants: list[_RootGrant], work: _Pass) -> Iterable[Path]:
         seen = set()
-        for root in roots:
+        for root in dict.fromkeys(grant.path for grant in grants):
             if work.stopped():
                 return
-            if not self._has_current_authority(root, work):
+            if not self._has_current_authority(root, grants, work):
                 continue
             stack = []
             try:
@@ -226,7 +250,7 @@ class DocumentIndex:
                 stack.append((root, owner, directory, entries))
                 while stack and not work.stopped():
                     folder, owner, directory, entries = stack[-1]
-                    if not self._has_current_authority(folder, work):
+                    if not self._has_current_authority(folder, grants, work):
                         break
                     entry = next(entries, None)
                     if entry is None:
@@ -253,7 +277,7 @@ class DocumentIndex:
                             if (path in seen or path.suffix.lower() not in _ALLOWED_EXTENSIONS
                                     or not self._under_root(path, root)):
                                 continue
-                            if self._authorised_identity(path, self._roots()) is None:
+                            if self._authorised_identity(path, grants) is None:
                                 work.coverage.reasons.add('unreadable')
                                 continue
                             seen.add(path)
@@ -316,10 +340,10 @@ class DocumentIndex:
             work.coverage.reasons.add('cached_files')
         return count + chunks <= self.limits.cached_chunks and files < self.limits.cached_files
 
-    def _index_file(self, path: Path, work: _Pass) -> bool:
-        if not self._has_current_authority(path, work):
+    def _index_file(self, path: Path, grants: list[_RootGrant], work: _Pass) -> bool:
+        if not self._has_current_authority(path, grants, work):
             return False
-        identity = self._authorised_identity(path, self._roots())
+        identity = self._authorised_identity(path, grants)
         if identity is None:
             work.coverage.reasons.add('changed')
             return False
@@ -337,7 +361,7 @@ class DocumentIndex:
                 return False
             if not work.charge('input_bytes', size):
                 return False
-            if not self._has_current_authority(path, work):
+            if not self._has_current_authority(path, grants, work):
                 return False
             with open_document_file(path) as stream:
                 opened = os.fstat(stream.fileno())
@@ -357,7 +381,7 @@ class DocumentIndex:
             prepared = []
             dimension = None
             for start, end, chunk in chunks:
-                if not self._has_current_authority(path, work):
+                if not self._has_current_authority(path, grants, work):
                     return False
                 vector = self._embed(chunk, work)
                 if dimension is not None and dimension != vector.size:
@@ -366,7 +390,7 @@ class DocumentIndex:
                 prepared.append((str(path), start, end, chunk, vector.tobytes()))
             if work.stopped():
                 return False
-            if self._authorised_identity(path, self._roots()) != identity:
+            if self._authorised_identity(path, grants) != identity:
                 work.coverage.reasons.add('changed')
                 return False
             if not self._cache_admits(path, len(prepared), work):
@@ -392,18 +416,15 @@ class DocumentIndex:
             if work.stopped():
                 return self.coverage
             self._open()
-            roots = self._roots()
-            if len(roots) > self.limits.roots:
-                work.coverage.reasons.add('roots')
-                roots = roots[:self.limits.roots]
+            grants = self._root_grants()
             for row in self._conn.execute('SELECT path,identity FROM document_files').fetchall():
                 if work.stopped():
                     return self.coverage
-                if self._authorised_identity(Path(row['path']), self._roots()) != row['identity']:
+                if self._authorised_identity(Path(row['path']), grants) != row['identity']:
                     with self._conn:
                         self._conn.execute('DELETE FROM document_files WHERE path=?', (row['path'],))
-            for path in self._iter_allowed_files(roots, work):
-                self._index_file(path, work)
+            for path in self._iter_allowed_files(grants, work):
+                self._index_file(path, grants, work)
                 if work.stopped() or work.coverage.reasons & {'files'}:
                     break
             debug_log(f'Document refresh coverage: {self.coverage}', 'documents')
@@ -417,8 +438,8 @@ class DocumentIndex:
             raise ValueError('Document search query exceeds its character limit')
         with self._lock:
             self._open()
-            roots, key = self._roots(), self._embedding_key()
-            if not roots:
+            grants, key = self._root_grants(), self._embedding_key()
+            if not grants:
                 return []
             if not self._conn.execute('SELECT 1 FROM document_chunks LIMIT 1').fetchone():
                 return []
@@ -427,8 +448,8 @@ class DocumentIndex:
                 self.coverage.reasons.update(work.coverage.reasons)
                 debug_log('Document query interrupted before cache changes', 'documents')
                 return []
-            roots = self._roots()
-            if not roots:
+            grants = self._root_grants()
+            if not grants:
                 debug_log('Document access revoked during query inference', 'documents')
                 return []
             with self._conn:
@@ -444,7 +465,7 @@ class DocumentIndex:
                     self.coverage.reasons.update(work.coverage.reasons)
                     break
                 path = Path(file['path'])
-                if self._authorised_identity(path, roots) != file['identity']:
+                if self._authorised_identity(path, grants) != file['identity']:
                     self.coverage.reasons.add('changed')
                     continue
                 if file['dimension'] != vector.size:
@@ -463,13 +484,13 @@ class DocumentIndex:
                     heapq.heappush(candidates, item)
                     if len(candidates) > min(10, max(1, top_k)):
                         heapq.heappop(candidates)
-            current_roots = self._roots()
+            current_grants = self._root_grants()
             hits = []
             for _, _, hit, identity in sorted(candidates, key=lambda item: (-item[0], item[1])):
                 if work.stopped():
                     self.coverage.reasons.update(work.coverage.reasons)
                     return []
-                if self._authorised_identity(Path(hit.path), current_roots) == identity:
+                if self._authorised_identity(Path(hit.path), current_grants) == identity:
                     hits.append(hit)
             if len(hits) != len(candidates):
                 self.coverage.reasons.add('changed')

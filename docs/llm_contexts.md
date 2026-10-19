@@ -180,7 +180,7 @@ requests do not supply this event.
 
 - **File**: `jarvis.memory.document_index.DocumentIndex`, consumed by
   `jarvis.tools.builtin.document_search.DocumentSearchTool`.
-- **Gating**: explicit document-search opt-in and configured folders, rechecked before each source read and new source embedding. Disabled
+- **Gating**: explicit document-search opt-in and configured folders, rechecked against the granting folder and its current target before each source read and new source embedding. Disabled
   search does not scan or embed. An empty index skips the query embedding.
 - **Model**: canonical `get_embedding_backend(cfg)` and resolved
   `cfg.embedding_model`, with no chat-model fallback or prompt-based extraction.
