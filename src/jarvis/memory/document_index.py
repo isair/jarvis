@@ -362,6 +362,10 @@ class DocumentIndex:
                 self.coverage.reasons.update(work.coverage.reasons)
                 debug_log('Document query interrupted before cache changes', 'documents')
                 return []
+            roots = self._roots()
+            if not roots:
+                debug_log('Document access revoked during query inference', 'documents')
+                return []
             with self._conn:
                 self._conn.execute('DELETE FROM document_files WHERE embedding_key=? AND dimension!=?',
                                    (key, int(vector.size)))
@@ -384,8 +388,19 @@ class DocumentIndex:
                         continue
                     distance = 1.0 - float(np.dot(vector, stored))
                     item = (-distance, row['id'], DocumentSearchHit(str(path), row['start_line'],
-                                                                 row['end_line'], row['text'], distance))
+                                                                 row['end_line'], row['text'], distance),
+                            file['identity'])
                     heapq.heappush(candidates, item)
                     if len(candidates) > min(10, max(1, top_k)):
                         heapq.heappop(candidates)
-            return [item[2] for item in sorted(candidates, key=lambda item: (-item[0], item[1]))]
+            current_roots = self._roots()
+            hits = []
+            for _, _, hit, identity in sorted(candidates, key=lambda item: (-item[0], item[1])):
+                if work.stopped():
+                    self.coverage.reasons.update(work.coverage.reasons)
+                    return []
+                if self._authorised_identity(Path(hit.path), current_roots) == identity:
+                    hits.append(hit)
+            if len(hits) != len(candidates):
+                debug_log('Document results withheld after source authority or identity changed', 'documents')
+            return hits

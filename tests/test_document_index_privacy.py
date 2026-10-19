@@ -60,3 +60,39 @@ def test_allowed_extensions_and_symlinks_keep_owned_content_separate(tmp_path):
         source.unlink()
         index.refresh()
         assert index.search('source', 10) == []
+
+
+@pytest.mark.parametrize('revocation', ['folders', 'feature'])
+@pytest.mark.parametrize('stage', ['inference', 'ranking'])
+def test_search_cannot_reuse_revoked_folder_authority(tmp_path, monkeypatch, revocation, stage):
+    root = tmp_path / 'documents'
+    root.mkdir()
+    (root / 'private.md').write_text('A cached private excerpt.')
+    cfg = SimpleNamespace(document_search_enabled=True, document_search_paths=[str(root)],
+                          embedding_model='owned-test', llm_embedding_timeout_sec=1)
+    backend = Embeddings()
+    with DocumentIndex(SimpleNamespace(db_path=str(tmp_path / 'diary.sqlite')), cfg,
+                       embedding_backend=backend) as index:
+        assert index.refresh().complete
+        assert [hit.text for hit in index.search('source')] == ['A cached private excerpt.']
+
+        def revoke():
+            if revocation == 'folders':
+                cfg.document_search_paths = []
+            else:
+                cfg.document_search_enabled = False
+
+        if stage == 'inference':
+            def revoke_during_inference(text, model, timeout_sec=15):
+                revoke()
+                return [1., 0.]
+            backend.embed = revoke_during_inference
+        else:
+            from jarvis.memory import document_index as documents
+            dot = documents.np.dot
+            def revoke_during_ranking(*args, **kwargs):
+                revoke()
+                return dot(*args, **kwargs)
+            monkeypatch.setattr(documents.np, 'dot', revoke_during_ranking)
+        assert index.search('source') == []
+        assert not cfg.document_search_paths or not cfg.document_search_enabled

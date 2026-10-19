@@ -21,7 +21,9 @@ of the diary transaction and vector backend. Failed embeddings or storage writes
 publish no partial file and are retried on a later refresh. Model, endpoint,
 backend and detected dimension changes invalidate incompatible cached vectors.
 Search uses cosine similarity over document candidates only. Sources and current
-folder authority are revalidated before returning cached excerpts.
+folder authority are revalidated after query inference and at the final result
+boundary before returning cached excerpts. Revoking a folder or disabling search
+while inference or ranking is in progress withholds its excerpts.
 
 Refreshes use the finite `IndexLimits` policy: at most 64 changed files,
 128 chunks, 1 MiB of source input, 2,048 directory entries and five seconds
