@@ -171,3 +171,38 @@ def test_real_worker_preserves_callback_ownership_with_concurrent_producers(voic
         for producer in producers:
             producer.join(timeout=3)
     assert worker is not None and not worker.is_alive()
+
+
+def test_idle_worker_releases_its_completed_callback(voice, monkeypatch):
+    import gc
+    import threading
+    import weakref
+
+    completed = threading.Event()
+    idle = threading.Event()
+
+    class ObservableQueue(queue.Queue):
+        def get(self, *args, **kwargs):
+            if completed.is_set():
+                idle.set()
+            return super().get(*args, **kwargs)
+
+    class Completion:
+        def __call__(self):
+            completed.set()
+
+    voice._q = ObservableQueue()
+    monkeypatch.setattr(voice, 'start', type(voice).start.__get__(voice))
+    voice.start()
+    worker = voice._thread
+    callback = Completion()
+    reference = weakref.ref(callback)
+    try:
+        voice.speak('first', completion_callback=callback)
+        del callback
+        assert idle.wait(timeout=3)
+        gc.collect()
+        assert reference() is None, 'Completed callback remains owned by an idle worker'
+    finally:
+        voice.stop()
+    assert worker is not None and not worker.is_alive()

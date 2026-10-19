@@ -534,12 +534,13 @@ class ChatterboxTTS:
                 request = self._q.get(timeout=0.5)
             except queue.Empty:
                 continue
-            if request is None or not request.text:
-                continue
             try:
-                self._speak_once(request)
+                if request is not None and request.text:
+                    self._speak_once(request)
             except Exception:
                 continue
+            finally:
+                del request
 
     def _speak_once(self, request: _SpeechRequest) -> None:
         text = request.text
@@ -849,13 +850,14 @@ class PiperTTS:
                 request = self._q.get(timeout=0.5)
             except queue.Empty:
                 continue
-            if request is None or not request.text:
-                continue
             try:
-                self._speak_once(request)
+                if request is not None and request.text:
+                    self._speak_once(request)
             except Exception as e:
                 debug_log(f"Piper TTS error in _speak_once: {e}", "tts")
                 continue
+            finally:
+                del request
 
     def _speak_once(self, request: _SpeechRequest) -> None:
         text = request.text

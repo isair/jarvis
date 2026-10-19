@@ -20,7 +20,8 @@ completion callback. Later submissions, including submissions made by a
 callback, cannot replace or clear another utterance's callbacks. Synthesis
 reports its exact duration to that utterance's listener, and completion reports
 only that utterance's completion. An interrupted utterance does not report
-successful completion. Callback failures remain isolated from later work.
+successful completion. Callback failures remain isolated from later work. The worker releases the
+completed request and its callback references before waiting for more speech.
 
 ## Piper voice downloads
 
