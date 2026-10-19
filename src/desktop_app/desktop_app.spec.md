@@ -373,6 +373,18 @@ and cancelled tasks with their result or error. In bundled mode it calls the
 daemon service directly. In source mode it sends `TASK:` commands over the
 existing daemon stdin pipe and consumes `__TASK__:` JSON events from the log
 stream. The task centre does not create a second LLM or tool path.
+Task frames use a dedicated Qt signal instead of the activity timeline, in
+both bundled and source modes. Only standalone frames with typed task or
+submission fields can update the window. Task details use plain text. The
+window indexes rows by identity and retains active tasks plus the shared
+terminal-history limit, ordered by recent updates.
+
+A submitted draft stays visible and read-only until a matching admission
+response arrives. Accepted submissions clear it; rejected submissions preserve
+it and display the redacted error. After ten seconds without confirmation,
+the editor becomes available with guidance to check existing tasks before
+retrying. Stale acknowledgements cannot clear a newer draft.
+
 
 ## Theme System
 

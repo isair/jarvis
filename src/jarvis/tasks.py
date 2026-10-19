@@ -14,6 +14,9 @@ from typing import Callable, Optional
 from .debug import debug_log
 from .utils.redact import redact
 
+DEFAULT_TASK_HISTORY = 200
+TASK_EVENT_PREFIX = "__TASK__:"
+
 
 def run_reply_engine(*args, **kwargs):
     """Load the reply engine only when a task actually starts."""
@@ -42,6 +45,7 @@ class Task:
 
     def as_dict(self) -> dict:
         return {
+            "type": "task",
             "id": self.id,
             "prompt": self.prompt,
             "status": self.status.value,
@@ -64,8 +68,11 @@ class TaskManager:
         event_callback: Optional[Callable[[dict], None]] = None,
         max_workers: int = 1,
         max_queued_tasks: int = 100,
-        max_history: int = 200,
+        max_history: int = DEFAULT_TASK_HISTORY,
     ) -> None:
+        for limit in (max_queued_tasks, max_history):
+            if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+                raise ValueError("Task capacity and history limits must be a positive integer")
         self.db = db
         self.cfg = cfg
         self.dialogue_memory = dialogue_memory
@@ -97,6 +104,7 @@ class TaskManager:
             self._prune_history()
             self._emit(task)
             self._futures[task.id] = self._executor.submit(self._run, task.id)
+        print(f'📋 Queued task: "{redact(task.prompt)}"', flush=True)
         debug_log(f"task submitted: {task.id}", "tasks")
         return task.id
 

@@ -317,3 +317,15 @@ def test_shutdown_rejects_admission_without_leaving_a_phantom_task():
     with pytest.raises(RuntimeError):
         manager.submit('A request after shutdown')
     assert manager.list_tasks() == []
+
+
+@pytest.mark.parametrize('option', ['max_queued_tasks', 'max_history'])
+@pytest.mark.parametrize('limit', [0, -1, None, True])
+def test_invalid_capacity_or_history_limits_are_rejected(option, limit):
+    manager = None
+    try:
+        with pytest.raises(ValueError, match='positive integer'):
+            manager = TaskManager(object(), SimpleNamespace(), object(), **{option: limit})
+    finally:
+        if manager is not None:
+            manager.shutdown()

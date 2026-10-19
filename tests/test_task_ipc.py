@@ -21,7 +21,7 @@ def test_task_stdin_command_submits_and_cancels_through_same_handler(monkeypatch
     )
 
     assert daemon.handle_task_stdin_line(
-        "TASK:" + json.dumps({"action": "submit", "prompt": "wash dishes"})
+        "TASK:" + json.dumps({"action": "submit", "prompt": "wash dishes", "request_id": "submission-one"})
     ) is True
     assert daemon.handle_task_stdin_line(
         "TASK:" + json.dumps({"action": "cancel", "id": "abc123"})

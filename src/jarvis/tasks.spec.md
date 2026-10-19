@@ -37,3 +37,13 @@ shared redaction rules. Diagnostics omit exception payloads. Invalid saved task
 records are skipped independently so valid history and the assistant can start.
 Shutdown closes task admission and drains workers before final diary saving,
 TTS shutdown, MCP teardown and database closure.
+
+Task events have type `task` and carry a string identity, known status and
+redacted text fields. Source-mode submission commands carry a unique
+`request_id`; the daemon returns a `submission` event with that identity and
+either an accepted task identity or a redacted error. Rejected submissions
+create no task. Protocol diagnostics omit command payloads.
+
+Queue capacity and history limits are positive integers. The desktop and task
+service share the default terminal-history limit. Invalid limits are rejected
+before executor creation.

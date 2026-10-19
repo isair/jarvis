@@ -656,25 +656,42 @@ def cancel_task(task_id: str) -> bool:
 
 
 def handle_task_stdin_line(line: str) -> bool:
-    """Handle one desktop task command in subprocess mode."""
+    """Handle a local task command and acknowledge correlated submissions."""
     if not line.startswith("TASK:"):
         return False
+    request_id = None
     try:
         command = json.loads(line[5:])
+        if not isinstance(command, dict):
+            raise ValueError("Task command must be an object")
+        request_id = command.get("request_id")
+        if not isinstance(request_id, str) or not 0 < len(request_id) <= 128:
+            request_id = None
         action = command.get("action")
         if action == "submit":
-            submit_task(str(command.get("prompt", "")))
+            if request_id is None or not isinstance(command.get("prompt"), str):
+                raise ValueError("Task submission needs a request identity and text")
+            task_id = submit_task(command["prompt"])
+            _emit_task_event({"type": "submission", "request_id": request_id,
+                              "accepted": True, "task_id": task_id})
         elif action == "cancel":
-            cancel_task(str(command.get("id", "")))
+            if not isinstance(command.get("id"), str):
+                raise ValueError("Task cancellation needs an identity")
+            cancel_task(command["id"])
         else:
-            debug_log(f"unknown task command action: {action}", "tasks")
+            raise ValueError("Unknown task command")
     except Exception as exc:
-        debug_log(f"invalid task command: {exc}", "tasks")
+        debug_log(f"invalid task command ({type(exc).__name__})", "tasks")
+        if request_id is not None:
+            from .utils.redact import redact
+            _emit_task_event({"type": "submission", "request_id": request_id,
+                              "accepted": False, "error": redact(str(exc))})
     return True
 
 
 def _emit_task_event(event: dict) -> None:
-    print(f"__TASK__:{json.dumps(event, ensure_ascii=False)}", flush=True)
+    from .tasks import TASK_EVENT_PREFIX
+    print(f"{TASK_EVENT_PREFIX}{json.dumps(event, ensure_ascii=False)}", flush=True)
 
 
 def _install_signal_handlers() -> None:

@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
+import uuid
 from typing import Callable, Optional
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import (
     QDialog,
     QHBoxLayout,
@@ -18,6 +19,10 @@ from PyQt6.QtWidgets import (
 )
 
 from desktop_app.themes import JARVIS_THEME_STYLESHEET
+from jarvis.tasks import DEFAULT_TASK_HISTORY, TASK_EVENT_PREFIX, TaskStatus
+from jarvis.utils.redact import redact
+
+SUBMISSION_TIMEOUT_MS = 10000
 
 
 _STATUS_LABELS = {
@@ -34,9 +39,10 @@ class TaskCentreWindow(QDialog):
 
     def __init__(
         self,
-        submit_callback: Callable[[str], object],
+        submit_callback: Callable[..., Optional[str]],
         cancel_callback: Callable[[str], object],
         parent=None,
+        *, max_history: int = DEFAULT_TASK_HISTORY,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("🧭 Jarvis Task Centre")
@@ -44,7 +50,15 @@ class TaskCentreWindow(QDialog):
         self.setStyleSheet(JARVIS_THEME_STYLESHEET)
         self._submit_callback = submit_callback
         self._cancel_callback = cancel_callback
+        if isinstance(max_history, bool) or not isinstance(max_history, int) or max_history < 1:
+            raise ValueError("Task history limit must be a positive integer")
+        self._max_history = max_history
         self._tasks: dict[str, dict] = {}
+        self._items: dict[str, QListWidgetItem] = {}
+        self._pending_request = None
+        self._submission_timer = QTimer(self)
+        self._submission_timer.setSingleShot(True)
+        self._submission_timer.timeout.connect(self._submission_timed_out)
 
         layout = QVBoxLayout(self)
         title = QLabel("🧭 Task Centre")
@@ -61,6 +75,7 @@ class TaskCentreWindow(QDialog):
 
         self.details = QLabel("Select a task to view its result.")
         self.details.setWordWrap(True)
+        self.details.setTextFormat(Qt.TextFormat.PlainText)
         self.details.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         layout.addWidget(self.details)
 
@@ -83,47 +98,104 @@ class TaskCentreWindow(QDialog):
         actions.addStretch()
         layout.addLayout(actions)
 
-    def add_or_update_task(self, event: dict) -> None:
-        task_id = str(event.get("id", ""))
-        if not task_id:
-            return
-        self._tasks[task_id] = dict(event)
-        item = self._find_item(task_id)
-        label = _STATUS_LABELS.get(event.get("status"), "❔ Unknown")
-        prompt = str(event.get("prompt", "")).replace("\n", " ")
-        text = f"{label}  {prompt[:100]}"
+    def add_or_update_task(self, event: dict) -> bool:
+        if not isinstance(event, dict) or event.get("type") != "task":
+            return False
+        task_id, status = event.get("id"), event.get("status")
+        if not isinstance(task_id, str) or not task_id or len(task_id) > 128:
+            return False
+        if not isinstance(status, str) or status not in _STATUS_LABELS:
+            return False
+        if not isinstance(event.get("prompt"), str) or any(
+            event.get(key) is not None and not isinstance(event[key], str)
+            for key in ("result", "error")
+        ):
+            return False
+        task = {"id": task_id, "status": status, "prompt": redact(event["prompt"]),
+                "result": redact(event["result"]) if event.get("result") else None,
+                "error": redact(event["error"]) if event.get("error") else None}
+        self._tasks.pop(task_id, None)
+        self._tasks[task_id] = task
+        item = self._items.get(task_id)
+        text = f"{_STATUS_LABELS[status]}  {task['prompt'][:100]}"
         if item is None:
             item = QListWidgetItem(text)
             item.setData(Qt.ItemDataRole.UserRole, task_id)
+            self._items[task_id] = item
             self.task_list.insertItem(0, item)
         else:
             item.setText(text)
-        if self.task_list.currentItem() is None:
-            self.task_list.setCurrentItem(item)
+        terminal = [identity for identity, saved in self._tasks.items()
+                    if saved['status'] not in {TaskStatus.QUEUED, TaskStatus.RUNNING}]
+        for identity in terminal[:max(0, len(terminal) - self._max_history)]:
+            removed = self._items.pop(identity)
+            self.task_list.takeItem(self.task_list.row(removed))
+            del self._tasks[identity]
+        if self.task_list.currentItem() is None and self.task_list.count():
+            self.task_list.setCurrentRow(0)
         self._show_task_details(self.task_list.currentItem(), None)
-
-    def process_log_line(self, line: str) -> bool:
-        prefix = "__TASK__:"
-        if prefix not in line:
-            return False
-        try:
-            event = json.loads(line.split(prefix, 1)[1].strip())
-        except (TypeError, ValueError):
-            return False
-        self.add_or_update_task(event)
         return True
 
+    def process_log_line(self, line: str) -> bool:
+        if not isinstance(line, str) or not line.startswith(TASK_EVENT_PREFIX):
+            return False
+        try:
+            event = json.loads(line[len(TASK_EVENT_PREFIX):])
+        except (TypeError, ValueError):
+            return False
+        if not isinstance(event, dict):
+            return False
+        if event.get('type') == 'submission':
+            identity, accepted = event.get('request_id'), event.get('accepted')
+            if not isinstance(identity, str) or not identity or not isinstance(accepted, bool):
+                return False
+            field = 'task_id' if accepted else 'error'
+            if not isinstance(event.get(field), str) or not event[field]:
+                return False
+            self._finish_submission(identity, accepted=accepted, error=event.get('error', ''))
+            return True
+        return self.add_or_update_task(event)
+
+    def _finish_submission(self, identity: str, *, accepted: bool, error: str = '') -> None:
+        if identity != self._pending_request:
+            return
+        self._submission_timer.stop()
+        self._pending_request = None
+        self.prompt.setReadOnly(False)
+        self.submit_button.setEnabled(True)
+        if accepted:
+            self.prompt.clear()
+        else:
+            self.details.setText(f"⚠️ {redact(error)}")
+
+    def _submission_timed_out(self) -> None:
+        if self._pending_request is not None:
+            self._finish_submission(
+                self._pending_request, accepted=False,
+                error="No confirmation from Jarvis. Check the task list before trying again.",
+            )
+
     def _submit(self) -> None:
+        if self._pending_request is not None:
+            return
         prompt = self.prompt.toPlainText().strip()
         if not prompt:
             self.details.setText("⚠️ Enter a task before running it.")
             return
+        identity = uuid.uuid4().hex
+        self._pending_request = identity
+        self.prompt.setReadOnly(True)
+        self.submit_button.setEnabled(False)
+        self._submission_timer.start(SUBMISSION_TIMEOUT_MS)
         try:
-            self._submit_callback(prompt)
+            task_id = self._submit_callback(prompt, request_id=identity)
+            if task_id is not None:
+                if not isinstance(task_id, str) or not task_id:
+                    raise ValueError("Task admission did not return an identity")
+                self._finish_submission(identity, accepted=True)
         except Exception as exc:
-            self.details.setText(f"❌ Could not queue task: {exc}")
-            return
-        self.prompt.clear()
+            self._finish_submission(identity, accepted=False,
+                                    error=f"Could not queue task: {redact(str(exc))}")
 
     def _cancel_selected(self) -> None:
         item = self.task_list.currentItem()
@@ -133,17 +205,11 @@ class TaskCentreWindow(QDialog):
         try:
             self._cancel_callback(str(task_id))
         except Exception as exc:
-            self.details.setText(f"❌ Could not cancel task: {exc}")
-
-    def _find_item(self, task_id: str) -> Optional[QListWidgetItem]:
-        for index in range(self.task_list.count()):
-            item = self.task_list.item(index)
-            if item.data(Qt.ItemDataRole.UserRole) == task_id:
-                return item
-        return None
+            self.details.setText(f"❌ Could not cancel task: {redact(str(exc))}")
 
     def _show_task_details(self, current, _previous) -> None:
         if current is None:
+            self.details.setText("Select a task to view its result.")
             return
         task = self._tasks.get(str(current.data(Qt.ItemDataRole.UserRole)), {})
         status = _STATUS_LABELS.get(task.get("status"), "❔ Unknown")

@@ -120,7 +120,8 @@ def _should_emit_as_log(line: str) -> bool:
     """
     from jarvis.daemon import CHAT_IPC_PREFIX, VOICE_STATUS_IPC_PREFIX
 
-    return not line.startswith((CHAT_IPC_PREFIX, VOICE_STATUS_IPC_PREFIX))
+    from jarvis.tasks import TASK_EVENT_PREFIX
+    return not line.startswith((CHAT_IPC_PREFIX, VOICE_STATUS_IPC_PREFIX, TASK_EVENT_PREFIX))
 
 
 def _collect_runtime_status_snapshot(
@@ -1145,6 +1146,15 @@ class LogSignals(QObject):
     """Signals for thread-safe log updates."""
     new_log = pyqtSignal(str)
     voice_status = pyqtSignal(object, str)
+    task_event = pyqtSignal(str)
+
+    def dispatch_output(self, line: str) -> None:
+        """Separate task protocol frames from user-facing activity lines."""
+        from jarvis.tasks import TASK_EVENT_PREFIX
+        if line.startswith(TASK_EVENT_PREFIX):
+            self.task_event.emit(line)
+        else:
+            self.new_log.emit(line)
 
 
 class LogViewerWindow(QMainWindow):
@@ -1722,7 +1732,7 @@ class DaemonThread(KeepAliveWorker):
 
         try:
             # Redirect stdout/stderr to capture logs
-            log_writer = LogStream(self.log_signals.new_log.emit)
+            log_writer = LogStream(self.log_signals.dispatch_output)
             sys_module.stdout = log_writer
             sys_module.stderr = log_writer
 
@@ -1800,7 +1810,7 @@ class JarvisSystemTray:
             submit_callback=self.submit_task,
             cancel_callback=self.cancel_task,
         )
-        self.log_signals.new_log.connect(self.task_centre.process_log_line)
+        self.log_signals.task_event.connect(self.task_centre.process_log_line)
 
         # Create memory viewer window (hidden by default)
         self.memory_viewer = MemoryViewerWindow()
@@ -2249,7 +2259,7 @@ class JarvisSystemTray:
         self.task_centre.raise_()
         self.task_centre.activateWindow()
 
-    def submit_task(self, prompt: str):
+    def submit_task(self, prompt: str, *, request_id: str):
         """Submit a prompt to the in-process or subprocess daemon."""
         if self.is_bundled:
             from jarvis.daemon import submit_task
@@ -2258,7 +2268,7 @@ class JarvisSystemTray:
             raise RuntimeError("Start Jarvis before submitting a task")
         import json
         self.daemon_process.stdin.write(
-            f"TASK:{json.dumps({'action': 'submit', 'prompt': prompt}, ensure_ascii=False)}\n"
+            f"TASK:{json.dumps({'action': 'submit', 'prompt': prompt, 'request_id': request_id}, ensure_ascii=False)}\n"
         )
         self.daemon_process.stdin.flush()
         return None
@@ -2771,6 +2781,7 @@ class JarvisSystemTray:
             return
 
         from jarvis.daemon import CHAT_IPC_PREFIX, VOICE_STATUS_IPC_PREFIX
+        from jarvis.tasks import TASK_EVENT_PREFIX
         process = self.daemon_process
 
         try:
@@ -2791,6 +2802,8 @@ class JarvisSystemTray:
                     self._chat_ipc_signals.line_received.emit(line)
                 elif line.startswith(VOICE_STATUS_IPC_PREFIX):
                     self.log_signals.voice_status.emit(process, line)
+                elif line.startswith(TASK_EVENT_PREFIX):
+                    self.log_signals.task_event.emit(line)
                 if _should_emit_as_log(line):
                     self.log_signals.new_log.emit(line)
         except Exception as e:
