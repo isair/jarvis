@@ -1281,6 +1281,7 @@ def _run_daemon(smoke_test: bool = False) -> None:
     except KeyboardInterrupt:
         debug_log("daemon received KeyboardInterrupt", "jarvis")
     finally:
+        request_stop()
         print("🔄 Daemon shutting down - saving memory...", flush=True)
         debug_log("daemon finally block starting - performing cleanup", "jarvis")
 

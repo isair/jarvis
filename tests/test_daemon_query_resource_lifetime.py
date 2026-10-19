@@ -1,5 +1,6 @@
 """Shutdown retains resources owned by admitted replies."""
 from threading import Event, Lock, Thread
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -50,8 +51,8 @@ def test_submission_cannot_start_after_shutdown_wins_admission(monkeypatch, runt
     assert started == ([] if stop_during_admission else ['Owned query'])
 
 
-@pytest.mark.parametrize('smoke', [False, True])
-def test_shutdown_does_not_save_or_close_resources_under_an_active_query(monkeypatch, mock_config, tmp_path, runtime, smoke):
+@pytest.mark.parametrize('smoke,exit_mode', [(False, 'requested'), (False, 'interrupt'), (False, 'error'), (True, 'requested')])
+def test_shutdown_does_not_save_or_close_resources_under_an_active_query(monkeypatch, mock_config, tmp_path, runtime, smoke, exit_mode):
     entered, release, finished, closed = Event(), Event(), Event(), Event()
     early_close, early_diary, usable = Event(), Event(), Event()
     completed, errors = [], []
@@ -66,6 +67,8 @@ def test_shutdown_does_not_save_or_close_resources_under_an_active_query(monkeyp
             closed.set()
 
     def reply(**kwargs):
+        if kwargs['text'] == 'After shutdown':
+            return 'Unexpected late reply.'
         entered.set()
         assert release.wait(5), 'Owned query was not released'
         assert kwargs['db'].conn.execute('SELECT 1').fetchone()[0] == 1
@@ -76,7 +79,8 @@ def test_shutdown_does_not_save_or_close_resources_under_an_active_query(monkeyp
     def start_voice():
         daemon.submit_text_query('Owned query', on_complete=completed.append)
         assert entered.wait(3)
-        daemon.request_stop()
+        if exit_mode == 'requested':
+            daemon.request_stop()
 
     def save_diary(*args, **kwargs):
         if entered.is_set() and not finished.is_set(): early_diary.set()
@@ -89,6 +93,12 @@ def test_shutdown_does_not_save_or_close_resources_under_an_active_query(monkeyp
     monkeypatch.setattr(daemon, '_check_and_update_diary', save_diary)
     monkeypatch.setattr('jarvis.tools.external.mcp_runtime.shutdown_runtime', lambda: None)
     monkeypatch.setattr('jarvis.reply.engine.run_reply_engine', reply)
+    if exit_mode != 'requested':
+        def interrupted_sleep(seconds):
+            if exit_mode == 'interrupt':
+                raise KeyboardInterrupt
+            raise RuntimeError('Owned daemon loop failure')
+        monkeypatch.setattr(daemon, 'time', SimpleNamespace(time=time.time, sleep=interrupted_sleep))
     original_wait = daemon.wait_for_chat_worker
     monkeypatch.setattr(daemon, 'wait_for_chat_worker', lambda **kw: original_wait(timeout_sec=0.01))
 
@@ -105,9 +115,20 @@ def test_shutdown_does_not_save_or_close_resources_under_an_active_query(monkeyp
         owner.join(5)
         assert original_wait(timeout_sec=3), 'Owned chat worker did not drain'
     assert not owner.is_alive()
-    assert not errors
+    if exit_mode == 'error':
+        assert len(errors) == 1 and str(errors[0]) == 'Owned daemon loop failure'
+    else:
+        assert not errors
     assert not early_close.is_set(), 'Shutdown closed a connection still owned by the query'
     assert not early_diary.is_set(), 'Shutdown saved memory while the reply still owned it'
     assert usable.is_set()
     assert completed == ['Ready.']
     assert closed.is_set()
+    late, delivered = [], Event()
+    def late_complete(value):
+        late.append(value)
+        delivered.set()
+    daemon.submit_text_query('After shutdown', on_complete=late_complete)
+    assert delivered.wait(3)
+    assert original_wait(timeout_sec=3), 'Owned late query did not drain'
+    assert late == [None], 'A stopped daemon admitted another reply'
