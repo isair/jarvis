@@ -75,8 +75,7 @@ class JarvisStateManager:
             ) as pending:
                 pending_path = pending.name
                 pending.write(state.value)
-                pending.flush()
-                identity = _file_identity(os.fstat(pending.fileno()))
+            identity = _file_identity(os.stat(pending_path, follow_symlinks=False))
             os.replace(pending_path, self._state_file)
             return identity
         except OSError:

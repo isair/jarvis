@@ -16,7 +16,9 @@ the same lock. Concurrent updates cannot publish an older local assignment after
 a newer one. Independent processes retain best-effort publication ordering.
 
 Each publication writes a unique temporary sibling and closes it before
-atomically replacing the shared path. Observers retain the previous complete
+reading final metadata from that owned sibling and atomically replacing the
+shared path. Ownership identity is captured after the writing handle closes and
+before publication. Observers retain the previous complete
 snapshot until publication. A symlink at the shared path is replaced rather
 than followed, preserving its target. Publication failure leaves an existing
 snapshot intact. Each invocation cleans up only its own unpublished temporary

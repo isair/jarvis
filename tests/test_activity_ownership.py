@@ -119,3 +119,10 @@ def test_shared_activity_works_with_only_standard_library_imports(monkeypatch, t
     assert manager.state is subject.JarvisState.SPEAKING
     assert manager.release_state(owner)
     assert manager.state is subject.JarvisState.IDLE
+
+
+def test_activity_ownership_survives_metadata_finalised_on_writer_close(tmp_path):
+    import runpy
+    from pathlib import Path
+    probe = Path(__file__).parent / 'fixtures' / 'activity_publication_probe.py'
+    runpy.run_path(str(probe))['verify_publication'](tmp_path / 'data')
