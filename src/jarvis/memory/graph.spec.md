@@ -40,7 +40,10 @@ No Other branch: the extractor defaults unknown classifications to `user`. A fac
 Extracted facts must be non-empty strings. Missing, blank or non-string facts
 are discarded before semantic review, without discarding valid sibling entries.
 Numbers, booleans and structured JSON values cannot become memory text through
-implicit conversion.
+implicit conversion. Model protocol delimiters and internal sentinels absent from
+its source summary cannot become an extracted fact, even when semantic review
+would accept it. Invalid candidates are discarded without losing valid siblings.
+Literal protocol syntax present in the source remains eligible for semantic review.
 
 ### Startup Preservation
 
@@ -245,6 +248,10 @@ Split quality safeguards:
   non-empty arrays of non-empty string facts. Every category is validated before
   any child is created; an invalid category leaves the parent data and children
   untouched.
+- Generated facts, category names/descriptions and the parent summary cannot
+  introduce model protocol delimiters or internal sentinels absent from the source
+  node. Rejected proposals preserve every saved node and create no children.
+  Source-established protocol literals remain valid.
 - If the split fails (LLM error, bad JSON), the node retains its data and the next write retries
 
 ## Auto-Merge (Future — requires LLM integration)
@@ -288,7 +295,11 @@ Piggybacks on the existing diary update flow in `conversation.py`:
 4. **Dedupe (fast-path)**: Before traversal, `GraphMemoryStore.get_branch_fact_keys` snapshots each candidate branch's persisted fact lines from its root and every descendant using one recursive SQLite query. Unicode-aware folding (`unicodedata.NFKC` + `str.casefold` + whitespace collapse) ignores casing and incidental whitespace. Exact keys already persisted or pending in the same branch are skipped before picker and merge calls, regardless of destination changes. A pending key is added only after successful routing. Branch boundaries remain distinct; substrings, negations and temporal qualifiers are not similarity matches. Skips are counted in `GraphUpdateResult(stored, skipped)`, are not reported as newly learned and do not touch access scores. Each branch is read once per flush. Semantic consolidation remains the node merge's responsibility.
 5. **Merge** (batched per node): `merge_node_data(store, node_id, new_facts: list[str], ...)` sends the existing node data + **all** new facts routed to that node in this flush to the picker model and asks it to produce a clean, consolidated, contradiction-free fact list, which is written back as the node's full `data`. The orchestrator groups the flush by `node_id` first so a 5-fact flush against the User node fires **one** rewrite that incorporates all five facts, not five separate rewrites of the same `data`. The call returns a `MergeResult(success: bool, incorporated_indices: list[int])` so the orchestrator can report only the facts that actually survived as new lines (consolidated-out facts aren't claimed as "newly stored"). One LLM call subsumes four behaviours: (a) **supersession** — contradictions, negations, and same-attribute updates drop the old line ("user does not need a daily check-in" replaces both "user has a need for a daily check-in" and the same need framed as an interest); (b) **near-duplicate dedupe** — different wordings of the same fact collapse to one canonical phrasing; (c) **consolidation** — repeated daily activities fold into patterns ("ate sushi on Monday", "ate sushi on Thursday" → "regularly eats sushi"); (d) **meta-narrative pruning** — lines that narrate the assistant's own behaviour, capabilities, or denials ("The assistant is unable to navigate to a web page", "The assistant suggested grilled salmon") are extractor artefacts from earlier prompt versions and get dropped. Counterpart to the extractor's BANNED FACT FORMS list: the extractor blocks them at write-time, the merge prompt scrubs the historical leftovers that a `consolidate-all` sweep can then surface. Genuine user-issued imperatives ("Always reply in British English") are not meta-narrative and survive. Independent facts coexist (a "user ate a Big Mac" line does not silently drop "user is vegetarian"; the contradiction stays visible). Because the latest prompt always rewrites the whole node, updated conventions propagate to old data without a separate migration. **Hallucination guard**: the rewrite is rejected if its complete stored text contains more non-empty lines than `len(existing) + len(new) + 2`, including embedded newlines within an individual returned fact — a runaway model can't quietly inflate the node. Fail-open: empty/cold node, LLM error, parse failure, oversized rewrite, or an empty rewrite all fall back to plain `append_to_node` for each new fact so they still land — a contradiction is recoverable, a silent wipe or hallucinated bloat is not.
    A rewrite containing a non-string fact is invalid as a whole. It cannot
-   partially replace current data. Blank string entries are ignored.
+   partially replace current data. Blank string entries are ignored. A rewrite
+   cannot introduce model protocol delimiters or internal sentinels absent from
+   the existing and supplied facts. Rejection leaves saved content intact and
+   uses the normal append fallback for new facts. Source-established literals
+   remain valid.
    Rewrites commit only if the node's raw source data still matches the model
    input snapshot. Inference runs without a database write lock. An intervening
    content change rejects the rewrite, preserving the concurrent edit; fallback

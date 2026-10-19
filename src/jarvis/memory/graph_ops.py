@@ -62,6 +62,23 @@ _BRANCH_LABELS = {
 _LABEL_TO_BRANCH = {v: k for k, v in _BRANCH_LABELS.items()}
 
 
+_MODEL_PROTOCOL_TOKEN = re.compile(
+    r"<\|[^<>\r\n]+?\|>|</?(?:tool_call|tool_response)\|?>|<unused\d+>"
+)
+
+
+def _introduces_model_protocol_tokens(content: str, source: str) -> bool:
+    """Reject generated protocol syntax absent from the model's source data."""
+    introduced = {match.group(0) for match in _MODEL_PROTOCOL_TOKEN.finditer(content)}
+    if not introduced:
+        return False
+    for match in _MODEL_PROTOCOL_TOKEN.finditer(source):
+        introduced.discard(match.group(0))
+        if not introduced:
+            return False
+    return True
+
+
 # ── Memory extraction from dialogue ───────────────────────────────────
 
 
@@ -401,6 +418,9 @@ def extract_graph_memories(
             continue
         fact_text = fact_text.strip()
         if not fact_text:
+            continue
+        if _introduces_model_protocol_tokens(fact_text, source_summary):
+            debug_log("graph memory extraction: ignored introduced model protocol token", "memory")
             continue
         branch_id = _LABEL_TO_BRANCH.get(branch_label)
         if branch_id is None:
@@ -785,6 +805,9 @@ def merge_node_data(
     # the model invented content not present in either input.
     max_kept = len(existing_lines) + len(sanitised_new) + _MERGE_GROWTH_SLACK
     new_data = "\n".join(cleaned)
+    if _introduces_model_protocol_tokens(new_data, user_content):
+        debug_log("merge: rejected introduced model protocol token", "memory")
+        return MergeResult(success=False)
     saved_line_count = len(_split_data_lines(new_data))
     if saved_line_count > max_kept:
         debug_log(
@@ -932,6 +955,10 @@ def auto_split_node(
          "\n".join(cat["facts"]))
         for cat in categories
     ]
+    proposed_text = "\n".join([str(summary), *(part for child in children for part in child)])
+    if _introduces_model_protocol_tokens(proposed_text, user_content):
+        debug_log("auto-split: rejected introduced model protocol token", "memory")
+        return False
     try:
         if not store.split_node(node, children=children, summary=str(summary)):
             return False
