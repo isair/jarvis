@@ -79,6 +79,13 @@ def main():
                 try:
                     junction(control, outside, access)
                     assert (control / 'source.txt').read_bytes() == sentinel
+                    for operation in (lambda: module.open_document_file(control / 'source.txt'),
+                                      lambda: module.scan_document_directory(control)):
+                        try:
+                            with operation():
+                                raise AssertionError('Static junction was accepted')
+                        except OSError:
+                            pass
                     print(f'✅ Junction control succeeded, access={access}', flush=True)
                 finally:
                     os.rmdir(control)  # Remove the junction itself, never recurse through it.
@@ -103,6 +110,34 @@ def main():
             with module.open_document_file(listing / '🌱.md') as stream:
                 assert stream.read() == b'owned astral Unicode'
             print('✅ Ordinary and Unicode reads/enumeration passed', flush=True)
+            bulk_names = {f"entry-{'é' * 75}-{number}.txt" for number in range(600)}
+            for name in bulk_names:
+                (listing / name).write_bytes(b'owned batch')
+            with module.scan_document_directory(listing) as (_, entries):
+                actual = [entry.name for entry in entries]
+            assert len(actual) == len(names | bulk_names) and set(actual) == names | bulk_names
+            kernel.GetCurrentProcess.restype = wintypes.HANDLE
+            kernel.GetProcessHandleCount.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+            kernel.GetProcessHandleCount.restype = wintypes.BOOL
+
+            def handle_count():
+                count = wintypes.DWORD()
+                assert kernel.GetProcessHandleCount(kernel.GetCurrentProcess(), ctypes.byref(count))
+                return count.value
+
+            before = handle_count()
+            for _ in range(25):
+                with module.scan_document_directory(listing) as (_, entries):
+                    assert next(entries).name in names | bulk_names
+                with module.open_document_file(ordinary) as stream:
+                    assert stream.read() == b'owned ordinary document'
+                try:
+                    with module.open_document_file(listing / 'missing.txt'):
+                        raise AssertionError('Missing file was accepted')
+                except OSError:
+                    pass
+            assert handle_count() <= before + 2, 'Document capability handles accumulate'
+            print('✅ Multiple batches and early-exit handle recovery passed', flush=True)
             original = module._open_entry
             failures = []
             for access in (0x2, 0x100):
