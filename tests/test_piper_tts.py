@@ -221,8 +221,8 @@ class TestPiperTTSWithMocking:
         tts = PiperTTS(enabled=True)
         delivered = []
         completed = threading.Event()
-        def synthesise(text):
-            delivered.append(text)
+        def synthesise(request):
+            delivered.append(request.text)
             completed.set()
         with patch.object(tts, "_ensure_initialized", return_value=True), \
              patch.object(tts, "_speak_once", side_effect=synthesise):

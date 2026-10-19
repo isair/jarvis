@@ -13,6 +13,16 @@ backend. The daemon reports availability after startup, and continues initialisi
 the listener and text chat when speech output is unavailable. Saved settings are
 unchanged; restarting Jarvis creates a fresh engine that can load a repaired model.
 
+## Queued utterance ownership
+
+Each queued utterance owns its preprocessed text, duration callback and
+completion callback. Later submissions, including submissions made by a
+callback, cannot replace or clear another utterance's callbacks. Synthesis
+reports its exact duration to that utterance's listener, and completion reports
+only that utterance's completion. An interrupted utterance does not report
+successful completion. Callback failures remain isolated from later work. The worker releases the
+completed request and its callback references before waiting for more speech.
+
 ## Piper voice downloads
 
 Missing voice files are downloaded from the configured public model-file source.

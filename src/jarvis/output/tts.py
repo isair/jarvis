@@ -12,6 +12,7 @@ import sys
 import time
 import warnings
 from pathlib import Path
+from dataclasses import dataclass
 from typing import Optional, Callable
 from urllib.parse import urlparse
 
@@ -383,6 +384,15 @@ def _preprocess_for_speech(text: str) -> str:
     return result
 
 
+@dataclass(frozen=True)
+class _SpeechRequest:
+    """One queued utterance and the callbacks that own its notifications."""
+
+    text: str
+    completion_callback: Optional[Callable[[], None]] = None
+    duration_callback: Optional[Callable[[float], None]] = None
+
+
 class ChatterboxTTS:
     """Experimental TTS implementation using Resemble AI's Chatterbox model."""
 
@@ -398,13 +408,11 @@ class ChatterboxTTS:
         self.cfg_weight = cfg_weight
 
         # Threading and queue setup (same as TextToSpeech)
-        self._q: queue.Queue[str] = queue.Queue()
+        self._q: queue.Queue[Optional[_SpeechRequest]] = queue.Queue()
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
         self._is_speaking = threading.Event()
         self._last_spoken_text: str = ""
-        self._completion_callback: Optional[Callable[[], None]] = None
-        self._duration_callback: Optional[Callable[[float], None]] = None
         self._should_interrupt = threading.Event()
 
         # Chatterbox model (eagerly loaded during initialization)
@@ -493,7 +501,7 @@ class ChatterboxTTS:
             pass
         self._stop.set()
         try:
-            self._q.put_nowait("")
+            self._q.put_nowait(None)
         except Exception:
             pass
         self._thread.join(timeout=2.0)
@@ -509,12 +517,10 @@ class ChatterboxTTS:
             self.start()
         if not self.enabled:
             return
-        self._completion_callback = completion_callback
-        self._duration_callback = duration_callback
         # Preprocess text for speech (convert links to readable descriptions)
         processed_text = _preprocess_for_speech(text)
         try:
-            self._q.put_nowait(processed_text)
+            self._q.put_nowait(_SpeechRequest(processed_text, completion_callback, duration_callback))
         except Exception:
             pass
 
@@ -525,17 +531,19 @@ class ChatterboxTTS:
     def _run(self) -> None:
         while not self._stop.is_set():
             try:
-                text = self._q.get(timeout=0.5)
+                request = self._q.get(timeout=0.5)
             except queue.Empty:
                 continue
-            if not text:
-                continue
             try:
-                self._speak_once(text)
+                if request is not None and request.text:
+                    self._speak_once(request)
             except Exception:
                 continue
+            finally:
+                del request
 
-    def _speak_once(self, text: str) -> None:
+    def _speak_once(self, request: _SpeechRequest) -> None:
+        text = request.text
         self._is_speaking.set()
         self._last_spoken_text = text
         self._should_interrupt.clear()
@@ -569,9 +577,9 @@ class ChatterboxTTS:
             debug_log(f"Chatterbox TTS synthesis complete: {exact_duration:.2f}s", "tts")
 
             # Notify listener of exact duration for precise echo detection
-            if self._duration_callback is not None:
+            if request.duration_callback is not None:
                 try:
-                    self._duration_callback(exact_duration)
+                    request.duration_callback(exact_duration)
                 except Exception as e:
                     debug_log(f"Chatterbox TTS duration callback error: {e}", "tts")
 
@@ -614,12 +622,12 @@ class ChatterboxTTS:
             self._notify_speaking_state(False)
             
             # Call completion callback if set and not interrupted
-            if self._completion_callback is not None and not interrupted:
+            if (request.completion_callback is not None and not interrupted
+                    and not self._should_interrupt.is_set()):
                 try:
-                    self._completion_callback()
+                    request.completion_callback()
                 except Exception:
                     pass
-                self._completion_callback = None
     
     def _notify_speaking_state(self, is_speaking: bool) -> None:
         """Notify the face widget of speaking state changes.
@@ -681,13 +689,11 @@ class PiperTTS:
         self.sentence_silence = sentence_silence
 
         # Threading and queue setup (same pattern as other TTS engines)
-        self._q: queue.Queue[str] = queue.Queue()
+        self._q: queue.Queue[Optional[_SpeechRequest]] = queue.Queue()
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
         self._is_speaking = threading.Event()
         self._last_spoken_text: str = ""
-        self._completion_callback: Optional[Callable[[], None]] = None
-        self._duration_callback: Optional[Callable[[float], None]] = None
         self._should_interrupt = threading.Event()
 
         # Piper voice (lazy loaded)
@@ -804,7 +810,7 @@ class PiperTTS:
             pass
         self._stop.set()
         try:
-            self._q.put_nowait("")
+            self._q.put_nowait(None)
         except Exception:
             pass
         self._thread.join(timeout=2.0)
@@ -820,12 +826,10 @@ class PiperTTS:
             self.start()
         if not self.enabled:
             return
-        self._completion_callback = completion_callback
-        self._duration_callback = duration_callback
         # Preprocess text for speech
         processed_text = _preprocess_for_speech(text)
         try:
-            self._q.put_nowait(processed_text)
+            self._q.put_nowait(_SpeechRequest(processed_text, completion_callback, duration_callback))
         except Exception:
             pass
 
@@ -843,18 +847,20 @@ class PiperTTS:
     def _run(self) -> None:
         while not self._stop.is_set():
             try:
-                text = self._q.get(timeout=0.5)
+                request = self._q.get(timeout=0.5)
             except queue.Empty:
                 continue
-            if not text:
-                continue
             try:
-                self._speak_once(text)
+                if request is not None and request.text:
+                    self._speak_once(request)
             except Exception as e:
                 debug_log(f"Piper TTS error in _speak_once: {e}", "tts")
                 continue
+            finally:
+                del request
 
-    def _speak_once(self, text: str) -> None:
+    def _speak_once(self, request: _SpeechRequest) -> None:
+        text = request.text
         self._is_speaking.set()
         self._last_spoken_text = text
         self._should_interrupt.clear()
@@ -918,9 +924,9 @@ class PiperTTS:
             debug_log(f"Piper TTS synthesis complete: {exact_duration:.2f}s, {len(full_audio)} samples", "tts")
 
             # Notify listener of exact duration for precise echo detection
-            if self._duration_callback is not None:
+            if request.duration_callback is not None:
                 try:
-                    self._duration_callback(exact_duration)
+                    request.duration_callback(exact_duration)
                 except Exception as e:
                     debug_log(f"Piper TTS duration callback error: {e}", "tts")
 
@@ -989,12 +995,12 @@ class PiperTTS:
             self._notify_speaking_state(False)
 
             # Call completion callback if set and not interrupted
-            if self._completion_callback is not None and not interrupted:
+            if (request.completion_callback is not None and not interrupted
+                    and not self._should_interrupt.is_set()):
                 try:
-                    self._completion_callback()
+                    request.completion_callback()
                 except Exception as e:
                     print(f"  ⚠️ Piper TTS completion callback error: {e}", flush=True)
-                self._completion_callback = None
 
     def _notify_speaking_state(self, is_speaking: bool) -> None:
         """Notify the face widget of speaking state changes."""
