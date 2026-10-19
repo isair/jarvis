@@ -286,6 +286,7 @@ class DocumentIndex:
     def _index_file(self, path: Path, roots: list[Path], work: _Pass) -> bool:
         identity = self._authorised_identity(path, roots)
         if identity is None:
+            work.coverage.reasons.add('changed')
             return False
         key = self._embedding_key()
         old = self._conn.execute('SELECT identity, embedding_key FROM document_files WHERE path=?',
@@ -306,6 +307,7 @@ class DocumentIndex:
             with os.fdopen(fd, 'rb') as stream:
                 opened = os.fstat(stream.fileno())
                 if not stat.S_ISREG(opened.st_mode) or self._identity(opened) != identity:
+                    work.coverage.reasons.add('changed')
                     return False
                 raw = stream.read(size + 1)
                 if len(raw) != size:
@@ -393,8 +395,12 @@ class DocumentIndex:
                 debug_log('Document access revoked during query inference', 'documents')
                 return []
             with self._conn:
-                self._conn.execute('DELETE FROM document_files WHERE embedding_key=? AND dimension!=?',
-                                   (key, int(vector.size)))
+                invalidated = self._conn.execute(
+                    'DELETE FROM document_files WHERE embedding_key=? AND dimension!=?',
+                    (key, int(vector.size))).rowcount
+            if invalidated:
+                self.coverage.reasons.add('embedding_dimensions')
+                debug_log('Document embedding dimensions changed; refresh required', 'documents')
             candidates = []
             for file in self._conn.execute('SELECT * FROM document_files WHERE embedding_key=?', (key,)):
                 if work.stopped():

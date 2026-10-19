@@ -149,3 +149,37 @@ def test_alias_cannot_expand_the_allowed_document_formats(tmp_path, target_suffi
         else:
             assert not hits
             assert 'format-restricted owned content' not in backend.inputs
+
+
+
+def test_atomic_editor_replacement_reports_incomplete_coverage_and_recovers(tmp_path, monkeypatch):
+    import os
+    from pathlib import Path
+
+    root = tmp_path / 'documents'
+    root.mkdir()
+    source = root / 'source.txt'
+    source.write_text('original owned source')
+    pending = root / 'editor.tmp'
+    pending.write_text('replacement owned source')
+    cfg = SimpleNamespace(document_search_enabled=True, document_search_paths=[str(root)],
+                          embedding_model='owned-test', llm_embedding_timeout_sec=1)
+    original_open = os.open
+    replaced = False
+
+    def replace_at_open(path, *args, **kwargs):
+        nonlocal replaced
+        if Path(path) == source and not replaced:
+            pending.replace(source)
+            replaced = True
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, 'open', replace_at_open)
+    with DocumentIndex(SimpleNamespace(db_path=str(tmp_path / 'diary.sqlite')), cfg,
+                       embedding_backend=Embeddings()) as index:
+        coverage = index.refresh()
+        assert replaced
+        assert index.search('source') == []
+        assert not coverage.complete and 'changed' in coverage.reasons
+        assert index.refresh().complete
+        assert [hit.text for hit in index.search('source')] == ['replacement owned source']

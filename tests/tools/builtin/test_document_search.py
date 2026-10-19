@@ -78,3 +78,23 @@ def test_registry_propagates_cancellation_without_touching_source_files(tmp_path
     assert not result.success
     assert 'cancel' in (result.reply_text or result.error_message).lower()
     assert not list(tmp_path.glob('*.sqlite*'))
+
+
+
+def test_changed_embedding_dimensions_report_partial_until_rebuilt(tmp_path):
+    ctx, root = context(tmp_path)
+    (root / 'guide.md').write_text('The owned launch code is pear.')
+    backend = SimpleNamespace(dimension=2)
+    backend.embed = lambda text, model, timeout_sec=1: [1.] + [0.] * (backend.dimension - 1)
+    tool = DocumentSearchTool(index_factory=lambda db, cfg: DocumentIndex(
+        db, cfg, embedding_backend=backend))
+    first = tool.run({'query': 'launch code'}, ctx)
+    assert first.success and 'The owned launch code is pear.' in first.reply_text
+    backend.dimension += 1
+    invalidated = tool.run({'query': 'launch code'}, ctx)
+    assert invalidated.success
+    assert 'Index coverage: partial.' in invalidated.reply_text
+    assert 'embedding_dimensions' in invalidated.reply_text
+    recovered = tool.run({'query': 'launch code'}, ctx)
+    assert recovered.success and 'The owned launch code is pear.' in recovered.reply_text
+    assert 'Index coverage: complete.' in recovered.reply_text

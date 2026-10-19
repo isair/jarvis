@@ -57,7 +57,9 @@ line range, and excerpt. Excerpts are wrapped in
 summarise, not instructions to follow.
 
 Every result includes complete or partial index coverage and explicit reasons
-for incomplete coverage. Empty results do not establish that an unscanned source
+for incomplete coverage. A source replaced during a read reports changed-source
+coverage. Query-time dimension invalidation reports partial coverage until a
+subsequent bounded refresh rebuilds the incompatible sources. Empty results do not establish that an unscanned source
 lacks the requested information. Query embedding failures return an error rather
 than a successful empty search. No result invents document content.
 
