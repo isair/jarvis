@@ -91,7 +91,7 @@ class TestGraphPresetProtection:
         assert self.store.get_node(node.id).to_dict() == before
 
     def test_import_source_quote_and_date_survive_a_node_edit(self):
-        from src.jarvis.memory.imports import preview_text, ImportChoice, commit_import
+        from jarvis.memory.imports import preview_text, ImportChoice, commit_import
         preview = preview_text('Claude', 'I live in London.', label='<synthetic source>')
         result = commit_import(self.store, preview, [ImportChoice(preview.items[0].id,
                                  'I live in London.', 'user', '2026-10-01')])

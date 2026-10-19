@@ -11,6 +11,8 @@ See graph.spec.md for the full specification.
 
 from __future__ import annotations
 
+import codecs
+from contextlib import contextmanager
 import re
 import sqlite3
 import threading
@@ -470,6 +472,42 @@ class GraphMemoryStore:
                 return None
             return self._row_to_node(row)
 
+    @contextmanager
+    def open_node_text(self, node_id: str):
+        """Yield decoded text chunks from one node snapshot, or None if absent.
+
+        Only bounded chunks enter Python. The read savepoint binds the row
+        identity to its BLOB and leaves any caller transaction uncommitted.
+        """
+        with self._lock:
+            self.conn.execute("SAVEPOINT graph_text_read")
+            try:
+                row = self.conn.execute(
+                    "SELECT rowid FROM memory_nodes WHERE id = ?", (node_id,),
+                ).fetchone()
+                if row is None:
+                    yield None
+                    return
+                encoding = self.conn.execute("PRAGMA encoding").fetchone()[0]
+                decoder = codecs.getincrementaldecoder(encoding)()
+                with self.conn.blobopen("memory_nodes", "data", row[0], readonly=True) as data:
+                    def chunks():
+                        while data.tell() < len(data):
+                            raw = data.read(4096)
+                            yield decoder.decode(raw, final=data.tell() == len(data))
+                    yield chunks()
+            finally:
+                self.conn.execute("RELEASE graph_text_read")
+
+    def get_child_ids(self, node_id: str) -> list[str]:
+        """Read child identifiers in decayed-access order without note payloads."""
+        score = _decay_score_sql()
+        with self._lock:
+            return [row[0] for row in self.conn.execute(
+                f"SELECT id FROM memory_nodes WHERE parent_id = ? ORDER BY {score} DESC",
+                (node_id,),
+            )]
+
     def get_children(self, node_id: str) -> list[MemoryNode]:
         """Get all direct children of a node, ordered by decayed access score."""
         score = _decay_score_sql()
@@ -582,13 +620,19 @@ class GraphMemoryStore:
         imported_at = datetime.now().astimezone().isoformat()
         known = {}
         for branch in ({record.branch for record in records} if match_unimported else ()):
-            rows = self.conn.execute('''WITH RECURSIVE subtree(id) AS (
+            texts = tuple({record.reviewed_text for record in records
+                           if record.branch == branch and record.source_date is None})
+            if not texts:
+                continue
+            placeholders = ','.join('?' for _ in texts)
+            rows = self.conn.execute(f'''WITH RECURSIVE subtree(id) AS (
                 SELECT id FROM memory_nodes WHERE id = ?
                 UNION SELECT child.id FROM memory_nodes child
                 JOIN subtree ON child.parent_id = subtree.id
             ) SELECT id, data FROM memory_nodes WHERE id IN (SELECT id FROM subtree)
+              AND data COLLATE BINARY IN ({placeholders})
               AND NOT EXISTS (SELECT 1 FROM memory_import_node_sources source
-                              WHERE source.node_id = memory_nodes.id)''', (branch,))
+                              WHERE source.node_id = memory_nodes.id)''', (branch, *texts))
             for row in rows:
                 text = row['data'] or ''
                 if text.strip():
@@ -662,19 +706,23 @@ class GraphMemoryStore:
                 record['source_metadata'] = json.loads(record['source_metadata'])
             return records
 
+    def get_context_sources(self, node_id: str) -> list[dict]:
+        """Read source context for a node, including graphs without import metadata."""
+        with self._lock:
+            try:
+                return self.get_import_provenance(node_id, limit=3)
+            except sqlite3.OperationalError:
+                if self.conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memory_imports'").fetchone():
+                    raise
+                return []
+
     def get_context_data(self, node: MemoryNode, *, max_chars: int, suffix: str = '') -> str:
         """Render bounded recall data with its original source dates."""
         from .imports import render_memory_context
-        try:
-            records = self.get_import_provenance(node.id, limit=3)
-        except sqlite3.OperationalError:
-            # Persisted graphs can be read before their writable schema bootstrap.
-            if self.conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memory_imports'").fetchone():
-                raise
-            records = []
+        records = self.get_context_sources(node.id)
         if records:
             return render_memory_context(node.data, self._resolve_branch(node.id) or BRANCH_WORLD,
-                                         records, max_chars=max_chars)
+                                         records, max_chars=max_chars, source_complete=True)
         text = node.data.strip()
         return text if len(text) <= max_chars else text[:max(0, max_chars-len(suffix))].rstrip()+suffix
 

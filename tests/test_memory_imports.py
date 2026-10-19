@@ -491,3 +491,96 @@ def test_blank_edited_memory_does_not_restore_archived_text_in_recall(tmp_path):
         assert store.get_context_data(edited, max_chars=1200) == ''
         assert not build_warm_profile(store)['user']
         assert store.get_import_provenance(node.id)[0]['original_text'] == preview.items[0].text
+
+
+@pytest.mark.parametrize('branch', ['user', 'directives', 'world'])
+def test_importing_a_small_note_does_not_materialise_unrelated_large_notes(tmp_path, branch):
+    import tracemalloc
+
+    preview = imports.preview_text('Claude', 'A small reviewed entry.', label='Source')
+    with closing(GraphMemoryStore(str(tmp_path/'bounded-import.db'))) as store:
+        large = store.create_node('Large note', 'An unrelated saved note',
+                                  'z'*(imports.MAX_ENTRY_CHARS*512), branch)
+        tracemalloc.start()
+        try:
+            result = imports.commit_import(store, preview, [
+                imports.ImportChoice(preview.items[0].id, preview.items[0].text, branch, None),
+            ])
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        assert result.created == 1
+        assert store.get_node(result.node_ids[0]).data == preview.items[0].text
+        assert store.get_node(large.id).data == large.data
+        assert peak < imports.MAX_ENTRY_CHARS*64
+
+
+@pytest.mark.parametrize('encoding', ['UTF-8', 'UTF-16le', 'UTF-16be'])
+@pytest.mark.parametrize('branch', ['user', 'directives'])
+def test_oversized_edited_import_keeps_bounded_context_and_uncertain_dates(tmp_path, encoding, branch):
+    import sqlite3
+    from jarvis.memory.graph_ops import build_warm_profile
+
+    path = tmp_path/'edited-import.db'
+    with sqlite3.connect(path) as db:
+        db.execute(f"PRAGMA encoding='{encoding}'")
+    preview = imports.preview_text('Claude', 'An original imported statement.', label='Source')
+    with closing(GraphMemoryStore(str(path))) as store:
+        result = imports.commit_import(store, preview, [
+            imports.ImportChoice(preview.items[0].id, preview.items[0].text, branch, '2020-01-01'),
+        ])
+        prefix = '    I live in Oxford.  \n'
+        secret = 'sk-'+'A'*40
+        oversized = prefix+'token='+secret+'z'*(imports.MAX_ENTRY_CHARS*256)
+        store.update_node(result.node_ids[0], data=oversized)
+        if branch == 'directives':
+            store.create_node('Short rule', 'A complete rule', 'Keep replies brief.', branch)
+        previous = store.conn.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, imports.MAX_ENTRY_CHARS*16)
+        try:
+            profile = build_warm_profile(store)
+        finally:
+            store.conn.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, previous)
+        assert secret not in profile[branch]
+        if branch == 'directives':
+            assert profile[branch] == 'Keep replies brief.'
+        else:
+            frame = json.loads(profile[branch].split(imports.IMPORT_CONTEXT_BEGIN+'\n')[1]
+                               .split('\n'+imports.IMPORT_CONTEXT_END)[0])
+            assert frame['text'] == prefix
+            assert frame['date'] is None
+            assert frame['complete'] is False
+
+
+@pytest.mark.parametrize('branch', ['user', 'directives'])
+def test_maximum_complete_import_keeps_literal_text_and_source_date(tmp_path, branch):
+    from jarvis.memory.graph_ops import build_warm_profile
+
+    text = '    '+('漢'*(imports.MAX_ENTRY_CHARS-6))+'  '
+    preview = imports.preview_text('Claude', 'An editable source.', label='Source')
+    with closing(GraphMemoryStore(str(tmp_path/'complete.db'))) as store:
+        imports.commit_import(store, preview, [
+            imports.ImportChoice(preview.items[0].id, text, branch, '2020-01-01'),
+        ])
+        profile = build_warm_profile(store, user_max_chars=imports.MAX_ENTRY_CHARS*2,
+                                     directives_max_chars=imports.MAX_ENTRY_CHARS*2)
+        if branch == 'directives':
+            assert profile[branch] == text
+        else:
+            frame = json.loads(profile[branch].split(imports.IMPORT_CONTEXT_BEGIN+'\n')[1]
+                               .split('\n'+imports.IMPORT_CONTEXT_END)[0])
+            assert frame['text'] == text
+            assert frame['date'] == '2020-01-01'
+            assert frame['complete'] is True
+
+
+def test_incomplete_line_cannot_supply_credentials_or_archival_recall(tmp_path):
+    from jarvis.memory.graph_ops import build_warm_profile
+
+    preview = imports.preview_text('Claude', 'An archived imported statement.', label='Source')
+    with closing(GraphMemoryStore(str(tmp_path/'credential-line.db'))) as store:
+        result = imports.commit_import(store, preview, [
+            imports.ImportChoice(preview.items[0].id, preview.items[0].text, 'user', None),
+        ])
+        store.update_node(result.node_ids[0], data='https://user:'+('p'*imports.MAX_ENTRY_CHARS*2)+'@example.com')
+        store.create_node('Current fact', 'A complete fact', 'I live in Oxford.', 'user')
+        assert build_warm_profile(store)['user'] == 'I live in Oxford.'

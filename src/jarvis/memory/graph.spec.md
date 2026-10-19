@@ -71,6 +71,17 @@ SQLite transaction.
 
 `build_warm_profile(store, *, user_max_chars, directives_max_chars)` returns a `{"user": "...", "directives": "..."}` dict by walking the User and Directives subtrees breadth-first (ordered by each sibling's decayed access score) and concatenating node data up to the char caps. `format_warm_profile_block(profile)` renders it as a labelled system-prompt section using denial-template mirroring (see CLAUDE.md): the headings literally occupy the semantic slot that small-model canonical denials refer to ("INFORMATION THE USER HAS SHARED IN PRIOR CONVERSATIONS", "STANDING INSTRUCTIONS FROM THE USER").
 
+Node text is decoded incrementally from a read-only SQLite BLOB, with temporary
+text buffers bounded by the output budget and a small read chunk. Leading and
+trailing whitespace, Unicode, embedded NULs and the truncation ellipsis retain
+their text semantics. Identity lookup and text reading share a read savepoint;
+closing or abandoning that read releases only its snapshot, without committing
+or rolling back a caller's pending edits. Child enumeration reads identifiers
+in the same decayed-access order, without materialising child note payloads.
+Exhausted branch budgets do not read more nodes or enumerate descendants.
+Traversal can still enumerate sibling identifiers; text caps are not a total
+node-count or query-time budget.
+
 The warm profile is injected into every reply's initial system message (see `reply/engine.py` Step 3.5) unconditionally and query-agnostically — personalisation is the default, not something gated behind a question-detection heuristic. No LLM call is involved in composition; it's a pure SQLite read.
 
 ## Data Model
@@ -98,7 +109,7 @@ SQLite table `memory_nodes` in the same database as the diary system. Schema is 
 
 Reviewed imports use `memory_imports` and `memory_import_node_sources`. Nodes and source records commit atomically. Original scrubbed quotations, reviewed text, provider/scope, optional original statement date and the import timestamp are distinct. Literal duplicates are date-qualified; repeated imports preserve subsequent human edits. Source associations survive splits; deleted nodes leave archival records without a live association. Data writes invalidate source-date bindings, while metadata-only edits preserve them. User/Directives provenance changes invalidate the warm profile revision.
 
-`get_context_data` provides bounded, fenced imported text and source-date metadata for warm profiles and graph enrichment. Current data takes precedence over archived quotes. Imported standing instructions require a complete excerpt. Original statement dates never come from file or import timestamps. See `imports.spec.md` for local discovery and review.
+`get_context_data` provides bounded, fenced imported text and source-date metadata for graph enrichment. Warm profiles stream node text and read at most three source records through `get_context_sources`; the shared import formatter preserves complete literal entries and marks bounded prefixes as incomplete and undated. Current data takes precedence over archived quotes. Imported standing instructions require a complete excerpt. Original statement dates never come from file or import timestamps. See `imports.spec.md` for local discovery and review.
 
 ### Entry Points
 

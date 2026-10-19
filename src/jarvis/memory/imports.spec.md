@@ -50,7 +50,9 @@ the diary or overwrite existing human edits.
 
 Graph nodes and provenance commit in one SQLite writer transaction. Any failure
 rolls back the batch. Exact whole-entry duplicates within a branch reuse an
-existing node. Case, whitespace, Unicode characters and surrounding context
+existing node. Duplicate lookup returns only exact reviewed-text candidates
+from the selected branches; unrelated note payloads do not enter Python. Case,
+whitespace, Unicode characters and surrounding context
 remain distinct; different branches, negations and temporal qualifiers remain
 distinct. Repeated imports do not duplicate nodes or provenance. A changed source
 can add provenance without rewriting a node edited after an earlier import.
@@ -65,7 +67,7 @@ Provenance retains provider, source identity/label/scope, source-content digest,
 original scrubbed quote, reviewed text, optional source date and the import's
 local timestamp. These records remain available when graph data is edited or
 split. Node deletion preserves the source record with no live node association.
-Provenance is available in the memory viewer's node detail, with the current binding distinguished from edited text. Memory context carries source dates and fenced current text within the existing character limits. Current text is budgeted before optional archived quotes. Blank current text supplies no recall block. Partial excerpts have no statement date. Standing instructions are included only when the complete entry fits. Source records are archival quotations, not fresh tool results. Existing graph
+Provenance is available in the memory viewer's node detail, with the current binding distinguished from edited text. Memory context carries source dates and fenced current text within the existing character limits. Current text is budgeted before optional archived quotes. Warm-profile reads retain at most the import entry character limit plus one lookahead character. Oversized edited entries contribute only complete newline-delimited prefixes before that limit, so clipped credential tokens do not enter redaction or context. Such prefixes remain explicitly incomplete and undated; incomplete standing instructions are omitted. Complete entries preserve literal whitespace and source dates. Blank current text supplies no recall block. Partial excerpts have no statement date. Standing instructions are included only when the complete entry fits. Source records are archival quotations, not fresh tool results. Existing graph
 search and the User/Directives warm profile make saved entries usable without a
 new inference context. Import does not claim to repair source or temporal
 uncertainty in existing memories.
