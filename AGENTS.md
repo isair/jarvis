@@ -2,6 +2,33 @@ Data privacy comes first, always.
 
 Jarvis is offline-first by principle. Do not add integrations that depend on a specific proprietary cloud vendor (e.g. ElevenLabs TTS, or any SaaS that requires shipping user audio/text/data to a third party's servers), not even as an opt-in feature. The line is the offline path: a backend is acceptable only if it can run fully locally. Generic, self-hostable protocols where the user points at their own endpoint (Ollama, OpenAI-compatible servers, LM Studio) are fine precisely because they can be local; a vendor-locked cloud service with no local option is not. When a feature request asks for such a service, decline it on principle and redirect to the offline equivalent (e.g. better local TTS voices rather than cloud TTS).
 
+## Product vision and scope
+
+Jarvis is a privacy-first, offline-first, voice-first assistant with one coherent
+conversation. Text chat, visual feedback and settings support that experience.
+They should not require users to enter a separate workflow for capabilities
+that belong in the shared assistant.
+
+Assess whether work belongs in Jarvis before investing in implementation, during
+PR review and again before merging. For a feature or substantial abstraction,
+state the concrete user problem, how people use it through the existing
+voice/chat experience, and how the proposal compares with extending or
+simplifying that experience. Weigh its benefit against interaction complexity, extra UI,
+latency, resource use, privacy exposure and ongoing maintenance.
+
+Prefer a reliable, coherent core over optional features or speculative
+frameworks. Passing tests, sound engineering, an existing contribution and
+reducing issue/PR counts do not establish product fit. When the value is weak,
+recommend simplification, consolidation or rejection before polishing the
+implementation. Record unresolved scope decisions explicitly. Routine fixes can
+state their user impact briefly; they do not need a separate product essay.
+
+Voice-first does not prohibit useful text interfaces, accessibility or visual
+controls. Judge whether they serve the shared assistant rather than creating a
+parallel product. Questioning an existing feature does not authorise deleting
+user data, removing functionality or closing valid defects; follow the existing
+specification and approval rules.
+
 All user-facing command line output should make use of emojis. Especially an initial emoji to start off the lines that depict what the line is about. Output should make use of indentation spacing to establish a visual hierarchy and aim to make output as easy to sift through as possible. Exception: Windows .bat scripts cannot use emojis (cmd.exe doesn't render Unicode properly).
 
 Any important point in our logical flows should have debug logs using the `debug_log` method from `src/jarvis/debug.py`. Avoid excessive logging to keep the logs easily readable and actionable.
