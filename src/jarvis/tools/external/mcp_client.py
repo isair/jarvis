@@ -107,34 +107,30 @@ def _resolve_command(command: str) -> str:
 
 
 class _StdioConnection:
-    """Async context manager that wraps a ``stdio_client`` session AND
-    owns the ``/dev/null`` file used to suppress the MCP server's stderr.
-
-    The wrapped context manager is built synchronously by
-    ``MCPClient._connect_stdio`` so existing call sites and tests that
-    construct a connection eagerly continue to work. The wrapper's job
-    is to close the devnull handle when the async context exits,
-    regardless of how the inner context terminates. Without this the
-    devnull handle leaked once per ``_session`` call (i.e. every MCP
-    tool invocation), eventually exhausting the process FD limit on
-    long-running daemons.
-    """
+    """Own the transport's log through setup, cancellation and teardown."""
 
     def __init__(self, inner_cm, errlog) -> None:
         self._cm = inner_cm
         self._errlog = errlog
 
     async def __aenter__(self):
-        return await self._cm.__aenter__()
+        try:
+            return await self._cm.__aenter__()
+        except BaseException:
+            self._close_log()
+            raise
 
     async def __aexit__(self, exc_type, exc, tb):
         try:
             return await self._cm.__aexit__(exc_type, exc, tb)
         finally:
-            try:
-                self._errlog.close()
-            except Exception:
-                pass
+            self._close_log()
+
+    def _close_log(self):
+        try:
+            self._errlog.close()
+        except Exception:
+            pass
 
 
 class MCPClient:
@@ -181,11 +177,10 @@ class MCPClient:
         devnull = open(os.devnull, "w")
         # Build the underlying transport CM eagerly so any synchronous
         # construction error closes devnull instead of leaking it. The
-        # wrapper guarantees the handle is also closed on every async
-        # exit path — this is the actual leak fix.
+        # wrapper closes the log if async entry fails or when the session exits.
         try:
             inner = stdio_client(params, errlog=devnull)
-        except Exception:
+        except BaseException:
             devnull.close()
             raise
         return _StdioConnection(inner, errlog=devnull)

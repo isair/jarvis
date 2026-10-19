@@ -44,6 +44,9 @@ resident for the daemon's lifetime.
 
 ## Invariants
 
+- Each stdio connection closes its owned log on construction failure, failed
+  or cancelled entry, and session exit. The original outcome propagates.
+
 - One in-flight `call_tool` per server at any time. Tool calls to the
   same server are serialised by the queue. Different servers run in
   parallel because each has its own worker.
