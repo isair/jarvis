@@ -84,7 +84,7 @@ if os.name == 'nt':
             raise ctypes.WinError(_nt.RtlNtStatusToDosError(status))
         return handle.value
 
-    def _windows_entries(directory):
+    def _windows_entries(handle):
         # Fixed-size batches retain the index's per-entry cancellation/budget checks.
         buffer = ctypes.create_string_buffer(65536)
         while True:
