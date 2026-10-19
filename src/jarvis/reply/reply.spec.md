@@ -26,7 +26,7 @@ Design principles enforced by the engine:
   - speech synthesizer (optional): for spoken output and hot-window activation.
   - spoken_output (boolean, default false): the caller owns spoken delivery of the returned reply. The voice listener supplies its enabled speech state; text chat and local tasks leave it false. An enabled synthesiser passed directly to the engine also declares spoken delivery.
 
-Reply delivery is snapshotted per request. Silent replies follow the language of the user's current request without inheriting speech-backend constraints. The configured Piper/Chatterbox English speech policy applies to spoken replies. Shared delivery guidance is injected beside the cached clock/location context, before final text-tool syntax guidance. It is stable across every model turn and system-message rebuild of that reply.
+The main reply model receives delivery guidance snapshotted per request. Silent replies follow the language of the user's current request without inheriting speech-backend constraints. The configured Piper/Chatterbox English speech policy guides spoken replies from this model. The max-turn digest has its own request-language contract below. Shared delivery guidance is injected beside the cached clock/location context, before final text-tool syntax guidance. It is stable across every model turn and system-message rebuild of that reply.
 
 ### Steps and Branches (Agentic Messages Loop)
 1. Redact
