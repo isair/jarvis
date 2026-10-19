@@ -128,6 +128,50 @@ jobs:
           subprocess.run([sys.executable, '-m', 'pytest', '-q', '-m', 'integration',
                           'tests/test_search_http.py'], env=env, check=True)
 
+  mcp-environment:
+    name: MCP environment (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Install MCP test dependencies
+        shell: python
+        run: |
+          from pathlib import Path
+          import subprocess
+          import sys
+          prefixes = ('mcp==', 'pydantic', 'pytest==', 'python-dotenv==', 'psutil')
+          dependencies = [line for line in Path('requirements.txt').read_text().splitlines()
+                          if line.startswith(prefixes)]
+          subprocess.run([sys.executable, '-m', 'pip', 'install', *dependencies], check=True)
+      - name: 🧪 Verify configured server environments
+        shell: python
+        run: |
+          import os
+          from pathlib import Path
+          import subprocess
+          import sys
+          import tempfile
+          with tempfile.TemporaryDirectory(prefix='jarvis-mcp-environment-') as directory:
+              owned = Path(directory)
+              scenario = owned / 'scenario.py'
+              scenario.write_text(
+                  "import os, pytest\nfrom pathlib import Path\n"
+                  "data = Path(os.environ['WORKER_PROBE_ROOT'])\n"
+                  "raise SystemExit(pytest.main(['-q', 'tests/test_mcp_configured_path.py', "
+                  "'--basetemp', str(data/'tests'), '-o', 'cache_dir='+str(data/'cache'), "
+                  "'-o', 'log_file='+str(data/'pytest.log')]))\n"
+              )
+              env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1')
+              subprocess.run([sys.executable, 'tests/fixtures/worker_probe.py',
+                              str(owned), str(scenario)], env=env, check=True)
+
   wizard-resources:
     name: Wizard resources (macos-latest)
     runs-on: macos-latest

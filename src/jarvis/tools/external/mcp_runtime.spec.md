@@ -44,6 +44,9 @@ resident for the daemon's lifetime.
 
 ## Invariants
 
+- Each stdio connection closes its owned log on construction failure, failed
+  or cancelled entry, and session exit. The original outcome propagates.
+
 - One in-flight `call_tool` per server at any time. Tool calls to the
   same server are serialised by the queue. Different servers run in
   parallel because each has its own worker.
@@ -95,6 +98,17 @@ Each server entry in `config.mcps` is a dict consumed by
 |-----|------|---------|--------|
 | `idle_timeout_sec` | float \| null | null | If set, the worker self-terminates after that many seconds with an empty queue. Stateful servers (browser automation) must leave this unset. |
 | `timeout_sec` | float \| null | 120 (`_DEFAULT_INVOKE_TIMEOUT_SEC`) | Bounds a single `call_tool` round trip and `list_tools` discovery. Servers whose tools legitimately run long (e.g. delegating a task to an external CLI agent) should raise this; a bare `concurrent.futures.TimeoutError` propagates on expiry. Non-finite or non-positive values fall back to the default. |
+
+### Server environment and executable lookup
+
+Command lookup first uses the server's configured `env.PATH`, or the inherited
+PATH when there is no override. Existing GUI/login-shell fallback discovery
+remains available. The child receives the inherited environment with explicit
+server values taking precedence. The resolved command's directory is prepended
+only when absent from that effective PATH, preserving custom dependency paths.
+An empty configured PATH adds only that directory, without an implicit current
+directory entry. Preparing one server does not alter the parent environment or
+another server's choices.
 
 ## Test contract
 
