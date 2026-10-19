@@ -376,7 +376,8 @@ stream. The task centre does not create a second LLM or tool path.
 Task frames use a dedicated Qt signal instead of the activity timeline, in
 both bundled and source modes. Only standalone frames with typed task or
 submission fields can update the window. Task details use a read-only plain-text viewport with scrolling, so long results
-remain reachable without displacing submission and cancellation controls. The
+remain reachable without displacing submission and cancellation controls.
+Unchanged result text retains its reading position and selection during task updates. The
 window indexes rows by identity and retains active tasks plus the shared
 terminal-history limit, ordered by recent updates.
 

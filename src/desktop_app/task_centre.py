@@ -219,4 +219,5 @@ class TaskCentreWindow(QDialog):
         result = task.get("result") or task.get("error")
         if result:
             text += f"\n\n{result}"
-        self.details.setPlainText(text)
+        if text != self.details.toPlainText():
+            self.details.setPlainText(text)

@@ -234,3 +234,41 @@ def test_unselected_task_rows_keep_readable_text_contrast(qapp):
         view.close()
         view.deleteLater()
         qapp.processEvents()
+
+
+def test_task_updates_preserve_an_unchanged_results_reading_position(qapp):
+    from PyQt6.QtGui import QTextCursor
+
+    view = TaskCentreWindow(lambda *args, **kwargs: None, lambda task: None)
+    try:
+        view.resize(760, 540)
+        view.show()
+        event = dict(task_event('reading'), result='Useful detail for this result.\n' * 250)
+        view.add_or_update_task(event)
+        qapp.processEvents()
+        cursor = view.details.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        cursor.movePosition(QTextCursor.MoveOperation.PreviousWord, QTextCursor.MoveMode.KeepAnchor)
+        view.details.setTextCursor(cursor)
+        view.details.ensureCursorVisible()
+        qapp.processEvents()
+        position = cursor.position()
+        selection = cursor.selectedText()
+        scroll = view.details.verticalScrollBar().value()
+        assert scroll > 0 and selection
+
+        for update in [task_event('other', 'queued'), task_event('other', 'running'), event]:
+            view.add_or_update_task(update)
+            qapp.processEvents()
+            assert view.details.textCursor().position() == position
+            assert view.details.textCursor().selectedText() == selection
+            assert view.details.verticalScrollBar().value() == scroll
+
+        view.add_or_update_task(dict(event, result='A revised result'))
+        assert 'A revised result' in view.details.toPlainText()
+        view.task_list.setCurrentItem(view._items['other'])
+        assert 'Request other' in view.details.toPlainText()
+    finally:
+        view.close()
+        view.deleteLater()
+        qapp.processEvents()
