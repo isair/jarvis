@@ -14,7 +14,9 @@ The desktop app is a **separate package** from the core `jarvis` module. It depe
 
 ## Source Runtime
 
-Source installations require Python 3.11 or later. The POSIX development
+Source installations require Python 3.11 or later. CLI and desktop package
+entrypoints reject unsupported runtimes before application dependencies or user
+configuration are loaded, with an actionable error. The POSIX development
 launcher validates interpreter versions before creating a virtual environment,
 selects a supported candidate and rejects an unsupported existing environment.
 
