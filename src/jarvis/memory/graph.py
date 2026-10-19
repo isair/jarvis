@@ -20,9 +20,12 @@ import unicodedata
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Callable, Optional
+from typing import Callable, Optional, Sequence, TYPE_CHECKING
 
 from ..debug import debug_log
+
+if TYPE_CHECKING:
+    from .imports import MemoryImportRecord, ImportResult
 
 
 # ── Mutation listeners ─────────────────────────────────────────────────────
@@ -234,6 +237,66 @@ CREATE TABLE IF NOT EXISTS memory_nodes (
 CREATE INDEX IF NOT EXISTS idx_nodes_parent ON memory_nodes(parent_id);
 CREATE INDEX IF NOT EXISTS idx_nodes_last_accessed ON memory_nodes(last_accessed DESC);
 CREATE INDEX IF NOT EXISTS idx_nodes_access_count ON memory_nodes(access_count DESC);
+
+CREATE TABLE IF NOT EXISTS memory_imports (
+    id TEXT PRIMARY KEY,
+    branch TEXT NOT NULL,
+    content_key TEXT NOT NULL,
+    node_id TEXT REFERENCES memory_nodes(id) ON DELETE SET NULL,
+    provider TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    source_digest TEXT NOT NULL,
+    source_label TEXT NOT NULL,
+    source_scope TEXT NOT NULL,
+    source_date TEXT,
+    source_metadata TEXT NOT NULL,
+    original_text TEXT NOT NULL,
+    reviewed_text TEXT NOT NULL,
+    imported_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_imports_content ON memory_imports(branch, content_key);
+CREATE INDEX IF NOT EXISTS idx_imports_node ON memory_imports(node_id);
+
+CREATE TABLE IF NOT EXISTS memory_import_node_sources (
+    import_id TEXT NOT NULL REFERENCES memory_imports(id) ON DELETE CASCADE,
+    node_id TEXT NOT NULL REFERENCES memory_nodes(id) ON DELETE CASCADE,
+    current_binding INTEGER NOT NULL CHECK(current_binding IN (0, 1)),
+    PRIMARY KEY(import_id, node_id)
+);
+CREATE INDEX IF NOT EXISTS idx_import_sources_node ON memory_import_node_sources(node_id);
+CREATE TRIGGER IF NOT EXISTS import_source_data_write
+AFTER UPDATE OF data ON memory_nodes BEGIN
+    UPDATE memory_import_node_sources SET current_binding = 0 WHERE node_id = NEW.id;
+END;
+
+CREATE INDEX IF NOT EXISTS idx_imports_live_content
+    ON memory_imports(branch, content_key, source_date, imported_at, node_id)
+    WHERE node_id IS NOT NULL;
+CREATE TABLE IF NOT EXISTS memory_import_retired (
+    import_id TEXT PRIMARY KEY REFERENCES memory_imports(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS memory_import_replacements (
+    original_id TEXT PRIMARY KEY REFERENCES memory_imports(id) ON DELETE CASCADE,
+    current_id TEXT NOT NULL REFERENCES memory_imports(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS memory_import_owned (
+    node_id TEXT PRIMARY KEY REFERENCES memory_nodes(id) ON DELETE CASCADE,
+    source_id TEXT NOT NULL,
+    fingerprint TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS memory_auto_sources (
+    source_id TEXT PRIMARY KEY,
+    source_json TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN ('pending', 'enabled', 'disabled', 'review')),
+    generation INTEGER NOT NULL DEFAULT 0,
+    digest TEXT NOT NULL,
+    branch TEXT,
+    bindings TEXT NOT NULL,
+    can_enable INTEGER NOT NULL,
+    error TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_auto_sources_state ON memory_auto_sources(state);
 
 CREATE TABLE IF NOT EXISTS memory_graph_revisions (
     name TEXT PRIMARY KEY,
@@ -535,6 +598,133 @@ class GraphMemoryStore:
             created_at=now, updated_at=now, data_token_count=token_count,
         )
 
+    def import_memories(self, records: Sequence[MemoryImportRecord]) -> ImportResult:
+        """Commit reviewed nodes and durable source records together."""
+        from .imports import ImportResult, _digest
+        if not records or any(record.branch not in FIXED_BRANCH_IDS or
+                              not isinstance(record.reviewed_text, str) or
+                              not record.reviewed_text.strip() for record in records):
+            raise ValueError('Invalid reviewed memory batch')
+        with self._lock, self.conn:
+            self.conn.execute('BEGIN IMMEDIATE')
+            result, created = self._import_memories_locked(records, match_unimported=True)
+        for node, branch in created:
+            _notify_graph_mutation('create', node.id, branch)
+        return result
+
+    def _import_memories_locked(self, records, *, match_unimported):
+        """Import validated records inside the caller's writer transaction."""
+        from .imports import ImportResult, _digest
+        created, node_ids = [], []
+        imported_at = datetime.now().astimezone().isoformat()
+        known = {}
+        for branch in ({record.branch for record in records} if match_unimported else ()):
+            texts = tuple({record.reviewed_text for record in records
+                           if record.branch == branch and record.source_date is None})
+            if not texts:
+                continue
+            placeholders = ','.join('?' for _ in texts)
+            rows = self.conn.execute(f'''WITH RECURSIVE subtree(id) AS (
+                SELECT id FROM memory_nodes WHERE id = ?
+                UNION SELECT child.id FROM memory_nodes child
+                JOIN subtree ON child.parent_id = subtree.id
+            ) SELECT id, data FROM memory_nodes WHERE id IN (SELECT id FROM subtree)
+              AND data COLLATE BINARY IN ({placeholders})
+              AND NOT EXISTS (SELECT 1 FROM memory_import_node_sources source
+                              WHERE source.node_id = memory_nodes.id)''', (branch, *texts))
+            for row in rows:
+                text = row['data'] or ''
+                if text.strip():
+                    known.setdefault((branch, text), row['id'])
+        for record in records:
+            key = record.reviewed_text
+            identity = _digest('\0'.join((record.source_id, record.source_digest,
+                               record.item_id, record.branch, key, record.source_date or '')))
+            original_id = identity
+            replacement = self.conn.execute('SELECT current_id FROM memory_import_replacements WHERE original_id=?', (original_id,)).fetchone()
+            if replacement is not None:
+                identity = replacement['current_id']
+            previous = self.conn.execute('SELECT node_id FROM memory_imports WHERE id = ?', (identity,)).fetchone()
+            if previous is not None and previous['node_id'] is None and self.conn.execute(
+                    'SELECT 1 FROM memory_import_retired WHERE import_id=?', (identity,)).fetchone():
+                identity = uuid.uuid4().hex
+                previous = None
+            if previous is not None:
+                node_ids.append(previous['node_id'])
+                continue
+            candidates = self.conn.execute('SELECT DISTINCT node_id FROM memory_imports WHERE node_id IS NOT NULL AND branch = ? AND content_key = ? AND source_date IS ? ORDER BY imported_at',
+                                           (record.branch, key, record.source_date))
+            shared = next((row for row in candidates
+                           if self._resolve_branch(row['node_id']) == record.branch and
+                           (match_unimported or self.get_node(row['node_id']).data == key)), None)
+            if shared is not None:
+                node_id = shared['node_id']
+            elif record.source_date is None and (record.branch, key) in known:
+                node_id = known[(record.branch, key)]
+            else:
+                node = self._insert_node(f'{record.provider} memory {record.item_id[:8]}',
+                       f'Reviewed import from {record.provider}. Scope: {record.source_scope}.',
+                       record.reviewed_text, record.branch)
+                created.append((node, record.branch))
+                from .auto_import import node_fingerprint
+                self.conn.execute('INSERT INTO memory_import_owned VALUES (?, ?, ?)',
+                                  (node.id, record.source_id, node_fingerprint(node)))
+                node_id = node.id
+                if record.source_date is None:
+                    known[(record.branch, key)] = node_id
+            self.conn.execute('''INSERT INTO memory_imports
+                (id, branch, content_key, node_id, provider, source_id, source_digest,
+                 source_label, source_scope, source_date, source_metadata, original_text, reviewed_text, imported_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                (identity, record.branch, key, node_id, record.provider, record.source_id,
+                 record.source_digest, record.source_label, record.source_scope,
+                 record.source_date, record.source_metadata, record.original_text, record.reviewed_text, imported_at))
+            if identity != original_id:
+                self.conn.execute('INSERT INTO memory_import_replacements VALUES (?, ?) ON CONFLICT(original_id) DO UPDATE SET current_id=excluded.current_id', (original_id, identity))
+            if node_id is not None:
+                self.conn.execute('INSERT INTO memory_import_node_sources VALUES (?, ?, 1)', (identity, node_id))
+                if self._resolve_branch(node_id) in (BRANCH_USER, BRANCH_DIRECTIVES):
+                    self.conn.execute("UPDATE memory_graph_revisions SET revision = revision + 1 WHERE name = 'warm_profile'")
+            node_ids.append(node_id)
+        return ImportResult(len(created), len(records) - len(created), tuple(node_ids)), created
+
+    def get_import_provenance(self, node_id: Optional[str] = None, *, limit: int = 100) -> list[dict]:
+        """Read import sources, including ancestor sources after a split."""
+        import json
+        limit = max(1, min(limit, 500))
+        with self._lock:
+            if node_id is None:
+                rows = self.conn.execute('SELECT * FROM memory_imports ORDER BY imported_at DESC, id LIMIT ?', (limit,))
+            else:
+                rows = self.conn.execute('''SELECT source.*, link.current_binding
+                    FROM memory_imports source JOIN memory_import_node_sources link
+                    ON source.id = link.import_id WHERE link.node_id = ?
+                    ORDER BY source.imported_at DESC, source.id LIMIT ?''', (node_id, limit))
+            records = [dict(row) for row in rows]
+            for record in records:
+                record['source_metadata'] = json.loads(record['source_metadata'])
+            return records
+
+    def get_context_sources(self, node_id: str) -> list[dict]:
+        """Read source context for a node, including graphs without import metadata."""
+        with self._lock:
+            try:
+                return self.get_import_provenance(node_id, limit=3)
+            except sqlite3.OperationalError:
+                if self.conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memory_imports'").fetchone():
+                    raise
+                return []
+
+    def get_context_data(self, node: MemoryNode, *, max_chars: int, suffix: str = '') -> str:
+        """Render bounded recall data with its original source dates."""
+        from .imports import render_memory_context
+        records = self.get_context_sources(node.id)
+        if records:
+            return render_memory_context(node.data, self._resolve_branch(node.id) or BRANCH_WORLD,
+                                         records, max_chars=max_chars, source_complete=True)
+        text = node.data.strip()
+        return text if len(text) <= max_chars else text[:max(0, max_chars-len(suffix))].rstrip()+suffix
+
     def split_node(
         self, source: MemoryNode, *, children: list[tuple[str, str, str]], summary: str,
     ) -> bool:
@@ -549,11 +739,15 @@ class GraphMemoryStore:
                 return False
             created = [self._insert_node(name, description, data, source.id)
                        for name, description, data in children]
+            for child in created:
+                self.conn.execute('''INSERT INTO memory_import_node_sources
+                    SELECT import_id, ?, current_binding FROM memory_import_node_sources
+                    WHERE node_id = ?''', (child.id, source.id))
             current.data = ""
             current.data_token_count = 0
             current.description = summary[:SUMMARY_MAX_LENGTH]
             current.updated_at = datetime.now(timezone.utc).isoformat()
-            self._persist_node(current)
+            self._persist_node(current, write_data=True)
             branch = self._resolve_branch(source.id)
 
         for child in created:
@@ -599,7 +793,7 @@ class GraphMemoryStore:
             if parent_id is not ...:
                 node.parent_id = parent_id
             node.updated_at = datetime.now(timezone.utc).isoformat()
-            self._persist_node(node)
+            self._persist_node(node, write_data=data is not None)
             branch = self._resolve_branch(node_id)
 
         _notify_graph_mutation("update", node_id, branch)
@@ -621,16 +815,14 @@ class GraphMemoryStore:
             current_id = current.parent_id
         return True
 
-    def _persist_node(self, node: MemoryNode) -> None:
+    def _persist_node(self, node: MemoryNode, *, write_data: bool) -> None:
         """Write a node snapshot inside the caller's locked write transaction."""
-        self.conn.execute(
-            """UPDATE memory_nodes
-               SET name = ?, description = ?, data = ?, parent_id = ?,
-                   updated_at = ?, data_token_count = ?
-               WHERE id = ?""",
-            (node.name, node.description, node.data, node.parent_id,
-             node.updated_at, node.data_token_count, node.id),
-        )
+        fields = ['name', 'description', 'parent_id', 'updated_at']
+        if write_data:
+            fields.extend(('data', 'data_token_count'))
+        assignments = ', '.join(f'{field} = ?' for field in fields)
+        self.conn.execute(f'UPDATE memory_nodes SET {assignments} WHERE id = ?',
+                          (*(getattr(node, field) for field in fields), node.id))
 
     def delete_node(self, node_id: str) -> bool:
         """Delete a node. Children are orphaned (parent_id set to NULL by FK).
@@ -684,7 +876,7 @@ class GraphMemoryStore:
             node.data += separator + text
             node.data_token_count = _estimate_tokens(node.data)
             node.updated_at = datetime.now(timezone.utc).isoformat()
-            self._persist_node(node)
+            self._persist_node(node, write_data=True)
             branch = self._resolve_branch(node_id)
 
         _notify_graph_mutation("update", node_id, branch)

@@ -127,3 +127,37 @@ jobs:
           env['JARVIS_SEARCH_PROBE_EXE'] = str(Path('build/search-native/dist/search-probe', executable).resolve())
           subprocess.run([sys.executable, '-m', 'pytest', '-q', '-m', 'integration',
                           'tests/test_search_http.py'], env=env, check=True)
+
+  memory-source-safety:
+    name: Memory source safety (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Install source-read test dependencies
+        run: python -m pip install pytest python-dotenv
+      - name: Verify owned source paths and native filesystem boundaries
+        shell: python
+        run: |
+          import os
+          from pathlib import Path
+          import subprocess
+          import sys
+          root = Path(os.environ['RUNNER_TEMP']) / 'memory-source-safety'
+          runtime = root / 'runtime'
+          runtime.mkdir(parents=True, exist_ok=True)
+          config = root / 'config.json'
+          config.write_text('{}', encoding='utf-8')
+          env = dict(os.environ, JARVIS_CONFIG_PATH=str(config),
+                     XDG_CONFIG_HOME=str(root / 'xdg'), TMPDIR=str(runtime),
+                     TEMP=str(runtime), TMP=str(runtime), PYTHONDONTWRITEBYTECODE='1')
+          subprocess.run([sys.executable, '-m', 'pytest', '-q',
+                          '-o', 'cache_dir=' + str(root / 'cache'),
+                          '--basetemp', str(root / 'test-data'),
+                          'tests/test_memory_source_safety.py'], env=env, check=True)

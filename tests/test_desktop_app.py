@@ -277,6 +277,7 @@ class TestOllamaRuntimeOwnership:
 
         stopped = []
         tray = JarvisSystemTray.__new__(JarvisSystemTray)
+        tray.memory_auto_import = MagicMock()
         tray.is_listening = False
         tray.daemon_process = None
         tray._ollama_runtime_ownership = OllamaRuntimeOwnership(
