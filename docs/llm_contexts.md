@@ -325,3 +325,7 @@ When you add or change a context, update `_CALLER_TO_CONTEXT` so it shows up in 
 ## Keep this doc in sync
 
 This graph is the reference for LLM-latency optimisation. Treat it as authoritative: whenever code changes affect an LLM call — a new context, a removed one, a changed model/timeout/cap/gating/prompt source, or a new data-flow edge — update this file in the same PR. If the update would be more than a one-line tweak, reflect it in the relevant `*.spec.md` too.
+
+Graph startup inspection reports unclassified root content without moving or
+reclassifying saved nodes. Explicit graph organisation owns structural changes;
+startup inspection does not invoke a model or alter memory provenance.

@@ -111,63 +111,25 @@ class TestGraphMemoryStoreBootstrap:
 
 
 @pytest.mark.unit
-class TestMigrateLegacyShape:
-    """Startup rehomes older graph content without losing it."""
-
-    def test_no_wipe_on_fresh_graph(self, store):
-        """Freshly seeded graph (root + 3 branches, no data) is conforming."""
-        assert store.migrate_legacy_shape() is False
-        assert store.get_node_count() == BOOTSTRAP_NODE_COUNT
-
-    def test_no_wipe_when_only_descendants_of_fixed_branches(self, store):
-        """Children grown under User/Directives/World are fine — the shape
-        check only looks at direct root children."""
-        store.create_node(
-            name="Identity", description="who the user is",
-            data="User's name is Baris.", parent_id="user",
-        )
-        assert store.migrate_legacy_shape() is False
-        # Content preserved
-        assert any(
-            n.name == "Identity" for n in store.get_all_nodes()
-        )
-
-    def test_rehomes_when_root_has_rogue_child(self, store):
-        """Existing node IDs and content remain visible and editable."""
-        node = store.create_node(
-            name="People", description="pre-taxonomy category",
-            data="Alice is a friend.", parent_id="root",
-        )
-        assert store.migrate_legacy_shape() is True
-        moved = store.get_node(node.id)
-        assert moved.data == "Alice is a friend."
-        assert moved.parent_id == "legacy"
-        assert store.migrate_legacy_shape() is False
-        assert store.delete_node(node.id)
-        assert store.get_node(node.id) is None
-
-    def test_rehomes_when_root_itself_has_data(self, store):
-        """Cold-start facts appended to root before the taxonomy existed
-        also count as non-conforming."""
-        store.conn.execute(
-            "UPDATE memory_nodes SET data = ? WHERE id = 'root'",
-            ("Some pre-taxonomy fact on root.",),
-        )
-        store.conn.commit()
-        assert store.migrate_legacy_shape() is True
-        root = store.get_root()
-        assert root.data == ""
-        assert store.get_node("legacy").data == "Some pre-taxonomy fact on root."
-
-    def test_keeps_fixed_branches_after_rehome(self, store):
-        """The original graph and three fixed branches are preserved."""
-        store.create_node(
-            name="Rogue", description="x", data="y", parent_id="root",
-        )
-        assert store.migrate_legacy_shape() is True
-        children = store.get_children("root")
-        child_ids = {c.id for c in children}
-        assert child_ids == {b[0] for b in FIXED_BRANCHES} | {"legacy"}
+@pytest.mark.parametrize("root_data, extra_child, expected", [
+    ("", False, False),
+    ("   ", False, False),
+    ("A saved root fact", False, True),
+    ("", True, True),
+    ("A saved root fact", True, True),
+])
+def test_startup_inspection_preserves_every_saved_row(store, root_data, extra_child, expected):
+    store.create_node("Identity", "Personal fact", data="Lives in Example City", parent_id="user")
+    store.create_node("Instructions", "Standing instruction", data="Use concise replies", parent_id="directives")
+    store.create_node("Knowledge", "World fact", data="Water freezes at zero Celsius", parent_id="world")
+    store.update_node("root", data=root_data)
+    if extra_child:
+        store.create_node("Manual note", "Unclassified note", data="Keep this note", parent_id="root")
+    before = list(store.conn.iterdump())
+    assert store.has_unclassified_root_content() is expected
+    assert list(store.conn.iterdump()) == before
+    assert store.has_unclassified_root_content() is expected
+    assert list(store.conn.iterdump()) == before
 
 
 @pytest.mark.unit

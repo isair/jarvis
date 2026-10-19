@@ -1469,7 +1469,7 @@ class TestDaemonSmokeTest:
             mock_vl.return_value = mock_vl_instance
 
             mock_graph_instance = MagicMock()
-            mock_graph_instance.migrate_legacy_shape.return_value = False
+            mock_graph_instance.has_unclassified_root_content.return_value = False
             mock_graph.return_value = mock_graph_instance
 
             # Capture stdout
@@ -1523,7 +1523,7 @@ class TestDaemonSmokeTest:
             mock_vl.return_value = mock_vl_instance
 
             mock_graph_instance = MagicMock()
-            mock_graph_instance.migrate_legacy_shape.return_value = False
+            mock_graph_instance.has_unclassified_root_content.return_value = False
             mock_graph.return_value = mock_graph_instance
 
             captured = io.StringIO()

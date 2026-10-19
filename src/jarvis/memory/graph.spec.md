@@ -17,14 +17,12 @@ and the graph import tools. The optional reserved `legacy` child holds
 uncategorised material and is non-deletable. Its ordinary descendants remain
 editable and deletable.
 
-`migrate_legacy_shape()` runs at daemon startup. When the root holds text or
-has children outside the fixed branches, it creates the `legacy` child,
-moves the root's text there verbatim, and reparents those children. Existing
-child IDs, contents, timestamps and descendants are preserved. It does not
-delete rows or create a hidden archive. The operation is idempotent. Editing
-or deleting a legacy descendant changes the only current copy of its text.
-The reserved `legacy` branch itself cannot be deleted, so root knowledge
-remains reachable from the viewer.
+`has_unclassified_root_content()` reports non-empty root text or children outside
+fixed branches. It reads root text in incremental SQLite chunks of at most 4,096
+bytes and recognises Unicode whitespace. Inspection preserves every saved row,
+including root data, node identities, parent relationships and timestamps.
+Daemon startup reports these notes for explicit organisation in the viewer.
+Inspection failures are non-fatal and close the inspection connection.
 
 ## Data model
 

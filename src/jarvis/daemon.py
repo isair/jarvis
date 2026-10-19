@@ -902,23 +902,16 @@ def main(smoke_test: bool = False) -> None:
     except Exception as exc:
         debug_log(f"fact mutation listener wiring failed: {exc}", "memory")
 
-    # Keep uncategorised graph content accessible under the editable legacy branch.
+    # Bootstrap missing branches and preserve all saved graph content.
     try:
         from .memory.graph import GraphMemoryStore
-        _graph_store_boot = GraphMemoryStore(cfg.db_path)
-        if _graph_store_boot.migrate_legacy_shape():
-            print("🧠 Rehomed uncategorised knowledge under Unverified legacy", flush=True)
-        _graph_store_boot.close()
-    except Exception as e:
-        debug_log(f"graph legacy-shape migration failed (non-fatal): {e}", "memory")
-
-    if not smoke_test:
-        threading.Thread(
-            target=_retry_pending_facts_at_boot,
-            args=(cfg,),
-            name="jarvis-fact-recovery",
-            daemon=True,
-        ).start()
+        with contextlib.closing(GraphMemoryStore(cfg.db_path)) as graph_store:
+            if graph_store.has_unclassified_root_content():
+                debug_log("knowledge graph contains unclassified root content; preserving saved memory", "memory")
+                print("🧠 Saved memory includes unclassified notes. All saved knowledge is preserved.", flush=True)
+                print("   📂 Review root-level notes in the Memory Viewer.", flush=True)
+    except Exception as exc:
+        debug_log(f"graph startup inspection failed (non-fatal): {type(exc).__name__}", "memory")
 
     # Check location detection status
     if cfg.location_enabled and not is_location_available():

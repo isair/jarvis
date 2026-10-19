@@ -308,40 +308,30 @@ class GraphMemoryStore:
                 )
             self.conn.commit()
 
-    def migrate_legacy_shape(self) -> bool:
-        """Rehome uncategorised root knowledge beneath an unverified branch.
-
-        Existing node IDs and text are retained. The legacy branch is editable
-        in the viewer, so deleting a node removes its only current copy.
-        """
-        expected_ids = FIXED_BRANCH_IDS | {LEGACY_BRANCH_ID}
-        with self._lock:
-            root_row = self.conn.execute("SELECT * FROM memory_nodes WHERE id='root'").fetchone()
-            root_has_data = bool(root_row and (root_row["data"] or "").strip())
-            rogue_children = self.conn.execute(
-                "SELECT id FROM memory_nodes WHERE parent_id='root' AND id NOT IN ({})".format(
-                    ",".join("?" * len(expected_ids))), tuple(expected_ids),
-            ).fetchall()
-            if not root_has_data and not rogue_children:
+    def has_unclassified_root_content(self) -> bool:
+        """Report root-level content without altering saved memory."""
+        with self._checked_read(lambda: None) as connection:
+            child = connection.execute(
+                "SELECT id FROM memory_nodes "
+                "WHERE parent_id='root' AND id NOT IN ({}) LIMIT 1".format(
+                    ",".join("?" * len(FIXED_BRANCH_IDS))), tuple(FIXED_BRANCH_IDS),
+            ).fetchone()
+            if child is not None:
+                return True
+            row = connection.execute(
+                "SELECT rowid FROM memory_nodes WHERE id='root' AND data IS NOT NULL"
+            ).fetchone()
+            if row is None:
                 return False
-            now = datetime.now(timezone.utc).isoformat()
-            with self.conn:
-                self.conn.execute(
-                    """INSERT OR IGNORE INTO memory_nodes
-                    (id,name,description,data,parent_id,access_count,last_accessed,created_at,updated_at,data_token_count)
-                    VALUES(?,?,?,'','root',0,?,?,?,0)""",
-                    (LEGACY_BRANCH_ID, "Unverified legacy", "Original graph knowledge with unverified provenance", now, now, now),
-                )
-                if root_has_data:
-                    legacy = self.conn.execute("SELECT data FROM memory_nodes WHERE id=?", (LEGACY_BRANCH_ID,)).fetchone()
-                    combined = (legacy["data"] + "\n" if legacy["data"] else "") + root_row["data"]
-                    self.conn.execute("UPDATE memory_nodes SET data=?,data_token_count=?,updated_at=? WHERE id=?",
-                                      (combined, _estimate_tokens(combined), now, LEGACY_BRANCH_ID))
-                    self.conn.execute("UPDATE memory_nodes SET data='',data_token_count=0,updated_at=? WHERE id='root'", (now,))
-                for child in rogue_children:
-                    self.conn.execute("UPDATE memory_nodes SET parent_id=? WHERE id=?", (LEGACY_BRANCH_ID, child["id"]))
-            debug_log(f"rehome legacy graph: root_data={root_has_data}, nodes={len(rogue_children)}", "memory")
-        return True
+            encoding = connection.execute("PRAGMA encoding").fetchone()[0]
+            decoder = codecs.getincrementaldecoder(encoding)()
+            with connection.blobopen("memory_nodes", "data", row[0], readonly=True) as data:
+                while data.tell() < len(data):
+                    unread = len(data) - data.tell()
+                    size = min(4096, unread)
+                    if decoder.decode(data.read(size), final=size == unread).strip():
+                        return True
+            return False
 
     # ── CRUD ────────────────────────────────────────────────────────────
 
