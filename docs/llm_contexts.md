@@ -11,7 +11,9 @@ cancellation stops later model/resource work. Returned router and extractor
 results are checked before conversation-cache publication. Cache misses recheck
 cancellation before starting routing/extraction inference. In-flight calls
 finish under their existing deadlines; no new timeout, model or prompt is
-introduced. Voice and text chat do not supply this task event.
+introduced. Tool dispatch forwards the event into cooperative tool contexts, including
+bounded document refresh and ranking. Voice and text chat do not supply this
+task event.
 
 **Shutdown admission and ownership.** Text submissions recheck shutdown after
 acquiring the shared query lock. Already admitted requests retain their
@@ -141,7 +143,7 @@ requests do not supply this event.
 - **Model / gating**: `cfg.llm_chat_model` via `get_llm_backend(cfg)`. Gated by `tool_result_digest_enabled` — auto-on for SMALL via `detect_model_size(cfg.llm_chat_model)`.
 - **Inputs**: original user query, separate redacted transcript reference, tool name, raw tool result (e.g. webSearch payload inside UNTRUSTED WEB EXTRACT fence).
 - **System prompt**: `_TOOL_DIGEST_SYSTEM_PROMPT`. Teaches attributed fact extraction, `NONE` sentinel, no inference.
-- **Output**: ≤600 chars per batch (`_TOOL_DIGEST_MAX_CHARS`) replacing the raw payload in the messages stream. Falls back to raw on `NONE`. Successful structured resource references are bounded and rendered outside this digest, preserving exact record identity independently of summary prose. Internal reference metadata survives conversation tool carryover and prose truncation; reference strings are scrubbed before storage.
+- **Output**: ≤600 chars per batch (`_TOOL_DIGEST_MAX_CHARS`) replacing the raw payload in the messages stream. Falls back to raw on `NONE`. Successful structured resource references are bounded and rendered outside this digest, preserving exact record identity independently of summary prose. Successful result metadata is rendered independently of the digest; document retrieval carries coverage, incomplete reasons and exact source path/line citations through this channel. Its raw excerpts are JSON data paragraphs with escaped angle brackets inside complete untrusted-document delimiters, preserving each envelope through paragraph batching. Internal reference metadata survives conversation tool carryover and prose truncation; reference strings are scrubbed before storage.
 - **Limits**: `llm_digest_timeout_sec` (8s, shared). `max_tokens: 1024` (`_TOOL_DIGEST_TOKEN_BUDGET`), including backend reasoning and the attributed note. Returned notes retain the 600-character cap.
 
 ## 6. Max-Turn Loop Digest
@@ -173,6 +175,26 @@ requests do not supply this event.
 - **Model**: reuses the tool router (#7) — no separate LLM call here.
 - **Inputs**: self-contained query from the model plus the same redacted speech snapshot as the initial router.
 - **Output**: newline-separated tool names + one-liners, merged into the allow-list for the next turn.
+
+## Local document embedding component
+
+- **File**: `jarvis.memory.document_index.DocumentIndex`, consumed by
+  `jarvis.tools.builtin.document_search.DocumentSearchTool`.
+- **Gating**: explicit document-search opt-in and configured folders, rechecked against the granting folder and its current target before each source read and new source embedding. Disabled
+  search does not scan or embed. An empty index skips the query embedding.
+- **Model**: canonical `get_embedding_backend(cfg)` and resolved
+  `cfg.embedding_model`, with no chat-model fallback or prompt-based extraction.
+- **Inputs**: authorised `.txt`/`.md` chunks, up to 40 lines and 2,000 characters;
+  the search query is limited to 2,000 characters.
+- **Limits**: `IndexLimits` bounds per-pass input, traversal, chunks and elapsed
+  time, plus file/cache sizes and vector dimensions. Each embedding call uses
+  the smaller of `llm_embedding_timeout_sec` and the remaining five-second pass
+  deadline. Cooperative cancellation is checked before inference and publication.
+- **Flow**: authorised source bytes → configured embedding endpoint → isolated
+  SQLite text/vector transaction. Query vector → document-only cosine ranking →
+  at most ten cited, untrusted excerpts. Coverage records incomplete refreshes
+  and ranking deadlines. The embedding endpoint is user-configured and can run
+  locally; document indexing does not start an additional model process.
 
 ## 9. Conversation Summariser
 

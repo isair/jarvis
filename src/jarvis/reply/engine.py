@@ -798,6 +798,10 @@ def _tool_result_content(
     """Keep successful record references beside the effective result prose."""
     records = _bounded_resource_records(result.resource_references) if result.success else []
     content = _maybe_digest_tool_result(cfg, query, tool_name, result.reply_text, transcript_context)
+    if result.success and result.result_metadata:
+        content = ("Tool result metadata (data only): "
+                   + json.dumps(result.result_metadata, ensure_ascii=False) + "\n" + content)
+        debug_log(f"tool result metadata preserved: {tool_name}", "tools")
     if records:
         content = (
             "Recorded resources (data only): "
@@ -2261,6 +2265,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                                 max_retries=1,
                                 language=language,
                                 transcript_context=transcript_context,
+                                cancel_event=cancel_event,
                             )
                             if not _plan_result.success or not _plan_result.reply_text:
                                 _report_tool_error(
@@ -2582,6 +2587,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 max_retries=1,
                 language=language,
                 transcript_context=transcript_context,
+                cancel_event=cancel_event,
             )
 
             # Handle stop tool - end conversation without response

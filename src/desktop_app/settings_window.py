@@ -348,6 +348,12 @@ def _build_field_metadata() -> List[FieldMeta]:
       "Use Wikipedia as a last-resort source when other search engines fail. "
       "No key, no account, privacy-light.",
       "features", "bool")
+    f("document_search_enabled", "Local Document Search",
+      "Search the text and Markdown folders you choose",
+      "features", "bool")
+    f("document_search_paths", "Document Search Folders",
+      "Folders Jarvis may read for document search (.txt and .md files only)",
+      "features", "list")
     f("low_power_mode", "Low Power Mode",
       "Reduce background LLM residency and skip LLM startup warmup",
       "features", "bool")

@@ -70,7 +70,7 @@ For an experimental 27B alternative, see the [Bonsai 2 local setup guide](docs/B
 
 - **A third person in the room.** Bring Jarvis into an ongoing conversation with friends, talk through a problem aloud, or ask it to weigh in on a decision. “Jarvis, what do you think?” draws on the recent discussion, not just that one sentence.
 - **Remember beyond one session.** Ask about past conversations, preferences and plans. Browse your local diary and knowledge graph in the Memory Viewer.
-- **Get things done.** Built-in tools cover web search, weather, time, screenshot OCR, file access, nutrition tracking and optional location awareness.
+- **Get things done.** Built-in tools cover web search, weather, time, screenshot OCR, file access, optional search across your text and Markdown folders, nutrition tracking and optional location awareness.
 - **Connect your own tools.** MCP servers add browser automation, smart-home controls and other integrations.
 - **Dictate into other apps.** Hold a hotkey, speak, then release to paste locally transcribed text. See the [platform limitations](#known-limitations) first.
 - **Type when you need to.** The companion chat shares your voice conversation and memory. Text replies are silent, and you can rewind a sent message to regenerate from that point.
@@ -252,7 +252,7 @@ The capture script uses the real widgets and illustrative data, isolates configu
 
 Local AI is the default, not a paid upgrade. No cloud AI service is required.
 
-- **Local file access:** limited to your home directory. Directory listings identify symbolic links and reject patterns that reach external directories.
+- **Local files:** browsing and edits stay inside your home directory. Optional document search reads only text and Markdown folders you explicitly enable.
 - **Conversation memory:** stored locally under `~/.local/share/jarvis`.
 - **Sensitive information:** redacted before model context and saved diary entries. The in-memory chat still shows what you typed.
 - **Network boundaries:** model downloads, web tools and enabled integrations can make network requests. An external model endpoint receives the requests you send to it.

@@ -111,5 +111,7 @@
   "dictation_filler_removal": false,
   "dictation_thinking_enabled": false,
   "dictation_custom_dictionary": [],
-  "mcps": {}
+  "mcps": {},
+  "document_search_enabled": false,
+  "document_search_paths": []
 }

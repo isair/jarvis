@@ -278,6 +278,10 @@ class Settings:
     # language.
     wikipedia_fallback_enabled: bool
 
+    # Explicitly authorised local documents
+    document_search_enabled: bool
+    document_search_paths: list[str]
+
     # Dictation (hold-to-dictate)
     dictation_enabled: bool
     dictation_hotkey: str
@@ -662,6 +666,8 @@ def get_default_config() -> Dict[str, Any]:
         "web_search_enabled": True,
         "brave_search_api_key": "",
         "wikipedia_fallback_enabled": True,
+        "document_search_enabled": False,
+        "document_search_paths": [],
 
         # Dictation (hold-to-dictate, WisprFlow-like)
         "dictation_enabled": True,
@@ -871,6 +877,10 @@ def load_settings() -> Settings:
     web_search_enabled = bool(merged.get("web_search_enabled", True))
     brave_search_api_key = str(merged.get("brave_search_api_key", "") or "").strip()
     wikipedia_fallback_enabled = bool(merged.get("wikipedia_fallback_enabled", True))
+    document_search_enabled = bool(merged.get("document_search_enabled", False))
+    raw_document_paths = merged.get("document_search_paths", [])
+    document_search_paths = [path.strip() for path in raw_document_paths
+                             if isinstance(path, str) and path.strip()] if isinstance(raw_document_paths, list) else []
     dictation_enabled = bool(merged.get("dictation_enabled", True))
     dictation_hotkey = str(merged.get("dictation_hotkey", _default_dictation_hotkey())).strip()
     dictation_filler_removal = bool(merged.get("dictation_filler_removal", False))
@@ -1004,6 +1014,8 @@ def load_settings() -> Settings:
         web_search_enabled=web_search_enabled,
         brave_search_api_key=brave_search_api_key,
         wikipedia_fallback_enabled=wikipedia_fallback_enabled,
+        document_search_enabled=document_search_enabled,
+        document_search_paths=document_search_paths,
 
         # Dictation
         dictation_enabled=dictation_enabled,

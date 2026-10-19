@@ -15,3 +15,11 @@ Saved opaque keys and literal values survive the existing migration and desktop-
 Every declared default is represented in typed runtime Settings. Saved values take precedence independently, including `llm_thinking_enabled`, `intent_judge_thinking_enabled` and `dictation_thinking_enabled`. These switches default to disabled and apply to their respective LLM contexts.
 
 `stop_commands` supplies the listener's text interruption phrases. An empty list disables text interruption phrases; intent judgement retains its stop decisions. `stop_command_fuzzy_ratio` supplies the same threshold to short-control matching and standalone-control priority during TTS echo handling. List normalisation follows the shared configuration list parser.
+
+## Local document permissions
+
+`document_search_enabled` defaults to false and `document_search_paths` to an
+empty list. Loading retains only non-empty strings from the folder list; a
+malformed list grants no folders. Settings exposes these options through its
+shared metadata and preserves unrelated configuration. A task cancellation
+signal reaches the document tool through the canonical tool context.

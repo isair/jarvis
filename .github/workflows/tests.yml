@@ -207,3 +207,19 @@ jobs:
               env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1', PYTHONPATH='src')
               subprocess.run([sys.executable, 'tests/fixtures/worker_probe.py',
                               str(owned), str(scenario)], env=env, check=True, timeout=30)
+
+  document-capabilities:
+    name: Document capabilities (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Verify native document capability boundaries
+        run: python tests/fixtures/document_windows_probe.py
