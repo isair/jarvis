@@ -7,13 +7,27 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 from datetime import datetime, timezone
 
-from src.jarvis.memory.conversation import (
+from jarvis.memory.conversation import (
     DialogueMemory,
     update_daily_conversation_summary,
     update_diary_from_dialogue_memory,
 )
-from src.jarvis.reply.engine import run_reply_engine
-from src.jarvis.utils.redact import redact
+from jarvis.reply.engine import run_reply_engine
+from jarvis.utils.redact import redact
+
+
+pytestmark = pytest.mark.usefixtures("no_network")
+
+
+@pytest.fixture
+def dialogue_reply_config(mock_config, tmp_path, monkeypatch):
+    mock_config.llm_chat_model = "test"
+    mock_config.db_path = str(tmp_path / "test.db")
+    mock_config.location_enabled = False
+    mock_config.memory_enrichment_source = "none"
+    monkeypatch.setattr("jarvis.reply.engine.select_tools", lambda *args, **kwargs: ["webSearch"])
+    monkeypatch.setattr("jarvis.reply.engine.plan_query", lambda *args, **kwargs: [])
+    return mock_config
 
 
 @pytest.mark.unit
@@ -85,9 +99,9 @@ class TestDialogueMemory:
 class TestReplyEngineDialogueMemory:
     """Test reply engine dialogue memory integration."""
     
-    @patch('src.jarvis.reply.engine.chat_with_messages')
-    @patch('src.jarvis.reply.engine.extract_text_from_response')
-    def test_dialogue_memory_preserves_message_order(self, mock_extract, mock_chat, tmp_path):
+    @patch('jarvis.reply.engine.chat_with_messages')
+    @patch('jarvis.reply.engine.extract_text_from_response')
+    def test_dialogue_memory_preserves_message_order(self, mock_extract, mock_chat, dialogue_reply_config):
         """Test that reply engine stores conversation in correct order."""
         # Mock dependencies
         mock_extract.return_value = "Final response"
@@ -95,23 +109,7 @@ class TestReplyEngineDialogueMemory:
 
         # Mock database and config
         mock_db = Mock()
-        mock_cfg = Mock()
-        mock_cfg.ollama_base_url = "http://localhost:11434"
-        mock_cfg.ollama_chat_model = "test"
-        mock_cfg.llm_chat_model = "test"
-        mock_cfg.voice_debug = False
-        mock_cfg.llm_tools_timeout_sec = 8.0
-        mock_cfg.llm_embedding_timeout_sec = 10.0
-        mock_cfg.llm_chat_timeout_sec = 45.0
-        mock_cfg.memory_enrichment_max_results = 5
-        mock_cfg.location_ip_address = None
-        mock_cfg.location_auto_detect = False
-        mock_cfg.agentic_max_turns = 8
-        mock_cfg.agentic_query_timeout_sec = 180.0
-        mock_cfg.agentic_context_tokens = 8192
-        mock_cfg.agentic_preparation = "staged"
-        mock_cfg.planner_timeout_sec = 3.0
-        mock_cfg.db_path = str(tmp_path / "test.db")
+
         
         # Create dialogue memory
         dialogue_memory = DialogueMemory()
@@ -119,7 +117,7 @@ class TestReplyEngineDialogueMemory:
         # Run reply engine
         result = run_reply_engine(
             db=mock_db,
-            cfg=mock_cfg,
+            cfg=dialogue_reply_config,
             tts=None,
             text="What's the weather in London?",
             dialogue_memory=dialogue_memory
@@ -133,10 +131,10 @@ class TestReplyEngineDialogueMemory:
         assert "User: What's the weather in London?" in chunks
         assert "Assistant: Final response" in chunks
     
-    @patch('src.jarvis.reply.engine.chat_with_messages')
-    @patch('src.jarvis.reply.engine.extract_text_from_response')
-    @patch('src.jarvis.reply.engine.run_tool_with_retries')
-    def test_dialogue_memory_filters_tool_calls(self, mock_tool, mock_extract, mock_chat, tmp_path):
+    @patch('jarvis.reply.engine.chat_with_messages')
+    @patch('jarvis.reply.engine.extract_text_from_response')
+    @patch('jarvis.reply.engine.run_tool_with_retries')
+    def test_dialogue_memory_filters_tool_calls(self, mock_tool, mock_extract, mock_chat, dialogue_reply_config):
         """Test that JSON tool calls are filtered from dialogue memory."""
         # Mock dependencies
         mock_tool.return_value = Mock(reply_text="Weather data", error_message=None)
@@ -164,23 +162,7 @@ class TestReplyEngineDialogueMemory:
         
         # Mock database and config
         mock_db = Mock()
-        mock_cfg = Mock()
-        mock_cfg.ollama_base_url = "http://localhost:11434"
-        mock_cfg.ollama_chat_model = "test"
-        mock_cfg.llm_chat_model = "test"
-        mock_cfg.voice_debug = False
-        mock_cfg.llm_tools_timeout_sec = 8.0
-        mock_cfg.llm_embedding_timeout_sec = 10.0
-        mock_cfg.llm_chat_timeout_sec = 45.0
-        mock_cfg.memory_enrichment_max_results = 5
-        mock_cfg.location_ip_address = None
-        mock_cfg.location_auto_detect = False
-        mock_cfg.agentic_max_turns = 8
-        mock_cfg.agentic_query_timeout_sec = 180.0
-        mock_cfg.agentic_context_tokens = 8192
-        mock_cfg.agentic_preparation = "staged"
-        mock_cfg.planner_timeout_sec = 3.0
-        mock_cfg.db_path = str(tmp_path / "test.db")
+
 
         # Create dialogue memory
         dialogue_memory = DialogueMemory()
@@ -188,7 +170,7 @@ class TestReplyEngineDialogueMemory:
         # Run reply engine
         result = run_reply_engine(
             db=mock_db,
-            cfg=mock_cfg,
+            cfg=dialogue_reply_config,
             tts=None,
             text="What's the weather in London?",
             dialogue_memory=dialogue_memory
@@ -220,7 +202,7 @@ class TestDiaryRedaction:
         assert "user@example.com" not in redacted
         assert "sk-abcd1234567890abcdef" not in redacted
     
-    @patch('src.jarvis.memory.conversation.generate_conversation_summary')
+    @patch('jarvis.memory.conversation.generate_conversation_summary')
     def test_diary_update_redacts_chunks(self, mock_summary):
         """Test that diary updates redact sensitive information from chunks."""
         # Mock summary generation
@@ -228,6 +210,7 @@ class TestDiaryRedaction:
         
         # Mock database
         mock_db = Mock()
+        mock_db.is_vss_enabled = False
         mock_db.get_conversation_summary.return_value = None
         mock_db.upsert_conversation_summary.return_value = 1
         
@@ -264,7 +247,7 @@ class TestDiaryRedaction:
         assert "sensitive@example.com" not in redacted_text
         assert "sk-abcdef123456" not in redacted_text
     
-    @patch('src.jarvis.memory.conversation.generate_conversation_summary')
+    @patch('jarvis.memory.conversation.generate_conversation_summary')
     def test_diary_update_preserves_conversation_flow(self, mock_summary):
         """Test that diary updates preserve conversation order after redaction."""
         # Mock summary generation
@@ -272,6 +255,7 @@ class TestDiaryRedaction:
         
         # Mock database
         mock_db = Mock()
+        mock_db.is_vss_enabled = False
         mock_db.get_conversation_summary.return_value = None
         mock_db.upsert_conversation_summary.return_value = 1
         
@@ -332,7 +316,7 @@ class TestDialogueMemoryIntegration:
         assert "sk-1234567890" in chunk_content
         
         # Simulate diary update redaction
-        from src.jarvis.utils.redact import redact
+        from jarvis.utils.redact import redact
         redacted_chunks = [redact(chunk) for chunk in chunks]
         redacted_content = redacted_chunks[0]
         
@@ -583,9 +567,10 @@ class TestDialogueMemoryEdgeCases:
         chunks_snapshot, _ = dm.get_pending_chunks_with_snapshot()
         assert chunks_simple == chunks_snapshot
 
-    @patch('src.jarvis.memory.conversation.update_daily_conversation_summary')
-    def test_update_diary_preserves_new_messages_during_slow_llm(self, mock_summary, tmp_path):
+    @patch('jarvis.memory.conversation.update_daily_conversation_summary')
+    def test_update_diary_preserves_new_messages_during_slow_llm(self, mock_summary, tmp_path, monkeypatch):
         """Integration test: messages arriving during slow LLM call are preserved."""
+        monkeypatch.setattr("jarvis.memory.fact_ops._direct_llm", lambda *args, **kwargs: "[]")
         dm = DialogueMemory(inactivity_timeout=0.1)
         from jarvis.memory.db import Database
         mock_db = Database(str(tmp_path / "memory.db"))
