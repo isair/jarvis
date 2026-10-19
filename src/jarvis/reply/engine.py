@@ -2714,12 +2714,13 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                             + json.dumps(_compound_sub_questions, ensure_ascii=False)
                             + ". One result may cover multiple parts, and constraints "
                             "may already be satisfied. Use another tool only for "
-                            "an unresolved outcome. If requested evidence is missing and "
-                            "an available tool can obtain it, call that tool now "
-                            "before answering. Do not repeat completed actions "
-                            "or assume failed actions succeeded. When all outcomes "
-                            "are covered, reply. Report a limitation only when available "
-                            "tools cannot resolve it.]"
+                            "an unresolved outcome. Check every part: which actual "
+                            "result supports it? If a requested fact or action still "
+                            "lacks supporting results and an available tool can resolve "
+                            "it, your next message MUST use tool_calls with that tool. "
+                            "Do not repeat completed actions or assume failed actions "
+                            "succeeded. Reply in prose only when the results cover the "
+                            "request or available tools cannot resolve what remains.]"
                         )
                     else:
                         remainder_hint = (
