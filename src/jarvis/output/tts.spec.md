@@ -42,7 +42,10 @@ Both backends publish playback start after synthesis and device preparation,
 immediately before starting audio. Queue admission and synthesis do not publish
 speaking activity or replace the last played text. A separate current-request
 preparation timestamp permits configured cancellation captured during synthesis;
-stale captures cannot interrupt a later preparing request. Observers receive the
+stale captures cannot interrupt a later preparing request. Preparation controls retain the captured request handle and interrupt only that
+utterance. A transition to playback preserves its identity; a queued replacement
+cannot inherit a delayed control. Request interruption and cancellation have
+separate terminal outcomes and share identity-bound cleanup. Observers receive the
 preprocessed utterance and exact audio duration. The observer pair is selected
 at playback start and retained until that request terminates. A queued request
 cancelled before playback emits no playback events.

@@ -754,11 +754,11 @@ class VoiceListener(threading.Thread):
                     debug_log("early beep: wake word detected", "voice")
 
         # Preparation accepts configured cancellation without claiming echo or engagement.
-        preparing_tts_overlapped = bool(
-            self.tts and self.tts.enabled and not received_during_tts
-            and self.tts.is_preparing_at(utterance_end_time)
+        preparing_request = (
+            self.tts.preparing_request_at(utterance_end_time)
+            if self.tts and self.tts.enabled and not received_during_tts else None
         )
-        if self.tts and self.tts.enabled and (active_tts_overlapped or preparing_tts_overlapped):
+        if self.tts and self.tts.enabled and (active_tts_overlapped or preparing_request is not None):
             # Stop command detection (fast, text-based)
             stop_commands = self.cfg.stop_commands
             stop_ratio = self.cfg.stop_command_fuzzy_ratio
@@ -768,7 +768,10 @@ class VoiceListener(threading.Thread):
                     print(f'  🔇 Heard (echo): "{text_lower[:50]}"', flush=True)
                     return
                 debug_log(f"stop command detected during TTS: {text_lower} (energy: {utterance_energy:.4f})", "voice")
-                self.tts.interrupt()
+                if active_tts_overlapped:
+                    self.tts.interrupt()
+                else:
+                    preparing_request.interrupt()
                 try:
                     while not self._audio_q.empty():
                         self._audio_q.get_nowait()

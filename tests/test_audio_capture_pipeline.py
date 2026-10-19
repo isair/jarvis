@@ -655,7 +655,7 @@ def test_delayed_stop_only_interrupts_tts_that_overlapped_capture(
     obj.cfg.wake_word = "jarvis"
     obj.cfg.wake_aliases = []
     obj.cfg.tune_enabled = False
-    obj.tts = SimpleNamespace(enabled=True, is_speaking=lambda: True, interrupt=Mock(), is_preparing_at=lambda timestamp: False)
+    obj.tts = SimpleNamespace(enabled=True, is_speaking=lambda: True, interrupt=Mock(), preparing_request_at=lambda timestamp: None)
     obj.echo_detector = SimpleNamespace(_tts_start_time=12.0, _last_tts_finish_time=0,
                                         _last_tts_text="", echo_tolerance=0.3)
     obj.state_manager = Mock()
@@ -685,7 +685,7 @@ def test_delayed_utterance_does_not_inherit_later_tts_text_for_intent():
     obj.cfg.wake_word = "jarvis"
     obj.cfg.wake_aliases = []
     obj.cfg.tune_enabled = False
-    obj.tts = SimpleNamespace(enabled=True, is_speaking=lambda: False, is_preparing_at=lambda timestamp: False)
+    obj.tts = SimpleNamespace(enabled=True, is_speaking=lambda: False, preparing_request_at=lambda timestamp: None)
     obj.echo_detector = SimpleNamespace(_tts_start_time=12.0, _last_tts_finish_time=13.0,
                                         _last_tts_text="future reply", echo_tolerance=0.3)
     obj.state_manager = Mock()
@@ -798,7 +798,7 @@ def test_speech_reaches_whisper_at_configured_boundary(
     monkeypatch.setattr(VoiceListener, '_start_llm_warmup', lambda _self: [])
     monkeypatch.setattr(VoiceListener, '_start_transcription_worker', lambda _self: None)
     monkeypatch.setattr('jarvis.activity.get_jarvis_state', lambda: MagicMock())
-    obj = VoiceListener(MagicMock(), cfg, SimpleNamespace(is_speaking=lambda: tts_speaking, set_playback_callbacks=lambda *callbacks: None, is_preparing_at=lambda timestamp: False), None)
+    obj = VoiceListener(MagicMock(), cfg, SimpleNamespace(is_speaking=lambda: tts_speaking, set_playback_callbacks=lambda *callbacks: None, preparing_request_at=lambda timestamp: None), None)
     frame_samples = cfg.sample_rate * frame_ms // 1000
     speech_frames = limit_frames - 2 if silent_endpoint else limit_frames * 3
     speech = np.linspace(.05, .2, frame_samples * speech_frames, dtype=np.float32)

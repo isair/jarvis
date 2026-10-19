@@ -35,7 +35,7 @@ def test_pending_reply_language_tracks_accepted_request(mock_config, monkeypatch
         "accepted": "Jarvis, 오늘 날씨는 어때요?", "unknown": "Jarvis, provide the forecast.",
     }
     if kind == "echo":
-        obj.tts = SimpleNamespace(enabled=True, is_speaking=lambda: True, is_preparing_at=lambda timestamp: False)
+        obj.tts = SimpleNamespace(enabled=True, is_speaking=lambda: True, preparing_request_at=lambda timestamp: None)
         obj.echo_detector._last_tts_text = texts[kind]
         monkeypatch.setattr(obj.echo_detector, "should_reject_as_echo", lambda *args, **kwargs: True)
     if kind == "undirected":

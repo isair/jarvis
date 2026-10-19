@@ -412,6 +412,7 @@ class SpeechRequest:
     _interrupted: bool = field(default=False, init=False)
     _finished: bool = field(default=False, init=False)
     _playback_started: bool = field(default=False, init=False)
+    _playback_started_at: float = field(default=0.0, init=False)
     _playback_callbacks: tuple[Optional[_PlaybackStart], Optional[_PlaybackEnd]] = field(default=(None, None), init=False, repr=False)
     _activity_release: Optional[Callable[[], None]] = field(default=None, init=False, repr=False)
 
@@ -432,17 +433,27 @@ class SpeechRequest:
             self._interrupted = True
 
     def cancel(self) -> None:
+        self._abandon('cancelled')
+
+    def interrupt(self) -> None:
+        """Interrupt this utterance without affecting a queued replacement."""
+        self._abandon('interrupted')
+
+    def _abandon(self, outcome: str) -> None:
         with self._lock:
             if self._finished:
                 return
-            self._cancelled = True
+            if outcome == 'cancelled':
+                self._cancelled = True
+            else:
+                self._interrupted = True
             active, interrupt = self._active, self._cancel_callback
         try:
             if active and interrupt is not None:
                 interrupt(self)
         finally:
             if not active:
-                self._finish('cancelled')
+                self._finish(outcome)
 
     def _finish(self, outcome: str) -> None:
         with self._lock:
@@ -485,13 +496,16 @@ class _QueuedSpeech:
         self._preparation_started_at = 0.0
         self._playback_callbacks: tuple[Optional[_PlaybackStart], Optional[_PlaybackEnd]] = (None, None)
 
-    def is_preparing_at(self, capture_time: float) -> bool:
-        """Allow controls captured during this still-synthesising request only."""
+    def preparing_request_at(self, capture_time: float) -> Optional[SpeechRequest]:
+        """Identify still-active speech whose synthesis overlaps this capture."""
         with self._lifecycle_lock:
             request = self._active_request
-            return bool(request is not None and not request._playback_started
-                        and not request.abandoned
-                        and 0 < self._preparation_started_at <= capture_time <= time.time())
+            if (request is not None and not request.abandoned
+                    and 0 < self._preparation_started_at <= capture_time <= time.time()
+                    and (not request._playback_started
+                         or capture_time < request._playback_started_at)):
+                return request
+            return None
 
     def set_playback_callbacks(self, started: Optional[_PlaybackStart],
                                finished: Optional[_PlaybackEnd]) -> None:
@@ -505,6 +519,7 @@ class _QueuedSpeech:
                 return False
             request._playback_callbacks = self._playback_callbacks
             request._playback_started = True
+            request._playback_started_at = time.time()
             self._last_spoken_text = request.text
             self._is_speaking.set()
             try:

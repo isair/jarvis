@@ -592,3 +592,6 @@ Configured interruption controls can cancel a still-current synthesising request
 when their capture overlaps its preparation. This control path does not classify
 preparation as playback, supply an echo reference or admit ambient conversation.
 A control captured before that request cannot cancel it after delayed recognition.
+The matching preparation request handle owns interruption, preserving queued
+replacements when synthesis finishes during control recognition. The control
+remains valid when that same utterance starts playback before recognition ends.

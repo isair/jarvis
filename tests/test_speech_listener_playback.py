@@ -167,3 +167,64 @@ def test_synthesis_remains_interruptible_without_claiming_playback(playback, mon
         release.set()
         worker.join(3)
         assert not worker.is_alive()
+
+
+@pytest.mark.parametrize('transition', ['replacement', 'playback'])
+def test_delayed_preparation_stop_remains_bound_to_its_captured_request(playback, monkeypatch, transition):
+    import threading
+    import time
+    from jarvis.listening import listener as module
+    listener, engine = playback
+    entered_first, release_first = threading.Event(), threading.Event()
+    entered_second, release_second = threading.Event(), threading.Event()
+    outcomes = []
+    if isinstance(engine, speech.PiperTTS):
+        target, method = engine._voice, 'synthesize'
+    else:
+        target, method = engine._model, 'generate'
+    original = getattr(target, method)
+    def held(text, *args, **kwargs):
+        entered, release = (entered_first, release_first) if text == 'first' else (entered_second, release_second)
+        entered.set()
+        assert release.wait(5), 'Owned synthesis hand-off was not released'
+        return original(text, *args, **kwargs)
+    monkeypatch.setattr(target, method, held)
+    original_detection = module.is_stop_command
+    def hand_off(*args, **kwargs):
+        release_first.set()
+        assert entered_second.wait(3), 'Queued replacement did not start synthesis'
+        return original_detection(*args, **kwargs)
+    monkeypatch.setattr(module, 'is_stop_command', hand_off)
+    engine.speak('first', terminal_callback=lambda result: outcomes.append(('first', result)))
+    if transition == 'replacement':
+        engine.speak('second', terminal_callback=lambda result: outcomes.append(('second', result)))
+    else:
+        started = listener.on_playback_started
+        def hold_playback(request, duration):
+            started(request, duration)
+            entered_second.set()
+            assert release_second.wait(5), 'Owned playback transition was not released'
+        engine.set_playback_callbacks(hold_playback, listener.on_playback_finished)
+    worker = threading.Thread(target=engine._run)
+    worker.start()
+    try:
+        assert entered_first.wait(3)
+        captured = time.time()
+        listener._process_transcript(listener.cfg.stop_commands[0],
+            utterance_start_time=captured, utterance_end_time=captured,
+            captured_during_tts=False, captured_tts_start_time=0,
+            generation=listener._capture_generation, language=None)
+        release_second.set()
+        worker.join(3)
+        assert not worker.is_alive()
+        if transition == 'replacement':
+            assert outcomes == [('first', 'completed'), ('second', 'completed')]
+            assert engine.get_last_spoken_text() == 'second'
+        else:
+            assert outcomes == [('first', 'interrupted')]
+            assert engine.get_last_spoken_text() == 'first'
+    finally:
+        release_first.set()
+        release_second.set()
+        worker.join(3)
+        assert not worker.is_alive()
