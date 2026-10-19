@@ -1007,6 +1007,12 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     if cancel_event is not None and cancel_event.is_set():
         return None
 
+    def preparation_cancelled(stage: str) -> bool:
+        if cancel_event is not None and cancel_event.is_set():
+            debug_log(f"reply preparation cancelled after {stage}", "reply")
+            return True
+        return False
+
     # Step 1: Redact sensitive information
     redacted = redact(text)
     transcript_context = speech_context.render() if speech_context else ""
@@ -1051,6 +1057,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 _tools, _errors = refresh_mcp_tools(verbose=False)
         except Exception as e:
             debug_log(f"MCP refresh on new conversation failed: {e}", "mcp")
+
+    if preparation_cancelled("MCP discovery"):
+        return None
 
     # Load MCP definitions for routing and the planner catalogue.
     mcp_tools: dict = {}
@@ -1132,6 +1141,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         routed_tools = list(_cached_routed)
         debug_log("tool router served from hot-window cache", "planning")
     else:
+        if preparation_cancelled("routing cache lookup"):
+            return None
         routed_tools = select_tools(
             query=redacted,
             builtin_tools=BUILTIN_TOOLS,
@@ -1146,6 +1157,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             context_hint=context_hint,
             transcript_context=transcript_context,
         )
+        if preparation_cancelled("tool routing"):
+            return None
         # Full-catalogue results do not provide a narrowed selection. Retry
         # routing rather than persisting that exposure for identical inputs.
         _router_returned_full_catalog = (
@@ -1159,6 +1172,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             and not _router_returned_full_catalog
         ):
             dialogue_memory.hot_cache_put(_router_cache_key, list(routed_tools or []))
+
+    if preparation_cancelled("tool routing"):
+        return None
 
     # Tool carry-over guard: when the previous assistant turn invoked a
     # tool that FAILED (success=False on the ToolExecutionResult), union
@@ -1262,6 +1278,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         except Exception as _plan_exc:  # pragma: no cover — defensive
             debug_log(f"planner step failed (non-fatal): {_plan_exc}", "planning")
             action_plan = []
+    if preparation_cancelled("planning"):
+        return None
+
     if action_plan:
         _plan_preview = " | ".join(s[:50] for s in action_plan)
         print(
@@ -1353,6 +1372,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     except Exception as error:
         debug_log(f"warm profile load failed (non-fatal): {error}", "memory")
 
+    if preparation_cancelled("profile loading"):
+        return None
+
     # Step 4: Memory enrichment — controlled by cfg.memory_enrichment_source
     # "all" = diary + graph, "diary" = diary only, "graph" = graph only
     enrichment_source = getattr(cfg, "memory_enrichment_source", "diary")
@@ -1398,12 +1420,16 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 search_params = _cached_params
                 debug_log("memory extractor served from hot-window cache", "memory")
             else:
+                if preparation_cancelled("memory cache lookup"):
+                    return None
                 search_params = extract_search_params_for_memory(
                     _extractor_query, cfg, resolve_model(cfg, Tier.FAST),
                     timeout_sec=float(getattr(cfg, 'llm_tools_timeout_sec', 8.0)),
                     thinking=getattr(cfg, 'llm_thinking_enabled', False),
                     context_hint="\n\n".join(filter(None, (context_hint, transcript_context))),
                 )
+                if preparation_cancelled("memory extraction"):
+                    return None
                 if dialogue_memory and hasattr(dialogue_memory, "hot_cache_put"):
                     dialogue_memory.hot_cache_put(_extractor_cache_key, search_params)
             keywords = search_params.get('keywords', [])
@@ -1417,6 +1443,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             debug_log(f"keyword extraction failed: {e}", "memory")
     else:
         debug_log("memory enrichment skipped: planner did not request it", "memory")
+
+    if preparation_cancelled("memory extraction"):
+        return None
 
     # Step 4a: Diary enrichment (episodic conversation history)
     if enrichment_source in ("all", "diary") and keywords:
@@ -1450,6 +1479,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 debug_log(f"diary enrichment: {len(context_results)} results", "memory")
         except Exception as e:
             debug_log(f"diary enrichment failed: {e}", "memory")
+
+    if preparation_cancelled("diary retrieval"):
+        return None
 
     # Step 4b: Graph memory enrichment (structured knowledge about the user).
     # The graph is a question-answer index: each node holds knowledge facts the
@@ -1514,6 +1546,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             except Exception as e:
                 debug_log(f"graph enrichment failed: {e}", "memory")
 
+    if preparation_cancelled("graph retrieval"):
+        return None
+
     # Step 4c: Memory digest for small models.
     #
     # Small models (~2B) degrade sharply as the system prompt grows, and the
@@ -1561,6 +1596,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             graph_context = ""
         except Exception as e:
             debug_log(f"memory digest step failed (non-fatal): {e}", "memory")
+
+    if preparation_cancelled("memory digest"):
+        return None
 
     # Step 6: Tool allow-list for this turn.
     #
