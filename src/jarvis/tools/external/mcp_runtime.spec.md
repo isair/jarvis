@@ -25,8 +25,10 @@ resident for the daemon's lifetime.
   `(kind, payload, future)` tuples from an `asyncio.Queue`.
 - Callers (registry → `MCPClient.list_tools` / `invoke_tool`) submit
   requests via `runtime.invoke(...)` / `runtime.list_tools(...)`. Each
-  call hops the request onto the loop with `call_soon_threadsafe(put_nowait, ...)`
-  and blocks on a `concurrent.futures.Future` for the result.
+  call hops request admission onto the loop with `call_soon_threadsafe(...)`
+  and blocks on a `concurrent.futures.Future` for the result. Admission checks
+  worker liveness before enqueuing, so a retired session triggers retry without
+  waiting for the request timeout. A closed loop surfaces as a session error.
 
 ## Lifecycle
 
