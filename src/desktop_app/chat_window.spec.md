@@ -54,6 +54,17 @@ dropping the message. The voice path acquires the same lock blocking (via
 query to finish rather than being dropped. Voice and text therefore cannot
 run `run_reply_engine` concurrently against the shared dialogue memory.
 
+### Daemon shutdown ownership
+
+Text admission checks the daemon stop flag again while holding the shared
+query lock. Normal and smoke-test shutdown close admission before final
+cleanup. Admitted replies retain their database and dialogue memory until
+they finish under their existing request deadlines. The five-second wait
+reports a slow drain; it does not permit diary saving or database closure
+while a reply still owns those resources. Final diary saving and resource
+closure hold the same query lock. Desktop wait timeouts retain the owning
+daemon worker as specified in `desktop_app.spec.md`.
+
 ### Cancellation
 
 Stop never calls `request_stop`, which is the daemon lifecycle shutdown

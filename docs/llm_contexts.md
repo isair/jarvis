@@ -13,6 +13,13 @@ cancellation before starting routing/extraction inference. In-flight calls
 finish under their existing deadlines; no new timeout, model or prompt is
 introduced. Voice and text chat do not supply this task event.
 
+**Shutdown admission and ownership.** Text submissions recheck shutdown after
+acquiring the shared query lock. Already admitted requests retain their
+existing inference and tool deadlines; normal and smoke cleanup hold that
+lock before final diary work or database closure. The five-second warning
+is a diagnostic grace period, not a resource-release deadline. Chat Stop
+continues to drop delivery after its in-flight reply returns.
+
 **Evaluation replay.** [Query/context comparison](query_context_comparison.md)
 runs synthetic directed speech through the intent judge, router, planner and
 reply contexts. Its `raw_context` arm uses production `SpeechContext` transport;
