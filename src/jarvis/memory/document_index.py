@@ -8,7 +8,8 @@ import os
 import sqlite3
 import stat
 import threading
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -24,6 +25,64 @@ _MAX_CHUNK_CHARS = 2_000
 
 
 @dataclass(frozen=True)
+class IndexLimits:
+    """Finite per-pass work, per-file allocation and persistent cache limits."""
+    files: int = 64
+    chunks: int = 128
+    input_bytes: int = 1_048_576
+    entries: int = 2_048
+    seconds: float = 5.0
+    file_bytes: int = 262_144
+    cached_chunks: int = 1_024
+    cached_files: int = 256
+    dimension: int = 4_096
+    depth: int = 32
+    roots: int = 32
+
+    def __post_init__(self):
+        if any(value <= 0 for value in vars(self).values()):
+            raise ValueError('Document index limits must be positive')
+
+
+@dataclass
+class IndexCoverage:
+    files: int = 0
+    chunks: int = 0
+    input_bytes: int = 0
+    entries: int = 0
+    reasons: set[str] = field(default_factory=set)
+
+    @property
+    def complete(self) -> bool:
+        return not self.reasons
+
+
+class _Pass:
+    def __init__(self, limits: IndexLimits, cancel_event):
+        self.limits = limits
+        self.cancel_event = cancel_event
+        self.deadline = time.monotonic() + limits.seconds
+        self.coverage = IndexCoverage()
+
+    def stopped(self) -> bool:
+        if self.cancel_event is not None and self.cancel_event.is_set():
+            self.coverage.reasons.add('cancelled')
+        if time.monotonic() >= self.deadline:
+            self.coverage.reasons.add('seconds')
+        return bool(self.coverage.reasons & {'cancelled', 'seconds'})
+
+    def charge(self, resource: str, amount: int = 1) -> bool:
+        if self.stopped():
+            return False
+        value = getattr(self.coverage, resource) + amount
+        if value > getattr(self.limits, resource):
+            self.coverage.reasons.add(resource)
+            return False
+        setattr(self.coverage, resource, value)
+        return True
+
+
+@dataclass(frozen=True)
 class DocumentSearchHit:
     path: str
     start_line: int
@@ -35,8 +94,11 @@ class DocumentSearchHit:
 class DocumentIndex:
     """Own document metadata, text and embeddings in one SQLite transaction."""
 
-    def __init__(self, db: Any, cfg: Any, *, embedding_backend: Any = None) -> None:
+    def __init__(self, db: Any, cfg: Any, *, embedding_backend: Any = None,
+                 limits: IndexLimits | None = None) -> None:
         self.cfg = cfg
+        self.limits = limits or IndexLimits()
+        self.coverage = IndexCoverage()
         self.embedding_backend = embedding_backend or get_embedding_backend(cfg)
         diary_path = str(db.db_path)
         self.path = ':memory:' if diary_path == ':memory:' else diary_path + '.documents.sqlite3'
@@ -45,6 +107,7 @@ class DocumentIndex:
         try:
             self._conn.row_factory = sqlite3.Row
             self._conn.execute('PRAGMA foreign_keys = ON')
+            self._conn.execute('PRAGMA max_page_count = 16384')
             self._conn.executescript("""
                 CREATE TABLE IF NOT EXISTS document_files (
                     path TEXT PRIMARY KEY, identity TEXT NOT NULL,
@@ -85,12 +148,19 @@ class DocumentIndex:
         if not self.cfg.document_search_enabled:
             return []
         roots = []
-        for raw in self.cfg.document_search_paths:
+        for number, raw in enumerate(self.cfg.document_search_paths):
+            if number >= self.limits.roots:
+                self.coverage.reasons.add('roots')
+                break
             try:
                 root = Path(raw).expanduser().resolve(strict=True)
-                if root.is_dir() and root not in roots:
-                    roots.append(root)
+                if root.is_dir():
+                    if root not in roots:
+                        roots.append(root)
+                else:
+                    self.coverage.reasons.add('unavailable_root')
             except (OSError, ValueError, RuntimeError):
+                self.coverage.reasons.add('unavailable_root')
                 debug_log('Skipping an unavailable document root', 'documents')
         return roots
 
@@ -111,23 +181,48 @@ class DocumentIndex:
             pass
         return None
 
-    def _iter_allowed_files(self, roots: Iterable[Path]) -> Iterable[Path]:
+    def _iter_allowed_files(self, roots: Iterable[Path], work: _Pass) -> Iterable[Path]:
         seen = set()
         for root in roots:
-            for candidate in root.rglob('*'):
-                if candidate.suffix.lower() not in _ALLOWED_EXTENSIONS:
-                    continue
-                try:
-                    resolved = candidate.resolve(strict=True)
-                except (OSError, RuntimeError):
-                    continue
-                if resolved not in seen and self._authorised_identity(resolved, [root]):
-                    seen.add(resolved)
-                    yield resolved
+            if work.stopped():
+                return
+            stack = []
+            try:
+                stack.append(os.scandir(root))
+                while stack and not work.stopped():
+                    entry = next(stack[-1], None)
+                    if entry is None:
+                        stack.pop().close()
+                        continue
+                    if not work.charge('entries'):
+                        return
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            if len(stack) >= self.limits.depth:
+                                work.coverage.reasons.add('depth')
+                            else:
+                                stack.append(os.scandir(entry.path))
+                        elif Path(entry.name).suffix.lower() in _ALLOWED_EXTENSIONS:
+                            path = Path(entry.path).resolve(strict=True)
+                            if path not in seen and self._authorised_identity(path, [root]):
+                                seen.add(path)
+                                yield path
+                    except (OSError, RuntimeError):
+                        work.coverage.reasons.add('unreadable')
+            except OSError:
+                work.coverage.reasons.add('unreadable')
+            finally:
+                for stream in stack:
+                    stream.close()
 
-    def _embed(self, text: str):
+    def _embed(self, text: str, work: _Pass):
+        if work.stopped():
+            raise ValueError('Document work was cancelled or reached its deadline')
+        remaining = max(0.001, work.deadline - time.monotonic())
         vector = self.embedding_backend.embed(text, self.cfg.embedding_model,
-                                             timeout_sec=self.cfg.llm_embedding_timeout_sec)
+                                             timeout_sec=min(self.cfg.llm_embedding_timeout_sec, remaining))
+        if vector is None or len(vector) > self.limits.dimension:
+            raise ValueError('Document embedding is unavailable or exceeds its dimension limit')
         return normalise_embedding(vector)
 
     @staticmethod
@@ -159,7 +254,7 @@ class DocumentIndex:
             chunks.append((start, len(lines), "\n".join(current)))
         return [(a, b, value) for a, b, value in chunks if value.strip()]
 
-    def _index_file(self, path: Path, roots: list[Path]) -> bool:
+    def _index_file(self, path: Path, roots: list[Path], work: _Pass) -> bool:
         identity = self._authorised_identity(path, roots)
         if identity is None:
             return False
@@ -168,21 +263,50 @@ class DocumentIndex:
                                  (str(path),)).fetchone()
         if old and old['identity'] == identity and old['embedding_key'] == key:
             return True
+        if not work.charge('files'):
+            return False
         try:
-            fd = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
-            with os.fdopen(fd, 'r', encoding='utf-8', errors='replace') as stream:
-                if self._identity(os.fstat(stream.fileno())) != identity:
+            size = path.stat().st_size
+            if size > self.limits.file_bytes:
+                work.coverage.reasons.add('file_bytes')
+                return False
+            if not work.charge('input_bytes', size):
+                return False
+            fd = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0)
+                         | getattr(os, 'O_NONBLOCK', 0))
+            with os.fdopen(fd, 'rb') as stream:
+                opened = os.fstat(stream.fileno())
+                if not stat.S_ISREG(opened.st_mode) or self._identity(opened) != identity:
                     return False
-                text = stream.read()
+                raw = stream.read(size + 1)
+                if len(raw) != size:
+                    work.coverage.reasons.add('changed')
+                    return False
+                text = raw.decode('utf-8', errors='replace')
             prepared = []
             dimension = None
             for start, end, chunk in self._chunks(text):
-                vector = self._embed(chunk)
+                if not work.charge('chunks'):
+                    return False
+                vector = self._embed(chunk, work)
                 if dimension is not None and dimension != vector.size:
                     raise ValueError('Document embedding dimensions changed during refresh')
                 dimension = vector.size
                 prepared.append((str(path), start, end, chunk, vector.tobytes()))
+            if work.stopped():
+                return False
             if self._authorised_identity(path, self._roots()) != identity:
+                work.coverage.reasons.add('changed')
+                return False
+            count = self._conn.execute('SELECT COUNT(*) FROM document_chunks WHERE path!=?',
+                                       (str(path),)).fetchone()[0]
+            if count + len(prepared) > self.limits.cached_chunks:
+                work.coverage.reasons.add('cached_chunks')
+                return False
+            files = self._conn.execute('SELECT COUNT(*) FROM document_files WHERE path!=?',
+                                       (str(path),)).fetchone()[0]
+            if files >= self.limits.cached_files:
+                work.coverage.reasons.add('cached_files')
                 return False
             with self._conn:
                 self._conn.execute('DELETE FROM document_files WHERE path=?', (str(path),))
@@ -192,43 +316,65 @@ class DocumentIndex:
                                        'VALUES (?,?,?,?,?)', prepared)
             return True
         except (OSError, ValueError, sqlite3.Error) as exc:
+            work.coverage.reasons.add('failed')
             debug_log(f'Document refresh did not publish {path}: {exc}', 'documents')
             return False
 
-    def refresh(self) -> None:
+    def refresh(self, *, cancel_event=None) -> IndexCoverage:
+        work = _Pass(self.limits, cancel_event)
+        self.coverage = work.coverage
         if not self.cfg.document_search_enabled:
-            return
+            return self.coverage
         with self._lock:
+            if work.stopped():
+                return self.coverage
             roots = self._roots()
+            if len(roots) > self.limits.roots:
+                work.coverage.reasons.add('roots')
+                roots = roots[:self.limits.roots]
             for row in self._conn.execute('SELECT path,identity FROM document_files').fetchall():
+                if work.stopped():
+                    return self.coverage
                 if self._authorised_identity(Path(row['path']), roots) != row['identity']:
                     with self._conn:
                         self._conn.execute('DELETE FROM document_files WHERE path=?', (row['path'],))
-            for path in self._iter_allowed_files(roots):
-                self._index_file(path, roots)
+            for path in self._iter_allowed_files(roots, work):
+                self._index_file(path, roots, work)
+                if work.stopped() or work.coverage.reasons & {'files', 'chunks', 'input_bytes'}:
+                    break
+            debug_log(f'Document refresh coverage: {self.coverage}', 'documents')
+            return self.coverage
 
-    def search(self, query: str, top_k: int = 5) -> list[DocumentSearchHit]:
+    def search(self, query: str, top_k: int = 5, *, cancel_event=None) -> list[DocumentSearchHit]:
         if not self.cfg.document_search_enabled:
             return []
+        work = _Pass(self.limits, cancel_event)
+        if len(query) > _MAX_CHUNK_CHARS:
+            raise ValueError('Document search query exceeds its character limit')
         with self._lock:
             roots, key = self._roots(), self._embedding_key()
             if not roots:
                 return []
-            try:
-                vector = self._embed(query)
-            except ValueError:
+            if not self._conn.execute('SELECT 1 FROM document_chunks LIMIT 1').fetchone():
                 return []
+            vector = self._embed(query, work)
             with self._conn:
                 self._conn.execute('DELETE FROM document_files WHERE embedding_key=? AND dimension!=?',
                                    (key, int(vector.size)))
             candidates = []
             for file in self._conn.execute('SELECT * FROM document_files WHERE embedding_key=?', (key,)):
+                if work.stopped():
+                    self.coverage.reasons.update(work.coverage.reasons)
+                    break
                 path = Path(file['path'])
                 if self._authorised_identity(path, roots) != file['identity']:
                     continue
                 if file['dimension'] != vector.size:
                     continue
                 for row in self._conn.execute('SELECT * FROM document_chunks WHERE path=?', (str(path),)):
+                    if work.stopped():
+                        self.coverage.reasons.update(work.coverage.reasons)
+                        break
                     stored = np.frombuffer(row['vector'], dtype=np.float32)
                     if stored.size != vector.size:
                         continue

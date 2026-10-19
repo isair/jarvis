@@ -174,6 +174,26 @@ requests do not supply this event.
 - **Inputs**: self-contained query from the model plus the same redacted speech snapshot as the initial router.
 - **Output**: newline-separated tool names + one-liners, merged into the allow-list for the next turn.
 
+## Local document embedding component
+
+- **File**: `jarvis.memory.document_index.DocumentIndex`, consumed by
+  `jarvis.tools.builtin.document_search.DocumentSearchTool`.
+- **Gating**: explicit document-search opt-in and configured folders. Disabled
+  search does not scan or embed. An empty index skips the query embedding.
+- **Model**: canonical `get_embedding_backend(cfg)` and resolved
+  `cfg.embedding_model`, with no chat-model fallback or prompt-based extraction.
+- **Inputs**: authorised `.txt`/`.md` chunks, up to 40 lines and 2,000 characters;
+  the search query is limited to 2,000 characters.
+- **Limits**: `IndexLimits` bounds per-pass input, traversal, chunks and elapsed
+  time, plus file/cache sizes and vector dimensions. Each embedding call uses
+  the smaller of `llm_embedding_timeout_sec` and the remaining five-second pass
+  deadline. Cooperative cancellation is checked before inference and publication.
+- **Flow**: authorised source bytes → configured embedding endpoint → isolated
+  SQLite text/vector transaction. Query vector → document-only cosine ranking →
+  at most ten cited, untrusted excerpts. Coverage records incomplete refreshes
+  and ranking deadlines. The embedding endpoint is user-configured and can run
+  locally; document indexing does not start an additional model process.
+
 ## 9. Conversation Summariser
 
 - **File**: [src/jarvis/memory/conversation.py](src/jarvis/memory/conversation.py) — `generate_conversation_summary()` (~line 1251).
