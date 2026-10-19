@@ -42,3 +42,13 @@ Locked temporary files are reported without crashing startup or publishing them.
 Progress includes transferred bytes and transfer rate, with a percentage when
 the response supplies a total size. Completion is reported only after publication.
 Download diagnostics use `debug_log` without recording user speech or reply text.
+
+## Shutdown and restart
+
+Stopping speech interrupts the active utterance and discards queued utterances
+and their callbacks. A worker still synthesising after the bounded join retains
+its shutdown state and ownership until it exits. Speech submitted while that
+worker drains is discarded; no second worker starts beside it. Stopped synthesis
+does not begin playback or report completion. Once the worker exits, a new
+submission can start a fresh worker without replaying discarded speech.
+Completion callbacks may stop their own worker without joining themselves.
