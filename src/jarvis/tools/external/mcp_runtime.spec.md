@@ -65,7 +65,9 @@ resident for the daemon's lifetime.
 ## Query-scoped discovery
 
 The reply's execution control bounds cache readiness, catalogue refresh and
-cache reads. A query-scoped refresh passes an activity checker through discovery;
+cache reads. Their lock acquisition polls the query's activity checker, so an
+abandoned helper exits while another operation still owns the cache. A
+query-scoped refresh passes an activity checker through discovery;
 it checks after acquiring the cache lock, before each server, and before
 publishing the new catalogue. Abandoned discovery can finish its issued read,
 but does not start a later server or replace the saved catalogue. Startup

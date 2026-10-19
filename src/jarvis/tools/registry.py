@@ -1,5 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass
+from contextlib import contextmanager
 from typing import Optional, Dict, Any, Tuple, List, Callable
 import sys
 import re
@@ -51,6 +52,24 @@ _mcp_tools_cache_lock = threading.Lock()
 _mcp_config_cache: Dict[str, Any] = {}
 
 
+@contextmanager
+def _mcp_cache_access(check_active: Optional[Callable[[], None]]):
+    """Release query-scoped waiters without waiting for another cache owner."""
+    if check_active is None:
+        with _mcp_tools_cache_lock:
+            yield
+        return
+    while True:
+        check_active()
+        if _mcp_tools_cache_lock.acquire(timeout=0.05):
+            break
+    try:
+        check_active()
+        yield
+    finally:
+        _mcp_tools_cache_lock.release()
+
+
 def initialize_mcp_tools(mcps_config: Dict[str, Any], verbose: bool = True) -> Tuple[Dict[str, "ToolSpec"], Dict[str, str]]:
     """
     Initialize MCP tools cache at startup.
@@ -74,9 +93,11 @@ def initialize_mcp_tools(mcps_config: Dict[str, Any], verbose: bool = True) -> T
         return _mcp_tools_cache.copy(), errors
 
 
-def get_cached_mcp_tools() -> Dict[str, "ToolSpec"]:
+def get_cached_mcp_tools(
+    *, check_active: Optional[Callable[[], None]] = None,
+) -> Dict[str, "ToolSpec"]:
     """Get cached MCP tools without rediscovering."""
-    with _mcp_tools_cache_lock:
+    with _mcp_cache_access(check_active):
         return _mcp_tools_cache.copy()
 
 
@@ -91,11 +112,7 @@ def refresh_mcp_tools(
     """
     global _mcp_tools_cache
 
-    if check_active is not None:
-        check_active()
-    with _mcp_tools_cache_lock:
-        if check_active is not None:
-            check_active()
+    with _mcp_cache_access(check_active):
         if not _mcp_config_cache:
             debug_log("No MCP config cached, skipping refresh", "mcp")
             return {}, {}
@@ -115,9 +132,11 @@ def refresh_mcp_tools(
         return _mcp_tools_cache.copy(), errors
 
 
-def is_mcp_cache_initialized() -> bool:
+def is_mcp_cache_initialized(
+    *, check_active: Optional[Callable[[], None]] = None,
+) -> bool:
     """Check if MCP tools cache has been initialized."""
-    with _mcp_tools_cache_lock:
+    with _mcp_cache_access(check_active):
         return len(_mcp_config_cache) > 0 or len(_mcp_tools_cache) > 0
 
 
