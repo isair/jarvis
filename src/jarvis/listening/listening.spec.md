@@ -587,3 +587,8 @@ announcements and error feedback provide echo references without creating
 conversational engagement. Thinking audio and visual activity release their own
 ownership independently, so disabling the tune cannot leave a finished query in
 the thinking state.
+
+Configured interruption controls can cancel a still-current synthesising request
+when their capture overlaps its preparation. This control path does not classify
+preparation as playback, supply an echo reference or admit ambient conversation.
+A control captured before that request cannot cancel it after delayed recognition.

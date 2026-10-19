@@ -7,8 +7,6 @@ import tempfile
 import threading
 from typing import Optional
 
-from .debug import debug_log
-
 
 class JarvisState(Enum):
     """Assistant activity shared with local observers."""
@@ -107,7 +105,6 @@ class JarvisStateManager:
             published = self._published_state()
             previous = published[0] if published is not None else self._state
             if previous in protected_states:
-                debug_log(f"Temporary {state.value} activity suppressed by {previous.value}", "activity")
                 return None
             if restore_state is not None:
                 previous = restore_state
@@ -119,7 +116,6 @@ class JarvisStateManager:
             owner = _StateOwnership(previous, identity)
             self._state = state
             self._owner = owner
-            debug_log(f"Temporary activity acquired: {state.value}", "activity")
             return owner
 
     def release_state(self, owner: Optional[_StateOwnership]) -> bool:
@@ -130,13 +126,11 @@ class JarvisStateManager:
             self._owner = None
             published = self._published_state()
             if published is None or published[1] != owner.publication:
-                debug_log("Activity publication changed before completion", "activity")
                 return False
             identity = self._write_state(owner.previous)
             if identity is None:
                 return False
             self._state = owner.previous
-            debug_log(f"Owned activity released: {owner.previous.value}", "activity")
             return True
 
 

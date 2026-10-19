@@ -93,3 +93,29 @@ def test_replacement_owner_does_not_restore_an_abandoned_temporary_state(state):
     assert manager.state is activity.JarvisState.SPEAKING
     assert manager.release_state(replacement)
     assert manager.state is prior
+
+
+def test_shared_activity_works_with_only_standard_library_imports(monkeypatch, tmp_path):
+    import builtins
+    import importlib.util
+    import sys
+    from jarvis import activity
+    original = builtins.__import__
+    def standard_import(name, *args, **kwargs):
+        if name.split('.')[0] not in sys.stdlib_module_names:
+            raise AssertionError(f'Activity requires a non-standard import: {name}')
+        return original(name, *args, **kwargs)
+    name = 'jarvis._owned_standard_activity'
+    spec = importlib.util.spec_from_file_location(name, activity.__file__)
+    subject = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, name, subject)
+    with monkeypatch.context() as imports:
+        imports.setattr(builtins, '__import__', standard_import)
+        spec.loader.exec_module(subject)
+    monkeypatch.setattr(subject, '_get_jarvis_state_file', lambda: str(tmp_path/'state'))
+    manager = subject.JarvisStateManager()
+    manager.set_state(subject.JarvisState.IDLE)
+    owner = manager.acquire_state(subject.JarvisState.SPEAKING)
+    assert manager.state is subject.JarvisState.SPEAKING
+    assert manager.release_state(owner)
+    assert manager.state is subject.JarvisState.IDLE

@@ -482,7 +482,16 @@ class _QueuedSpeech:
         self._last_spoken_text = ''
         self._should_interrupt = threading.Event()
         self._active_request: Optional[SpeechRequest] = None
+        self._preparation_started_at = 0.0
         self._playback_callbacks: tuple[Optional[_PlaybackStart], Optional[_PlaybackEnd]] = (None, None)
+
+    def is_preparing_at(self, capture_time: float) -> bool:
+        """Allow controls captured during this still-synthesising request only."""
+        with self._lifecycle_lock:
+            request = self._active_request
+            return bool(request is not None and not request._playback_started
+                        and not request.abandoned
+                        and 0 < self._preparation_started_at <= capture_time <= time.time())
 
     def set_playback_callbacks(self, started: Optional[_PlaybackStart],
                                finished: Optional[_PlaybackEnd]) -> None:
@@ -505,6 +514,7 @@ class _QueuedSpeech:
                     JarvisState.SPEAKING, restore_state=JarvisState.IDLE,
                     protected_states={JarvisState.DICTATING, JarvisState.DICTATION_PROCESSING},
                 )
+                debug_log(f'Playback activity ownership: {owner is not None}', 'tts')
                 if owner is not None:
                     request._activity_release = lambda: manager.release_state(owner)
             except Exception as exc:
@@ -627,6 +637,7 @@ class _QueuedSpeech:
                     active = not self._stop.is_set() and request._claim()
                     if active:
                         self._active_request = request
+                        self._preparation_started_at = time.time()
                 if active:
                     outcome = 'completed' if self._speak_once(request) is True else 'failed'
                     if self._stop.is_set():
@@ -643,6 +654,7 @@ class _QueuedSpeech:
                     # Replacement waits for this worker; retain its request
                     # identity until terminal commitment and callback release.
                     self._active_request = None
+                    self._preparation_started_at = 0.0
                     del request
 
 

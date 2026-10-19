@@ -25,3 +25,19 @@ file, with best-effort cleanup when the operating system denies removal.
 State updates remain best-effort and do not interrupt assistant work when the
 shared file is unavailable. The desktop observes activity on its animation
 clock; the state manager owns no GUI objects, signals, threads or timers.
+
+## Temporary activity ownership
+
+A local producer can acquire temporary activity and retain a token identifying
+that exact publication. Protected visible states prevent acquisition. A successful
+acquisition records either the supplied terminal state or the preceding activity;
+replacement ownership inherits the original restoration state unless explicitly
+specified. Failed publication creates no owner.
+
+Release restores activity only when the same local token still owns an unchanged
+published snapshot. Explicit state assignment and later acquisitions supersede
+older tokens. A newer publication with the same enum value also supersedes older
+ownership. This preserves dictation and newer work when speech or query cleanup
+finishes. The manager's lock serialises local ownership; independent processes
+retain best-effort ordering rather than a cross-process compare-and-swap contract.
+No lock files, worker threads or persistent ownership records are created.

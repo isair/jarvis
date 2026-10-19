@@ -62,6 +62,7 @@ def _create_listener(**kwargs):
     mock_db = MagicMock()
     mock_tts = MagicMock()
     mock_tts.enabled = True
+    mock_tts.is_preparing_at.return_value = False
     mock_tts.is_speaking.return_value = kwargs.get("tts_speaking", False)
     mock_dialogue_memory = MagicMock()
 

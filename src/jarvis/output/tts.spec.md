@@ -40,7 +40,9 @@ worker releases the completed request and its callback references before waiting
 
 Both backends publish playback start after synthesis and device preparation,
 immediately before starting audio. Queue admission and synthesis do not publish
-speaking activity or replace the last played text. Observers receive the
+speaking activity or replace the last played text. A separate current-request
+preparation timestamp permits configured cancellation captured during synthesis;
+stale captures cannot interrupt a later preparing request. Observers receive the
 preprocessed utterance and exact audio duration. The observer pair is selected
 at playback start and retained until that request terminates. A queued request
 cancelled before playback emits no playback events.

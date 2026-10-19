@@ -38,6 +38,12 @@ class SpeakingTTS:
     def __init__(self):
         self.speaking = True
 
+    def set_playback_callbacks(self, started, finished):
+        self.playback_callbacks = started, finished
+
+    def is_preparing_at(self, capture_time):
+        return False
+
     def is_speaking(self):
         return self.speaking
 

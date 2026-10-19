@@ -126,3 +126,44 @@ def test_rejected_acknowledgement_releases_presence_without_a_thinking_tune(play
     state.set_state(activity.JarvisState.DICTATING)
     listener._stop_thinking_tune()
     assert state.state is activity.JarvisState.DICTATING
+
+
+@pytest.mark.parametrize('control,interrupts', [('configured', True), ('ambient', False), ('stale', False)])
+def test_synthesis_remains_interruptible_without_claiming_playback(playback, monkeypatch, control, interrupts):
+    import threading
+    import time
+    listener, engine = playback
+    entered, release = threading.Event(), threading.Event()
+    completed, outcomes = [], []
+    if isinstance(engine, speech.PiperTTS):
+        target, method = engine._voice, 'synthesize'
+    else:
+        target, method = engine._model, 'generate'
+    original = getattr(target, method)
+    def held(*args, **kwargs):
+        entered.set()
+        assert release.wait(5), 'Owned synthesis was not released'
+        return original(*args, **kwargs)
+    monkeypatch.setattr(target, method, held)
+    engine.speak('first', completion_callback=lambda: completed.append(True), terminal_callback=outcomes.append)
+    worker = threading.Thread(target=engine._run)
+    worker.start()
+    try:
+        assert entered.wait(3)
+        assert not engine.is_speaking()
+        assert listener.echo_detector._tts_start_time == 0
+        utterance = 'unrelated ambient chatter' if control == 'ambient' else listener.cfg.stop_commands[0]
+        now = time.time() - (60 if control == 'stale' else 0)
+        listener._process_transcript(utterance, utterance_start_time=now, utterance_end_time=now,
+                                     language=None, generation=listener._capture_generation,
+                                     captured_during_tts=False, captured_tts_start_time=0)
+        release.set()
+        worker.join(3)
+        assert not worker.is_alive()
+        assert outcomes == ['interrupted' if interrupts else 'completed']
+        assert completed == ([] if interrupts else [True])
+        assert bool(listener.echo_detector._tts_start_time) is not interrupts
+    finally:
+        release.set()
+        worker.join(3)
+        assert not worker.is_alive()

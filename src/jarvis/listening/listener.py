@@ -753,15 +753,17 @@ class VoiceListener(threading.Thread):
                     self._set_face_state_listening()
                     debug_log("early beep: wake word detected", "voice")
 
-        # Echo rejection & stop commands — only while TTS is actively playing.
-        # After TTS finishes, the intent judge handles everything (echo detection,
-        # hot window follow-ups, etc.) using full transcript context + last TTS text.
-        if self.tts and self.tts.enabled and active_tts_overlapped:
+        # Preparation accepts configured cancellation without claiming echo or engagement.
+        preparing_tts_overlapped = bool(
+            self.tts and self.tts.enabled and not received_during_tts
+            and self.tts.is_preparing_at(utterance_end_time)
+        )
+        if self.tts and self.tts.enabled and (active_tts_overlapped or preparing_tts_overlapped):
             # Stop command detection (fast, text-based)
             stop_commands = self.cfg.stop_commands
             stop_ratio = self.cfg.stop_command_fuzzy_ratio
             if is_stop_command(text_lower, stop_commands, stop_ratio):
-                if is_stop_command_echo(text_lower, self.echo_detector._last_tts_text, stop_commands, stop_ratio):
+                if active_tts_overlapped and is_stop_command_echo(text_lower, self.echo_detector._last_tts_text, stop_commands, stop_ratio):
                     debug_log("ignored stop command contained in literal TTS echo", "echo")
                     print(f'  🔇 Heard (echo): "{text_lower[:50]}"', flush=True)
                     return
@@ -774,6 +776,7 @@ class VoiceListener(threading.Thread):
                     pass
                 return
 
+        if self.tts and self.tts.enabled and active_tts_overlapped:
             # Echo rejection during active TTS
             should_reject = self.echo_detector.should_reject_as_echo(
                 text_lower, utterance_energy, True,
@@ -1066,7 +1069,8 @@ class VoiceListener(threading.Thread):
 
         def release_query(outcome=None):
             if owner is not None:
-                manager.release_state(owner)
+                released = manager.release_state(owner)
+                debug_log(f'Voice thinking cleanup: released={released}', 'voice')
 
         def on_complete():
             with self._audio_state_lock:
