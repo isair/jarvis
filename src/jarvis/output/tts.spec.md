@@ -52,3 +52,9 @@ worker drains is discarded; no second worker starts beside it. Stopped synthesis
 does not begin playback or report completion. Once the worker exits, a new
 submission can start a fresh worker without replaying discarded speech.
 Completion callbacks may stop their own worker without joining themselves.
+
+Stopping also invalidates submissions and startup requests waiting for their
+initial model load, even when no worker exists yet. Finishing that preparation
+cannot start a cancelled request or enqueue it onto a newer worker. A fresh
+submission after stopping can use the prepared model. Model preparation itself
+is not forcibly terminated.
