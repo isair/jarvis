@@ -128,6 +128,8 @@ class _PersistentMCPRuntime:
         self._thread: Optional[threading.Thread] = None
         self._workers: Dict[str, "_ServerWorker"] = {}
         self._workers_lock = threading.Lock()
+        self._server_locks = {}
+        self._shutdown_lock = threading.Lock()
         self.closed = False
         self._start_loop()
 
@@ -200,7 +202,7 @@ class _PersistentMCPRuntime:
                 f"MCP worker '{server_name}' died; restarting and retrying once",
                 "mcp",
             )
-            self._drop_worker(server_name)
+            self._drop_worker(server_name, worker)
             worker = self._get_worker(server_name, server_cfg)
             return worker.invoke(tool_name, arguments, timeout)
 
@@ -234,90 +236,101 @@ class _PersistentMCPRuntime:
                 f"MCP worker '{server_name}' died during list_tools; restarting",
                 "mcp",
             )
-            self._drop_worker(server_name)
+            self._drop_worker(server_name, worker)
             worker = self._get_worker(server_name, server_cfg)
             return worker.list_tools(timeout)
 
     def _get_worker(
         self, server_name: str, server_cfg: Dict[str, Any]
     ) -> "_ServerWorker":
-        """Return a live worker for ``server_name``, replacing it if needed.
+        """Serialise one server's lifecycle without holding the registry lock.
 
-        Reuses an existing worker iff it is still alive and its cached
-        config equals the requested one. A dead worker or a config
-        change triggers shutdown of the old worker and creation of a
-        fresh one. Callers hold no lock during ``worker.start()`` so
-        startup work happens without blocking other servers.
+        Starting workers are registered before setup, so shutdown owns them
+        even while their session handshake is pending.
         """
         with self._workers_lock:
-            existing = self._workers.get(server_name)
-            if existing is not None and existing.alive and existing.config == server_cfg:
-                return existing
+            if self.closed:
+                raise _WorkerDeadError("Persistent MCP runtime is closed")
+            server_lock = self._server_locks.setdefault(server_name, threading.Lock())
+        with server_lock:
+            with self._workers_lock:
+                if self.closed:
+                    raise _WorkerDeadError("Persistent MCP runtime is closed")
+                existing = self._workers.get(server_name)
+                if existing is not None and existing.alive and existing.config == server_cfg:
+                    return existing
             if existing is not None:
-                # Config changed or worker dead: replace it.
-                try:
-                    existing.shutdown()
-                except Exception as e:  # noqa: BLE001
-                    debug_log(
-                        f"MCP worker '{server_name}' replacement shutdown error: {e}",
-                        "mcp",
-                    )
-            loop = self._loop
-            if loop is None:
-                raise RuntimeError(
-                    "Persistent MCP runtime event loop is not available"
-                )
-            worker = _ServerWorker(loop, server_name, server_cfg)
-            worker.start()
-            self._workers[server_name] = worker
-            return worker
-
-    def _drop_worker(self, server_name: str) -> None:
-        """Forcibly evict and shut down the cached worker for ``server_name``.
-
-        Used after the worker has signalled it is no longer servicing
-        requests (e.g. a ``_WorkerDeadError``). Safe to call when no
-        worker is cached.
-        """
-        with self._workers_lock:
-            worker = self._workers.pop(server_name, None)
-        if worker is not None:
+                existing.shutdown()
+                if not existing.stopped:
+                    raise _WorkerDeadError(f"MCP server '{server_name}' is still closing")
+            with self._workers_lock:
+                if self.closed:
+                    raise _WorkerDeadError("Persistent MCP runtime is closed")
+                loop = self._loop
+                if loop is None:
+                    raise RuntimeError("Persistent MCP runtime event loop is not available")
+                worker = _ServerWorker(loop, server_name, server_cfg)
+                self._workers[server_name] = worker
             try:
-                worker.shutdown()
-            except Exception as e:  # noqa: BLE001
-                debug_log(
-                    f"MCP worker '{server_name}' drop shutdown error: {e}", "mcp"
-                )
+                worker.start()
+                with self._workers_lock:
+                    if self.closed or self._workers.get(server_name) is not worker:
+                        raise _WorkerDeadError("Persistent MCP runtime closed during startup")
+                return worker
+            except BaseException:
+                try:
+                    worker.shutdown()
+                except Exception as error:
+                    debug_log(
+                        f"MCP worker '{server_name}' startup cleanup error: {type(error).__name__}", 'mcp'
+                    )
+                with self._workers_lock:
+                    if worker.stopped and self._workers.get(server_name) is worker:
+                        del self._workers[server_name]
+                raise
+
+    def _drop_worker(self, server_name: str, expected_worker: "_ServerWorker") -> None:
+        """Retire only the failed instance, preserving a newer session."""
+        with self._workers_lock:
+            server_lock = self._server_locks.get(server_name)
+        if server_lock is None:
+            return
+        with server_lock:
+            with self._workers_lock:
+                worker = self._workers.get(server_name)
+                if worker is not expected_worker:
+                    return
+            worker.shutdown()
+            with self._workers_lock:
+                if worker.stopped and self._workers.get(server_name) is worker:
+                    del self._workers[server_name]
 
     def shutdown(self) -> None:
-        if self.closed:
-            return
-        self.closed = True
-        with self._workers_lock:
-            workers = list(self._workers.values())
-            self._workers.clear()
-        # Ask every worker to exit cleanly first; cancel the task if the
-        # graceful path stalls (e.g. a hung call_tool).
-        for w in workers:
-            try:
-                w.shutdown()
-            except Exception as e:  # noqa: BLE001
-                debug_log(
-                    f"MCP worker '{w._server_name}' shutdown error: {e}", "mcp"
-                )
-        loop = self._loop
-        if loop is not None:
-            try:
-                loop.call_soon_threadsafe(loop.stop)
-            except Exception as e:  # noqa: BLE001
-                debug_log(f"MCP runtime loop.stop error: {e}", "mcp")
-        if self._thread is not None:
-            self._thread.join(timeout=_SHUTDOWN_THREAD_JOIN_SEC)
-            if self._thread.is_alive():
-                debug_log(
-                    "MCP runtime thread did not exit within shutdown timeout",
-                    "mcp",
-                )
+        # Concurrent callers join the same complete teardown.
+        with self._shutdown_lock:
+            with self._workers_lock:
+                if self.closed:
+                    return
+                self.closed = True
+                workers = list(self._workers.values())
+                self._workers.clear()
+            for worker in workers:
+                try:
+                    worker.shutdown()
+                except Exception as error:
+                    debug_log(
+                        f"MCP worker '{worker._server_name}' shutdown error: {error}", 'mcp'
+                    )
+            loop = self._loop
+            if loop is not None:
+                try:
+                    loop.call_soon_threadsafe(loop.stop)
+                except Exception as error:
+                    debug_log(f"MCP runtime loop.stop error: {error}", 'mcp')
+            if self._thread is not None:
+                self._thread.join(timeout=_SHUTDOWN_THREAD_JOIN_SEC)
+                if self._thread.is_alive():
+                    debug_log("MCP runtime thread did not exit within shutdown timeout", 'mcp')
 
 
 class _WorkerDeadError(RuntimeError):
@@ -348,6 +361,9 @@ class _ServerWorker:
         self._queue: Optional[asyncio.Queue] = None
         self._task: Optional[asyncio.Task] = None
         self._ready: concurrent.futures.Future = concurrent.futures.Future()
+        self._lifecycle_lock = threading.Lock()
+        self._stop_future: Optional[concurrent.futures.Future] = None
+        self._setup_future: Optional[concurrent.futures.Future] = None
         self.alive = True
         # ``idle_timeout_sec`` opts in to self-termination after a period
         # of inactivity. ``None`` (default) means the worker stays
@@ -363,14 +379,23 @@ class _ServerWorker:
                 self._idle_timeout = None
 
     def start(self) -> None:
-        async def _setup() -> None:
+        async def setup() -> None:
+            if not self.alive:
+                raise _WorkerDeadError(f"MCP server '{self._server_name}' stopped before startup")
             self._queue = asyncio.Queue()
             self._task = asyncio.ensure_future(self._run())
 
-        asyncio.run_coroutine_threadsafe(_setup(), self._loop).result(timeout=5)
-        # Block until the worker has initialised the MCP session, or
-        # surfaced a startup error. Without this, the first ``invoke``
-        # would race the session handshake.
+        with self._lifecycle_lock:
+            if not self.alive:
+                raise _WorkerDeadError(f"MCP server '{self._server_name}' stopped before startup")
+            coroutine = setup()
+            try:
+                future = asyncio.run_coroutine_threadsafe(coroutine, self._loop)
+                self._setup_future = future
+            except BaseException:
+                coroutine.close()
+                raise
+        future.result(timeout=5)
         self._ready.result(timeout=_SETUP_TIMEOUT_SEC)
 
     async def _run(self) -> None:
@@ -530,14 +555,25 @@ class _ServerWorker:
                 ) from None
             raise
 
-    def shutdown(self) -> None:
-        """Let the session exit, cancelling wedged work within a bounded wait."""
-        self.alive = False
-        task = self._task
-        if task is None or task.done():
-            return
+    @property
+    def stopped(self) -> bool:
+        """Whether this instance cannot create or retain session resources."""
+        return (
+            not self.alive
+            and (self._setup_future is None or self._setup_future.done())
+            and (self._task is None or self._task.done())
+        )
 
+    def shutdown(self) -> None:
+        """Join session cleanup, including setup admitted before stopping."""
         async def stop() -> None:
+            if not self._ready.done():
+                self._ready.set_exception(
+                    _WorkerDeadError(f"MCP server '{self._server_name}' stopped during startup")
+                )
+            task = self._task
+            if task is None or task.done():
+                return
             if self._queue is not None:
                 self._queue.put_nowait(None)
             _, pending = await asyncio.wait({task}, timeout=_SHUTDOWN_GRACE_SEC)
@@ -551,10 +587,18 @@ class _ServerWorker:
                     )
 
         try:
-            asyncio.run_coroutine_threadsafe(stop(), self._loop).result(
-                timeout=_SHUTDOWN_GRACE_SEC + _SHUTDOWN_CLEANUP_SEC + 1
-            )
-        except Exception as error:  # noqa: BLE001
+            with self._lifecycle_lock:
+                self.alive = False
+                if self._stop_future is None:
+                    coroutine = stop()
+                    try:
+                        self._stop_future = asyncio.run_coroutine_threadsafe(coroutine, self._loop)
+                    except BaseException:
+                        coroutine.close()
+                        raise
+                future = self._stop_future
+            future.result(timeout=_SHUTDOWN_GRACE_SEC + _SHUTDOWN_CLEANUP_SEC + 1)
+        except Exception as error:
             debug_log(
                 f"MCP worker '{self._server_name}' shutdown error: {type(error).__name__}", 'mcp'
             )
