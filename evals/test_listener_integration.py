@@ -36,9 +36,9 @@ requires_voice_model = pytest.mark.skipif(
 
 @pytest.fixture(autouse=True)
 def isolated_face_state(monkeypatch, tmp_path):
-    from desktop_app import face_widget
-    monkeypatch.setattr(face_widget, '_get_jarvis_state_file', lambda: str(tmp_path / 'state'))
-    monkeypatch.setattr(face_widget, '_jarvis_state_instance', None)
+    from jarvis import activity
+    monkeypatch.setattr(activity, '_get_jarvis_state_file', lambda: str(tmp_path / 'state'))
+    monkeypatch.setattr(activity, '_jarvis_state_instance', None)
     import sys
     listeners = []
     create = _create_listener

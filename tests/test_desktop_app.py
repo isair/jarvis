@@ -1806,12 +1806,12 @@ class TestListeningWindowVisibility:
         (not the tray's face_window widget), so tests assert on the state
         manager that factory returns.
         """
-        import desktop_app.face_widget as face_widget_mod
+        from jarvis import activity
         from jarvis.activity import JarvisState
 
         fake_state = MagicMock()
         monkeypatch.setattr(
-            face_widget_mod,
+            activity,
             "get_jarvis_state",
             MagicMock(return_value=fake_state),
         )
