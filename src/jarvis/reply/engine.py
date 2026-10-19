@@ -918,9 +918,9 @@ def _run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     if is_new_conversation and getattr(cfg, "mcps", {}):
         try:
             from ..tools.registry import refresh_mcp_tools, is_mcp_cache_initialized
-            if is_mcp_cache_initialized():
+            if control.call(is_mcp_cache_initialized):
                 debug_log("New conversation detected, refreshing MCP tools", "mcp")
-                _tools, _errors = control.call(refresh_mcp_tools, verbose=False)
+                _tools, _errors = control.call(refresh_mcp_tools, verbose=False, check_active=control.check)
         except (ExecutionCancelled, ExecutionDeadlineExceeded):
             raise
         except Exception as e:

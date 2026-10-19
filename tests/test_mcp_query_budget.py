@@ -12,12 +12,13 @@ from jarvis.tools import registry
 pytestmark = [pytest.mark.unit, pytest.mark.usefixtures('no_network')]
 
 
-@pytest.mark.parametrize('stage', ['refresh', 'cache'])
+@pytest.mark.parametrize('stage', ['initialized', 'refresh', 'cache', 'servers', 'publication'])
 @pytest.mark.parametrize('outcome', ['cancel', 'deadline', 'success'])
 def test_mcp_catalogue_wait_obeys_query_lifetime(tmp_path, mock_config, monkeypatch, stage, outcome):
     cfg = mock_config
     cfg.db_path = str(tmp_path / 'owned-memory.db')
-    cfg.mcps = {'owned-public-probe': {'command': 'never-started-owned-fake'}}
+    cfg.mcps = {name: {'command': 'never-started-owned-fake'}
+                for name in (('first',) if stage == 'publication' else ('first', 'later'))}
     cfg.agentic_query_timeout_sec = 0.08 if outcome == 'deadline' else 3
     cfg.agentic_preparation = 'staged'
     cfg.llm_chat_model = 'test-large'
@@ -32,17 +33,36 @@ def test_mcp_catalogue_wait_obeys_query_lifetime(tmp_path, mock_config, monkeypa
     helpers = []
     result = {}
     model_actions = []
+    server_calls = []
     memory = DialogueMemory()
 
     def catalogue(*args, **kwargs):
         helpers.append(threading.current_thread())
         entered.set()
         assert release.wait(3), 'Owned catalogue gate was not released'
+        if stage == 'initialized':
+            return True
         return ({}, {}) if stage == 'refresh' else {}
 
-    monkeypatch.setattr(registry, 'is_mcp_cache_initialized', lambda: True)
-    monkeypatch.setattr(registry, 'refresh_mcp_tools', catalogue if stage == 'refresh' else lambda **kwargs: ({}, {}))
-    monkeypatch.setattr(registry, 'get_cached_mcp_tools', catalogue if stage == 'cache' else lambda: {})
+    monkeypatch.setattr(registry, 'is_mcp_cache_initialized', catalogue if stage == 'initialized' else lambda: True)
+    if stage in {'servers', 'publication'}:
+        monkeypatch.setattr(registry, '_mcp_config_cache', cfg.mcps)
+        monkeypatch.setattr(registry, '_mcp_tools_cache', {'keep': registry.ToolSpec('keep', 'Saved catalogue')})
+
+        class OwnedClient:
+            def __init__(self, config):
+                pass
+
+            def list_tools(self, server_name):
+                server_calls.append(server_name)
+                if server_name == 'first':
+                    catalogue()
+                return [{'name': server_name + '_tool'}]
+
+        monkeypatch.setattr(registry, 'MCPClient', OwnedClient)
+    else:
+        monkeypatch.setattr(registry, 'refresh_mcp_tools', catalogue if stage == 'refresh' else lambda **kwargs: ({}, {}))
+        monkeypatch.setattr(registry, 'get_cached_mcp_tools', catalogue if stage == 'cache' else lambda: {})
     monkeypatch.setattr(engine, '_build_enrichment_context_hint', lambda *args: 'Owned context')
     monkeypatch.setattr(engine, 'plan_query', lambda **kwargs: [])
 
@@ -76,7 +96,7 @@ def test_mcp_catalogue_wait_obeys_query_lifetime(tmp_path, mock_config, monkeypa
                 release.set()
             elif outcome == 'cancel':
                 cancelled.set()
-            assert done.wait(0.5), 'Reply remained blocked in MCP catalogue work'
+            assert done.wait(2 if outcome == 'success' else 0.5), 'Reply remained blocked in MCP catalogue work'
             assert 'error' not in result
             if outcome == 'success':
                 assert result['reply'] == 'Owned request completed.'
@@ -93,3 +113,7 @@ def test_mcp_catalogue_wait_obeys_query_lifetime(tmp_path, mock_config, monkeypa
             for helper in helpers:
                 helper.join(3)
                 assert not helper.is_alive(), 'Owned catalogue helper did not drain'
+        if stage in {'servers', 'publication'}:
+            assert server_calls == (list(cfg.mcps) if outcome == 'success' else [next(iter(cfg.mcps))]), 'Abandoned discovery started another server'
+            if outcome != 'success':
+                assert set(registry.get_cached_mcp_tools()) == {'keep'}, 'Abandoned discovery replaced the saved catalogue'

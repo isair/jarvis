@@ -1,6 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Optional, Dict, Any, Tuple, List
+from typing import Optional, Dict, Any, Tuple, List, Callable
 import sys
 import re
 import requests
@@ -80,7 +80,9 @@ def get_cached_mcp_tools() -> Dict[str, "ToolSpec"]:
         return _mcp_tools_cache.copy()
 
 
-def refresh_mcp_tools(verbose: bool = True) -> Tuple[Dict[str, "ToolSpec"], Dict[str, str]]:
+def refresh_mcp_tools(
+    verbose: bool = True, *, check_active: Optional[Callable[[], None]] = None,
+) -> Tuple[Dict[str, "ToolSpec"], Dict[str, str]]:
     """
     Refresh MCP tools cache by rediscovering all tools.
 
@@ -89,7 +91,11 @@ def refresh_mcp_tools(verbose: bool = True) -> Tuple[Dict[str, "ToolSpec"], Dict
     """
     global _mcp_tools_cache
 
+    if check_active is not None:
+        check_active()
     with _mcp_tools_cache_lock:
+        if check_active is not None:
+            check_active()
         if not _mcp_config_cache:
             debug_log("No MCP config cached, skipping refresh", "mcp")
             return {}, {}
@@ -97,7 +103,10 @@ def refresh_mcp_tools(verbose: bool = True) -> Tuple[Dict[str, "ToolSpec"], Dict
         if verbose:
             print("🔄 Refreshing MCP tools...", flush=True)
 
-        _mcp_tools_cache, errors = discover_mcp_tools(_mcp_config_cache)
+        tools, errors = discover_mcp_tools(_mcp_config_cache, check_active=check_active)
+        if check_active is not None:
+            check_active()
+        _mcp_tools_cache = tools
 
         if verbose:
             print(f"  ✅ Found {len(_mcp_tools_cache)} MCP tools", flush=True)
@@ -122,56 +131,63 @@ class ToolSpec:
     read_only: bool = False  # Explicit MCP readOnlyHint; unknown tools stay serial.
 
 
-def discover_mcp_tools(mcps_config: Dict[str, Any]) -> Tuple[Dict[str, ToolSpec], Dict[str, str]]:
-    """Discover all tools from configured MCP servers and create ToolSpec entries for them.
+def discover_mcp_tools(
+    mcps_config: Dict[str, Any], *, check_active: Optional[Callable[[], None]] = None,
+) -> Tuple[Dict[str, ToolSpec], Dict[str, str]]:
+    """Discover configured tools, checking query activity between servers.
 
-    Returns:
-        Tuple of (discovered_tools, errors) where errors maps server name to error message.
+    An active checker raises when its caller is abandoned. Already issued
+    discovery can finish, but no following server or cache publication begins.
     """
     if not mcps_config:
         return {}, {}
-
+    if check_active is not None:
+        check_active()
     try:
         client = MCPClient(mcps_config)
-        discovered_tools = {}
-        errors: Dict[str, str] = {}
+    except Exception as error:
+        debug_log(f"Failed to discover MCP tools: {error}", "mcp")
+        return {}, {"_global": str(error)}
 
-        for server_name in mcps_config.keys():
-            try:
-                tools = client.list_tools(server_name)
-                for tool_info in tools:
-                    tool_name = tool_info.get("name")
-                    if not tool_name:
-                        continue
+    discovered_tools = {}
+    errors: Dict[str, str] = {}
 
-                    # Create a unique tool name: server__toolname
-                    full_tool_name = f"{server_name}__{tool_name}"
+    for server_name in mcps_config.keys():
+        if check_active is not None:
+            check_active()
+        try:
+            tools = client.list_tools(server_name)
+            for tool_info in tools:
+                tool_name = tool_info.get("name")
+                if not tool_name:
+                    continue
 
-                    # Create a ToolSpec for this MCP tool
-                    description = tool_info.get("description", f"Tool from {server_name} MCP server")
-                    input_schema = tool_info.get("inputSchema", {"type": "object", "properties": {}, "required": []})
-                    discovered_tools[full_tool_name] = ToolSpec(
-                        name=full_tool_name,
-                        description=description,
-                        inputSchema=input_schema,
-                        read_only=bool(tool_info.get("readOnlyHint", False)),
-                    )
+                # Create a unique tool name: server__toolname
+                full_tool_name = f"{server_name}__{tool_name}"
 
-            except BaseException as e:
-                # ExceptionGroups (from anyio TaskGroup) wrap the real cause;
-                # extract the first sub-exception for a useful error message.
-                cause = e
-                if hasattr(e, "exceptions") and e.exceptions:
-                    cause = e.exceptions[0]
-                debug_log(f"Failed to discover tools from MCP server '{server_name}': {cause}", "mcp")
-                errors[server_name] = str(cause)
-                continue
+                # Create a ToolSpec for this MCP tool
+                description = tool_info.get("description", f"Tool from {server_name} MCP server")
+                input_schema = tool_info.get("inputSchema", {"type": "object", "properties": {}, "required": []})
+                discovered_tools[full_tool_name] = ToolSpec(
+                    name=full_tool_name,
+                    description=description,
+                    inputSchema=input_schema,
+                    read_only=bool(tool_info.get("readOnlyHint", False)),
+                )
 
-        return discovered_tools, errors
+        except BaseException as e:
+            # ExceptionGroups (from anyio TaskGroup) wrap the real cause;
+            # extract the first sub-exception for a useful error message.
+            cause = e
+            if hasattr(e, "exceptions") and e.exceptions:
+                cause = e.exceptions[0]
+            debug_log(f"Failed to discover tools from MCP server '{server_name}': {cause}", "mcp")
+            errors[server_name] = str(cause)
+            continue
 
-    except Exception as e:
-        debug_log(f"Failed to discover MCP tools: {e}", "mcp")
-        return {}, {"_global": str(e)}
+    if check_active is not None:
+        check_active()
+    return discovered_tools, errors
 
 
 def generate_tools_json_schema(allowed_tools: Optional[List[str]] = None, mcp_tools: Optional[Dict[str, ToolSpec]] = None) -> List[Dict[str, Any]]:

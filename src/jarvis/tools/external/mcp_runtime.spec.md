@@ -62,6 +62,15 @@ resident for the daemon's lifetime.
   sessions. Sync `MCPClient.list_tools` / `invoke_tool` route through
   the runtime.
 
+## Query-scoped discovery
+
+The reply's execution control bounds cache readiness, catalogue refresh and
+cache reads. A query-scoped refresh passes an activity checker through discovery;
+it checks after acquiring the cache lock, before each server, and before
+publishing the new catalogue. Abandoned discovery can finish its issued read,
+but does not start a later server or replace the saved catalogue. Startup
+discovery without a query scope retains its ordinary server timeouts.
+
 ## Public surface
 
 - `MCPClient.list_tools(server_name)` — returns a list of tool dicts.
