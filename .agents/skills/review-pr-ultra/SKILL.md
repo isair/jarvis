@@ -29,6 +29,11 @@ gh pr diff <PR>
 ```
 
 Read the project's `AGENTS.md` for coding conventions the review should enforce.
+Apply `AGENTS.md`'s **Product vision and scope** gate before judging technical
+quality. Preserve a brief product-fit assessment in the final report; unresolved
+scope blocks feature readiness even if every specialist finds sound code.
+Include this assessment and any open scope question in each specialist's context.
+
 Store all context — include it in each specialist agent's prompt.
 
 ## Step 2 — Spawn Specialist Agents (Parallel)
@@ -64,6 +69,8 @@ Focus: Efficiency and scalability.
 
 ### Agent 4: Maintainability & Simplicity Reviewer
 Focus: Design quality, readability, and simplicity.
+- Assess product fit under `AGENTS.md`: user benefit, shared voice/chat flow,
+  simpler existing alternatives and the complexity the proposal introduces.
 - SOLID principle violations, excessive coupling, low cohesion
 - Code duplication (DRY violations)
 - Naming clarity (variables, functions, classes)
@@ -167,6 +174,7 @@ Collect all VERIFIED and DOWNGRADED findings. Produce a final review report:
 
 | State | Verdict |
 |-------|---------|
+| Unresolved product-fit blocker | **REQUEST_CHANGES** |
 | ≥ 1 VERIFIED critical or high | **REQUEST_CHANGES** |
 | All highs downgraded; only mediums verified | **COMMENT** |
 | No verified ≥ medium | **APPROVE** |
@@ -176,7 +184,7 @@ Collect all VERIFIED and DOWNGRADED findings. Produce a final review report:
 - Be specific: include file paths, line numbers, and code snippets
 - Be constructive: every criticism must include a concrete suggestion
 - Acknowledge what's done well — reviews should be balanced
-- If no critical/high issues exist, lean towards APPROVE
+- If product fit is established and no critical/high issues exist, lean towards APPROVE
 - Use the project's conventions (British English, emojis for emphasis)
 
 ## Step 5 — Present and Ask for Go-Ahead
