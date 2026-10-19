@@ -103,7 +103,7 @@ def test_oversized_batch_has_no_partial_effects(mock_config, db, dialogue_memory
         [_call("London", "first"), _call("Paris", "second"), _call("Berlin", "third")], budget=2)
     assert calls == []
     results = _paired_results(histories[1])
-    assert all(r["tool_failed"] and "No tool in this batch was executed" in r["content"] for r in results)
+    assert all(r["tool_failed"] and "No action in this batch was performed" in r["content"] for r in results)
 
 
 def test_malformed_entries_do_not_hide_recognisable_calls(mock_config, db, dialogue_memory):
@@ -141,3 +141,17 @@ def test_discovery_only_authorises_subsequent_model_requests(mock_config, db, di
     final_outcomes = [m for m in histories[2] if m.get("role") == "tool"]
     assert final_outcomes[-1]["tool_call_id"] == "selected"
     assert final_outcomes[-1]["tool_failed"] is False
+
+
+@pytest.mark.parametrize("stop_first", [True, False])
+def test_stop_dismisses_even_an_oversized_batch(mock_config, db, dialogue_memory, stop_first):
+    from jarvis.reply.engine import STOP_SIGNAL
+    from jarvis.tools.types import ToolExecutionResult
+    stop = _call("", "dismiss", name="stop", arguments={})
+    actions = [_call("London", "first"), _call("Paris", "second")]
+    requests = [stop, *actions] if stop_first else [*actions, stop]
+    calls, histories, reply = _run(mock_config, db, dialogue_memory, requests, budget=2,
+        outcome=lambda count: ToolExecutionResult(success=True, reply_text=STOP_SIGNAL))
+    assert calls == [("stop", {})]
+    assert len(histories) == 1
+    assert reply is None

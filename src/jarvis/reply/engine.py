@@ -2470,20 +2470,23 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             break
 
         # Every native request consumes a slot in the existing reply budget.
-        # Reject an oversized batch before any side effect; the model can retry
-        # with a smaller request while there is still a response turn available.
+        # Reject oversized work before actions; stop remains a terminal control.
+        # The model can retry smaller work while a response slot remains.
         batch_over_budget = len(tool_requests) > max_turns - turn + 1
         batch_allowed_tools = frozenset(allowed_tools)
+        if batch_over_budget:
+            debug_log(f"native batch exceeds reply budget ({len(tool_requests)} requests, "
+                      f"{max_turns - turn + 1} slots); only dismissal can execute", "planning")
         if tool_requests and not batch_over_budget:
             turn += len(tool_requests) - 1
         for tool_name, tool_args, tool_call_id in tool_requests:
             if cancel_event is not None and cancel_event.is_set():
                 debug_log("reply cancelled between native tool requests", "planning")
                 return None
-            if batch_over_budget:
+            if batch_over_budget and tool_name != "stop":
                 _append_tool_feedback(
                     tool_name, tool_call_id,
-                    "This batch exceeds the remaining reply budget. No tool in this batch was executed. "
+                    "This batch exceeds the remaining reply budget. No action in this batch was performed. "
                     "Request fewer actions or report the unfinished work.", failed=True,
                 )
                 continue
