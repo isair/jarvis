@@ -9,8 +9,7 @@ from unittest.mock import patch
 import pytest
 
 from evals.conftest import requires_judge_llm
-from evals.helpers import assert_not_fallback_reply, voice_config
-from jarvis.config import get_default_config
+from evals.helpers import assert_not_fallback_reply, isolated_voice_settings
 from jarvis.llm import get_embedding_backend
 from jarvis.memory.conversation import DialogueMemory
 from jarvis.memory.db import Database
@@ -39,7 +38,7 @@ def test_citation_reader_preserves_exact_bounds(reply, expected):
 
 
 def configuration(tmp_path):
-    cfg = voice_config()
+    cfg = isolated_voice_settings()
     cfg.location_enabled = False
     cfg.planner_enabled = False
     cfg.memory_digest_enabled = False
@@ -49,7 +48,7 @@ def configuration(tmp_path):
     cfg.embedding_provider = cfg.llm_provider
     cfg.embedding_base_url = cfg.llm_base_url
     cfg.embedding_api_key = getattr(cfg, 'llm_api_key', '')
-    cfg.embedding_model = os.environ.get('EVAL_DOCUMENT_EMBEDDING_MODEL') or get_default_config()['embedding_model']
+    cfg.embedding_model = os.environ.get('EVAL_DOCUMENT_EMBEDDING_MODEL') or cfg.embedding_model
     Path(cfg.document_search_paths[0]).mkdir()
     return cfg
 
