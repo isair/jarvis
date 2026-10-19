@@ -980,7 +980,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     text: str, dialogue_memory: "DialogueMemory",
                     language: Optional[str] = None,
                     quiet: bool = False,
-                    speech_context: Optional["SpeechContext"] = None) -> Optional[str]:
+                    speech_context: Optional["SpeechContext"] = None,
+                    *, cancel_event=None) -> Optional[str]:
     """
     Main entry point for reply generation.
 
@@ -1003,6 +1004,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     Returns:
         Generated reply text or None
     """
+    if cancel_event is not None and cancel_event.is_set():
+        return None
+
     # Step 1: Redact sensitive information
     redacted = redact(text)
     transcript_context = speech_context.render() if speech_context else ""
@@ -2112,6 +2116,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         print("    ⚠️ Planned task needs recovery before continuing.", flush=True)
 
     while turn < max_turns:
+        if cancel_event is not None and cancel_event.is_set():
+            return None
         turn += 1
         debug_log(f"🔁 messages loop turn {turn}", "planning")
         print(f"  🔁 Turn {turn}/{max_turns}", flush=True)
@@ -2142,6 +2148,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                         tools_schema=tools_json_schema or [],
                         transcript_context=transcript_context,
                     )
+                    if cancel_event is not None and cancel_event.is_set():
+                        debug_log("reply cancelled after plan-step resolution", "planning")
+                        return None
                     if _resolved is not None:
                         _name, _args = _resolved
                         try:
@@ -2301,6 +2310,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 response=llm_resp,
             )
         except ToolsNotSupportedError:
+            if cancel_event is not None and cancel_event.is_set():
+                debug_log("reply cancelled before tool-protocol fallback", "planning")
+                return None
             # Model doesn't support the native tools API — switch to text-based tool calling
             # for the rest of this session and rebuild the system message to include tool
             # descriptions as plain text with markdown fence instructions.
@@ -2330,6 +2342,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 use_text_tools=True,
                 response=llm_resp,
             )
+        if cancel_event is not None and cancel_event.is_set():
+            debug_log("reply cancelled after model response", "planning")
+            return None
         if not llm_resp:
             debug_log("  ❌ LLM returned no response", "planning")
             break
@@ -2771,6 +2786,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         reply = _UNEXECUTED_ACTION_REPLY
         debug_log("unexecuted planned action: turn budget exhausted without execution", "planning")
 
+    if cancel_event is not None and cancel_event.is_set():
+        return None
+
     # Step 9: Handle error case - return error message if no reply
     if not reply or not reply.strip():
         # Max-turn backstop: the loop exhausted its turns without producing
@@ -2790,6 +2808,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 "planning",
             )
             digested = None
+        if cancel_event is not None and cancel_event.is_set():
+            debug_log("reply cancelled after max-turn digest", "planning")
+            return None
         if digested and digested.strip():
             debug_log(
                 "max-turn cap reached, delivered digest with caveat",
@@ -2827,6 +2848,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         return reply
 
     # Step 10: Output and memory update
+    if cancel_event is not None and cancel_event.is_set():
+        return None
     safe_reply = reply.strip()
     if not safe_reply:
         safe_reply = "Sorry, I had trouble processing that. Could you try again?"
@@ -2846,6 +2869,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             tts.speak(safe_reply)
 
     # Step 11: Add to dialogue memory
+    if cancel_event is not None and cancel_event.is_set():
+        return None
     if dialogue_memory is not None:
         try:
             # Add user message

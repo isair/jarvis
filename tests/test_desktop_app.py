@@ -1385,6 +1385,43 @@ class TestDaemonSmokeTest:
         dictation.stop.assert_called_once()
 
 
+    def test_tasks_drain_before_the_final_diary_and_tts_shutdown(self, runtime, monkeypatch):
+        import time
+        from types import SimpleNamespace
+        from jarvis import tasks
+
+        daemon, database, listener, dictation = runtime
+        state = {'active': True, 'tts_stopped': False}
+        completed, saved = [], []
+
+        def drain(wait=True):
+            state['active'] = False
+            completed.append('A task completing during shutdown')
+
+        monkeypatch.setattr(tasks, 'TaskManager', lambda **kwargs: SimpleNamespace(shutdown=drain))
+        tts = daemon.create_tts_engine.return_value
+        tts.stop.side_effect = lambda: state.update(tts_stopped=True)
+
+        def save(db, cfg, **kwargs):
+            if kwargs.get('force'):
+                saved.append((not state['active'], not state['tts_stopped'], tuple(completed)))
+
+        monkeypatch.setattr(daemon, '_check_and_update_diary', save)
+
+        class StopMainLoop(Exception):
+            pass
+
+        def stop_loop(seconds):
+            raise StopMainLoop()
+
+        clock = MagicMock(wraps=time)
+        clock.sleep.side_effect = stop_loop
+        monkeypatch.setattr(daemon, 'time', clock)
+        with pytest.raises(StopMainLoop):
+            daemon.main(smoke_test=False)
+        assert saved == [(True, True, ('A task completing during shutdown',))]
+
+
 class TestDesktopSmokeTest:
     """Desktop smoke startup, diagnostics and exit codes without native services."""
 

@@ -32,6 +32,7 @@ src/desktop_app/
 ├── face_widget.py       # Animated face visualization
 ├── themes.py            # Qt stylesheets and color palette
 ├── diary_dialog.py      # End-of-session diary update dialog
+├── task_centre.py       # Interactive local task queue and monitor
 ├── chat_window.py       # Text chat interface (see chat_window.spec.md)
 ├── memory_viewer.py     # Flask-based memory browser
 ├── updater.py           # Update checking logic
@@ -129,6 +130,7 @@ The central controller that manages:
 | **SettingsWindow** | Auto-generated config editor with tabbed categories |
 | **SetupWizard** | First-run configuration (Ollama, models, profile) |
 | **DictationHistoryWindow** | Scrollable list of past dictations with copy/delete/clear actions |
+| **TaskCentreWindow** | Submit, monitor, and cancel prompts executed by the local task service |
 | **ChatWindow** | Text chat interface alongside voice; shares one conversation with the voice path and is enabled only while the daemon is running (see `chat_window.spec.md`) |
 
 ### Activity log and downloads
@@ -362,6 +364,29 @@ daemon process cannot affect the current runtime. Shutdown disables the action;
 a replacement daemon begins with unpaused capture. Pause is runtime state and is
 not saved to configuration. The hardware capture stream remains warm while
 assistant input is discarded; this control does not claim to release the device.
+
+### Task Centre
+
+The task centre is available from the tray menu and submits prompts to the
+daemon's local task service. It displays queued, running, completed, failed,
+and cancelled tasks with their result or error. In bundled mode it calls the
+daemon service directly. In source mode it sends `TASK:` commands over the
+existing daemon stdin pipe and consumes `__TASK__:` JSON events from the log
+stream. The task centre does not create a second LLM or tool path.
+Task frames use a dedicated Qt signal instead of the activity timeline, in
+both bundled and source modes. Only standalone frames with typed task or
+submission fields can update the window. Task details use a read-only plain-text viewport with scrolling, so long results
+remain reachable without displacing submission and cancellation controls.
+Unchanged result text retains its reading position and selection during task updates. The
+window indexes rows by identity and retains active tasks plus the shared
+terminal-history limit, ordered by recent updates.
+
+A submitted draft stays visible and read-only until a matching admission
+response arrives. Accepted submissions clear it; rejected submissions preserve
+it and display the redacted error. After ten seconds without confirmation,
+the editor becomes available with guidance to check existing tasks before
+retrying. Stale acknowledgements cannot clear a newer draft.
+
 
 ## Theme System
 

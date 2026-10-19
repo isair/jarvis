@@ -22,6 +22,15 @@ control is evaluation-only; raw-context data flow matches the reply path.
 
 ## 1. Main Reply Loop (agentic messages loop)
 
+Task requests can supply a cooperative cancellation event. Entry and loop checks
+skip further work; checks after plan-step resolution and model responses prevent
+new tool actions, and a native-protocol failure cannot start fallback inference
+after cancellation. Current inference/tool calls finish under their configured
+deadlines. Cancellation suppresses final output and dialogue writes, including empty or
+failed max-turn digests. Desktop task requests run without TTS and use redacted,
+caller-owned delivery. Models, prompts and token budgets use their configured values. Voice and text
+requests do not supply this event.
+
 - **File**: [src/jarvis/reply/engine.py](src/jarvis/reply/engine.py) — `reply()` and the loop at ~lines 1370-1650; native tool-call path in `chat_with_messages()` (~1424, 1455).
 - **Trigger**: every user message. Runs up to `agentic_max_turns` (default 8) iterations per reply.
 - **Model / gating**: `cfg.llm_chat_model` via `get_llm_backend(cfg)`. Ollama defaults to E4B chat; setup budgets chat and fast together after embedding and Whisper overhead from the shared desktop model catalogue, preserving explicit saved choices. Larger chat recommendations retain room for E2B fast. Not optional. No size branching on the loop itself — size branching affects the digests around it.

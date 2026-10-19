@@ -10,6 +10,7 @@ import os
 import time
 import signal
 import threading
+import json
 import contextlib
 
 # Fix OpenBLAS threading crash in bundled apps (must be before numpy imports)
@@ -65,6 +66,7 @@ _global_stop_requested: bool = False
 _warm_profile_graph_listener = None  # registered callback, kept for shutdown unregister
 _global_tts_engine = None  # TTS engine reference for face animation polling
 _global_dictation_engine = None  # Dictation engine reference for history UI
+_global_task_manager = None
 # Config + DB booted by main(). Shared by the voice listener and the text-chat
 # submission path so voice and text are one conversation against one store.
 _global_cfg = None
@@ -639,6 +641,59 @@ def get_dictation_engine():
     return _global_dictation_engine
 
 
+def submit_task(prompt: str) -> str:
+    """Submit a prompt from an interactive desktop client."""
+    if _global_task_manager is None:
+        raise RuntimeError("Task service is not ready")
+    return _global_task_manager.submit(prompt)
+
+
+def cancel_task(task_id: str) -> bool:
+    """Cancel a queued task, or mark a running task as cancelled."""
+    if _global_task_manager is None:
+        return False
+    return _global_task_manager.cancel(task_id)
+
+
+def handle_task_stdin_line(line: str) -> bool:
+    """Handle a local task command and acknowledge correlated submissions."""
+    if not line.startswith("TASK:"):
+        return False
+    request_id = None
+    try:
+        command = json.loads(line[5:])
+        if not isinstance(command, dict):
+            raise ValueError("Task command must be an object")
+        request_id = command.get("request_id")
+        if not isinstance(request_id, str) or not 0 < len(request_id) <= 128:
+            request_id = None
+        action = command.get("action")
+        if action == "submit":
+            if request_id is None or not isinstance(command.get("prompt"), str):
+                raise ValueError("Task submission needs a request identity and text")
+            task_id = submit_task(command["prompt"])
+            _emit_task_event({"type": "submission", "request_id": request_id,
+                              "accepted": True, "task_id": task_id})
+        elif action == "cancel":
+            if not isinstance(command.get("id"), str):
+                raise ValueError("Task cancellation needs an identity")
+            cancel_task(command["id"])
+        else:
+            raise ValueError("Unknown task command")
+    except Exception as exc:
+        debug_log(f"invalid task command ({type(exc).__name__})", "tasks")
+        if request_id is not None:
+            from .utils.redact import redact
+            _emit_task_event({"type": "submission", "request_id": request_id,
+                              "accepted": False, "error": redact(str(exc))})
+    return True
+
+
+def _emit_task_event(event: dict) -> None:
+    from .tasks import TASK_EVENT_PREFIX
+    print(f"{TASK_EVENT_PREFIX}{json.dumps(event, ensure_ascii=False)}", flush=True)
+
+
 def _install_signal_handlers() -> None:
     """Ensure signals like Ctrl+Break trigger clean shutdown."""
     def _raise_keyboard_interrupt(_signum, _frame):
@@ -826,6 +881,7 @@ def main(smoke_test: bool = False) -> None:
 def _run_daemon(smoke_test: bool = False) -> None:
     """Initialise and run the daemon while holding its single-instance lock."""
     global _global_dialogue_memory, _global_stop_requested, _global_tts_engine, _global_dictation_engine
+    global _global_task_manager
     global _warm_profile_graph_listener
     global _global_voice_listener
 
@@ -1003,6 +1059,15 @@ def _run_daemon(smoke_test: bool = False) -> None:
     _global_tts_engine = tts  # Expose for face widget speaking animation
     _start_tts_engine(tts)
 
+    from .tasks import TaskManager
+    _global_task_manager = TaskManager(
+        db=db,
+        cfg=cfg,
+        dialogue_memory=_global_dialogue_memory,
+        event_callback=_emit_task_event,
+    )
+    print("📋 Task service ready", flush=True)
+
     # Initialize voice listening (only if dependencies available)
     print("🎤 Preparing speech recognition in the background...", flush=True)
     voice_thread: Optional[threading.Thread] = None
@@ -1092,6 +1157,10 @@ def _run_daemon(smoke_test: bool = False) -> None:
             except Exception:
                 pass
 
+        if _global_task_manager is not None:
+            _global_task_manager.shutdown(wait=True)
+            _global_task_manager = None
+
         if tts is not None:
             try:
                 tts.stop()
@@ -1148,6 +1217,8 @@ def _run_daemon(smoke_test: bool = False) -> None:
                     debug_log("SHUTDOWN command received, requesting stop", "jarvis")
                     request_stop()
                     break
+                if handle_task_stdin_line(stripped):
+                    continue
                 # Chat query-in (subprocess mode). Returns False for any other
                 # line, which we silently ignore.
                 if handle_voice_pause_stdin_line(stripped):
@@ -1220,6 +1291,10 @@ def _run_daemon(smoke_test: bool = False) -> None:
                 pass
             debug_log("voice thread stopped", "jarvis")
 
+        if _global_task_manager is not None:
+            _global_task_manager.shutdown(wait=True)
+            _global_task_manager = None
+
         # A chat worker that started just before the stop request is still
         # inside run_reply_engine, holding the database connection the
         # diary pass below is about to use and the one db.close() will
@@ -1250,8 +1325,7 @@ def _run_daemon(smoke_test: bool = False) -> None:
         if tts is not None:
             tts.stop()
 
-        # Tear down persistent MCP sessions so subprocess-launched
-        # children (e.g. chrome-devtools-mcp's Chrome) close cleanly.
+        # Tear down persistent MCP sessions after task workers have stopped.
         try:
             from .tools.external.mcp_runtime import shutdown_runtime
             shutdown_runtime()

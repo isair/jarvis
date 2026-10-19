@@ -120,7 +120,8 @@ def _should_emit_as_log(line: str) -> bool:
     """
     from jarvis.daemon import CHAT_IPC_PREFIX, VOICE_STATUS_IPC_PREFIX
 
-    return not line.startswith((CHAT_IPC_PREFIX, VOICE_STATUS_IPC_PREFIX))
+    from jarvis.tasks import TASK_EVENT_PREFIX
+    return not line.startswith((CHAT_IPC_PREFIX, VOICE_STATUS_IPC_PREFIX, TASK_EVENT_PREFIX))
 
 
 def _collect_runtime_status_snapshot(
@@ -1145,6 +1146,15 @@ class LogSignals(QObject):
     """Signals for thread-safe log updates."""
     new_log = pyqtSignal(str)
     voice_status = pyqtSignal(object, str)
+    task_event = pyqtSignal(str)
+
+    def dispatch_output(self, line: str) -> None:
+        """Separate task protocol frames from user-facing activity lines."""
+        from jarvis.tasks import TASK_EVENT_PREFIX
+        if line.startswith(TASK_EVENT_PREFIX):
+            self.task_event.emit(line)
+        else:
+            self.new_log.emit(line)
 
 
 class LogViewerWindow(QMainWindow):
@@ -1722,7 +1732,7 @@ class DaemonThread(KeepAliveWorker):
 
         try:
             # Redirect stdout/stderr to capture logs
-            log_writer = LogStream(self.log_signals.new_log.emit)
+            log_writer = LogStream(self.log_signals.dispatch_output)
             sys_module.stdout = log_writer
             sys_module.stderr = log_writer
 
@@ -1794,6 +1804,13 @@ class JarvisSystemTray:
         self.log_signals = LogSignals()
         self.log_signals.new_log.connect(self.log_viewer.append_log)
         self.log_signals.voice_status.connect(self._on_voice_pause_status)
+
+        from desktop_app.task_centre import TaskCentreWindow
+        self.task_centre = TaskCentreWindow(
+            submit_callback=self.submit_task,
+            cancel_callback=self.cancel_task,
+        )
+        self.log_signals.task_event.connect(self.task_centre.process_log_line)
 
         # Create memory viewer window (hidden by default)
         self.memory_viewer = MemoryViewerWindow()
@@ -1914,6 +1931,11 @@ class JarvisSystemTray:
         self.logs_action = QAction("📝 View Logs")
         self.logs_action.triggered.connect(self.show_log_viewer)
         self.menu.addAction(self.logs_action)
+
+        # Task centre action
+        self.tasks_action = QAction("🧭 Task Centre")
+        self.tasks_action.triggered.connect(self.show_task_centre)
+        self.menu.addAction(self.tasks_action)
 
         # Memory viewer action
         self.memory_action = QAction("🧠 Memory Viewer")
@@ -2230,6 +2252,40 @@ class JarvisSystemTray:
         self.log_viewer.show()
         self.log_viewer.raise_()
         self.log_viewer.activateWindow()
+
+    def show_task_centre(self) -> None:
+        """Show the interactive task centre."""
+        self.task_centre.show()
+        self.task_centre.raise_()
+        self.task_centre.activateWindow()
+
+    def submit_task(self, prompt: str, *, request_id: str):
+        """Submit a prompt to the in-process or subprocess daemon."""
+        if self.is_bundled:
+            from jarvis.daemon import submit_task
+            return submit_task(prompt)
+        if self.daemon_process is None or self.daemon_process.stdin is None:
+            raise RuntimeError("Start Jarvis before submitting a task")
+        import json
+        self.daemon_process.stdin.write(
+            f"TASK:{json.dumps({'action': 'submit', 'prompt': prompt, 'request_id': request_id}, ensure_ascii=False)}\n"
+        )
+        self.daemon_process.stdin.flush()
+        return None
+
+    def cancel_task(self, task_id: str):
+        """Cancel a prompt in the in-process or subprocess daemon."""
+        if self.is_bundled:
+            from jarvis.daemon import cancel_task
+            return cancel_task(task_id)
+        if self.daemon_process is None or self.daemon_process.stdin is None:
+            raise RuntimeError("Start Jarvis before cancelling a task")
+        import json
+        self.daemon_process.stdin.write(
+            f"TASK:{json.dumps({'action': 'cancel', 'id': task_id})}\n"
+        )
+        self.daemon_process.stdin.flush()
+        return True
 
     def show_memory_viewer(self) -> None:
         """Open memory in the embedded viewer or system browser."""
@@ -2570,6 +2626,7 @@ class JarvisSystemTray:
                     env["PYTHONPATH"] = f"{src_path}{os.pathsep}{env['PYTHONPATH']}"
                 else:
                     env["PYTHONPATH"] = str(src_path)
+                env["JARVIS_TASK_IPC"] = "1"
                 # Signal the daemon that we own its stdin (chat query-in IPC)
                 # so it starts the stdin monitor. Without this the daemon would
                 # treat a non-TTY stdin as "no monitor" on non-Windows, and a
@@ -2724,6 +2781,7 @@ class JarvisSystemTray:
             return
 
         from jarvis.daemon import CHAT_IPC_PREFIX, VOICE_STATUS_IPC_PREFIX
+        from jarvis.tasks import TASK_EVENT_PREFIX
         process = self.daemon_process
 
         try:
@@ -2744,6 +2802,8 @@ class JarvisSystemTray:
                     self._chat_ipc_signals.line_received.emit(line)
                 elif line.startswith(VOICE_STATUS_IPC_PREFIX):
                     self.log_signals.voice_status.emit(process, line)
+                elif line.startswith(TASK_EVENT_PREFIX):
+                    self.log_signals.task_event.emit(line)
                 if _should_emit_as_log(line):
                     self.log_signals.new_log.emit(line)
         except Exception as e:

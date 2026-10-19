@@ -456,3 +456,12 @@ cleanup attempts to remove unpublished temporary files. Failure logs contain the
 class only, keeping private payload text out of error messages. Diagnostic
 failures never interrupt the reply loop. Windows uses the directory's inherited
 access controls; POSIX mode assertions do not describe Windows ACLs.
+
+## Cooperative task cancellation
+
+An optional task cancellation event is checked at reply entry, agentic loop
+boundaries, after plan-step resolution, model responses and max-turn digests, before protocol
+fallback and before output or dialogue writes. A cancelled request returns no
+reply and starts no subsequent tool action. In-flight inference and tool calls
+finish under their existing deadlines; cancellation cannot undo completed actions.
+Voice and text chat do not supply a task cancellation event.
