@@ -71,6 +71,17 @@ SQLite transaction.
 
 `build_warm_profile(store, *, user_max_chars, directives_max_chars)` returns a `{"user": "...", "directives": "..."}` dict by walking the User and Directives subtrees breadth-first (ordered by each sibling's decayed access score) and concatenating node data up to the char caps. `format_warm_profile_block(profile)` renders it as a labelled system-prompt section using denial-template mirroring (see CLAUDE.md): the headings literally occupy the semantic slot that small-model canonical denials refer to ("INFORMATION THE USER HAS SHARED IN PRIOR CONVERSATIONS", "STANDING INSTRUCTIONS FROM THE USER").
 
+Node text is decoded incrementally from a read-only SQLite BLOB, with temporary
+text buffers bounded by the output budget and a small read chunk. Leading and
+trailing whitespace, Unicode, embedded NULs and the truncation ellipsis retain
+their text semantics. Identity lookup and text reading share a read savepoint;
+closing or abandoning that read releases only its snapshot, without committing
+or rolling back a caller's pending edits. Child enumeration reads identifiers
+in the same decayed-access order, without materialising child note payloads.
+Exhausted branch budgets do not read more nodes or enumerate descendants.
+Traversal can still enumerate sibling identifiers; text caps are not a total
+node-count or query-time budget.
+
 The warm profile is injected into every reply's initial system message (see `reply/engine.py` Step 3.5) unconditionally and query-agnostically — personalisation is the default, not something gated behind a question-detection heuristic. No LLM call is involved in composition; it's a pure SQLite read.
 
 ## Data Model

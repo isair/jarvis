@@ -11,6 +11,8 @@ See graph.spec.md for the full specification.
 
 from __future__ import annotations
 
+import codecs
+from contextlib import contextmanager
 import re
 import sqlite3
 import threading
@@ -406,6 +408,42 @@ class GraphMemoryStore:
             if row is None:
                 return None
             return self._row_to_node(row)
+
+    @contextmanager
+    def open_node_text(self, node_id: str):
+        """Yield decoded text chunks from one node snapshot, or None if absent.
+
+        Only bounded chunks enter Python. The read savepoint binds the row
+        identity to its BLOB and leaves any caller transaction uncommitted.
+        """
+        with self._lock:
+            self.conn.execute("SAVEPOINT graph_text_read")
+            try:
+                row = self.conn.execute(
+                    "SELECT rowid FROM memory_nodes WHERE id = ?", (node_id,),
+                ).fetchone()
+                if row is None:
+                    yield None
+                    return
+                encoding = self.conn.execute("PRAGMA encoding").fetchone()[0]
+                decoder = codecs.getincrementaldecoder(encoding)()
+                with self.conn.blobopen("memory_nodes", "data", row[0], readonly=True) as data:
+                    def chunks():
+                        while data.tell() < len(data):
+                            raw = data.read(4096)
+                            yield decoder.decode(raw, final=data.tell() == len(data))
+                    yield chunks()
+            finally:
+                self.conn.execute("RELEASE graph_text_read")
+
+    def get_child_ids(self, node_id: str) -> list[str]:
+        """Read child identifiers in decayed-access order without note payloads."""
+        score = _decay_score_sql()
+        with self._lock:
+            return [row[0] for row in self.conn.execute(
+                f"SELECT id FROM memory_nodes WHERE parent_id = ? ORDER BY {score} DESC",
+                (node_id,),
+            )]
 
     def get_children(self, node_id: str) -> list[MemoryNode]:
         """Get all direct children of a node, ordered by decayed access score."""
