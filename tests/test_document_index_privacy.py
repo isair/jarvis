@@ -96,3 +96,25 @@ def test_search_cannot_reuse_revoked_folder_authority(tmp_path, monkeypatch, rev
             monkeypatch.setattr(documents.np, 'dot', revoke_during_ranking)
         assert index.search('source') == []
         assert not cfg.document_search_paths or not cfg.document_search_enabled
+
+
+@pytest.mark.parametrize('enable_later', [False, True])
+def test_disabled_index_leaves_no_persistent_files_until_enabled(tmp_path, enable_later):
+    root = tmp_path / 'documents'
+    root.mkdir()
+    (root / 'guide.md').write_text('An explicitly enabled local source.')
+    cfg = SimpleNamespace(document_search_enabled=False, document_search_paths=[str(root)],
+                          embedding_model='owned-test', llm_embedding_timeout_sec=1)
+    before = set(tmp_path.iterdir())
+    with DocumentIndex(SimpleNamespace(db_path=str(tmp_path / 'diary.sqlite')), cfg,
+                       embedding_backend=Embeddings()) as index:
+        assert set(tmp_path.iterdir()) == before
+        assert index.refresh().complete
+        assert index.search('source') == []
+        assert set(tmp_path.iterdir()) == before
+        if enable_later:
+            cfg.document_search_enabled = True
+            assert index.refresh().complete
+            assert [hit.text for hit in index.search('source')] == ['An explicitly enabled local source.']
+    if not enable_later:
+        assert set(tmp_path.iterdir()) == before

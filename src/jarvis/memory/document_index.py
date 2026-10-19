@@ -99,10 +99,24 @@ class DocumentIndex:
         self.cfg = cfg
         self.limits = limits or IndexLimits()
         self.coverage = IndexCoverage()
-        self.embedding_backend = embedding_backend or get_embedding_backend(cfg)
+        self.embedding_backend = embedding_backend
         diary_path = str(db.db_path)
         self.path = ':memory:' if diary_path == ':memory:' else diary_path + '.documents.sqlite3'
         self._lock = threading.RLock()
+        self._conn = None
+        self._closed = False
+        if self.cfg.document_search_enabled:
+            self._open()
+
+    def _open(self) -> None:
+        if self._closed:
+            raise ValueError('Document index is closed')
+        if not self.cfg.document_search_enabled:
+            raise ValueError('Document search is disabled')
+        if self._conn is not None:
+            return
+        if self.embedding_backend is None:
+            self.embedding_backend = get_embedding_backend(self.cfg)
         self._conn = sqlite3.connect(self.path, timeout=1)
         try:
             self._conn.row_factory = sqlite3.Row
@@ -123,10 +137,13 @@ class DocumentIndex:
             """)
         except BaseException:
             self._conn.close()
+            self._conn = None
             raise
 
     def close(self) -> None:
-        self._conn.close()
+        self._closed = True
+        if self._conn is not None:
+            self._conn.close()
 
     def __enter__(self):
         return self
@@ -328,6 +345,7 @@ class DocumentIndex:
         with self._lock:
             if work.stopped():
                 return self.coverage
+            self._open()
             roots = self._roots()
             if len(roots) > self.limits.roots:
                 work.coverage.reasons.add('roots')
@@ -352,6 +370,7 @@ class DocumentIndex:
         if len(query) > _MAX_CHUNK_CHARS:
             raise ValueError('Document search query exceeds its character limit')
         with self._lock:
+            self._open()
             roots, key = self._roots(), self._embedding_key()
             if not roots:
                 return []

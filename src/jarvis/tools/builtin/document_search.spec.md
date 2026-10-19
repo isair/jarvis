@@ -2,7 +2,9 @@
 
 Searches user-owned `.txt` and `.md` files under explicitly configured folders.
 The feature is disabled by default and performs no filesystem or embedding work
-until the user enables it and supplies at least one folder.
+until the user enables it and supplies at least one folder. Constructing or
+closing a disabled index creates no persistent files; enabling it permits
+subsequent refreshes and searches to initialise its storage.
 
 ### Indexing
 
