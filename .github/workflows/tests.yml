@@ -142,7 +142,7 @@ jobs:
           from pathlib import Path
           import subprocess
           import sys
-          prefixes = ('PyQt6>=', 'psutil', 'pytest==', 'python-dotenv==', 'requests==')
+          prefixes = ('PyQt6>=', 'psutil', 'pytest==', 'python-dotenv==', 'requests==', 'filelock')
           dependencies = [line for line in Path('requirements.txt').read_text().splitlines()
                           if line.startswith(prefixes)]
           subprocess.run([sys.executable, '-m', 'pip', 'install', *dependencies,
