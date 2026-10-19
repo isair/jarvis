@@ -24,6 +24,18 @@ pytestmark = [pytest.mark.eval, requires_judge_llm]
     ('Kullanıcı "Öğretmen olarak çalışıyorum" cümlesini çevirmemi istedi.', 'USER', 'The user works as a teacher.', False),
     ('Der Benutzer bat um ein Rollenspiel als Lehrer.', 'USER', 'The user works as a teacher.', False),
     ('The user is visiting Bristol for the weekend.', 'USER', 'The user lives in Bristol.', False),
+    ('The user asked about the difference between a dynamic camera system and a fixed camera setup in games.',
+     'USER', 'The user asked about the difference between a dynamic camera system and a fixed camera setup in games', False),
+    ('The user inquired about the difference between dynamic and fixed camera setups in games.',
+     'USER', 'The user inquired about the difference between dynamic and fixed camera setups in games', False),
+    ('The weather forecast for London for the week will range from 6.8 to 16.8 degrees Celsius.',
+     'WORLD', 'The weather forecast for London for the week will range from 6.8 to 16.8 degrees Celsius', False),
+    ('The user requested the weather forecast for London.', 'USER', 'The user is in London', False),
+    ('The user requested the weather forecast for London.', 'USER', 'The user is located in London', False),
+    ('The user follows an 1800 kcal daily meal plan.', 'USER', 'The user follows an 1800 kcal daily meal plan', True),
+    ('A lookup established that Trenches Boxing Club in Hackney offers evening classes.',
+     'WORLD', 'Trenches Boxing Club in Hackney offers evening classes', True),
+    ('The user said they live in London and requested tomorrow\'s weather.', 'USER', 'The user lives in London', True),
 ])
 def test_review_checks_candidate_relationship_against_source(monkeypatch, summary, branch, fact, supported):
     from jarvis.memory import graph_ops
