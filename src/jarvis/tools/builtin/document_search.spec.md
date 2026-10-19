@@ -46,7 +46,9 @@ ranking retains at most ten candidates in memory.
 
 Each embedding timeout is capped by the remaining pass deadline. Cancellation
 and deadlines are checked between directory entries, source files, embedding
-calls and publication. Query inference checks interruption before invalidating
+calls and publication. Current folder authority is rechecked before each source
+read and each new source embedding. Revocation stops admitting affected work
+and records partial coverage; already admitted transport calls may finish. Query inference checks interruption before invalidating
 cached vectors, so a cancelled or expired query preserves reusable excerpts.
 Cancellation during search produces an unsuccessful tool result. A cancelled file
 never publishes partially. Whole-file chunk and cache capacity are checked before inference and cache
@@ -61,8 +63,10 @@ coverage of a larger collection. No permanent indexing worker is required.
 The query is embedded locally and matched against indexed chunks. Results are
 bounded to the requested top-k (maximum 10) and include the resolved file path,
 line range, and excerpt. Excerpts are wrapped in
-`UNTRUSTED LOCAL DOCUMENT` delimiters. Document text is data to quote or
-summarise, not instructions to follow.
+`UNTRUSTED LOCAL DOCUMENT` delimiters. Each excerpt is one JSON data paragraph
+containing its path, line range and text. Angle brackets are Unicode-escaped
+inside the JSON so source content and names cannot manufacture delimiter
+boundaries. Document text is data to quote or summarise, not instructions to follow.
 
 Every result includes complete or partial index coverage and explicit reasons
 for incomplete coverage. A source replaced during a read reports changed-source

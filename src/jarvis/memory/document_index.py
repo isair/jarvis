@@ -200,11 +200,21 @@ class DocumentIndex:
             pass
         return None
 
+    def _has_current_authority(self, path: Path, work: _Pass) -> bool:
+        """Admit source work only while its folder remains explicitly authorised."""
+        if any(self._under_root(path, root) for root in self._roots()):
+            return True
+        work.coverage.reasons.add('authority')
+        debug_log('Document source work stopped after folder authority changed', 'documents')
+        return False
+
     def _iter_allowed_files(self, roots: Iterable[Path], work: _Pass) -> Iterable[Path]:
         seen = set()
         for root in roots:
             if work.stopped():
                 return
+            if not self._has_current_authority(root, work):
+                continue
             stack = []
             try:
                 owner = ExitStack()
@@ -216,6 +226,8 @@ class DocumentIndex:
                 stack.append((root, owner, directory, entries))
                 while stack and not work.stopped():
                     folder, owner, directory, entries = stack[-1]
+                    if not self._has_current_authority(folder, work):
+                        break
                     entry = next(entries, None)
                     if entry is None:
                         stack.pop()[1].close()
@@ -241,7 +253,7 @@ class DocumentIndex:
                             if (path in seen or path.suffix.lower() not in _ALLOWED_EXTENSIONS
                                     or not self._under_root(path, root)):
                                 continue
-                            if self._authorised_identity(path, [root]) is None:
+                            if self._authorised_identity(path, self._roots()) is None:
                                 work.coverage.reasons.add('unreadable')
                                 continue
                             seen.add(path)
@@ -304,8 +316,10 @@ class DocumentIndex:
             work.coverage.reasons.add('cached_files')
         return count + chunks <= self.limits.cached_chunks and files < self.limits.cached_files
 
-    def _index_file(self, path: Path, roots: list[Path], work: _Pass) -> bool:
-        identity = self._authorised_identity(path, roots)
+    def _index_file(self, path: Path, work: _Pass) -> bool:
+        if not self._has_current_authority(path, work):
+            return False
+        identity = self._authorised_identity(path, self._roots())
         if identity is None:
             work.coverage.reasons.add('changed')
             return False
@@ -322,6 +336,8 @@ class DocumentIndex:
                 work.coverage.reasons.add('file_bytes')
                 return False
             if not work.charge('input_bytes', size):
+                return False
+            if not self._has_current_authority(path, work):
                 return False
             with open_document_file(path) as stream:
                 opened = os.fstat(stream.fileno())
@@ -341,6 +357,8 @@ class DocumentIndex:
             prepared = []
             dimension = None
             for start, end, chunk in chunks:
+                if not self._has_current_authority(path, work):
+                    return False
                 vector = self._embed(chunk, work)
                 if dimension is not None and dimension != vector.size:
                     raise ValueError('Document embedding dimensions changed during refresh')
@@ -381,11 +399,11 @@ class DocumentIndex:
             for row in self._conn.execute('SELECT path,identity FROM document_files').fetchall():
                 if work.stopped():
                     return self.coverage
-                if self._authorised_identity(Path(row['path']), roots) != row['identity']:
+                if self._authorised_identity(Path(row['path']), self._roots()) != row['identity']:
                     with self._conn:
                         self._conn.execute('DELETE FROM document_files WHERE path=?', (row['path'],))
             for path in self._iter_allowed_files(roots, work):
-                self._index_file(path, roots, work)
+                self._index_file(path, work)
                 if work.stopped() or work.coverage.reasons & {'files'}:
                     break
             debug_log(f'Document refresh coverage: {self.coverage}', 'documents')

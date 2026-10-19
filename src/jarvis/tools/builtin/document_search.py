@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from typing import TYPE_CHECKING, Any, Callable, Dict, Optional
 
 from ...debug import debug_log
@@ -90,13 +92,15 @@ class DocumentSearchTool(Tool):
             )
         excerpts = []
         for hit in hits:
-            excerpts.append(
-                f"[{hit.path}, lines {hit.start_line}-{hit.end_line}]\n"
-                f"{_FENCE_BEGIN}\n{hit.text}\n{_FENCE_END}"
-            )
+            payload = json.dumps({
+                "path": hit.path,
+                "line_range": f"lines {hit.start_line}-{hit.end_line}",
+                "text": hit.text,
+            }, ensure_ascii=False).replace('<', r'\u003c').replace('>', r'\u003e')
+            excerpts.append(f"{_FENCE_BEGIN}\n{payload}\n{_FENCE_END}")
         return ToolExecutionResult(
             True,
-            coverage_text + f"Local document results for '{query}'. Use only these cited excerpts:\n"
+            coverage_text + "Local document results. Use only these cited excerpts:\n"
             + "\n\n".join(excerpts),
             result_metadata=metadata,
         )
