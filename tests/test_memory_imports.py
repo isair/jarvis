@@ -491,3 +491,25 @@ def test_blank_edited_memory_does_not_restore_archived_text_in_recall(tmp_path):
         assert store.get_context_data(edited, max_chars=1200) == ''
         assert not build_warm_profile(store)['user']
         assert store.get_import_provenance(node.id)[0]['original_text'] == preview.items[0].text
+
+
+@pytest.mark.parametrize('branch', ['user', 'directives', 'world'])
+def test_importing_a_small_note_does_not_materialise_unrelated_large_notes(tmp_path, branch):
+    import tracemalloc
+
+    preview = imports.preview_text('Claude', 'A small reviewed entry.', label='Source')
+    with closing(GraphMemoryStore(str(tmp_path/'bounded-import.db'))) as store:
+        large = store.create_node('Large note', 'An unrelated saved note',
+                                  'z'*(imports.MAX_ENTRY_CHARS*512), branch)
+        tracemalloc.start()
+        try:
+            result = imports.commit_import(store, preview, [
+                imports.ImportChoice(preview.items[0].id, preview.items[0].text, branch, None),
+            ])
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        assert result.created == 1
+        assert store.get_node(result.node_ids[0]).data == preview.items[0].text
+        assert store.get_node(large.id).data == large.data
+        assert peak < imports.MAX_ENTRY_CHARS*64

@@ -545,13 +545,19 @@ class GraphMemoryStore:
             self.conn.execute('BEGIN IMMEDIATE')
             known = {}
             for branch in {record.branch for record in records}:
-                rows = self.conn.execute('''WITH RECURSIVE subtree(id) AS (
+                texts = tuple({record.reviewed_text for record in records
+                               if record.branch == branch and record.source_date is None})
+                if not texts:
+                    continue
+                placeholders = ','.join('?' for _ in texts)
+                rows = self.conn.execute(f'''WITH RECURSIVE subtree(id) AS (
                     SELECT id FROM memory_nodes WHERE id = ?
                     UNION SELECT child.id FROM memory_nodes child
                     JOIN subtree ON child.parent_id = subtree.id
                 ) SELECT id, data FROM memory_nodes WHERE id IN (SELECT id FROM subtree)
+                  AND data COLLATE BINARY IN ({placeholders})
                   AND NOT EXISTS (SELECT 1 FROM memory_import_node_sources source
-                                  WHERE source.node_id = memory_nodes.id)''', (branch,))
+                                  WHERE source.node_id = memory_nodes.id)''', (branch, *texts))
                 for row in rows:
                     text = row['data'] or ''
                     if text.strip():

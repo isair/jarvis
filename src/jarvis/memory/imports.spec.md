@@ -50,7 +50,9 @@ the diary or overwrite existing human edits.
 
 Graph nodes and provenance commit in one SQLite writer transaction. Any failure
 rolls back the batch. Exact whole-entry duplicates within a branch reuse an
-existing node. Case, whitespace, Unicode characters and surrounding context
+existing node. Duplicate lookup returns only exact reviewed-text candidates
+from the selected branches; unrelated note payloads do not enter Python. Case,
+whitespace, Unicode characters and surrounding context
 remain distinct; different branches, negations and temporal qualifiers remain
 distinct. Repeated imports do not duplicate nodes or provenance. A changed source
 can add provenance without rewriting a node edited after an earlier import.
