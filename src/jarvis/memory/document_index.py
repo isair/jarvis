@@ -209,13 +209,13 @@ class DocumentIndex:
             try:
                 owner = ExitStack()
                 try:
-                    entries = owner.enter_context(scan_document_directory(root))
+                    directory, entries = owner.enter_context(scan_document_directory(root))
                 except BaseException:
                     owner.close()
                     raise
-                stack.append((root, owner, entries))
+                stack.append((root, owner, directory, entries))
                 while stack and not work.stopped():
-                    folder, owner, entries = stack[-1]
+                    folder, owner, directory, entries = stack[-1]
                     entry = next(entries, None)
                     if entry is None:
                         stack.pop()[1].close()
@@ -230,11 +230,12 @@ class DocumentIndex:
                                 child = folder / entry.name
                                 owner = ExitStack()
                                 try:
-                                    entries = owner.enter_context(scan_document_directory(child))
+                                    child_directory, entries = owner.enter_context(
+                                        scan_document_directory(child, directory))
                                 except BaseException:
                                     owner.close()
                                     raise
-                                stack.append((child, owner, entries))
+                                stack.append((child, owner, child_directory, entries))
                         elif Path(entry.name).suffix.lower() in _ALLOWED_EXTENSIONS:
                             path = (folder / entry.name).resolve(strict=True)
                             if path not in seen and self._authorised_identity(path, [root]):
@@ -245,7 +246,7 @@ class DocumentIndex:
             except OSError:
                 work.coverage.reasons.add('unreadable')
             finally:
-                for _, owner, _ in reversed(stack):
+                for _, owner, _, _ in reversed(stack):
                     owner.close()
 
     def _embed(self, text: str, work: _Pass):

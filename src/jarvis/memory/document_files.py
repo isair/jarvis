@@ -69,16 +69,17 @@ def _open_entry(path: Path, parent, *, directory: bool):
 
 
 @contextmanager
-def _directory(path: Path):
-    """Pin each canonical ancestor, rejecting substitution by links at every step."""
+def _directory(path: Path, parent=None):
+    """Pin a child of an owned parent, or walk canonical ancestors from the anchor."""
     if not path.is_absolute():
         raise ValueError('Document capabilities require absolute paths')
     with ExitStack() as stack:
-        current = Path(path.anchor)
-        parent = _open_entry(current, None, directory=True)
+        parts = path.parts[1:] if parent is None else ()
+        current = Path(path.anchor) if parent is None else path
+        parent = _open_entry(current, parent, directory=True)
         close = _kernel.CloseHandle if os.name == 'nt' else os.close
         stack.callback(close, parent)
-        for part in path.parts[1:]:
+        for part in parts:
             current = current / part
             parent = _open_entry(current, parent, directory=True)
             stack.callback(close, parent)
@@ -102,8 +103,8 @@ def open_document_file(path: Path):
 
 
 @contextmanager
-def scan_document_directory(path: Path):
+def scan_document_directory(path: Path, parent=None):
     """Enumerate a pinned directory, never a substituted ancestor target."""
-    with _directory(path) as directory:
+    with _directory(path, parent) as directory:
         with os.scandir(path if os.name == 'nt' else directory) as entries:
-            yield entries
+            yield directory, entries

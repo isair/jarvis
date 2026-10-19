@@ -14,7 +14,9 @@ resolve outside an allowed folder are skipped. Both the entry and its resolved
 target must have an allowed extension; other extensions are ignored.
 Directory traversal and file reads use pinned filesystem capabilities. POSIX
 opens each canonical ancestor relative to its parent descriptor without following
-links and enumerates through directory descriptors. Windows opens every ancestor
+links and enumerates through directory descriptors. Nested scans reuse their
+pinned parent capability, keeping live handles linear in folder depth; normal
+completion, early budget stops and failures close every owned capability. Windows opens every ancestor
 and leaf without following reparse points, retaining deletion-denying ancestor
 handles while absolute names are used. Reads use the verified regular-file
 handle; a path-only check or post-inference denial is not the read boundary.

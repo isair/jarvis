@@ -168,3 +168,49 @@ def test_impossible_source_does_not_starve_later_small_files(tmp_path, monkeypat
             assert resource in coverage.reasons
             assert coverage.chunks == (1 if pass_number == 0 else 0)
             assert any(hit.text == 'retrievable source' for hit in index.search('query', 10))
+
+
+
+def test_supported_depth_fits_a_finite_descriptor_budget(tmp_path):
+    import os
+    if os.name != 'posix':
+        pytest.skip('POSIX descriptor limits require a POSIX host')
+    import resource
+
+    limits = documents.IndexLimits()
+    index, root = make_index(tmp_path, limits)
+    folder = root
+    for _ in range(limits.depth - 2):
+        folder /= 'nested'
+        folder.mkdir()
+    (folder / 'guide.md').write_text('deep authorised source')
+    previous = resource.getrlimit(resource.RLIMIT_NOFILE)
+    budget = min(256, previous[0])
+    try:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (budget, previous[1]))
+        with index:
+            assert index.refresh().complete
+            assert [hit.text for hit in index.search('source')] == ['deep authorised source']
+    finally:
+        resource.setrlimit(resource.RLIMIT_NOFILE, previous)
+
+
+@pytest.mark.parametrize('stop_early', [False, True])
+def test_directory_capabilities_close_after_a_scan(tmp_path, stop_early):
+    import os
+    import psutil
+
+    limits = replace(documents.IndexLimits(), entries=1) if stop_early else documents.IndexLimits()
+    index, root = make_index(tmp_path, limits)
+    folder = root
+    for _ in range(10):
+        folder /= 'nested'
+        folder.mkdir()
+    (folder / 'guide.md').write_text('owned source')
+    process = psutil.Process()
+    count = process.num_handles if os.name == 'nt' else process.num_fds
+    with index:
+        before = count()
+        for _ in range(3):
+            index.refresh()
+        assert count() <= before
