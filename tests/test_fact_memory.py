@@ -24,7 +24,7 @@ def store(tmp_path):
 
 
 def test_source_attribution_and_quote_are_required(store):
-    fact = store.add_fact(
+    fact, _ = store.add_fact(
         "The user lives in Bristol", kind="user", owner="user",
         source_ref="turn-1", source_type="dialogue", source_role="user",
         source_channel="text", source_text="I live in Bristol",
@@ -50,14 +50,14 @@ def test_source_attribution_and_quote_are_required(store):
 
 
 def test_explicit_correction_and_retraction_keep_history(store):
-    first = store.add_fact(
+    first, _ = store.add_fact(
         "The user lives in Bristol", kind="user", owner="user",
         source_ref="turn-1", source_type="dialogue", source_role="user",
         source_channel="text", source_text="I live in Bristol",
         evidence="I live in Bristol", observed_at="2026-01-01T10:00:00+00:00",
         predicate_key="residence",
     )
-    unrelated = store.add_fact(
+    unrelated, _ = store.add_fact(
         "The user works in London", kind="user", owner="user",
         source_ref="turn-2", source_type="dialogue", source_role="user",
         source_channel="text", source_text="I work in London",
@@ -155,7 +155,7 @@ def test_warm_profile_keeps_directives_whole_and_legacy_label(store):
 
 
 def test_recall_filters_superseded_and_merges_diary_under_budget(store):
-    old = store.add_fact(
+    old, _ = store.add_fact(
         "The user lives in Bristol", kind="user", owner="user",
         source_ref="turn-1", source_type="dialogue", source_role="user",
         source_channel="text", source_text="I live in Bristol",
@@ -286,8 +286,8 @@ def test_one_turn_supports_two_distinct_cited_facts(store):
     common = dict(source_ref="turn-1", source_type="dialogue", source_role="user",
                   source_channel="text", source_text="I live in Bristol and play chess",
                   observed_at="2026-01-01T10:00:00+00:00", kind="user", owner="user")
-    one = store.add_fact("The user lives in Bristol", evidence="I live in Bristol", **common)
-    two = store.add_fact("The user plays chess", evidence="play chess", **common)
+    one, _ = store.add_fact("The user lives in Bristol", evidence="I live in Bristol", **common)
+    two, _ = store.add_fact("The user plays chess", evidence="play chess", **common)
     assert one["source"]["evidence"] == "I live in Bristol"
     assert two["source"]["evidence"] == "play chess"
 
@@ -314,7 +314,7 @@ def test_recall_source_modes_include_legacy_world_without_trusting_it(store):
 
 
 def test_historical_valid_time_returns_predecessor_at_requested_date(store):
-    first = store.add_fact(
+    first, _ = store.add_fact(
         "The user lives in Bristol", kind="user", owner="user",
         source_ref="turn-1", source_type="dialogue", source_role="user",
         source_channel="text", source_text="I live in Bristol", evidence="I live in Bristol",
@@ -344,7 +344,7 @@ def test_mutations_change_revision_and_notify_profile_cache(store):
     register_fact_mutation_listener(callback)
     try:
         first_revision = store.revision()
-        fact = store.add_fact(
+        fact, _ = store.add_fact(
             "The user lives in Bristol", kind="user", owner="user",
             source_ref="turn-1", source_type="dialogue", source_role="user",
             source_channel="text", source_text="I live in Bristol", evidence="I live in Bristol",
@@ -361,7 +361,7 @@ def test_mutations_change_revision_and_notify_profile_cache(store):
 
 
 def test_manual_correction_redacts_fact_text_and_normalises_offset_times(store):
-    first = store.add_fact(
+    first, _ = store.add_fact(
         "The user lives in Bristol", kind="user", owner="user",
         source_ref="turn-1", source_type="dialogue", source_role="user",
         source_channel="text", source_text="I live in Bristol", evidence="I live in Bristol",
@@ -381,7 +381,7 @@ def test_manual_correction_redacts_fact_text_and_normalises_offset_times(store):
 
 
 def test_competing_corrections_cannot_leave_two_active_successors(store):
-    first = store.add_fact(
+    first, _ = store.add_fact(
         "The user lives in Bristol", kind="user", owner="user",
         source_ref="turn-1", source_type="dialogue", source_role="user",
         source_channel="text", source_text="I live in Bristol", evidence="I live in Bristol",
@@ -460,7 +460,7 @@ def test_web_claim_cannot_own_user_and_manual_directive_is_not_cut(store):
             observed_at="2026-01-01T10:00:00Z",
         )
     rule = "Always answer in British English and preserve every clause " + "precisely " * 1500
-    fact = store.add_fact(rule, kind="directive", owner="user", source_ref="manual-1",
+    fact, _ = store.add_fact(rule, kind="directive", owner="user", source_ref="manual-1",
                           source_type="manual", source_role="user", source_channel="text",
                           source_text=rule, evidence=rule, observed_at="2026-01-01T10:00:00Z")
     assert fact["text"] == rule.strip()

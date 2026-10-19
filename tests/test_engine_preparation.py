@@ -214,7 +214,7 @@ def test_external_correction_invalidates_profile_in_same_conversation(mock_confi
     mock_config.db_path = db.db_path
     mock_config.llm_chat_model = "test-large"
     store = FactStore(db.db_path)
-    fact = store.add_fact("I live in Paris", kind="user", owner="user", subject="user",
+    fact, _ = store.add_fact("I live in Paris", kind="user", owner="user", subject="user",
                           source_ref="test:old", source_type="dialogue", source_role="user",
                           source_channel="text", source_text="I live in Paris", evidence="I live in Paris",
                           observed_at="2026-01-01T00:00:00Z")

@@ -203,7 +203,8 @@ class FactStore:
                  source_text: str, evidence: str, observed_at: str,
                  source_app: str = "jarvis", subject: str = "",
                  predicate_key: str = "", valid_from: str | None = None,
-                 supersedes_id: int | None = None, embedding: list[float] | None = None) -> dict:
+                 supersedes_id: int | None = None, embedding: list[float] | None = None) -> tuple[dict, bool]:
+        """Return the assertion and whether this transaction inserted it."""
         text, evidence, source_text = _scrub(text), _scrub(evidence), _scrub(source_text)
         subject, predicate_key = _scrub(subject), _scrub(predicate_key)
         observed_at = _utc(observed_at)
@@ -265,9 +266,22 @@ class FactStore:
                 row = self.conn.execute(self._SELECT + " WHERE s.source_ref=? AND f.text=?", (source_ref, text)).fetchone()
                 if row is None:
                     raise
-                return self._row(row)
+                return self._row(row), False
         _notify("correct" if supersedes_id else "add", fact_id, kind, owner)
-        return self.get_fact(fact_id)
+        return self.get_fact(fact_id), True
+
+    def update_fact_embedding(self, fact_id: int, *, expected_text: str,
+                              embedding: list[float]) -> bool:
+        """Attach an optional vector only while its source assertion is active."""
+        with self._lock, self.conn:
+            updated = self.conn.execute(
+                "UPDATE memory_facts SET embedding_json=? WHERE id=? AND text=? AND status='active' AND embedding_json IS NULL",
+                (json.dumps(embedding), fact_id, expected_text),
+            )
+            if updated.rowcount != 1:
+                return False
+            self._revision()
+        return True
 
     def correct_fact(self, fact_id: int, *, text: str, evidence: str, source_text: str,
                      source_ref: str, source_role: str = "user", source_channel: str = "text",
@@ -276,11 +290,12 @@ class FactStore:
         old = self.get_fact(fact_id)
         if old is None:
             raise ValueError("Unknown fact")
-        return self.add_fact(text, kind=old["kind"], owner=old["owner"], subject=old["subject"],
+        fact, _ = self.add_fact(text, kind=old["kind"], owner=old["owner"], subject=old["subject"],
                              predicate_key=old["predicate_key"], source_ref=source_ref,
                              source_type="manual", source_role=source_role, source_channel=source_channel,
                              source_text=source_text, evidence=evidence, observed_at=observed_at or _now(),
                              valid_from=valid_from, supersedes_id=fact_id, embedding=embedding)
+        return fact
 
     def retract_fact(self, fact_id: int, *, evidence: str, observed_at: str | None = None) -> bool:
         if not evidence.strip():

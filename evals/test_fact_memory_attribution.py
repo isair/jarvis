@@ -56,7 +56,7 @@ def _correction_successful(store: FactStore, old_id: int, message: dict) -> bool
 def test_correction_assessment_requires_active_linked_user_residence(tmp_path, decoy_text):
     with closing(FactStore(str(tmp_path / "facts.db"))) as store:
         old_observed_at, correction = _correction_fixture()
-        old = store.add_fact("The user lives in Bristol", kind="user", owner="user",
+        old, _ = store.add_fact("The user lives in Bristol", kind="user", owner="user",
                              subject="user", predicate_key="residence", source_ref="old",
                              source_type="dialogue", source_role="user", source_channel="addressed_dialogue",
                              source_text="I live in Bristol", evidence="I live in Bristol",
@@ -83,7 +83,7 @@ def test_correction_assessment_requires_active_linked_user_residence(tmp_path, d
 def test_correction_assessment_accepts_grounded_successor(tmp_path, successor_text):
     with closing(FactStore(str(tmp_path / "facts.db"))) as store:
         old_observed_at, correction = _correction_fixture()
-        old = store.add_fact("The user lives in Bristol", kind="user", owner="user",
+        old, _ = store.add_fact("The user lives in Bristol", kind="user", owner="user",
                              subject="user", predicate_key="residence", source_ref="old",
                              source_type="dialogue", source_role="user", source_channel="addressed_dialogue",
                              source_text="I live in Bristol", evidence="I live in Bristol",
@@ -105,7 +105,7 @@ def test_correction_assessment_accepts_grounded_successor(tmp_path, successor_te
 def test_correction_assessment_rejects_negated_first_person_successor(tmp_path, successor_text):
     with closing(FactStore(str(tmp_path / "facts.db"))) as store:
         old_observed_at, correction = _correction_fixture()
-        old = store.add_fact("The user lives in Bristol", kind="user", owner="user",
+        old, _ = store.add_fact("The user lives in Bristol", kind="user", owner="user",
                              subject="user", predicate_key="residence", source_ref="old",
                              source_type="dialogue", source_role="user", source_channel="addressed_dialogue",
                              source_text="I live in Bristol", evidence="I live in Bristol",
@@ -178,7 +178,7 @@ def test_explicit_user_correction_links_existing_fact(tmp_path, scenario_recorde
     passed = False
     try:
         old_observed_at, correction = _correction_fixture()
-        old = store.add_fact("The user lives in Bristol", kind="user", owner="user",
+        old, _ = store.add_fact("The user lives in Bristol", kind="user", owner="user",
                              subject="user", predicate_key="residence", source_ref="old",
                              source_type="dialogue", source_role="user", source_channel="addressed_dialogue",
                              source_text="I live in Bristol", evidence="I live in Bristol",

@@ -18,7 +18,7 @@ def test_concurrent_profile_write_is_not_hidden_by_cache(tmp_path, mock_config, 
     old_text = 'Use long responses' if mutation == 'directive' else 'The user lives in Bristol'
     new_text = 'Keep replies concise' if mutation == 'directive' else 'The user lives in Bath'
     with closing(FactStore(path)) as store:
-        old = store.add_fact(
+        old, _ = store.add_fact(
             old_text, kind='directive' if mutation == 'directive' else 'user', owner='user',
             source_ref='owned-first', source_type='dialogue', source_role='user',
             source_channel='text', source_text=old_text, evidence=old_text,

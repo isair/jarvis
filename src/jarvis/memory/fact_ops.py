@@ -96,6 +96,9 @@ def _evidence_is_quoted(source: str, evidence: str) -> bool:
 def ingest_dialogue_facts(store: FactStore, messages: list[dict], cfg, *, source_app: str,
                           chat_model: str, timeout_sec: float = 30.0) -> FactIngestResult:
     """Extract from the source turn, validating role, quote and ownership."""
+    deadline = time.monotonic() + max(0.0, timeout_sec)
+    if time.monotonic() >= deadline:
+        return FactIngestResult(failed=True)
     clean = [
         {"source_index": index, "role": str(m.get("role", "unknown")), "channel": str(m.get("channel", "unknown")),
          "content": redact(str(m.get("content", ""))), "ts": float(m.get("ts", 0.0))}
@@ -118,10 +121,16 @@ def ingest_dialogue_facts(store: FactStore, messages: list[dict], cfg, *, source
     payload = ("<<<BEGIN UNTRUSTED DIALOGUE>>>\n" +
                json.dumps({"messages": clean, "existing_facts": candidates}, ensure_ascii=False) +
                "\n<<<END UNTRUSTED DIALOGUE>>>")
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        return FactIngestResult(failed=True)
     try:
-        response = _direct_llm(cfg, chat_model, _EXTRACT_PROMPT, payload, timeout_sec)
+        response = _direct_llm(cfg, chat_model, _EXTRACT_PROMPT, payload, remaining)
     except Exception as exc:
         debug_log(f"fact extraction call failed: {exc}", "memory")
+        return FactIngestResult(failed=True)
+    if time.monotonic() >= deadline:
+        debug_log("fact extraction budget exhausted; batch retained for retry", "memory")
         return FactIngestResult(failed=True)
     parsed = _parse_array(response or "")
     if parsed is None:
@@ -132,6 +141,9 @@ def ingest_dialogue_facts(store: FactStore, messages: list[dict], cfg, *, source
         return FactIngestResult(failed=True)
     stored = skipped = 0
     for item in parsed:
+        if time.monotonic() >= deadline:
+            debug_log("fact ingestion budget exhausted; batch retained for retry", "memory")
+            return FactIngestResult(stored, skipped, failed=True)
         if not isinstance(item, dict):
             skipped += 1
             continue
@@ -178,26 +190,36 @@ def ingest_dialogue_facts(store: FactStore, messages: list[dict], cfg, *, source
         timestamp = message["ts"]
         observed = datetime.fromtimestamp(timestamp, timezone.utc).isoformat() if timestamp else datetime.now(timezone.utc).isoformat()
         source_ref = hashlib.sha256(f"{source_app}:{timestamp}:{message['role']}:{message['content']}".encode()).hexdigest()
-        embedding = None
-        if getattr(cfg, "embedding_model", ""):
-            try:
-                embedding = get_embedding_backend(cfg).embed(text, cfg.embedding_model, timeout_sec=10.0)
-            except Exception as exc:
-                debug_log(f"fact embedding unavailable: {exc}", "memory")
         try:
-            before = store.revision()
-            store.add_fact(
+            fact, inserted = store.add_fact(
                 text, kind=kind, owner=owner, source_ref=source_ref,
                 source_type="dialogue", source_role=message["role"], source_channel=message["channel"],
                 source_text=message["content"], evidence=evidence, observed_at=observed,
                 source_app=source_app, subject=str(item.get("subject") or "").strip(),
                 predicate_key=str(item.get("predicate_key") or "").strip(),
-                valid_from=item.get("valid_from") or None, supersedes_id=supersedes, embedding=embedding,
+                valid_from=item.get("valid_from") or None, supersedes_id=supersedes,
             )
-            stored += int(store.revision() != before)
+            stored += int(inserted)
         except (ValueError, TypeError, KeyError) as exc:
             debug_log(f"fact rejected: {exc}", "memory")
             skipped += 1
+            continue
+        if inserted and getattr(cfg, "embedding_model", ""):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return FactIngestResult(stored, skipped, failed=True)
+            try:
+                embedding = get_embedding_backend(cfg).embed(
+                    text, cfg.embedding_model, timeout_sec=min(10.0, remaining),
+                )
+            except Exception as exc:
+                debug_log(f"fact embedding unavailable: {exc}", "memory")
+                embedding = None
+            if time.monotonic() >= deadline:
+                debug_log("fact indexing budget exhausted; batch retained for retry", "memory")
+                return FactIngestResult(stored, skipped, failed=True)
+            if embedding:
+                store.update_fact_embedding(fact["id"], expected_text=fact["text"], embedding=embedding)
     debug_log(f"fact extraction: stored={stored}, skipped={skipped}", "memory")
     return FactIngestResult(stored=stored, skipped=skipped)
 
@@ -218,7 +240,7 @@ def process_pending_fact_batches(store: FactStore, cfg, *, chat_model: str,
                                        chat_model=chat_model, timeout_sec=remaining)
         total_stored += result.stored
         total_skipped += result.skipped
-        if result.failed:
+        if result.failed or time.monotonic() >= deadline:
             failed = True
             break
         store.complete_batch(batch["id"])

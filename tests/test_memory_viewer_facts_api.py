@@ -14,7 +14,7 @@ pytestmark = pytest.mark.unit
 def facts_client(tmp_path, monkeypatch):
     path = str(tmp_path / "facts.db")
     store = FactStore(path)
-    fact = store.add_fact(
+    fact, _ = store.add_fact(
         "I live in Paris", kind="user", owner="user", subject="user",
         source_ref="dialogue:test", source_type="dialogue", source_role="user",
         source_channel="text", source_text="I live in Paris", evidence="I live in Paris",

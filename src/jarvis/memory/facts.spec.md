@@ -25,7 +25,11 @@ it contains no audio or tool payload. A failed extractor leaves the batch for
 retry. Successful extraction deletes the batch and retains only source hashes
 and cited evidence excerpts. Duplicate batches and duplicate facts are
 idempotent. `process_pending_fact_batches()` processes batches in order within
-one total timeout and stops at a failed or unfinished batch. An extractor result
+one total timeout shared by extraction and optional embeddings, and stops at a
+failed or unfinished batch. Validated facts commit before optional indexing.
+An expired batch retains its source and completed lexical facts; retrying it
+skips optional indexing for duplicate facts. Late vectors attach only while the
+original assertion remains active and unchanged. An extractor result
 above the per-batch candidate cap is treated as failed before any candidate is
 written, leaving the complete source batch for retry rather than dropping its
 tail.
@@ -50,7 +54,8 @@ Extraction has a 1200-token generation cap, including any provider-side reasonin
 and the caller's bounded timeout. Empty or truncated JSON is retryable, not a
 successful extraction.
 
-`add_fact()` stores a new assertion. It never infers supersession from recency.
+`add_fact()` returns the assertion and an atomic insertion flag, so unrelated
+mutations cannot trigger duplicate indexing. It stores a new assertion. It never infers supersession from recency.
 An explicit `supersedes_id` is accepted only for an active fact with matching
 kind and owner. The extractor further requires the same subject and predicate
 key. `correct_fact()` creates a successor and closes the old fact's valid
