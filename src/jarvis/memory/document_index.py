@@ -1,6 +1,7 @@
 """Isolated, atomic semantic storage for explicitly authorised documents."""
 from __future__ import annotations
 
+from contextlib import ExitStack
 import hashlib
 import heapq
 import json
@@ -15,6 +16,7 @@ from typing import Any, Iterable
 
 import numpy as np
 
+from .document_files import open_document_file, scan_document_directory
 from ..debug import debug_log
 from ..llm import get_embedding_backend
 from ..utils.embedding_vector import normalise_embedding
@@ -192,9 +194,8 @@ class DocumentIndex:
             if (resolved != path or resolved.suffix.lower() not in _ALLOWED_EXTENSIONS
                     or not any(self._under_root(resolved, root) for root in roots)):
                 return None
-            value = path.stat()
-            if stat.S_ISREG(value.st_mode):
-                return self._identity(value)
+            with open_document_file(path) as stream:
+                return self._identity(os.fstat(stream.fileno()))
         except (OSError, ValueError, RuntimeError):
             pass
         return None
@@ -206,11 +207,18 @@ class DocumentIndex:
                 return
             stack = []
             try:
-                stack.append(os.scandir(root))
+                owner = ExitStack()
+                try:
+                    entries = owner.enter_context(scan_document_directory(root))
+                except BaseException:
+                    owner.close()
+                    raise
+                stack.append((root, owner, entries))
                 while stack and not work.stopped():
-                    entry = next(stack[-1], None)
+                    folder, owner, entries = stack[-1]
+                    entry = next(entries, None)
                     if entry is None:
-                        stack.pop().close()
+                        stack.pop()[1].close()
                         continue
                     if not work.charge('entries'):
                         return
@@ -219,9 +227,16 @@ class DocumentIndex:
                             if len(stack) >= self.limits.depth:
                                 work.coverage.reasons.add('depth')
                             else:
-                                stack.append(os.scandir(entry.path))
+                                child = folder / entry.name
+                                owner = ExitStack()
+                                try:
+                                    entries = owner.enter_context(scan_document_directory(child))
+                                except BaseException:
+                                    owner.close()
+                                    raise
+                                stack.append((child, owner, entries))
                         elif Path(entry.name).suffix.lower() in _ALLOWED_EXTENSIONS:
-                            path = Path(entry.path).resolve(strict=True)
+                            path = (folder / entry.name).resolve(strict=True)
                             if path not in seen and self._authorised_identity(path, [root]):
                                 seen.add(path)
                                 yield path
@@ -230,8 +245,8 @@ class DocumentIndex:
             except OSError:
                 work.coverage.reasons.add('unreadable')
             finally:
-                for stream in stack:
-                    stream.close()
+                for _, owner, _ in reversed(stack):
+                    owner.close()
 
     def _embed(self, text: str, work: _Pass):
         if work.stopped():
@@ -302,9 +317,7 @@ class DocumentIndex:
                 return False
             if not work.charge('input_bytes', size):
                 return False
-            fd = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0)
-                         | getattr(os, 'O_NONBLOCK', 0))
-            with os.fdopen(fd, 'rb') as stream:
+            with open_document_file(path) as stream:
                 opened = os.fstat(stream.fileno())
                 if not stat.S_ISREG(opened.st_mode) or self._identity(opened) != identity:
                     work.coverage.reasons.add('changed')

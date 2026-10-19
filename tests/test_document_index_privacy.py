@@ -164,17 +164,21 @@ def test_atomic_editor_replacement_reports_incomplete_coverage_and_recovers(tmp_
     pending.write_text('replacement owned source')
     cfg = SimpleNamespace(document_search_enabled=True, document_search_paths=[str(root)],
                           embedding_model='owned-test', llm_embedding_timeout_sec=1)
-    original_open = os.open
+    from jarvis.memory import document_files
+    original_open = document_files._open_entry
     replaced = False
+    opens = 0
 
     def replace_at_open(path, *args, **kwargs):
-        nonlocal replaced
-        if Path(path) == source and not replaced:
-            pending.replace(source)
-            replaced = True
+        nonlocal replaced, opens
+        if path == source:
+            opens += 1
+            if opens == 3:
+                pending.replace(source)
+                replaced = True
         return original_open(path, *args, **kwargs)
 
-    monkeypatch.setattr(os, 'open', replace_at_open)
+    monkeypatch.setattr(document_files, '_open_entry', replace_at_open)
     with DocumentIndex(SimpleNamespace(db_path=str(tmp_path / 'diary.sqlite')), cfg,
                        embedding_backend=Embeddings()) as index:
         coverage = index.refresh()
@@ -183,3 +187,72 @@ def test_atomic_editor_replacement_reports_incomplete_coverage_and_recovers(tmp_
         assert not coverage.complete and 'changed' in coverage.reasons
         assert index.refresh().complete
         assert [hit.text for hit in index.search('source')] == ['replacement owned source']
+
+
+
+@pytest.mark.parametrize('boundary', ['authorisation', 'read', 'traversal'])
+def test_parent_directory_swap_never_reads_or_embeds_outside_bytes(tmp_path, monkeypatch, boundary):
+    import os
+    from pathlib import Path
+
+    root = tmp_path / 'documents'
+    nested = root / 'nested'
+    nested.mkdir(parents=True)
+    source = nested / 'source.txt'
+    source.write_text('authorised owned source')
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    secret = 'OWNED OUTSIDE PRIVACY SENTINEL'
+    (outside / 'source.txt').write_text(secret)
+    cfg = SimpleNamespace(document_search_enabled=True, document_search_paths=[str(root)],
+                          embedding_model='owned-test', llm_embedding_timeout_sec=1)
+    inputs = []
+    backend = SimpleNamespace(embed=lambda text, model, timeout_sec=1: inputs.append(text) or [1., 0.])
+    swapped = False
+    blocked = False
+
+    def swap():
+        nonlocal swapped, blocked
+        if not swapped and not blocked:
+            try:
+                nested.rename(tmp_path / 'original-nested')
+                nested.symlink_to(outside, target_is_directory=True)
+                swapped = True
+            except PermissionError:
+                # Windows pins deny ancestor deletion while names are in use.
+                blocked = True
+                raise
+
+    if boundary == 'authorisation':
+        original = Path.resolve
+        resolutions = 0
+        def resolve_then_swap(path, *args, **kwargs):
+            nonlocal resolutions
+            result = original(path, *args, **kwargs)
+            if path == source:
+                resolutions += 1
+                if resolutions == 3:
+                    swap()
+            return result
+        monkeypatch.setattr(Path, 'resolve', resolve_then_swap)
+    else:
+        from jarvis.memory import document_files
+        original = document_files._open_entry
+        opens = 0
+        def open_after_swap(path, *args, **kwargs):
+            nonlocal opens
+            if boundary == 'read' and path == source:
+                opens += 1
+                if opens == 3:
+                    swap()
+            elif boundary == 'traversal' and path == nested and kwargs['directory']:
+                swap()
+            return original(path, *args, **kwargs)
+        monkeypatch.setattr(document_files, '_open_entry', open_after_swap)
+
+    with DocumentIndex(SimpleNamespace(db_path=str(tmp_path / 'diary.sqlite')), cfg,
+                       embedding_backend=backend) as index:
+        index.refresh()
+        assert swapped or blocked
+        assert secret not in inputs
+        assert all(hit.text != secret for hit in index.search('source', 10))

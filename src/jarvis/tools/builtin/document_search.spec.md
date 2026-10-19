@@ -12,6 +12,12 @@ Each search performs a bounded refresh of configured folders and scans only
 regular files whose resolved path remains inside that folder. Symlinks that
 resolve outside an allowed folder are skipped. Both the entry and its resolved
 target must have an allowed extension; other extensions are ignored.
+Directory traversal and file reads use pinned filesystem capabilities. POSIX
+opens each canonical ancestor relative to its parent descriptor without following
+links and enumerates through directory descriptors. Windows opens every ancestor
+and leaf without following reparse points, retaining deletion-denying ancestor
+handles while absolute names are used. Reads use the verified regular-file
+handle; a path-only check or post-inference denial is not the read boundary.
 Device, inode, byte size and modification/change times identify each source.
 Unchanged files in the same embedding space are not re-embedded. Changed files are re-chunked and embedded, and deleted files
 remove their chunks and vectors. Unavailable or removed roots also remove their
