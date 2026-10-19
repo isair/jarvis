@@ -3822,7 +3822,7 @@ class MCPPage(ScrollableWizardPage):
         """Check if Node.js (npx) is available on the system."""
         try:
             from jarvis.tools.external.mcp_client import _resolve_command
-            _resolve_command("npx")
+            _resolve_command("npx", os.environ.get("PATH", ""))
             return True
         except (FileNotFoundError, Exception):
             return False

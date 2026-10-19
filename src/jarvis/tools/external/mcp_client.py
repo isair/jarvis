@@ -6,6 +6,8 @@ import shutil
 from typing import Any, Dict, Optional, List
 from contextlib import asynccontextmanager
 
+from jarvis.debug import debug_log
+
 from mcp import ClientSession  # type: ignore
 from mcp.client.stdio import stdio_client, StdioServerParameters  # type: ignore
 
@@ -47,10 +49,10 @@ def _get_user_shell() -> str:
     return os.environ.get("SHELL", "/bin/bash")
 
 
-def _resolve_command(command: str) -> str:
+def _resolve_command(command: str, search_path: str) -> str:
     """Resolve a command name to an absolute path.
 
-    First checks the current PATH via ``shutil.which``.  If that fails,
+    First checks the supplied PATH via ``shutil.which``.  If that fails,
     probes a list of common directories that GUI-launched daemons on macOS
     typically miss (Homebrew, nvm, fnm, Volta, etc.).  As a final fallback,
     spawns the user's login shell to resolve the command.
@@ -63,8 +65,8 @@ def _resolve_command(command: str) -> str:
             return command
         raise FileNotFoundError(f"MCP server command does not exist: {command}")
 
-    # Try standard PATH first
-    found = shutil.which(command)
+    # Try the server's effective PATH first
+    found = shutil.which(command, path=search_path)
     if found:
         return found
 
@@ -152,20 +154,24 @@ class MCPClient:
         # Windows compatibility: prefer npx.cmd when requested
         if os.name == "nt" and command.lower() == "npx":
             command = "npx.cmd"
-        # Resolve command to an absolute path
-        command = _resolve_command(command)
+        user_env = server_cfg.get("env") or {}
+        current_path = user_env.get("PATH", os.environ.get("PATH", ""))
+        if "PATH" in user_env:
+            debug_log("Resolving MCP command with the server's PATH override", "mcp")
+        command = _resolve_command(command, current_path)
         # Expand user (~) in args for filesystem paths
         raw_args = server_cfg.get("args") or []
         args = [os.path.expanduser(str(a)) if isinstance(a, str) else a for a in raw_args]
-        user_env = server_cfg.get("env") or {}
         # Ensure the resolved command's directory is on PATH so that
         # shebangs like #!/usr/bin/env node can find sibling binaries.
-        # We must pass the full environment because StdioServerParameters
-        # replaces (not merges) the parent env when env is not None.
+        # Forward inherited variables and explicit server overrides alongside
+        # the adjusted PATH.
         cmd_dir = os.path.dirname(command)
-        current_path = os.environ.get("PATH", "")
         if cmd_dir and cmd_dir not in current_path.split(os.pathsep):
-            env = {**os.environ, **user_env, "PATH": cmd_dir + os.pathsep + current_path}
+            env = {
+                **os.environ, **user_env,
+                "PATH": cmd_dir + (os.pathsep + current_path if current_path else ""),
+            }
         elif user_env:
             env = {**os.environ, **user_env}
         else:
