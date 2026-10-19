@@ -1,10 +1,23 @@
 """
-Unified system prompt for the assistant persona.
+Shared assistant persona and reply-delivery guidance.
 
 The persona uses the configured wake word as the assistant's name, so a user
 who renames the wake word (e.g. "Friday") gets a butler with the matching
 name rather than a persona hardcoded to "Jarvis".
 """
+
+ENGLISH_SPEECH_REPLY_GUIDANCE = (
+    "Reply delivery: English speech. The final user-facing reply must be in English, "
+    "the language selected for spoken output. A request in another language does "
+    "not change the spoken output language. Preserve names and quoted source text."
+)
+
+SILENT_REPLY_GUIDANCE = (
+    "Reply delivery: displayed text. Follow the language requested in the user's "
+    "current request, or the language of that request if none is specified. "
+    "The speech backend does not constrain this written reply."
+)
+
 
 _SYSTEM_PROMPT_TEMPLATE: str = (
     "Persona: you are a British butler named {name} — polite, composed, quietly amused, and "
