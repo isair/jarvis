@@ -50,8 +50,11 @@ facts and direct children outside the fixed branches can be manually created or
 imported; their placement does not establish their age or ownership.
 
 `GraphMemoryStore.has_unclassified_root_content()` reports non-empty root data or
-root children outside the fixed branches without writing to the database. The
-daemon advises users to review such notes in the Memory Viewer. All existing
+root children outside the fixed branches without writing to the database. Root
+text is inspected through the shared incremental text stream, so whole notes do
+not enter Python memory. Unicode whitespace remains empty; scanning stops at the
+first non-whitespace character. Entire whitespace-only notes require a full scan.
+The inspection leaves caller transactions uncommitted. The daemon advises users to review such notes in the Memory Viewer. All existing
 node IDs, contents, relationships and metadata remain intact, as does the diary.
 
 The warm profile includes User and Directives only. Unclassified root notes stay
