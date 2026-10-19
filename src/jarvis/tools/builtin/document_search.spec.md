@@ -33,7 +33,10 @@ ranking retains at most ten candidates in memory.
 
 Each embedding timeout is capped by the remaining pass deadline. Cancellation
 and deadlines are checked between directory entries, source files, embedding
-calls and publication. A cancelled file never publishes partially. Sources
+calls and publication. Query inference checks interruption before invalidating
+cached vectors, so a cancelled or expired query preserves reusable excerpts.
+Cancellation during search produces an unsuccessful tool result. A cancelled file
+never publishes partially. Sources
 that exceed a budget are skipped as complete files. An exhausted pass reports
 partial coverage and its reasons; a bounded scan does not promise exhaustive
 coverage of a larger collection. No permanent indexing worker is required.

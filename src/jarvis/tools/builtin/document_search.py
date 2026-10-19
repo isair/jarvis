@@ -65,6 +65,8 @@ class DocumentSearchTool(Tool):
                 if context.cancel_event is not None and context.cancel_event.is_set():
                     return ToolExecutionResult(False, "Document search was cancelled.")
                 hits = index.search(query, top_k=top_k, cancel_event=context.cancel_event)
+                if context.cancel_event is not None and context.cancel_event.is_set():
+                    return ToolExecutionResult(False, "Document search was cancelled.")
                 coverage = index.coverage
                 status = "complete" if coverage.complete else "partial"
                 details = ", ".join(sorted(coverage.reasons)) or "none"

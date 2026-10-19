@@ -358,6 +358,10 @@ class DocumentIndex:
             if not self._conn.execute('SELECT 1 FROM document_chunks LIMIT 1').fetchone():
                 return []
             vector = self._embed(query, work)
+            if work.stopped():
+                self.coverage.reasons.update(work.coverage.reasons)
+                debug_log('Document query interrupted before cache changes', 'documents')
+                return []
             with self._conn:
                 self._conn.execute('DELETE FROM document_files WHERE embedding_key=? AND dimension!=?',
                                    (key, int(vector.size)))
