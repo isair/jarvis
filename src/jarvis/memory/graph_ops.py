@@ -13,6 +13,7 @@ single intercept point tests patch.
 
 from __future__ import annotations
 
+from collections import deque
 import json
 import re
 import sqlite3
@@ -1202,43 +1203,57 @@ def consolidate_all_populated_nodes(
 # ── Warm profile (User + Directives) ─────────────────────────────────
 
 
+def _profile_text_prefix(chunks: Iterator[str], max_chars: int) -> str:
+    """Trim streamed text and preserve the profile's character-cap contract."""
+    parts: list[str] = []
+    position = 0
+    started = False
+    for chunk in chunks:
+        if not started:
+            chunk = chunk.lstrip()
+            if not chunk:
+                continue
+            started = True
+        if position <= max_chars:
+            parts.append(chunk[:max_chars + 1 - position])
+        last_content = len(chunk.rstrip())
+        if last_content and position + last_content > max_chars:
+            debug_log("🪴 Warm profile: node text reached the output budget", "memory")
+            return "".join(parts)[:max(0, max_chars - 1)].rstrip() + "…"
+        position += len(chunk)
+    return "".join(parts).rstrip()
+
+
 def _collect_branch_text(
     store: GraphMemoryStore, branch_root_id: str, max_chars: int,
 ) -> str:
-    """Return the concatenated ``data`` of all nodes in a branch's subtree,
-    newest-touched first, truncated at ``max_chars``.
-
-    Used to build the warm blob. We walk the subtree breadth-first from
-    the branch root so fresher / more-touched nodes (ordered by the
-    store's decayed access score) appear first; content gets truncated
-    at the char cap so the system prompt stays bounded.
-    """
-    root = store.get_node(branch_root_id)
-    if root is None:
-        return ""
+    """Collect bounded node text breadth-first in sibling decayed-access order."""
+    from .imports import render_streamed_memory_context
 
     parts: list[str] = []
     remaining = max_chars
-    # BFS ordered by sibling decayed-access score (get_children sorts).
-    queue: list[str] = [branch_root_id]
+    queue = deque([branch_root_id])
     visited: set[str] = set()
     while queue and remaining > 0:
-        node_id = queue.pop(0)
+        node_id = queue.popleft()
         if node_id in visited:
             continue
         visited.add(node_id)
-        node = store.get_node(node_id)
-        if node is None:
-            continue
-        if node.data:
-            snippet = store.get_context_data(node, max_chars=remaining, suffix='…')
-            if len(snippet) > remaining:
-                snippet = snippet[: max(0, remaining - 1)].rstrip() + "…"
-            if snippet:
-                parts.append(snippet)
-                remaining -= len(snippet) + 1  # +1 for separator
-        for child in store.get_children(node_id):
-            queue.append(child.id)
+        with store.open_node_text(node_id) as chunks:
+            if chunks is None:
+                continue
+            records = store.get_context_sources(node_id)
+            if records:
+                snippet = render_streamed_memory_context(
+                    chunks, branch_root_id, records, max_chars=remaining,
+                )
+            else:
+                snippet = _profile_text_prefix(chunks, remaining)
+        if snippet:
+            parts.append(snippet)
+            remaining -= len(snippet) + 1
+        if remaining > 0:
+            queue.extend(store.get_child_ids(node_id))
     return "\n".join(parts)
 
 

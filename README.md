@@ -212,6 +212,8 @@ Enable **Settings → Features → Low Power Mode**. It skips LLM startup warmup
 <details>
 <summary><strong>Run from source</strong></summary>
 
+Source installations require Python 3.11 or later.
+
 ```bash
 git clone https://github.com/isair/jarvis.git
 cd jarvis

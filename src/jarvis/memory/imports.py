@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import date
 from itertools import islice
 from pathlib import Path
-from typing import TYPE_CHECKING, Sequence
+from typing import TYPE_CHECKING, Iterable, Sequence
 
 from ..debug import debug_log
 from ..utils.redact import scrub_secrets
@@ -338,14 +338,38 @@ def commit_import(store: GraphMemoryStore, preview: ImportPreview, choices: Sequ
     return result
 
 
-def render_memory_context(text: str, kind: str, records: Sequence[dict], *, max_chars: int) -> str:
+def render_streamed_memory_context(
+    chunks: Iterable[str], kind: str, records: Sequence[dict], *, max_chars: int,
+) -> str:
+    """Read a bounded literal entry; incomplete lines cannot expose clipped secrets."""
+    parts: list[str] = []
+    size = 0
+    complete = True
+    for chunk in chunks:
+        part = chunk[:MAX_ENTRY_CHARS+1-size]
+        parts.append(part)
+        size += len(part)
+        if size > MAX_ENTRY_CHARS:
+            complete = False
+            break
+    text = ''.join(parts)
+    if not complete:
+        text = text[:text.rfind('\n', 0, MAX_ENTRY_CHARS)+1]
+        debug_log('📥 Imported memory: context omits an incomplete trailing line', 'memory')
+    return render_memory_context(text, kind, records, max_chars=max_chars,
+                                 source_complete=complete)
+
+
+def render_memory_context(
+    text: str, kind: str, records: Sequence[dict], *, max_chars: int, source_complete: bool,
+) -> str:
     """Keep source dates with bounded, fenced memory text, without new dates."""
     text = scrub_secrets(text)
     if not text.strip():
         return ''
     if kind == 'directives':
-        return text if len(text) <= max_chars else ''
-    matches = [record for record in records if record['current_binding'] and
+        return text if source_complete and len(text) <= max_chars else ''
+    matches = [record for record in records if source_complete and record['current_binding'] and
                text == record['reviewed_text']]
     dates = {record['source_date'] for record in matches}
     original_date = next(iter(dates)) if len(dates) == 1 else None
@@ -353,8 +377,8 @@ def render_memory_context(text: str, kind: str, records: Sequence[dict], *, max_
                                   for r in records[:2]]
     prefix, suffix = IMPORT_CONTEXT_BEGIN+'\n', '\n'+IMPORT_CONTEXT_END
     def encode(length):
-        state = {'date': original_date if length == len(text) else None,
-                 'text': text[:length], 'complete': length == len(text), 'kind': kind}
+        state = {'date': original_date if source_complete and length == len(text) else None,
+                 'text': text[:length], 'complete': source_complete and length == len(text), 'kind': kind}
         if archive:
             state['archived_quotes'] = archive
         return prefix+json.dumps(state, ensure_ascii=False, separators=(',', ':')).replace('<', '\\u003c').replace('>', '\\u003e')+suffix
