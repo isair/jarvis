@@ -71,6 +71,13 @@ class DocumentSearchTool(Tool):
                 status = "complete" if coverage.complete else "partial"
                 details = ", ".join(sorted(coverage.reasons)) or "none"
                 coverage_text = f"Index coverage: {status}. Incomplete coverage reasons: {details}.\n"
+                metadata = {
+                    "index_coverage": status,
+                    "incomplete_reasons": sorted(coverage.reasons),
+                    "citations": [{"path": hit.path,
+                                   "line_range": f"lines {hit.start_line}-{hit.end_line}"}
+                                  for hit in hits],
+                }
         except Exception as exc:
             debug_log(f"Local document search failed: {exc}", "documents")
             return ToolExecutionResult(False, f"Local document search failed: {exc}")
@@ -79,6 +86,7 @@ class DocumentSearchTool(Tool):
             return ToolExecutionResult(
                 True,
                 coverage_text + f"No matching documents were found for '{query}'. Do not infer an answer from the empty index.",
+                result_metadata=metadata,
             )
         excerpts = []
         for hit in hits:
@@ -90,4 +98,5 @@ class DocumentSearchTool(Tool):
             True,
             coverage_text + f"Local document results for '{query}'. Use only these cited excerpts:\n"
             + "\n\n".join(excerpts),
+            result_metadata=metadata,
         )

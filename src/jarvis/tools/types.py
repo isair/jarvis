@@ -12,3 +12,4 @@ class ToolExecutionResult:
     error_message: Optional[str] = None
     missing_context: Optional[str] = None
     resource_references: tuple[dict[str, Any], ...] = ()
+    result_metadata: Optional[dict[str, Any]] = None

@@ -143,7 +143,7 @@ requests do not supply this event.
 - **Model / gating**: `cfg.llm_chat_model` via `get_llm_backend(cfg)`. Gated by `tool_result_digest_enabled` — auto-on for SMALL via `detect_model_size(cfg.llm_chat_model)`.
 - **Inputs**: original user query, separate redacted transcript reference, tool name, raw tool result (e.g. webSearch payload inside UNTRUSTED WEB EXTRACT fence).
 - **System prompt**: `_TOOL_DIGEST_SYSTEM_PROMPT`. Teaches attributed fact extraction, `NONE` sentinel, no inference.
-- **Output**: ≤600 chars per batch (`_TOOL_DIGEST_MAX_CHARS`) replacing the raw payload in the messages stream. Falls back to raw on `NONE`. Successful structured resource references are bounded and rendered outside this digest, preserving exact record identity independently of summary prose. Internal reference metadata survives conversation tool carryover and prose truncation; reference strings are scrubbed before storage.
+- **Output**: ≤600 chars per batch (`_TOOL_DIGEST_MAX_CHARS`) replacing the raw payload in the messages stream. Falls back to raw on `NONE`. Successful structured resource references are bounded and rendered outside this digest, preserving exact record identity independently of summary prose. Successful result metadata is rendered independently of the digest; document retrieval carries coverage, incomplete reasons and exact source path/line citations through this channel. Internal reference metadata survives conversation tool carryover and prose truncation; reference strings are scrubbed before storage.
 - **Limits**: `llm_digest_timeout_sec` (8s, shared). `max_tokens: 1024` (`_TOOL_DIGEST_TOKEN_BUDGET`), including backend reasoning and the attributed note. Returned notes retain the 600-character cap.
 
 ## 6. Max-Turn Loop Digest

@@ -71,7 +71,9 @@ that cannot be opened report unreadable coverage rather than an exhaustive empty
 search. Query-time dimension invalidation reports partial coverage until a
 subsequent bounded refresh rebuilds the incompatible sources. Empty results do not establish that an unscanned source
 lacks the requested information. Query embedding failures return an error rather
-than a successful empty search. No result invents document content.
+than a successful empty search. Coverage, incomplete reasons and exact path/line citations also travel as
+structured result metadata outside lossy prose digestion. Empty searches retain
+their coverage metadata. No result invents document content.
 
 ### Configuration
 

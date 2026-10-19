@@ -172,3 +172,35 @@ def test_unreadable_eligible_source_reports_partial_and_recovers(tmp_path, monke
     recovered = tool.run({'query': 'source'}, ctx)
     assert recovered.success and 'owned unreadable source' in recovered.reply_text
     assert 'Index coverage: complete.' in recovered.reply_text
+
+
+
+@pytest.mark.parametrize('has_hits', [False, True])
+def test_coverage_and_citations_survive_lossy_tool_digest(tmp_path, monkeypatch, has_hits):
+    from jarvis.reply import engine
+
+    ctx, root = context(tmp_path)
+    source = root / 'guide.md'
+    if has_hits:
+        source.write_text('The project code is pear.\n' * 30)
+    limits = replace(IndexLimits(), file_bytes=1000)
+    (root / 'oversized.txt').write_text('x' * (limits.file_bytes + 1))
+    tool = DocumentSearchTool(index_factory=lambda db, cfg: DocumentIndex(
+        db, cfg, embedding_backend=Embeddings(), limits=limits))
+    query = 'look for ' + 'project code ' * 40
+    result = tool.run({'query': query}, ctx)
+    assert result.success
+    assert 'Index coverage: partial.' in result.reply_text
+    ctx.cfg.tool_result_digest_enabled = True
+    ctx.cfg.llm_chat_model = 'owned-test'
+    ctx.cfg.llm_digest_timeout_sec = 1
+    ctx.cfg.llm_thinking_enabled = False
+    digest = ('According to the local document, the project code is pear.' if has_hits
+              else 'The document search returned no matching excerpts.')
+    monkeypatch.setattr(engine, 'digest_tool_result_for_query', lambda **kwargs: digest)
+    content, _ = engine._tool_result_content(ctx.cfg, query, 'documentSearch', result)
+    assert digest in content
+    assert 'partial' in content and 'file_bytes' in content
+    if has_hits:
+        assert str(source.resolve()) in content
+        assert 'lines 1-30' in content
