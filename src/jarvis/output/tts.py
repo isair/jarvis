@@ -2,6 +2,7 @@ from __future__ import annotations
 import platform
 import subprocess
 import threading
+import asyncio
 import queue
 import shutil
 import signal
@@ -384,6 +385,18 @@ def _preprocess_for_speech(text: str) -> str:
     return result
 
 
+def _call_speech_callback(callback: Callable, arguments: tuple, label: str) -> None:
+    """Isolate observer failures, including cancellation of an observer's own task."""
+    try:
+        callback(*arguments)
+    except (Exception, asyncio.CancelledError) as exc:
+        debug_log(f'Speech {label} callback failed: {type(exc).__name__}', 'tts')
+
+
+_PlaybackStart = Callable[['SpeechRequest', float], None]
+_PlaybackEnd = Callable[['SpeechRequest', str], None]
+
+
 @dataclass(eq=False)
 class SpeechRequest:
     """One cancellable utterance with success and terminal ownership callbacks."""
@@ -398,6 +411,10 @@ class SpeechRequest:
     _cancelled: bool = field(default=False, init=False)
     _interrupted: bool = field(default=False, init=False)
     _finished: bool = field(default=False, init=False)
+    _playback_started: bool = field(default=False, init=False)
+    _playback_started_at: float = field(default=0.0, init=False)
+    _playback_callbacks: tuple[Optional[_PlaybackStart], Optional[_PlaybackEnd]] = field(default=(None, None), init=False, repr=False)
+    _activity_release: Optional[Callable[[], None]] = field(default=None, init=False, repr=False)
 
     def _claim(self) -> bool:
         with self._lock:
@@ -416,17 +433,27 @@ class SpeechRequest:
             self._interrupted = True
 
     def cancel(self) -> None:
+        self._abandon('cancelled')
+
+    def interrupt(self) -> None:
+        """Interrupt this utterance without affecting a queued replacement."""
+        self._abandon('interrupted')
+
+    def _abandon(self, outcome: str) -> None:
         with self._lock:
             if self._finished:
                 return
-            self._cancelled = True
+            if outcome == 'cancelled':
+                self._cancelled = True
+            else:
+                self._interrupted = True
             active, interrupt = self._active, self._cancel_callback
         try:
             if active and interrupt is not None:
                 interrupt(self)
         finally:
             if not active:
-                self._finish('cancelled')
+                self._finish(outcome)
 
     def _finish(self, outcome: str) -> None:
         with self._lock:
@@ -437,20 +464,20 @@ class SpeechRequest:
                 outcome = 'cancelled'
             elif self._interrupted:
                 outcome = 'interrupted'
-            complete, terminal = self.completion_callback, self.terminal_callback
+            callbacks = []
+            if self._playback_started and self._playback_callbacks[1] is not None:
+                callbacks.append((self._playback_callbacks[1], (self, outcome), 'playback finish'))
+            if outcome == 'completed' and self.completion_callback is not None:
+                callbacks.append((self.completion_callback, (), 'completion'))
+            if self._activity_release is not None:
+                callbacks.append((self._activity_release, (), 'activity release'))
+            if self.terminal_callback is not None:
+                callbacks.append((self.terminal_callback, (outcome,), 'terminal'))
             self.completion_callback = self.duration_callback = self.terminal_callback = None
-            self._cancel_callback = None
-        try:
-            if outcome == 'completed' and complete is not None:
-                complete()
-        except Exception as exc:
-            debug_log(f'Speech completion callback failed: {exc}', 'tts')
-        finally:
-            try:
-                if terminal is not None:
-                    terminal(outcome)
-            except Exception as exc:
-                debug_log(f'Speech terminal callback failed: {exc}', 'tts')
+            self._cancel_callback = self._activity_release = None
+            self._playback_callbacks = (None, None)
+        for callback, arguments, label in callbacks:
+            _call_speech_callback(callback, arguments, label)
 
 
 class _QueuedSpeech:
@@ -466,6 +493,51 @@ class _QueuedSpeech:
         self._last_spoken_text = ''
         self._should_interrupt = threading.Event()
         self._active_request: Optional[SpeechRequest] = None
+        self._preparation_started_at = 0.0
+        self._playback_callbacks: tuple[Optional[_PlaybackStart], Optional[_PlaybackEnd]] = (None, None)
+
+    def preparing_request_at(self, capture_time: float) -> Optional[SpeechRequest]:
+        """Identify still-active speech whose synthesis overlaps this capture."""
+        with self._lifecycle_lock:
+            request = self._active_request
+            if (request is not None and not request.abandoned
+                    and 0 < self._preparation_started_at <= capture_time <= time.time()
+                    and (not request._playback_started
+                         or capture_time < request._playback_started_at)):
+                return request
+            return None
+
+    def set_playback_callbacks(self, started: Optional[_PlaybackStart],
+                               finished: Optional[_PlaybackEnd]) -> None:
+        """Observe future playback, retaining the matching termination callback."""
+        with self._lifecycle_lock:
+            self._playback_callbacks = started, finished
+
+    def _begin_playback(self, request: SpeechRequest, duration: float) -> bool:
+        with self._lifecycle_lock:
+            if self._stop.is_set() or request.abandoned:
+                return False
+            request._playback_callbacks = self._playback_callbacks
+            request._playback_started = True
+            request._playback_started_at = time.time()
+            self._last_spoken_text = request.text
+            self._is_speaking.set()
+            try:
+                from jarvis.activity import JarvisState, get_jarvis_state
+                manager = get_jarvis_state()
+                owner = manager.acquire_state(
+                    JarvisState.SPEAKING, restore_state=JarvisState.IDLE,
+                    protected_states={JarvisState.DICTATING, JarvisState.DICTATION_PROCESSING},
+                )
+                debug_log(f'Playback activity ownership: {owner is not None}', 'tts')
+                if owner is not None:
+                    request._activity_release = lambda: manager.release_state(owner)
+            except Exception as exc:
+                debug_log(f'Speech activity unavailable: {type(exc).__name__}', 'tts')
+        callback = request._playback_callbacks[0]
+        if callback is not None:
+            _call_speech_callback(callback, (request, duration), 'playback start')
+        return not self._stop.is_set() and not request.abandoned
 
     def start(self) -> None:
         with self._lifecycle_lock:
@@ -580,6 +652,7 @@ class _QueuedSpeech:
                     active = not self._stop.is_set() and request._claim()
                     if active:
                         self._active_request = request
+                        self._preparation_started_at = time.time()
                 if active:
                     outcome = 'completed' if self._speak_once(request) is True else 'failed'
                     if self._stop.is_set():
@@ -596,6 +669,7 @@ class _QueuedSpeech:
                     # Replacement waits for this worker; retain its request
                     # identity until terminal commitment and callback release.
                     self._active_request = None
+                    self._preparation_started_at = 0.0
                     del request
 
 
@@ -691,12 +765,8 @@ class ChatterboxTTS(_QueuedSpeech):
         with self._lifecycle_lock:
             if self._stop.is_set() or request.abandoned:
                 return False
-            self._is_speaking.set()
-            self._last_spoken_text = text
             self._should_interrupt.clear()
         
-        # Signal speaking state to face widget
-        self._notify_speaking_state(True)
 
         try:
             # Check if model is available
@@ -727,10 +797,7 @@ class ChatterboxTTS(_QueuedSpeech):
 
             # Notify listener of exact duration for precise echo detection
             if request.duration_callback is not None:
-                try:
-                    request.duration_callback(exact_duration)
-                except Exception as e:
-                    debug_log(f"Chatterbox TTS duration callback error: {e}", "tts")
+                _call_speech_callback(request.duration_callback, (exact_duration,), 'duration')
 
             # Save to temporary file
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
@@ -744,6 +811,8 @@ class ChatterboxTTS(_QueuedSpeech):
                 # Play audio using pygame (cross-platform)
                 pygame.mixer.init(frequency=self._model.sr, size=-16, channels=1, buffer=1024)
                 pygame.mixer.music.load(tmp_path)
+                if not self._begin_playback(request, exact_duration):
+                    return False
                 with self._lifecycle_lock:
                     if self._stop.is_set() or self._should_interrupt.is_set():
                         return False
@@ -771,30 +840,8 @@ class ChatterboxTTS(_QueuedSpeech):
         finally:
             self._is_speaking.clear()
             
-            # Signal speaking stopped to face widget
-            self._notify_speaking_state(False)
         return False
     
-    def _notify_speaking_state(self, is_speaking: bool) -> None:
-        """Notify the face widget of speaking state changes.
-
-        Uses file-based approach to work across processes:
-        - Dev mode runs daemon as subprocess (different process)
-        - File-based state works across process boundaries
-        """
-        # Import here to avoid circular dependencies
-        try:
-            from jarvis.activity import get_jarvis_state, JarvisState
-            state_manager = get_jarvis_state()
-            if is_speaking:
-                debug_log("setting face state to SPEAKING (chatterbox)", "tts")
-                state_manager.set_state(JarvisState.SPEAKING)
-            # Note: When speaking ends, we don't change state here - let daemon manage transitions
-        except ImportError:
-            debug_log("face widget not available (ImportError) (chatterbox)", "tts")
-        except Exception as e:
-            # Don't let face widget errors affect TTS
-            debug_log(f"failed to set face state to SPEAKING (chatterbox): {e}", "tts")
 
     # Loopback guard helpers (same interface as TextToSpeech)
     def is_speaking(self) -> bool:
@@ -949,12 +996,8 @@ class PiperTTS(_QueuedSpeech):
         with self._lifecycle_lock:
             if self._stop.is_set() or request.abandoned:
                 return False
-            self._is_speaking.set()
-            self._last_spoken_text = text
             self._should_interrupt.clear()
 
-        # Signal speaking state to face widget
-        self._notify_speaking_state(True)
 
         try:
             # Initialize on first use
@@ -1012,10 +1055,7 @@ class PiperTTS(_QueuedSpeech):
 
             # Notify listener of exact duration for precise echo detection
             if request.duration_callback is not None:
-                try:
-                    request.duration_callback(exact_duration)
-                except Exception as e:
-                    debug_log(f"Piper TTS duration callback error: {e}", "tts")
+                _call_speech_callback(request.duration_callback, (exact_duration,), 'duration')
 
             # Play audio with streaming for interruption support
             play_position = [0]
@@ -1046,38 +1086,43 @@ class PiperTTS(_QueuedSpeech):
                     callback_failed.set()
                     raise sd.CallbackAbort() from None
 
+            stream = None
             try:
+                if self._stop.is_set() or request.abandoned:
+                    return False
+                with portaudio_lock:
+                    stream = sd.OutputStream(
+                        samplerate=self._sample_rate,
+                        channels=1,
+                        dtype='int16',
+                        blocksize=blocksize,
+                        callback=audio_callback,
+                    )
+                if not self._begin_playback(request, exact_duration):
+                    return False
                 with self._lifecycle_lock, self._audio_lock:
-                    if self._stop.is_set() or self._should_interrupt.is_set():
+                    if self._stop.is_set() or request.abandoned:
                         return False
+                    self._audio_stream = stream
                     with portaudio_lock:
-                        self._audio_stream = sd.OutputStream(
-                            samplerate=self._sample_rate,
-                            channels=1,
-                            dtype='int16',
-                            blocksize=blocksize,
-                            callback=audio_callback,
-                        )
-                        self._audio_stream.start()
+                        stream.start()
 
-                # Wait for playback to complete
-                while self._audio_stream is not None and self._audio_stream.active:
+                while stream.active:
                     if self._should_interrupt.is_set():
-                        with self._audio_lock:
-                            if self._audio_stream is not None:
-                                with portaudio_lock:
-                                    self._audio_stream.abort()
+                        with portaudio_lock:
+                            stream.abort()
                         break
                     time.sleep(0.05)
             finally:
                 with self._audio_lock:
-                    if self._audio_stream is not None:
-                        try:
-                            with portaudio_lock:
-                                self._audio_stream.close()
-                        except Exception:
-                            pass
+                    if self._audio_stream is stream:
                         self._audio_stream = None
+                if stream is not None:
+                    try:
+                        with portaudio_lock:
+                            stream.close()
+                    except Exception as exc:
+                        debug_log(f'Piper stream cleanup failed: {type(exc).__name__}', 'tts')
 
             actual_duration = time.time() - start_time
             successful = drained.is_set() and not callback_failed.is_set()
@@ -1089,21 +1134,8 @@ class PiperTTS(_QueuedSpeech):
             print(f"  ⚠️ Piper TTS error: {e}", flush=True)
         finally:
             self._is_speaking.clear()
-            self._notify_speaking_state(False)
         return False
 
-    def _notify_speaking_state(self, is_speaking: bool) -> None:
-        """Notify the face widget of speaking state changes."""
-        try:
-            from jarvis.activity import get_jarvis_state, JarvisState
-            state_manager = get_jarvis_state()
-            if is_speaking:
-                debug_log("setting face state to SPEAKING (piper)", "tts")
-                state_manager.set_state(JarvisState.SPEAKING)
-        except ImportError:
-            debug_log("face widget not available (ImportError) (piper)", "tts")
-        except Exception as e:
-            debug_log(f"failed to set face state to SPEAKING (piper): {e}", "tts")
 
     # Loopback guard helpers (same interface as TextToSpeech)
     def is_speaking(self) -> bool:

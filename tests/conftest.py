@@ -375,3 +375,91 @@ def silent_thinking_tunes(monkeypatch):
         assert all(not worker.is_alive() for worker in workers), 'Test left a thinking-cue worker running'
         assert all(not player.is_playing() for player in players), 'Test left a thinking cue active'
         assert all(stream.closed for stream in streams), 'Test left an output stream open'
+
+
+@pytest.fixture
+def make_speech_backend(monkeypatch, tmp_path):
+    """Run real speech workers against owned synthesis and audio boundaries."""
+    import queue
+    import sys
+    from types import ModuleType, SimpleNamespace
+    import numpy as np
+    import sounddevice
+    from jarvis import activity
+
+    monkeypatch.setattr(activity, '_get_jarvis_state_file', lambda: str(tmp_path / 'owned-speech-state'))
+    state = activity.JarvisStateManager()
+    state.set_state(activity.JarvisState.IDLE)
+    monkeypatch.setattr(activity, '_jarvis_state_instance', state)
+    engines = []
+
+    def create(backend):
+        engine = backend()
+        engines.append(engine)
+        monkeypatch.setattr(engine, '_start_if_current', lambda generation: None)
+
+        class DrainingQueue(queue.Queue):
+            def get(self, *args, **kwargs):
+                try:
+                    return super().get(block=False)
+                except queue.Empty:
+                    engine._stop.set()
+                    raise
+
+        engine._q = DrainingQueue()
+        sample_rate = 100
+        lengths = {'first': sample_rate, 'second': sample_rate * 2, 'cancelled': sample_rate}
+
+        def samples(text):
+            if text == 'cancelled':
+                engine.interrupt()
+            return np.zeros(lengths.get(text, sample_rate), dtype=np.int16)
+
+        class SilentStream:
+            active = False
+
+            def __init__(self, **kwargs):
+                self.callback = kwargs['callback']
+
+            def start(self):
+                self.active = True
+                try:
+                    while self.active:
+                        self.callback(np.zeros((1024, 1), dtype=np.int16), 1024, None, None)
+                except (sounddevice.CallbackStop, sounddevice.CallbackAbort):
+                    self.active = False
+
+            def abort(self):
+                self.active = False
+
+            def close(self):
+                self.active = False
+
+        monkeypatch.setattr(sounddevice, 'OutputStream', SilentStream)
+        config = ModuleType('piper.config')
+        config.SynthesisConfig = lambda **kwargs: kwargs
+        monkeypatch.setitem(sys.modules, 'piper.config', config)
+        engine._sample_rate = sample_rate
+        engine._voice = SimpleNamespace(synthesize=lambda text, cfg: [
+            SimpleNamespace(audio_int16_array=samples(text))])
+        monkeypatch.setattr(engine, '_ensure_initialized', lambda: True, raising=False)
+        engine._model = SimpleNamespace(sr=sample_rate, generate=lambda text, **kwargs: samples(text)[None, :])
+        monkeypatch.setattr(engine, '_ensure_model', lambda: True, raising=False)
+        audio = ModuleType('torchaudio')
+        audio.save = lambda *args, **kwargs: None
+        monkeypatch.setitem(sys.modules, 'torchaudio', audio)
+        pygame = ModuleType('pygame')
+        music = SimpleNamespace(load=lambda path: None, play=lambda: None,
+                                stop=lambda: None, get_busy=lambda: False)
+        pygame.mixer = SimpleNamespace(init=lambda **kwargs: None, quit=lambda: None, music=music)
+        pygame.time = SimpleNamespace(wait=lambda duration: None)
+        monkeypatch.setitem(sys.modules, 'pygame', pygame)
+        return engine
+
+    yield create
+    for engine in engines:
+        engine.stop()
+        worker = engine._thread
+        if worker is not None:
+            worker.join(timeout=3)
+            assert not worker.is_alive(), 'Owned speech worker did not finish'

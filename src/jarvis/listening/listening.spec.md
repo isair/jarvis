@@ -358,7 +358,7 @@ To minimise perceived latency, audio and visual feedback starts **immediately af
 - **Hot window:** If voice started during an active (or pending) hot window, start the thinking beep and set face state to LISTENING.
 - **No trigger:** If neither condition is met, no feedback is given.
 
-If the intent judge later rejects the query with high confidence, the beep is stopped and face state reverts to IDLE. This brief false-positive beep is acceptable — users prefer immediate acknowledgement over delayed but perfect accuracy.
+If the intent judge later rejects the query with high confidence, the beep stops and its still-owned listening activity reverts to IDLE. Newer activity and dictation remain intact, including when the beep is disabled. This brief false-positive beep is acceptable — users prefer immediate acknowledgement over delayed but perfect accuracy.
 
 **Face state is not set during TTS** — the beep is suppressed while TTS is playing to avoid self-triggering.
 
@@ -569,3 +569,29 @@ Currently, echo is handled at the transcript level via fuzzy text matching and t
 - Three consecutive usable utterances of at least one second that each take at least two seconds and longer than their audio duration produce one warning per listener instance. Fast or short eligible samples reset the streak.
 - The warning recommends a smaller supported model while preserving English-only selection, states the accuracy trade-off, and points to the Setup Wizard or Whisper settings. The smallest or an unknown model gets hardware/load guidance instead. User configuration is never changed automatically.
 - Debug diagnostics record audio duration, decode duration and the loaded model while gathering samples.
+
+## Shared playback tracking
+
+The listener subscribes to the local speech engine's playback events. Echo
+references use the preprocessed text and exact duration of the utterance entering
+playback, including error feedback and announcements. Pending speech and synthesis
+do not replace the reference. Only the matching playback termination records its
+finish time; a stale callback cannot end a newer echo window.
+
+A voice query owns thinking activity until its speech reaches playback or
+terminates. Empty replies, unavailable speech, failed synthesis and pending
+cancellation release that ownership without opening a follow-up window. Playback
+owns its own temporary speaking activity. Successful conversational replies alone
+schedule follow-up listening, subject to the current capture generation. Generic
+announcements and error feedback provide echo references without creating
+conversational engagement. Thinking audio and visual activity release their own
+ownership independently, so disabling the tune cannot leave a finished query in
+the thinking state.
+
+Configured interruption controls can cancel a still-current synthesising request
+when their capture overlaps its preparation. This control path does not classify
+preparation as playback, supply an echo reference or admit ambient conversation.
+A control captured before that request cannot cancel it after delayed recognition.
+The matching preparation request handle owns interruption, preserving queued
+replacements when synthesis finishes during control recognition. The control
+remains valid when that same utterance starts playback before recognition ends.

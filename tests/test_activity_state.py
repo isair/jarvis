@@ -33,10 +33,10 @@ def test_activity_publication_does_not_load_the_desktop(monkeypatch, tmp_path, p
         manager.start_collection('A new request', language=None)
         expected = activity.JarvisState.LISTENING
     else:
-        from jarvis.output.tts import PiperTTS, ChatterboxTTS
+        from jarvis.output.tts import PiperTTS, ChatterboxTTS, SpeechRequest
         backend = PiperTTS if publisher == 'piper' else ChatterboxTTS
-        engine = backend.__new__(backend)
-        engine._notify_speaking_state(True)
+        engine = backend()
+        engine._begin_playback(SpeechRequest('Owned speech'), 1.0)
     assert path.read_text() == expected.value
     assert state.state is expected
     assert not any(name.split('.')[0] in {'desktop_app', 'PyQt6'} for name in sys.modules)

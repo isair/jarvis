@@ -51,6 +51,8 @@ jobs:
           python-version: '3.11'
       - name: Verify native daemon ownership
         run: python tests/fixtures/daemon_lock_probe.py
+      - name: Verify shared activity publication
+        run: python tests/fixtures/activity_publication_probe.py
 
   piper-download:
     name: Piper downloads (${{ matrix.os }})

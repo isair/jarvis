@@ -529,6 +529,10 @@ class VoiceListener(threading.Thread):
 
         # Thinking tune player
         self._tune_player: Optional = None
+        self._feedback_state_owner = None
+        self._active_playback = None
+        if self.tts is not None:
+            self.tts.set_playback_callbacks(self.on_playback_started, self.on_playback_finished)
 
     def stop(self) -> None:
         """Stop the voice listener."""
@@ -577,38 +581,44 @@ class VoiceListener(threading.Thread):
             self._tune_player.start_tune()
 
     def _stop_thinking_tune(self) -> None:
-        """Stop the thinking tune and revert face state to IDLE."""
+        """Stop acknowledgement audio and release only its own visual feedback."""
         if self._tune_player is not None:
             self._tune_player.stop_tune()
             self._tune_player = None
-            try:
-                from jarvis.activity import get_jarvis_state, JarvisState
-                if not self.is_capture_paused('dictation'):
-                    get_jarvis_state().set_state(JarvisState.IDLE)
-            except ImportError:
-                pass
-            except Exception:
-                pass
+        if self._feedback_state_owner is not None:
+            manager, owner = self._feedback_state_owner
+            self._feedback_state_owner = None
+            manager.release_state(owner)
 
     def _set_face_state_listening(self) -> None:
-        """Set the desktop face widget to LISTENING state."""
+        """Own acknowledgement feedback without replacing dictation or playback."""
         try:
             from jarvis.activity import get_jarvis_state, JarvisState
-            get_jarvis_state().set_state(JarvisState.LISTENING)
-        except ImportError:
-            pass
-        except Exception as e:
-            debug_log(f"failed to set face state to LISTENING: {e}", "voice")
+            manager = get_jarvis_state()
+            owner = manager.acquire_state(
+                JarvisState.LISTENING, restore_state=JarvisState.IDLE,
+                protected_states={JarvisState.SPEAKING, JarvisState.DICTATING,
+                                  JarvisState.DICTATION_PROCESSING},
+            )
+            if owner is not None:
+                self._feedback_state_owner = manager, owner
+        except Exception as exc:
+            debug_log(f'Listening feedback unavailable: {type(exc).__name__}', 'voice')
 
-    def track_tts_start(self, tts_text: str) -> None:
-        """Called when TTS starts speaking."""
-        if self.tts and self.tts.enabled:
-            # Calculate baseline energy from recent audio samples
-            baseline_energy = 0.0045  # default
-            if self._recent_audio_energy:
-                baseline_energy = sum(self._recent_audio_energy) / len(self._recent_audio_energy)
+    def on_playback_started(self, request, duration: float) -> None:
+        """Track the exact utterance entering playback, independently of its source."""
+        with self._audio_state_lock:
+            self._active_playback = request
+            energy = self._recent_audio_energy
+            baseline = sum(energy) / len(energy) if energy else 0.0045
+            self.echo_detector.track_tts_start(request.text, baseline, exact_duration=duration)
 
-            self.echo_detector.track_tts_start(tts_text, baseline_energy)
+    def on_playback_finished(self, request, outcome: str) -> None:
+        """Finish only the echo window belonging to this playback."""
+        with self._audio_state_lock:
+            if self._active_playback is request:
+                self._active_playback = None
+                self.echo_detector.track_tts_finish()
 
     def activate_hot_window(self) -> None:
         """Activate hot window after TTS completion."""
@@ -617,9 +627,6 @@ class VoiceListener(threading.Thread):
         if not self.cfg.hot_window_enabled:
             debug_log("hot window disabled in config, skipping", "voice")
             return
-
-        # Track TTS finish time for echo detection
-        self.echo_detector.track_tts_finish()
 
         # Schedule delayed hot window activation
         debug_log(f"scheduling hot window activation (echo_tolerance={self.state_manager.echo_tolerance}s, hot_window={self.state_manager.hot_window_seconds}s)", "voice")
@@ -746,20 +753,25 @@ class VoiceListener(threading.Thread):
                     self._set_face_state_listening()
                     debug_log("early beep: wake word detected", "voice")
 
-        # Echo rejection & stop commands — only while TTS is actively playing.
-        # After TTS finishes, the intent judge handles everything (echo detection,
-        # hot window follow-ups, etc.) using full transcript context + last TTS text.
-        if self.tts and self.tts.enabled and active_tts_overlapped:
+        # Preparation accepts configured cancellation without claiming echo or engagement.
+        preparing_request = (
+            self.tts.preparing_request_at(utterance_end_time)
+            if self.tts and self.tts.enabled and not received_during_tts else None
+        )
+        if self.tts and self.tts.enabled and (active_tts_overlapped or preparing_request is not None):
             # Stop command detection (fast, text-based)
             stop_commands = self.cfg.stop_commands
             stop_ratio = self.cfg.stop_command_fuzzy_ratio
             if is_stop_command(text_lower, stop_commands, stop_ratio):
-                if is_stop_command_echo(text_lower, self.echo_detector._last_tts_text, stop_commands, stop_ratio):
+                if active_tts_overlapped and is_stop_command_echo(text_lower, self.echo_detector._last_tts_text, stop_commands, stop_ratio):
                     debug_log("ignored stop command contained in literal TTS echo", "echo")
                     print(f'  🔇 Heard (echo): "{text_lower[:50]}"', flush=True)
                     return
                 debug_log(f"stop command detected during TTS: {text_lower} (energy: {utterance_energy:.4f})", "voice")
-                self.tts.interrupt()
+                if active_tts_overlapped:
+                    self.tts.interrupt()
+                else:
+                    preparing_request.interrupt()
                 try:
                     while not self._audio_q.empty():
                         self._audio_q.get_nowait()
@@ -767,6 +779,7 @@ class VoiceListener(threading.Thread):
                     pass
                 return
 
+        if self.tts and self.tts.enabled and active_tts_overlapped:
             # Echo rejection during active TTS
             should_reject = self.echo_detector.should_reject_as_echo(
                 text_lower, utterance_energy, True,
@@ -1046,85 +1059,58 @@ class VoiceListener(threading.Thread):
         # Clear audio buffers to prevent stale audio from next query
         self._clear_audio_buffers()
 
-        # Set face state to THINKING
-        try:
-            from jarvis.activity import get_jarvis_state, JarvisState
-            state_manager = get_jarvis_state()
-            state_manager.set_state(JarvisState.THINKING)
-            debug_log("face state set to THINKING (dispatch_query)", "voice")
-        except Exception as e:
-            debug_log(f"failed to set face state to THINKING: {e}", "voice")
-
-        # Import reply engine
+        from jarvis.activity import get_jarvis_state, JarvisState
         from ..reply.engine import run_reply_engine
         from ..daemon import query_lock
 
-        # Process the query (keep thinking tune playing during processing).
-        # Hold the shared voice+text query lock so a voice query and a text
-        # chat query cannot run the reply engine concurrently against the
-        # same dialogue memory. Voice blocks while a text query finishes
-        # rather than being dropped (see daemon.query_lock).
+        manager = get_jarvis_state()
+        owner = manager.acquire_state(
+            JarvisState.THINKING, restore_state=JarvisState.IDLE,
+            protected_states={JarvisState.DICTATING, JarvisState.DICTATION_PROCESSING},
+        )
+        transferred = False
+
+        def release_query(outcome=None):
+            if owner is not None:
+                released = manager.release_state(owner)
+                debug_log(f'Voice thinking cleanup: released={released}', 'voice')
+
+        def on_complete():
+            with self._audio_state_lock:
+                if self._transcription_is_current(generation):
+                    self.activate_hot_window()
+
         try:
-            with query_lock():
-                if not self._transcription_is_current(generation):
-                    debug_log("discarded voice dispatch after waiting for query lock", "voice")
-                    self._stop_thinking_tune()
-                    return
-                reply = run_reply_engine(
-                    self.db, self.cfg, None, query, self.dialogue_memory,
-                    language=language,
-                    speech_context=speech_context,
-                )
-        except Exception as e:
-            # Log the error visibly - this should never happen silently
-            print(f"\n  ❌ Reply engine error: {e}", flush=True)
-            debug_log(f"reply engine exception: {e}", "voice")
+            failed = False
+            try:
+                # Voice and text share one conversation and reply-engine lock.
+                with query_lock():
+                    if not self._transcription_is_current(generation):
+                        debug_log('Discarded voice dispatch after query-lock wait', 'voice')
+                        return
+                    reply = run_reply_engine(
+                        self.db, self.cfg, None, query, self.dialogue_memory,
+                        language=language, speech_context=speech_context,
+                    )
+            except Exception as exc:
+                print(f"\n  ❌ Reply engine error: {exc}", flush=True)
+                debug_log(f'Reply engine exception: {exc}', 'voice')
+                failed = True
+                reply = 'Sorry, I encountered an error processing your request.'
+
             self._stop_thinking_tune()
-            # Provide user feedback via TTS
-            if self._transcription_is_current(generation) and self.tts and self.tts.enabled:
-                self.tts.speak("Sorry, I encountered an error processing your request.")
-            return
-
-        if not self._transcription_is_current(generation):
-            debug_log("discarded voice reply after voice generation invalidation", "voice")
-            self._stop_thinking_tune()
-            return
-
-        # Handle TTS with proper callbacks
-        if reply and self.tts and self.tts.enabled:
-            # Stop thinking tune when TTS starts
-            self._stop_thinking_tune()
-
-            # TTS completion callback for hot window
-            def _on_tts_complete():
-                import time as _time
-                debug_log(f"TTS completion callback triggered at {_time.time():.3f}", "voice")
-                with self._audio_state_lock:
-                    if self._transcription_is_current(generation):
-                        self.activate_hot_window()
-                    else:
-                        self.echo_detector.track_tts_finish()
-
-            # Duration callback to update echo detector with exact timing (Piper only)
-            def _on_duration_known(duration: float):
-                debug_log(f"TTS exact duration: {duration:.2f}s", "voice")
-                if self.echo_detector:
-                    self.echo_detector._tts_exact_duration = duration
-
             if not self._transcription_is_current(generation):
-                debug_log("discarded voice speech after thinking-tune teardown", "voice")
+                debug_log('Discarded voice reply after generation invalidation', 'voice')
                 return
-
-            # Track TTS start for echo detection with actual text
-            self.track_tts_start(reply)
-            debug_log(f"starting TTS for reply ({len(reply)} chars)", "voice")
-
-            self.tts.speak(reply, completion_callback=_on_tts_complete,
-                          duration_callback=_on_duration_known)
-        else:
-            debug_log(f"no TTS output: reply={bool(reply)}, tts={bool(self.tts)}, enabled={getattr(self.tts, 'enabled', False) if self.tts else False}", "voice")
-            # Stop thinking tune if no TTS response
+            if reply and self.tts is not None and self.tts.enabled:
+                debug_log(f'Queueing voice output ({len(reply)} chars)', 'voice')
+                self.tts.speak(reply, completion_callback=None if failed else on_complete,
+                               terminal_callback=release_query)
+                transferred = True
+        finally:
             self._stop_thinking_tune()
+            if not transferred:
+                release_query()
 
     def _calculate_audio_energy(self, frames: list) -> float:
         """Calculate RMS energy from audio frames."""

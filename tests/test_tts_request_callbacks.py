@@ -1,9 +1,7 @@
 """Speech callbacks belong to their utterance, including queued and reentrant work."""
 import queue
 import sys
-from types import ModuleType, SimpleNamespace
 
-import numpy as np
 import pytest
 
 from jarvis.output import tts as speech
@@ -12,71 +10,8 @@ pytestmark = pytest.mark.unit
 
 
 @pytest.fixture(params=[speech.PiperTTS, speech.ChatterboxTTS], ids=['piper', 'chatterbox'])
-def voice(request, monkeypatch):
-    engine = request.param()
-    monkeypatch.setattr(engine, '_start_if_current', lambda generation: None)
-    monkeypatch.setattr(engine, '_notify_speaking_state', lambda speaking: None)
-
-    class DrainingQueue(queue.Queue):
-        def get(self, *args, **kwargs):
-            try:
-                return super().get(block=False)
-            except queue.Empty:
-                engine._stop.set()
-                raise
-
-    engine._q = DrainingQueue()
-    sample_rate = 100
-    lengths = {'first': sample_rate, 'second': sample_rate * 2, 'cancelled': sample_rate}
-
-    def samples(text):
-        if text == 'cancelled':
-            engine.interrupt()
-        return np.zeros(lengths[text], dtype=np.int16)
-
-    class SilentStream:
-        active = False
-
-        def __init__(self, **kwargs):
-            self.callback = kwargs['callback']
-
-        def start(self):
-            self.active = True
-            try:
-                while self.active:
-                    self.callback(np.zeros((1024, 1), dtype=np.int16), 1024, None, None)
-            except (sounddevice.CallbackStop, sounddevice.CallbackAbort):
-                self.active = False
-
-        def abort(self):
-            self.active = False
-
-        def close(self):
-            self.active = False
-
-    import sounddevice
-    monkeypatch.setattr(sounddevice, 'OutputStream', SilentStream)
-    config = ModuleType('piper.config')
-    config.SynthesisConfig = lambda **kwargs: kwargs
-    monkeypatch.setitem(sys.modules, 'piper.config', config)
-    engine._sample_rate = sample_rate
-    engine._voice = SimpleNamespace(synthesize=lambda text, cfg: [
-        SimpleNamespace(audio_int16_array=samples(text))])
-    monkeypatch.setattr(engine, '_ensure_initialized', lambda: True, raising=False)
-
-    engine._model = SimpleNamespace(sr=sample_rate, generate=lambda text, **kwargs: samples(text)[None, :])
-    monkeypatch.setattr(engine, '_ensure_model', lambda: True, raising=False)
-    audio = ModuleType('torchaudio')
-    audio.save = lambda *args, **kwargs: None
-    monkeypatch.setitem(sys.modules, 'torchaudio', audio)
-    pygame = ModuleType('pygame')
-    music = SimpleNamespace(load=lambda path: None, play=lambda: None,
-                            stop=lambda: None, get_busy=lambda: False)
-    pygame.mixer = SimpleNamespace(init=lambda **kwargs: None, quit=lambda: None, music=music)
-    pygame.time = SimpleNamespace(wait=lambda duration: None)
-    monkeypatch.setitem(sys.modules, 'pygame', pygame)
-    yield engine
-    engine._stop.set()
+def voice(request, make_speech_backend):
+    return make_speech_backend(request.param)
 
 
 def test_queued_utterances_keep_their_own_callbacks(voice):
@@ -797,3 +732,155 @@ def test_failed_audio_start_closes_stream_before_terminal_release(voice, monkeyp
                 terminal_callback=events.append)
     voice._run()
     assert events == ['closed', 'failed']
+
+
+def test_playback_callbacks_and_activity_follow_actual_queued_output(voice):
+    from jarvis import activity
+    state = activity.get_jarvis_state()
+    state.set_state(activity.JarvisState.THINKING)
+    events = []
+
+    def started(request, duration):
+        events.append(('start', request.text, duration, state.state, voice.is_speaking()))
+
+    def finished(request, outcome):
+        events.append(('end', request.text, outcome, voice.is_speaking()))
+
+    voice.set_playback_callbacks(started, finished)
+    voice.speak('first')
+    voice.speak('second')
+    assert events == []
+    assert state.state is activity.JarvisState.THINKING
+    assert not voice.is_speaking()
+    voice._run()
+    assert events == [
+        ('start', 'first', 1.0, activity.JarvisState.SPEAKING, True),
+        ('end', 'first', 'completed', False),
+        ('start', 'second', 2.0, activity.JarvisState.SPEAKING, True),
+        ('end', 'second', 'completed', False),
+    ]
+    assert state.state is activity.JarvisState.IDLE
+
+
+def test_synthesis_does_not_publish_speaking_or_replace_last_playback(voice):
+    from jarvis import activity
+    state = activity.get_jarvis_state()
+    state.set_state(activity.JarvisState.THINKING)
+    observations = []
+    if isinstance(voice, speech.PiperTTS):
+        original = voice._voice.synthesize
+        def synthesise(*args, **kwargs):
+            observations.append((voice.is_speaking(), voice.get_last_spoken_text(), state.state))
+            return original(*args, **kwargs)
+        voice._voice.synthesize = synthesise
+    else:
+        original = voice._model.generate
+        def generate(*args, **kwargs):
+            observations.append((voice.is_speaking(), voice.get_last_spoken_text(), state.state))
+            return original(*args, **kwargs)
+        voice._model.generate = generate
+    voice.speak('first')
+    voice._run()
+    assert observations == [(False, '', activity.JarvisState.THINKING)]
+    assert voice.get_last_spoken_text() == 'first'
+    assert state.state is activity.JarvisState.IDLE
+
+
+@pytest.mark.parametrize('protected', ['DICTATING', 'DICTATION_PROCESSING'])
+def test_playback_keeps_protected_dictation_presence(voice, protected):
+    from jarvis import activity
+    state = activity.get_jarvis_state()
+    value = activity.JarvisState[protected]
+    state.set_state(value)
+    completed = []
+    voice.speak('first', completion_callback=lambda: completed.append(True))
+    voice._run()
+    assert completed == [True]
+    assert state.state is value
+
+
+@pytest.mark.parametrize('newer', ['LISTENING', 'THINKING', 'DICTATING', 'DICTATION_PROCESSING', 'SPEAKING'])
+def test_playback_cleanup_preserves_a_newer_presence(voice, newer):
+    from jarvis import activity
+    state = activity.get_jarvis_state()
+    value = activity.JarvisState[newer]
+    voice.set_playback_callbacks(lambda request, duration: state.set_state(value), None)
+    voice.speak('first')
+    voice._run()
+    assert state.state is value
+
+
+@pytest.mark.parametrize('binding', ['before-playback', 'during-first'])
+def test_playback_observer_binding_is_current_at_start_and_owned_until_finish(voice, binding):
+    events = []
+
+    def new_start(request, duration):
+        events.append(('new-start', request.text))
+
+    def new_end(request, outcome):
+        events.append(('new-end', request.text, outcome))
+
+    def old_start(request, duration):
+        events.append(('old-start', request.text))
+        if binding == 'during-first' and request.text == 'first':
+            voice.set_playback_callbacks(new_start, new_end)
+
+    def old_end(request, outcome):
+        events.append(('old-end', request.text, outcome))
+
+    voice.set_playback_callbacks(old_start, old_end)
+    voice.speak('first')
+    voice.speak('second')
+    if binding == 'before-playback':
+        voice.set_playback_callbacks(new_start, new_end)
+    voice._run()
+    first = 'new' if binding == 'before-playback' else 'old'
+    assert events == [(first+'-start', 'first'), (first+'-end', 'first', 'completed'),
+                      ('new-start', 'second'), ('new-end', 'second', 'completed')]
+
+
+def test_pending_cancellation_never_publishes_playback_or_speech_presence(voice):
+    from jarvis import activity
+    events = []
+    voice.set_playback_callbacks(lambda *args: events.append('start'), lambda *args: events.append('finish'))
+    request = voice.speak('first')
+    request.cancel()
+    voice._run()
+    assert events == []
+    assert not voice.is_speaking()
+    assert voice.get_last_spoken_text() == ''
+    assert activity.get_jarvis_state().state is activity.JarvisState.IDLE
+
+
+@pytest.mark.parametrize('stage', ['duration', 'start', 'finish', 'completion', 'terminal'])
+@pytest.mark.parametrize('cancelled_callback', [False, True], ids=['exception', 'cancelled-error'])
+def test_failed_callback_does_not_skip_cleanup_or_abandon_the_next_utterance(voice, stage, cancelled_callback):
+    import asyncio
+    from jarvis import activity
+    outcomes = []
+    completed = []
+
+    def notify(label, *args):
+        if label == 'terminal':
+            outcomes.append(args[0])
+        if label == 'completion':
+            completed.append('first')
+        if label == stage:
+            if cancelled_callback:
+                raise asyncio.CancelledError('Owned callback cancellation')
+            raise RuntimeError('Owned callback failure')
+
+    voice.set_playback_callbacks(
+        lambda request, duration: notify('start') if request.text == 'first' else None,
+        lambda request, outcome: notify('finish') if request.text == 'first' else None,
+    )
+    voice.speak('first', duration_callback=lambda seconds: notify('duration'),
+                completion_callback=lambda: notify('completion'),
+                terminal_callback=lambda outcome: notify('terminal', outcome))
+    voice.speak('second', completion_callback=lambda: completed.append('second'),
+                terminal_callback=outcomes.append)
+    voice._run()
+    assert outcomes == ['completed', 'completed']
+    assert completed == ['first', 'second']
+    assert activity.get_jarvis_state().state is activity.JarvisState.IDLE
+    assert not voice.is_speaking()
