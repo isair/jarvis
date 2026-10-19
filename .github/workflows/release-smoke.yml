@@ -42,7 +42,7 @@ jobs:
 
     permissions:
       contents: write
-      actions: write  # needed to dispatch release.yml (workflow_dispatch)
+      actions: write  # dispatch main release and Pages workflows
 
     steps:
       - name: 📥 Checkout full history
@@ -115,20 +115,19 @@ jobs:
           JARVIS_SMOKE_BUILD_RESULT: ${{ needs.build-desktop.result }}
           JARVIS_TESTED_SHA: ${{ github.sha }}
 
-      # GitHub does NOT fire on:push workflows for pushes made with
-      # GITHUB_TOKEN, so release.yml would never run after the fast-forward
-      # above and the release would silently not be published. Dispatch it
-      # explicitly: workflow_dispatch is one of the two event types
-      # GITHUB_TOKEN is allowed to trigger. semantic-release inside
-      # release.yml decides whether a new version is warranted; if not, the
-      # run simply finishes without publishing.
-      - name: 🚀 Trigger release workflow
+      # GITHUB_TOKEN pushes do not trigger push workflows. Explicit main
+      # dispatches publish the app and website after qualified promotion.
+      # semantic-release decides whether an app version is warranted.
+      - name: 🚀 Trigger main workflows
         run: |
+          set -euo pipefail
           if [ "$JARVIS_RELEASE_PROMOTED" != "true" ]; then
             exit 0
           fi
           gh workflow run release.yml --ref main --repo "$JARVIS_RELEASE_REPOSITORY"
           echo "🚀 Dispatched release.yml on main. See https://github.com/$JARVIS_RELEASE_REPOSITORY/actions/workflows/release.yml"
+          gh workflow run public-site.yml --ref main --repo "$JARVIS_RELEASE_REPOSITORY"
+          echo "🌐 Dispatched public-site.yml on main. See https://github.com/$JARVIS_RELEASE_REPOSITORY/actions/workflows/public-site.yml"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           JARVIS_RELEASE_PROMOTED: ${{ steps.promote.outputs.promoted }}

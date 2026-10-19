@@ -26,4 +26,4 @@ The public Jarvis website describes the desktop assistant, its setup and its pri
 - Public canonical URLs use HTTPS without credentials, query strings, fragments or relative path segments.
 - Output directories containing unrelated files or symbolic links are rejected. A rebuild recognises its generated manifest and refuses added or missing files.
 - Pull requests validate the site without deployment credentials. Public deployment is restricted to main, including manual dispatch, and uses minimum GitHub Pages/OIDC permissions. The github-pages environment permits only main deployments.
-- Website changes reach main through the repository's release promotion. Publication does not change the repository's default branch.
+- Website changes reach main through the repository's release promotion. Successful promotion explicitly dispatches the app release and public-site workflows on main; validation runs dispatch neither. Publication does not change the repository's default branch.
