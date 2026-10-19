@@ -459,8 +459,16 @@ access controls; POSIX mode assertions do not describe Windows ACLs.
 
 ## Cooperative task cancellation
 
-An optional task cancellation event is checked at reply entry, agentic loop
-boundaries, after plan-step resolution, model responses and max-turn digests, before protocol
+An optional task cancellation event is checked at reply entry, between MCP
+discovery, tool routing, planning, profile loading, keyword extraction, diary
+and graph retrieval, and memory digest stages. Cancelled preparation does not
+start later resource or model work, or cache a newly returned routing/extraction
+result. Cache misses check cancellation before starting routing/extraction
+inference. A cancelled planner result is not printed. Existing in-flight
+operations finish under their configured deadlines.
+
+The event is also checked at agentic loop boundaries, after plan-step
+resolution, model responses and max-turn digests, before protocol
 fallback and before output or dialogue writes. A cancelled request returns no
 reply and starts no subsequent tool action. In-flight inference and tool calls
 finish under their existing deadlines; cancellation cannot undo completed actions.
