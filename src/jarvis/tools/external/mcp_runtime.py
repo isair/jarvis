@@ -533,22 +533,27 @@ class _ServerWorker:
             )
         kind, payload = cmd
         fut: concurrent.futures.Future = concurrent.futures.Future()
-        # Single cross-thread hop: schedule the put on the loop and
-        # wait on the result future. ``put_nowait`` is safe because
-        # the queue is unbounded.
-        self._loop.call_soon_threadsafe(
-            queue.put_nowait, (kind, payload, fut)
-        )
+        def enqueue() -> None:
+            # Session retirement and queue admission share the loop, so a
+            # request cannot land behind the worker's final queue drain.
+            if not self.alive:
+                fut.set_exception(_WorkerDeadError(
+                    f"MCP server '{self._server_name}' retired before request admission"
+                ))
+                return
+            queue.put_nowait((kind, payload, fut))
+
+        try:
+            self._loop.call_soon_threadsafe(enqueue)
+        except RuntimeError as error:
+            raise _WorkerDeadError(
+                f"MCP server '{self._server_name}' event loop is unavailable"
+            ) from error
         try:
             return fut.result(timeout=timeout)
         except concurrent.futures.TimeoutError:
-            # If the worker died between our enqueue and the wait, the
-            # drain in ``_run``'s finally would normally resolve the
-            # future with ``_WorkerDeadError`` — but if our cmd landed
-            # on the queue *after* the drain ran, no one will ever
-            # resolve it. Treat that as a worker death so the runtime
-            # can replace the worker instead of returning a misleading
-            # plain timeout to the caller.
+            # A stopped loop may never run scheduled admission. A retired
+            # worker still signals session loss rather than a tool timeout.
             if not self.alive:
                 raise _WorkerDeadError(
                     f"MCP server '{self._server_name}' died while servicing call"

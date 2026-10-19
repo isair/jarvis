@@ -231,3 +231,44 @@ def test_replacement_waits_for_the_previous_sessions_resources(startup_runtime, 
     assert state.connection_closed['retiring'].wait(1)
     asyncio.run_coroutine_threadsafe(asyncio.sleep(0), runtime._loop).result(timeout=1)
     assert runtime.list_tools('target', _cfg('replacement'))[0] == 'replacement'
+
+
+@pytest.mark.parametrize('retirement', ['idle', 'shutdown'])
+def test_retired_session_rejects_late_request_without_waiting_for_timeout(startup_runtime, monkeypatch, retirement):
+    runtime, state = startup_runtime
+    cfg = dict(_cfg('fast'), idle_timeout_sec=0.1)
+    initial = runtime.list_tools('same', cfg)
+    admitted = threading.Event()
+    schedule = runtime._loop.call_soon_threadsafe
+    caller = {}
+    monkeypatch.setattr(mcp_runtime, 'get_runtime', lambda: runtime)
+    client = mcp_client.MCPClient({'same': cfg})
+
+    def pause_queue_admission(callback, *args, **kwargs):
+        if threading.get_ident() == caller.get('identity') and not admitted.is_set():
+            admitted.set()
+            assert state.release.wait(3)
+        return schedule(callback, *args, **kwargs)
+
+    monkeypatch.setattr(runtime._loop, 'call_soon_threadsafe', pause_queue_admission)
+    def request():
+        caller['identity'] = threading.get_ident()
+        if retirement == 'shutdown':
+            return client.list_tools('same')
+        return runtime.list_tools('same', cfg, timeout=2)
+
+    done, result = state.background(request)
+    assert admitted.wait(1)
+    if retirement == 'shutdown':
+        runtime.shutdown()
+    else:
+        assert state.connection_closed['fast'].wait(1)
+        asyncio.run_coroutine_threadsafe(asyncio.sleep(0), runtime._loop).result(timeout=1)
+    state.release.set()
+    assert done.wait(0.5), 'A retired session delayed retry until the request timeout'
+    if retirement == 'shutdown':
+        assert isinstance(result.get('error'), mcp_client.MCPServerSessionError)
+    else:
+        assert 'error' not in result
+        assert result['value'][0] == initial[0]
+        assert result['value'][1] != initial[1], 'The request did not reach a fresh session'
