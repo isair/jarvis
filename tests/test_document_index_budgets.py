@@ -122,3 +122,49 @@ def test_query_embedding_failure_is_an_error_not_an_empty_success(tmp_path):
             index.search('query')
     finally:
         index.close()
+
+
+@pytest.mark.parametrize('resource', ['cached_files', 'cached_chunks'])
+def test_full_cache_avoids_embedding_sources_it_cannot_publish(tmp_path, resource):
+    class Recording(Embeddings):
+        def __init__(self):
+            super().__init__()
+            self.inputs = []
+
+        def embed(self, text, model, timeout_sec=15):
+            self.inputs.append(text)
+            return super().embed(text, model, timeout_sec)
+
+    backend = Recording()
+    index, root = make_index(tmp_path, replace(documents.IndexLimits(), **{resource: 1}), backend)
+    with index:
+        (root / 'cached.txt').write_text('reusable source')
+        assert index.refresh().complete
+        (root / 'pending.txt').write_text('unpublishable source')
+        for _ in range(2):
+            coverage = index.refresh()
+            assert resource in coverage.reasons
+        assert 'unpublishable source' not in backend.inputs
+        assert [hit.text for hit in index.search('query')] == ['reusable source']
+
+
+@pytest.mark.parametrize('resource', ['chunks', 'input_bytes'])
+def test_impossible_source_does_not_starve_later_small_files(tmp_path, monkeypatch, resource):
+    limits = replace(documents.IndexLimits(), chunks=2, input_bytes=50)
+    index, root = make_index(tmp_path, limits)
+    large = root / 'a-large.txt'
+    small = root / 'b-small.txt'
+    large.write_text('x\n' * (limits.chunks * documents._MAX_CHUNK_LINES + 1)
+                     if resource == 'chunks' else 'x' * (limits.input_bytes + 1))
+    if resource == 'chunks':
+        index.limits = replace(limits, input_bytes=large.stat().st_size + 50)
+    small.write_text('retrievable source')
+    original = documents.DocumentIndex._iter_allowed_files
+    monkeypatch.setattr(documents.DocumentIndex, '_iter_allowed_files',
+                        lambda self, roots, work: iter(sorted(original(self, roots, work))))
+    with index:
+        for pass_number in range(2):
+            coverage = index.refresh()
+            assert resource in coverage.reasons
+            assert coverage.chunks == (1 if pass_number == 0 else 0)
+            assert any(hit.text == 'retrievable source' for hit in index.search('query', 10))

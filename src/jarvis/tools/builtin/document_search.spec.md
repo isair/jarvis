@@ -40,8 +40,10 @@ and deadlines are checked between directory entries, source files, embedding
 calls and publication. Query inference checks interruption before invalidating
 cached vectors, so a cancelled or expired query preserves reusable excerpts.
 Cancellation during search produces an unsuccessful tool result. A cancelled file
-never publishes partially. Sources
-that exceed a budget are skipped as complete files. An exhausted pass reports
+never publishes partially. Whole-file chunk and cache capacity are checked before inference and cache
+capacity is rechecked before publication. Sources that cannot fit a budget are
+skipped as complete files; later smaller sources remain eligible within the
+remaining scan, file and time budgets. An exhausted pass reports
 partial coverage and its reasons; a bounded scan does not promise exhaustive
 coverage of a larger collection. No permanent indexing worker is required.
 

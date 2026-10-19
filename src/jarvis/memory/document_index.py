@@ -271,6 +271,17 @@ class DocumentIndex:
             chunks.append((start, len(lines), "\n".join(current)))
         return [(a, b, value) for a, b, value in chunks if value.strip()]
 
+    def _cache_admits(self, path: Path, chunks: int, work: _Pass) -> bool:
+        count = self._conn.execute('SELECT COUNT(*) FROM document_chunks WHERE path!=?',
+                                   (str(path),)).fetchone()[0]
+        files = self._conn.execute('SELECT COUNT(*) FROM document_files WHERE path!=?',
+                                   (str(path),)).fetchone()[0]
+        if count + chunks > self.limits.cached_chunks:
+            work.coverage.reasons.add('cached_chunks')
+        if files >= self.limits.cached_files:
+            work.coverage.reasons.add('cached_files')
+        return count + chunks <= self.limits.cached_chunks and files < self.limits.cached_files
+
     def _index_file(self, path: Path, roots: list[Path], work: _Pass) -> bool:
         identity = self._authorised_identity(path, roots)
         if identity is None:
@@ -300,11 +311,14 @@ class DocumentIndex:
                     work.coverage.reasons.add('changed')
                     return False
                 text = raw.decode('utf-8', errors='replace')
+            chunks = self._chunks(text)
+            if not self._cache_admits(path, len(chunks), work):
+                return False
+            if not work.charge('chunks', len(chunks)):
+                return False
             prepared = []
             dimension = None
-            for start, end, chunk in self._chunks(text):
-                if not work.charge('chunks'):
-                    return False
+            for start, end, chunk in chunks:
                 vector = self._embed(chunk, work)
                 if dimension is not None and dimension != vector.size:
                     raise ValueError('Document embedding dimensions changed during refresh')
@@ -315,15 +329,7 @@ class DocumentIndex:
             if self._authorised_identity(path, self._roots()) != identity:
                 work.coverage.reasons.add('changed')
                 return False
-            count = self._conn.execute('SELECT COUNT(*) FROM document_chunks WHERE path!=?',
-                                       (str(path),)).fetchone()[0]
-            if count + len(prepared) > self.limits.cached_chunks:
-                work.coverage.reasons.add('cached_chunks')
-                return False
-            files = self._conn.execute('SELECT COUNT(*) FROM document_files WHERE path!=?',
-                                       (str(path),)).fetchone()[0]
-            if files >= self.limits.cached_files:
-                work.coverage.reasons.add('cached_files')
+            if not self._cache_admits(path, len(prepared), work):
                 return False
             with self._conn:
                 self._conn.execute('DELETE FROM document_files WHERE path=?', (str(path),))
@@ -358,7 +364,7 @@ class DocumentIndex:
                         self._conn.execute('DELETE FROM document_files WHERE path=?', (row['path'],))
             for path in self._iter_allowed_files(roots, work):
                 self._index_file(path, roots, work)
-                if work.stopped() or work.coverage.reasons & {'files', 'chunks', 'input_bytes'}:
+                if work.stopped() or work.coverage.reasons & {'files'}:
                     break
             debug_log(f'Document refresh coverage: {self.coverage}', 'documents')
             return self.coverage
