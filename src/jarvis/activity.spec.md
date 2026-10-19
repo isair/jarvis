@@ -11,6 +11,10 @@ complete known enum value; missing, unreadable or invalid snapshots fall back
 to the manager's latest locally assigned state. Activity transport is temporary
 session state, not persisted user memory.
 
+Within one manager, assigning local state and publishing its snapshot share
+the same lock. Concurrent updates cannot publish an older local assignment after
+a newer one. Independent processes retain best-effort publication ordering.
+
 Each publication writes a unique temporary sibling and closes it before
 atomically replacing the shared path. Observers retain the previous complete
 snapshot until publication. A symlink at the shared path is replaced rather
