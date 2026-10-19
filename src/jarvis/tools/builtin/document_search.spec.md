@@ -16,9 +16,9 @@ Directory traversal and file reads use pinned filesystem capabilities. POSIX
 opens each canonical ancestor relative to its parent descriptor without following
 links and enumerates through directory descriptors. Nested scans reuse their
 pinned parent capability, keeping live handles linear in folder depth; normal
-completion, early budget stops and failures close every owned capability. Windows opens every ancestor
-and leaf without following reparse points, retaining deletion-denying ancestor
-handles while absolute names are used. Reads use the verified regular-file
+completion, early budget stops and failures close every owned capability. Windows opens each child relative to its pinned ancestor with kernel reparse
+rejection and enumerates directory handles in fixed-size batches. Only the
+directory being enumerated requires list permission. Reads use the verified regular-file
 handle; a path-only check or post-inference denial is not the read boundary.
 Device, inode, byte size and modification/change times identify each source.
 Unchanged files in the same embedding space are not re-embedded. Changed files are re-chunked and embedded, and deleted files

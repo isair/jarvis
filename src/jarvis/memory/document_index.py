@@ -223,7 +223,7 @@ class DocumentIndex:
                     if not work.charge('entries'):
                         return
                     try:
-                        if entry.is_dir(follow_symlinks=False):
+                        if entry.directory:
                             if len(stack) >= self.limits.depth:
                                 work.coverage.reasons.add('depth')
                             else:
