@@ -190,7 +190,7 @@ def test_reused_textual_ids_do_not_alias_distinct_requests(mock_config, db, dial
     assert len(set(identities)) == len(identities), "Distinct requests share a result identity"
 
 
-def test_duplicate_feedback_does_not_mark_an_unanswered_query_part_complete(mock_config, db, dialogue_memory):
+def test_duplicate_feedback_keeps_all_requested_outcomes_visible(mock_config, db, dialogue_memory):
     mock_config.llm_chat_model = "gemma4:e2b"
     first, second = {"location": "London"}, {"location": "Paris"}
     repeated = _response(_text_call(first, "literal"))
@@ -201,7 +201,11 @@ def test_duplicate_feedback_does_not_mark_an_unanswered_query_part_complete(mock
     assert reply == "Two readings are recorded."
     assert executed == [("getWeather", first), ("getWeather", second)]
     assert _assert_paired_results(snapshots[-1])
-    assert 'Still unanswered: "Ankara reading"' in snapshots[-1][-1]["content"]
+    feedback = snapshots[-1][-1]["content"]
+    for part in ("London reading", "Paris reading", "Ankara reading"):
+        assert part in feedback
+    assert "You have answered" not in feedback
+    assert "Still unanswered:" not in feedback
 
 
 def test_textual_outcome_identity_matches_the_request(mock_config, db, dialogue_memory):
