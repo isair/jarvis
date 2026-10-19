@@ -125,15 +125,25 @@ class DocumentIndex:
         lines = text.splitlines()
         chunks: list[tuple[int, int, str]] = []
         current: list[str] = []
+        current_chars = 0
         start = 1
         for line_number, line in enumerate(lines, start=1):
             if current and (
                 len(current) >= _MAX_CHUNK_LINES
-                or len("\n".join(current)) + len(line) + 1 > _MAX_CHUNK_CHARS
+                or current_chars + len(line) + 1 > _MAX_CHUNK_CHARS
             ):
                 chunks.append((start, line_number - 1, "\n".join(current)))
                 current = []
+                current_chars = 0
+            if not current:
                 start = line_number
+            if len(line) > _MAX_CHUNK_CHARS:
+                full_parts = (len(line) - 1) // _MAX_CHUNK_CHARS
+                for part in range(full_parts):
+                    offset = part * _MAX_CHUNK_CHARS
+                    chunks.append((line_number, line_number, line[offset:offset + _MAX_CHUNK_CHARS]))
+                line = line[full_parts * _MAX_CHUNK_CHARS:]
+            current_chars += len(line) + bool(current)
             current.append(line)
         if current:
             chunks.append((start, len(lines), "\n".join(current)))
