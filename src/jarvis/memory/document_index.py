@@ -189,7 +189,8 @@ class DocumentIndex:
     def _authorised_identity(self, path: Path, roots: list[Path]) -> str | None:
         try:
             resolved = path.resolve(strict=True)
-            if resolved != path or not any(self._under_root(resolved, root) for root in roots):
+            if (resolved != path or resolved.suffix.lower() not in _ALLOWED_EXTENSIONS
+                    or not any(self._under_root(resolved, root) for root in roots)):
                 return None
             value = path.stat()
             if stat.S_ISREG(value.st_mode):

@@ -118,3 +118,34 @@ def test_disabled_index_leaves_no_persistent_files_until_enabled(tmp_path, enabl
             assert [hit.text for hit in index.search('source')] == ['An explicitly enabled local source.']
     if not enable_later:
         assert set(tmp_path.iterdir()) == before
+
+
+@pytest.mark.parametrize('target_suffix', ['.json', '.pdf', '.txt', '.md'])
+def test_alias_cannot_expand_the_allowed_document_formats(tmp_path, target_suffix):
+    root = tmp_path / 'documents'
+    root.mkdir()
+    source = root / ('source' + target_suffix)
+    source.write_text('format-restricted owned content')
+    (root / 'alias.txt').symlink_to(source)
+    cfg = SimpleNamespace(document_search_enabled=True, document_search_paths=[str(root)],
+                          embedding_model='owned-test', llm_embedding_timeout_sec=1)
+
+    class Recording(Embeddings):
+        def __init__(self):
+            self.inputs = []
+
+        def embed(self, text, model, timeout_sec=15):
+            self.inputs.append(text)
+            return super().embed(text, model, timeout_sec)
+
+    backend = Recording()
+    with DocumentIndex(SimpleNamespace(db_path=str(tmp_path / 'diary.sqlite')), cfg,
+                       embedding_backend=backend) as index:
+        assert index.refresh().complete
+        hits = index.search('source')
+        if target_suffix in {'.txt', '.md'}:
+            assert [hit.text for hit in hits] == ['format-restricted owned content']
+            assert hits[0].path == str(source.resolve())
+        else:
+            assert not hits
+            assert 'format-restricted owned content' not in backend.inputs

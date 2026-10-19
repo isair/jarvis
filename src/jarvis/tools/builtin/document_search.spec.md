@@ -10,7 +10,8 @@ subsequent refreshes and searches to initialise its storage.
 
 Each search performs a bounded refresh of configured folders and scans only
 regular files whose resolved path remains inside that folder. Symlinks that
-resolve outside an allowed folder are skipped. Other extensions are ignored.
+resolve outside an allowed folder are skipped. Both the entry and its resolved
+target must have an allowed extension; other extensions are ignored.
 Device, inode, byte size and modification/change times identify each source.
 Unchanged files in the same embedding space are not re-embedded. Changed files are re-chunked and embedded, and deleted files
 remove their chunks and vectors. Unavailable or removed roots also remove their
