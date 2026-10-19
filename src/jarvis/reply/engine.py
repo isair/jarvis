@@ -284,10 +284,13 @@ def _text_tool_call_guidance(allowed_names: list[str]) -> str:
         "- Multi-part requests: compare every requested outcome and constraint "
         "with the actual tool results. One result can cover several parts. "
         "A constraint may already be satisfied without another action. "
+        "Execute requested actions through their available tools and confirm "
+        "the result before reporting completion. "
         "Use further tools only for outcomes that remain unresolved; do not "
         "repeat completed actions or treat a failed action as completed. "
         "For independent information requests, obtain the missing evidence "
-        "before answering. Explain any outcome you cannot complete."
+        "before answering. Do not stop with an offer to continue while an "
+        "available tool can obtain the missing evidence."
     )
 
 
@@ -2711,9 +2714,12 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                             + json.dumps(_compound_sub_questions, ensure_ascii=False)
                             + ". One result may cover multiple parts, and constraints "
                             "may already be satisfied. Use another tool only for "
-                            "an unresolved outcome. Do not repeat completed actions "
+                            "an unresolved outcome. If requested evidence is missing and "
+                            "an available tool can obtain it, call that tool now "
+                            "before answering. Do not repeat completed actions "
                             "or assume failed actions succeeded. When all outcomes "
-                            "are covered, reply; explain any remaining limitation.]"
+                            "are covered, reply. Report a limitation only when available "
+                            "tools cannot resolve it.]"
                         )
                     else:
                         remainder_hint = (

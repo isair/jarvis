@@ -17,7 +17,7 @@ pytestmark = pytest.mark.eval
 
 class OwnedReminderRemoval(Tool):
     name = 'removeReminder'
-    description = 'Delete the single reminder with the supplied name, returning every remaining reminder.'
+    description = 'Delete one reminder by its exact name. The current names are tea and soup. Return every remaining reminder.'
     inputSchema = {'type': 'object', 'properties': {'name': {'type': 'string'}}, 'required': ['name']}
 
     def __init__(self):
@@ -26,7 +26,9 @@ class OwnedReminderRemoval(Tool):
 
     def run(self, args, context):
         self.calls.append(args)
-        self.entries.discard(args.get('name'))
+        if args.get('name') not in self.entries:
+            return ToolExecutionResult(False, None, 'No reminder has that exact name. Current names: ' + ', '.join(sorted(self.entries)))
+        self.entries.remove(args['name'])
         return ToolExecutionResult(True, json.dumps({'remaining_reminders': sorted(self.entries)}))
 
 
