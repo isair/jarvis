@@ -30,7 +30,10 @@ def test_resumed_plan_exposes_original_tools(mock_config, db, dialogue_memory):
 
     with patch("jarvis.reply.preparation.prepare_turn", return_value=decision), \
          patch.object(engine, "chat_with_messages", side_effect=chat):
-        assert engine.run_reply_engine(db, mock_config, None, "continue", dialogue_memory)
+        assert engine.run_reply_engine(
+            db, mock_config, None, "continue", dialogue_memory,
+            resume_task_id=task.task_id,
+        )
     assert "getWeather" in {tool["function"]["name"] for tool in requests[0]["tools"]}
 
 
@@ -63,7 +66,10 @@ def test_resumed_dependent_step_resolves_from_bounded_prior_evidence(
     with patch("jarvis.reply.preparation.prepare_turn", return_value=decision), \
          patch.object(engine, "_resolve_plan_step", side_effect=resolve), \
          patch.object(engine, "chat_with_messages", return_value={"message": {"content": "I need the weather forecast."}}):
-        engine.run_reply_engine(db, mock_config, None, "continue", dialogue_memory)
+        engine.run_reply_engine(
+            db, mock_config, None, "continue", dialogue_memory,
+            resume_task_id=task.task_id,
+        )
 
     assert resolver_contexts
     prior = resolver_contexts[0]

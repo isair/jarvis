@@ -920,7 +920,9 @@ def _run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             from ..tools.registry import refresh_mcp_tools, is_mcp_cache_initialized
             if is_mcp_cache_initialized():
                 debug_log("New conversation detected, refreshing MCP tools", "mcp")
-                _tools, _errors = refresh_mcp_tools(verbose=False)
+                _tools, _errors = control.call(refresh_mcp_tools, verbose=False)
+        except (ExecutionCancelled, ExecutionDeadlineExceeded):
+            raise
         except Exception as e:
             debug_log(f"MCP refresh on new conversation failed: {e}", "mcp")
 
@@ -929,7 +931,9 @@ def _run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     if getattr(cfg, "mcps", {}):
         try:
             from ..tools.registry import get_cached_mcp_tools
-            mcp_tools = get_cached_mcp_tools()
+            mcp_tools = control.call(get_cached_mcp_tools)
+        except (ExecutionCancelled, ExecutionDeadlineExceeded):
+            raise
         except Exception as e:
             debug_log(f"⚠️ Failed to get cached MCP tools: {e}", "mcp")
             mcp_tools = {}

@@ -58,9 +58,8 @@ class ExecutionControl:
         completed: queue.Queue[tuple[bool, Any]] = queue.Queue(maxsize=1)
 
         def worker() -> None:
-            if self.cancel_event.is_set():
-                return
             try:
+                self.check()
                 completed.put((True, fn(*args, **kwargs)))
             except BaseException as exc:
                 completed.put((False, exc))
