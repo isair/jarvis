@@ -164,10 +164,10 @@ def test_one_manager_publishes_concurrent_updates_in_assignment_order(monkeypatc
     if publisher == 'direct':
         update = lambda: manager.set_state(activity.JarvisState.SPEAKING)
     else:
-        from jarvis.output.tts import PiperTTS, ChatterboxTTS
+        from jarvis.output.tts import PiperTTS, ChatterboxTTS, SpeechRequest
         backend = PiperTTS if publisher == 'piper' else ChatterboxTTS
-        engine = backend.__new__(backend)
-        update = lambda: engine._notify_speaking_state(True)
+        engine = backend()
+        update = lambda: engine._begin_playback(SpeechRequest('Owned speech'), 1.0)
 
     def update_second():
         second_started.set()

@@ -36,6 +36,29 @@ only that utterance's completion. An interrupted utterance does not report
 successful completion. Callback failures remain isolated from later work. The
 worker releases the completed request and its callback references before waiting for more speech.
 
+## Playback observers and activity
+
+Both backends publish playback start after synthesis and device preparation,
+immediately before starting audio. Queue admission and synthesis do not publish
+speaking activity or replace the last played text. Observers receive the
+preprocessed utterance and exact audio duration. The observer pair is selected
+at playback start and retained until that request terminates. A queued request
+cancelled before playback emits no playback events.
+
+The listener tracks every played utterance, including announcements and error
+feedback, through these shared observers. Matching termination records echo-tail
+timing; stale termination cannot finish a newer utterance's echo window. Only a
+successful conversational reply can schedule follow-up listening.
+
+Playback temporarily owns speaking activity and restores idle only while its
+publication remains current. Dictation recording and processing remain protected.
+Newer activity, including a same-valued publication, supersedes older ownership.
+In-process transitions share the state manager's lock; publication identity also
+preserves already observed changes from other publishers. The state file remains
+an atomic observer snapshot, rather than a cross-process transaction protocol.
+Callback exceptions, including observer task cancellation, cannot skip terminal
+cleanup or abandon later queued speech. Cancelling speech uses its request handle.
+
 ## Piper voice downloads
 
 Missing voice files are downloaded from the configured public model-file source.
