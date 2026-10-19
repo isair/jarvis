@@ -814,7 +814,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         if control.task_store and control.task_id:
             control.task_store.finish(control.task_id, status="deadline", missing_info=["time budget expired"])
         debug_log("reply deadline exceeded", "planning")
-        return "I ran out of time before finishing. Ask me to continue if you'd like me to use the saved results."
+        return "I ran out of time before finishing."
     except (ContextBudgetExceeded, InvalidToolHistory) as exc:
         debug_log(f"Reply context cannot be sent safely: {exc}", "planning")
         if control.task_store and control.task_id:

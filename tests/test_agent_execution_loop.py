@@ -411,6 +411,7 @@ def test_query_deadline_in_slow_preparation_prevents_model_reply(
 
     assert entered.is_set()
     assert "ran out of time" in reply
+    assert "Ask me to continue" not in reply, "Default entry points cannot select a saved task for continuation"
     chat.assert_not_called()
     assert dialogue_memory.get_recent_messages() == []
 
