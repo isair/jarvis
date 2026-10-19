@@ -14,7 +14,7 @@ pytestmark = pytest.mark.unit
 @pytest.fixture(params=[speech.PiperTTS, speech.ChatterboxTTS], ids=['piper', 'chatterbox'])
 def voice(request, monkeypatch):
     engine = request.param()
-    monkeypatch.setattr(engine, 'start', lambda: None)
+    monkeypatch.setattr(engine, '_start_if_current', lambda generation: None)
     monkeypatch.setattr(engine, '_notify_speaking_state', lambda speaking: None)
 
     class DrainingQueue(queue.Queue):
@@ -142,7 +142,7 @@ def test_real_worker_preserves_callback_ownership_with_concurrent_producers(voic
     import threading
 
     voice._q = queue.Queue()
-    monkeypatch.setattr(voice, 'start', type(voice).start.__get__(voice))
+    monkeypatch.setattr(voice, '_start_if_current', type(voice)._start_if_current.__get__(voice))
     voice.start()
     worker = voice._thread
     completed = []
@@ -192,7 +192,7 @@ def test_idle_worker_releases_its_completed_callback(voice, monkeypatch):
             completed.set()
 
     voice._q = ObservableQueue()
-    monkeypatch.setattr(voice, 'start', type(voice).start.__get__(voice))
+    monkeypatch.setattr(voice, '_start_if_current', type(voice)._start_if_current.__get__(voice))
     voice.start()
     worker = voice._thread
     callback = Completion()
@@ -221,7 +221,7 @@ def test_stopped_synthesis_discards_pending_speech_and_restarts_cleanly(voice, m
     durations = []
     synthesised = []
     voice._q = queue.Queue()
-    monkeypatch.setattr(voice, 'start', type(voice).start.__get__(voice))
+    monkeypatch.setattr(voice, '_start_if_current', type(voice)._start_if_current.__get__(voice))
 
     def wait_for_release(text):
         synthesised.append(text)
@@ -284,7 +284,7 @@ def test_completion_callback_can_stop_the_engine_without_joining_itself(voice, m
     stopped = threading.Event()
     restarted = threading.Event()
     voice._q = queue.Queue()
-    monkeypatch.setattr(voice, 'start', type(voice).start.__get__(voice))
+    monkeypatch.setattr(voice, '_start_if_current', type(voice)._start_if_current.__get__(voice))
 
     def complete():
         voice.stop()
@@ -313,7 +313,7 @@ def test_stopping_from_duration_callback_does_not_start_playback(voice, monkeypa
     playback = []
     completed = []
     voice._q = queue.Queue()
-    monkeypatch.setattr(voice, 'start', type(voice).start.__get__(voice))
+    monkeypatch.setattr(voice, '_start_if_current', type(voice)._start_if_current.__get__(voice))
     monkeypatch.setattr(sys.modules['sounddevice'].OutputStream, 'start',
                         lambda self: playback.append('piper'))
     monkeypatch.setattr(sys.modules['pygame'].mixer.music, 'play',
@@ -356,7 +356,7 @@ def test_shutdown_cannot_complete_speech_while_discarding_pending_requests(voice
             return super().get_nowait()
 
     voice._q = PausedDiscardQueue()
-    monkeypatch.setattr(voice, 'start', type(voice).start.__get__(voice))
+    monkeypatch.setattr(voice, '_start_if_current', type(voice)._start_if_current.__get__(voice))
     if isinstance(voice, speech.PiperTTS):
         original = voice._voice.synthesize
         def synthesise(text, cfg):
@@ -401,7 +401,7 @@ def test_slow_audio_preparation_does_not_block_shutdown(voice, monkeypatch):
     playback = []
     completed = []
     voice._q = queue.Queue()
-    monkeypatch.setattr(voice, 'start', type(voice).start.__get__(voice))
+    monkeypatch.setattr(voice, '_start_if_current', type(voice)._start_if_current.__get__(voice))
 
     def prepare(**kwargs):
         preparing.set()
@@ -438,7 +438,7 @@ def test_model_preparation_does_not_hold_the_shutdown_lock(voice, monkeypatch):
     loading = threading.Event()
     release = threading.Event()
     stopped = threading.Event()
-    monkeypatch.setattr(voice, 'start', type(voice).start.__get__(voice))
+    monkeypatch.setattr(voice, '_start_if_current', type(voice)._start_if_current.__get__(voice))
     voice._q = queue.Queue()
     def load():
         loading.set()
@@ -462,3 +462,49 @@ def test_model_preparation_does_not_hold_the_shutdown_lock(voice, monkeypatch):
         stopper.join(timeout=3)
         voice.stop()
         assert not starter.is_alive() and not stopper.is_alive()
+
+
+@pytest.mark.parametrize('newer_submission', [False, True])
+def test_cancelled_model_load_cannot_submit_stale_speech(voice, monkeypatch, newer_submission):
+    import threading
+
+    loading = threading.Event()
+    release = threading.Event()
+    stale = threading.Event()
+    fresh = threading.Event()
+    voice._q = queue.Queue()
+    monkeypatch.setattr(voice, '_start_if_current', type(voice)._start_if_current.__get__(voice))
+
+    def load():
+        if threading.current_thread() is starter:
+            loading.set()
+            assert release.wait(timeout=6)
+        return True
+
+    loader = '_ensure_initialized' if isinstance(voice, speech.PiperTTS) else '_ensure_model'
+    monkeypatch.setattr(voice, loader, load)
+    starter = threading.Thread(target=lambda: voice.speak('first', completion_callback=stale.set))
+    try:
+        starter.start()
+        assert loading.wait(timeout=3)
+        voice.stop()
+        if newer_submission:
+            voice.speak('second', completion_callback=fresh.set)
+            assert fresh.wait(timeout=3)
+        release.set()
+        starter.join(timeout=3)
+        assert not starter.is_alive()
+        assert not stale.wait(timeout=1), 'Cancelled model loading submitted stale speech'
+        if not newer_submission:
+            voice.speak('second', completion_callback=fresh.set)
+            assert fresh.wait(timeout=3), 'A fresh request cannot use the prepared model'
+        assert voice.get_last_spoken_text() == 'second'
+    finally:
+        release.set()
+        starter.join(timeout=3)
+        worker = voice._thread
+        voice.stop()
+        if worker is not None:
+            worker.join(timeout=3)
+            assert not worker.is_alive()
+        assert not starter.is_alive()

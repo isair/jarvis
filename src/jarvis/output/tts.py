@@ -411,6 +411,7 @@ class ChatterboxTTS:
         self._q: queue.Queue[Optional[_SpeechRequest]] = queue.Queue()
         self._thread: Optional[threading.Thread] = None
         self._lifecycle_lock = threading.RLock()
+        self._lifecycle_generation = 0
         self._stop = threading.Event()
         self._is_speaking = threading.Event()
         self._last_spoken_text: str = ""
@@ -482,11 +483,18 @@ class ChatterboxTTS:
 
     def start(self) -> None:
         with self._lifecycle_lock:
-            if not self.enabled or (self._thread is not None and self._thread.is_alive()):
+            generation = self._lifecycle_generation
+        self._start_if_current(generation)
+
+    def _start_if_current(self, generation: int) -> None:
+        with self._lifecycle_lock:
+            if (generation != self._lifecycle_generation or not self.enabled
+                    or (self._thread is not None and self._thread.is_alive())):
                 return
         available = self._ensure_model()
         with self._lifecycle_lock:
-            if not self.enabled or (self._thread is not None and self._thread.is_alive()):
+            if (generation != self._lifecycle_generation or not self.enabled
+                    or (self._thread is not None and self._thread.is_alive())):
                 return
             if not available:
                 self.enabled = False
@@ -508,12 +516,13 @@ class ChatterboxTTS:
 
     def stop(self) -> None:
         with self._lifecycle_lock:
-            worker = self._thread
-            if worker is None:
-                return
+            self._lifecycle_generation += 1
             self._stop.set()
             self.interrupt()
             self._discard_pending_speech()
+            worker = self._thread
+            if worker is None:
+                return
             self._q.put_nowait(None)
         if worker is not threading.current_thread():
             worker.join(timeout=2.0)
@@ -527,8 +536,13 @@ class ChatterboxTTS:
               duration_callback: Optional[Callable[[float], None]] = None) -> None:
         if not self.enabled or not text.strip():
             return
-        self.start()
         with self._lifecycle_lock:
+            generation = self._lifecycle_generation
+        self._start_if_current(generation)
+        with self._lifecycle_lock:
+            if generation != self._lifecycle_generation:
+                debug_log("Discarding speech request cancelled by shutdown", "tts")
+                return
             if not self.enabled or self._stop.is_set():
                 return
             processed_text = _preprocess_for_speech(text)
@@ -711,6 +725,7 @@ class PiperTTS:
         self._q: queue.Queue[Optional[_SpeechRequest]] = queue.Queue()
         self._thread: Optional[threading.Thread] = None
         self._lifecycle_lock = threading.RLock()
+        self._lifecycle_generation = 0
         self._stop = threading.Event()
         self._is_speaking = threading.Event()
         self._last_spoken_text: str = ""
@@ -810,11 +825,18 @@ class PiperTTS:
 
     def start(self) -> None:
         with self._lifecycle_lock:
-            if not self.enabled or (self._thread is not None and self._thread.is_alive()):
+            generation = self._lifecycle_generation
+        self._start_if_current(generation)
+
+    def _start_if_current(self, generation: int) -> None:
+        with self._lifecycle_lock:
+            if (generation != self._lifecycle_generation or not self.enabled
+                    or (self._thread is not None and self._thread.is_alive())):
                 return
         available = self._ensure_initialized()
         with self._lifecycle_lock:
-            if not self.enabled or (self._thread is not None and self._thread.is_alive()):
+            if (generation != self._lifecycle_generation or not self.enabled
+                    or (self._thread is not None and self._thread.is_alive())):
                 return
             if not available:
                 self.enabled = False
@@ -836,12 +858,13 @@ class PiperTTS:
 
     def stop(self) -> None:
         with self._lifecycle_lock:
-            worker = self._thread
-            if worker is None:
-                return
+            self._lifecycle_generation += 1
             self._stop.set()
             self.interrupt()
             self._discard_pending_speech()
+            worker = self._thread
+            if worker is None:
+                return
             self._q.put_nowait(None)
         if worker is not threading.current_thread():
             worker.join(timeout=2.0)
@@ -855,8 +878,13 @@ class PiperTTS:
               duration_callback: Optional[Callable[[float], None]] = None) -> None:
         if not self.enabled or not text.strip():
             return
-        self.start()
         with self._lifecycle_lock:
+            generation = self._lifecycle_generation
+        self._start_if_current(generation)
+        with self._lifecycle_lock:
+            if generation != self._lifecycle_generation:
+                debug_log("Discarding speech request cancelled by shutdown", "tts")
+                return
             if not self.enabled or self._stop.is_set():
                 return
             processed_text = _preprocess_for_speech(text)
