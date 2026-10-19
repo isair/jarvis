@@ -14,6 +14,7 @@ Any code change must either adhere to our spec files perfectly or you should ask
 |-----------|--------|----------------|
 | `src/jarvis/config.spec.md` | Shared configuration file selection | One resolver for runtime and desktop reads, writes and navigation |
 | `website/website.spec.md` | Public product site, static build, discovery metadata and GitHub Pages publication | Crawlable content, truthful claims, no user stores or third-party tracking |
+| `src/jarvis/activity.spec.md` | Shared assistant activity publication and local observers | Standard-library core; complete atomic file snapshots; no desktop or Qt dependency |
 | `src/desktop_app/desktop_app.spec.md` | System tray app, startup flow, daemon integration, windows, theme, updates | Desktop is separate from core; jarvis has no knowledge of desktop_app |
 | `src/desktop_app/settings_window.spec.md` | Auto-generated settings UI from config metadata | Metadata-driven; only non-default values written; preserves unknown keys |
 | `src/desktop_app/setup_wizard.spec.md` | First-run wizard (Ollama, models, Whisper, location) | Minimal friction; only shown when user action required; doesn't configure everything |

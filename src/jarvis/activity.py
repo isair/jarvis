@@ -52,13 +52,25 @@ class JarvisStateManager:
             return self._state
 
     def _write_state(self, state: JarvisState) -> None:
-        """Write state to file for cross-process communication."""
+        """Publish a complete snapshot without following the shared path."""
+        pending_path = None
         try:
-            with open(self._state_file, 'w') as f:
-                f.write(state.value)
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", prefix=".jarvis-state-",
+                dir=os.path.dirname(self._state_file) or ".", delete=False,
+            ) as pending:
+                pending_path = pending.name
+                pending.write(state.value)
+            os.replace(pending_path, self._state_file)
         except OSError:
-            # File write failed - state won't be shared across processes
+            # Publication is best-effort; retain the previous shared snapshot.
             pass
+        finally:
+            if pending_path is not None:
+                try:
+                    os.unlink(pending_path)
+                except OSError:
+                    pass
 
     def set_state(self, state: JarvisState) -> None:
         """Set the Jarvis state (thread-safe, cross-process)."""
