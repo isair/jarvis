@@ -12,6 +12,12 @@ The desktop app is a **separate package** from the core `jarvis` module. It depe
 - Building alternative UIs (web, mobile) without modifying core logic
 - Keeping PyQt6 dependencies isolated from the core package
 
+## Source Runtime
+
+Source installations require Python 3.11 or later. The POSIX development
+launcher validates interpreter versions before creating a virtual environment,
+selects a supported candidate and rejects an unsupported existing environment.
+
 ## Package Structure
 
 ```
