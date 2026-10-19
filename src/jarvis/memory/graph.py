@@ -367,10 +367,6 @@ class GraphMemoryStore:
         classification, so they remain available for explicit organisation.
         """
         with self._lock:
-            root_row = self.conn.execute(
-                "SELECT data FROM memory_nodes WHERE id = 'root'"
-            ).fetchone()
-            root_has_data = bool(root_row and (root_row["data"] or "").strip())
             root_child = self.conn.execute(
                 "SELECT id FROM memory_nodes "
                 "WHERE parent_id = 'root' AND id NOT IN ({}) LIMIT 1".format(
@@ -378,7 +374,10 @@ class GraphMemoryStore:
                 ),
                 tuple(FIXED_BRANCH_IDS),
             ).fetchone()
-            return root_has_data or root_child is not None
+            if root_child is not None:
+                return True
+            with self.open_node_text("root") as chunks:
+                return chunks is not None and any(chunk.strip() for chunk in chunks)
 
     # ── CRUD ────────────────────────────────────────────────────────────
 
