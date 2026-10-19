@@ -26,6 +26,8 @@ if os.name == 'nt':
     _kernel.GetFileInformationByHandleEx.restype = wintypes.BOOL
     _kernel.GetFileType.argtypes = [wintypes.HANDLE]
     _kernel.GetFileType.restype = wintypes.DWORD
+    _kernel.ReOpenFile.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD]
+    _kernel.ReOpenFile.restype = wintypes.HANDLE
 
     class _AttributeTag(ctypes.Structure):
         _fields_ = [('attributes', wintypes.DWORD), ('tag', wintypes.DWORD)]
@@ -61,13 +63,13 @@ if os.name == 'nt':
     _nt.RtlNtStatusToDosError.argtypes = [ctypes.c_long]
     _nt.RtlNtStatusToDosError.restype = wintypes.ULONG
 
-    def _windows_handle(name: str, parent, *, directory: bool, enumerate_entries=False):
+    def _windows_handle(name: str, parent, *, directory: bool):
         # RootDirectory binds a single child name to the already pinned object.
         # OBJ_DONT_REPARSE rejects traversal at the kernel boundary.
         encoded = name.encode('utf-16-le')
         if len(encoded) > 65532:
             raise OSError('Document entry name is too long')
-        buffer = ctypes.create_unicode_buffer(name)
+        buffer = ctypes.create_unicode_buffer(name, len(encoded) // 2 + 1)
         text = _UnicodeString(len(encoded), len(encoded) + 2,
                               ctypes.cast(buffer, wintypes.LPWSTR))
         attributes = _ObjectAttributes(ctypes.sizeof(_ObjectAttributes), parent,
@@ -75,8 +77,6 @@ if os.name == 'nt':
         handle = wintypes.HANDLE()
         status_block = _IoStatus()
         access = 0x80 | 0x100000 | (0x20 if directory else 0x1)
-        if enumerate_entries:
-            access |= 0x1  # Only the directory being listed needs list permission.
         status = _nt.NtCreateFile(ctypes.byref(handle), access, ctypes.byref(attributes),
                                   ctypes.byref(status_block), None, 0, 0x1 | 0x2, 1,
                                   0x200000 | 0x20 | (0x1 if directory else 0x40), None, 0)
@@ -85,7 +85,10 @@ if os.name == 'nt':
         return handle.value
 
     def _windows_entries(directory):
-        handle = _windows_handle('.', directory, directory=True, enumerate_entries=True)
+        # Reopen the same object with list permission, without resolving a pathname.
+        handle = _kernel.ReOpenFile(directory, 0x1 | 0x80, 0x1 | 0x2, 0x02200000)
+        if handle == ctypes.c_void_p(-1).value:
+            raise ctypes.WinError(ctypes.get_last_error())
         try:
             # Fixed-size batches retain the index's per-entry cancellation/budget checks.
             buffer = ctypes.create_string_buffer(65536)
@@ -104,7 +107,7 @@ if os.name == 'nt':
                             or (info.next and (info.next < end - offset
                                                or info.next % 8 or offset + info.next >= len(buffer)))):
                         raise OSError('Invalid document directory information')
-                    name = buffer.raw[start:end].decode('utf-16-le')
+                    name = ctypes.string_at(ctypes.addressof(buffer) + start, info.name_bytes).decode('utf-16-le')
                     if name not in ('.', '..'):
                         yield DocumentEntry(name, bool(info.attributes & 0x10)
                                             and not bool(info.attributes & 0x400))

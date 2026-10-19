@@ -89,9 +89,10 @@ def main():
                 assert stream.read() == ordinary.read_bytes()
             listing = root / 'listing'
             listing.mkdir()
-            names = {'café.txt', '東京.md', 'child'}
+            names = {'café.txt', '東京.md', '🌱.md', 'child'}
             (listing / 'café.txt').write_text('owned accent', encoding='utf-8')
             (listing / '東京.md').write_text('owned Unicode', encoding='utf-8')
+            (listing / '🌱.md').write_bytes(b'owned astral Unicode')
             (listing / 'child').mkdir()
             with module.scan_document_directory(listing) as (_, entries):
                 listed = {entry.name: entry.directory for entry in entries}
@@ -99,6 +100,8 @@ def main():
             assert not listed['café.txt'] and not listed['東京.md']
             with module.open_document_file(listing / '東京.md') as stream:
                 assert stream.read() == b'owned Unicode'
+            with module.open_document_file(listing / '🌱.md') as stream:
+                assert stream.read() == b'owned astral Unicode'
             print('✅ Ordinary and Unicode reads/enumeration passed', flush=True)
             original = module._open_entry
             failures = []
