@@ -157,7 +157,7 @@ def test_voice_evals_reach_selected_backend(monkeypatch, provider, url, expected
     monkeypatch.setenv('EVAL_JUDGE_BASE_URL', url)
     monkeypatch.setenv('EVAL_JUDGE_MODEL', 'synthetic-voice-model')
     monkeypatch.setattr('jarvis.llm.http.get', lambda *args, **kw: nullcontext(SimpleNamespace(status_code=404)))
-    monkeypatch.setattr('desktop_app.face_widget.get_jarvis_state', lambda: MagicMock())
+    monkeypatch.setattr('jarvis.activity.get_jarvis_state', lambda: MagicMock())
     calls = []
     content = json.dumps(dict(directed=True, query=('random topic' if entry == 'processed' else 'weather'), stop=False,
                              confidence='high', reasoning='Addressed to the assistant'))

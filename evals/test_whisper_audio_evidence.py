@@ -17,11 +17,11 @@ pytestmark = pytest.mark.eval
 @pytest.fixture(autouse=True)
 def private_audio_runtime(tmp_path, monkeypatch):
     """Qualification uses private settings and face state with local model caches."""
-    from desktop_app import face_widget
+    from jarvis import activity
 
     monkeypatch.setenv("JARVIS_CONFIG_PATH", str(tmp_path / "config.json"))
-    monkeypatch.setattr(face_widget, "_get_jarvis_state_file", lambda: str(tmp_path / "face-state"))
-    monkeypatch.setattr(face_widget, "_jarvis_state_instance", None)
+    monkeypatch.setattr(activity, "_get_jarvis_state_file", lambda: str(tmp_path / "face-state"))
+    monkeypatch.setattr(activity, "_jarvis_state_instance", None)
 
 
 @pytest.fixture(scope="module")

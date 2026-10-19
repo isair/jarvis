@@ -14,7 +14,7 @@ from PyQt6.QtCore import Qt, QPoint
 from PyQt6.QtGui import QImage, QPainter, QRegion
 
 from desktop_app import face_widget
-from desktop_app.face_widget import JarvisState
+from jarvis.activity import JarvisState
 
 
 pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("no_network")]

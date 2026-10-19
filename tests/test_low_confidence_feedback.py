@@ -9,8 +9,9 @@ pytestmark = pytest.mark.unit
 @pytest.fixture
 def face(qapp, monkeypatch, tmp_path):
     from desktop_app import face_widget
-    monkeypatch.setattr(face_widget, '_get_jarvis_state_file', lambda: str(tmp_path / 'state'))
-    monkeypatch.setattr(face_widget, '_jarvis_state_instance', None)
+    from jarvis import activity
+    monkeypatch.setattr(activity, '_get_jarvis_state_file', lambda: str(tmp_path / 'state'))
+    monkeypatch.setattr(activity, '_jarvis_state_instance', None)
     window = face_widget.FaceWindow()
     window.show()
     QTest.qWait(20)
@@ -28,7 +29,7 @@ def test_face_has_no_rejection_subtitle_or_reserved_row(face):
 
 def test_daemon_stop_sleeps_face_without_subtitle_dependency(face):
     from desktop_app.app import JarvisSystemTray
-    from desktop_app.face_widget import JarvisState
+    from jarvis.activity import JarvisState
     tray = object.__new__(JarvisSystemTray)
     tray.face_window = face
     face.face._state_manager.set_state(JarvisState.LISTENING)

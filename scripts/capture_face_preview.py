@@ -21,6 +21,7 @@ from PyQt6.QtCore import Qt, QRectF
 from PyQt6.QtGui import QColor, QFont, QImage, QPainter
 from PyQt6.QtWidgets import QApplication
 
+from jarvis.activity import JarvisState
 from desktop_app import face_widget
 from desktop_app.themes import COLORS
 
@@ -54,18 +55,18 @@ def main():
     app = QApplication([])
     app.setQuitOnLastWindowClosed(False)
     clock = SimpleNamespace(now=1000.0)
-    state = SimpleNamespace(state=face_widget.JarvisState.ASLEEP)
+    state = SimpleNamespace(state=JarvisState.ASLEEP)
     with ExitStack() as stack:
         stack.enter_context(patch.object(face_widget, 'get_jarvis_state', return_value=state))
         stack.enter_context(patch.object(face_widget._time, 'monotonic', side_effect=lambda: clock.now))
         stack.enter_context(patch.object(face_widget, 'debug_log'))
         stack.enter_context(patch.object(face_widget.random, 'uniform', side_effect=lambda low, high: (low + high) / 2))
-        states = list(face_widget.JarvisState)
+        states = list(JarvisState)
         sheet = QImage(220 * len(states), 624, QImage.Format.Format_ARGB32_Premultiplied)
         painter = QPainter(sheet)
         for index, current in enumerate(states):
             clock.now = 1000.0
-            state.state = face_widget.JarvisState.ASLEEP
+            state.state = JarvisState.ASLEEP
             window = face_widget.FaceWindow()
             window.show()
             app.processEvents()
@@ -87,7 +88,7 @@ def main():
             from PIL import Image
 
             clock.now = 1000.0
-            state.state = face_widget.JarvisState.ASLEEP
+            state.state = JarvisState.ASLEEP
             window = face_widget.FaceWindow()
             window.show()
             app.processEvents()
@@ -96,11 +97,11 @@ def main():
             # A bounded glance makes its maximum idle movement visible in the preview.
             stack.enter_context(patch.object(face_widget.random, 'uniform', side_effect=lambda low, high: high))
             for current, duration in (
-                (face_widget.JarvisState.IDLE, 16),
-                (face_widget.JarvisState.LISTENING, 3),
-                (face_widget.JarvisState.THINKING, 4),
-                (face_widget.JarvisState.SPEAKING, 4),
-                (face_widget.JarvisState.ASLEEP, 3),
+                (JarvisState.IDLE, 16),
+                (JarvisState.LISTENING, 3),
+                (JarvisState.THINKING, 4),
+                (JarvisState.SPEAKING, 4),
+                (JarvisState.ASLEEP, 3),
             ):
                 state.state = current
                 window.face._animate()

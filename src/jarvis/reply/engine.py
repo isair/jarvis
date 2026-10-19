@@ -2529,7 +2529,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
                 # Set face state to IDLE (waiting for wake word)
                 try:
-                    from desktop_app.face_widget import get_jarvis_state, JarvisState
+                    from jarvis.activity import get_jarvis_state, JarvisState
                     state_manager = get_jarvis_state()
                     state_manager.set_state(JarvisState.IDLE)
                 except Exception:

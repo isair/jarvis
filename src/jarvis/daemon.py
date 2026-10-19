@@ -1086,7 +1086,7 @@ def _run_daemon(smoke_test: bool = False) -> None:
             def _on_dictation_start():
                 voice_thread.set_capture_paused('dictation', True)
                 try:
-                    from desktop_app.face_widget import JarvisState, get_jarvis_state
+                    from jarvis.activity import JarvisState, get_jarvis_state
                     get_jarvis_state().set_state(JarvisState.DICTATING)
                 except Exception:
                     pass
@@ -1094,7 +1094,7 @@ def _run_daemon(smoke_test: bool = False) -> None:
 
             def _on_dictation_processing_start():
                 try:
-                    from desktop_app.face_widget import JarvisState, get_jarvis_state
+                    from jarvis.activity import JarvisState, get_jarvis_state
                     get_jarvis_state().set_state(JarvisState.DICTATION_PROCESSING)
                 except Exception:
                     pass
@@ -1103,7 +1103,7 @@ def _run_daemon(smoke_test: bool = False) -> None:
             def _on_dictation_end():
                 voice_thread.set_capture_paused('dictation', False)
                 try:
-                    from desktop_app.face_widget import JarvisState, get_jarvis_state
+                    from jarvis.activity import JarvisState, get_jarvis_state
                     get_jarvis_state().set_state(JarvisState.IDLE)
                 except Exception:
                     pass

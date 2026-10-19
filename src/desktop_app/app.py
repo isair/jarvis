@@ -2453,7 +2453,7 @@ class JarvisSystemTray:
     def _set_face_asleep(self) -> None:
         """Reset the face to asleep so it doesn't look ready while the daemon is down."""
         try:
-            from desktop_app.face_widget import JarvisState, get_jarvis_state
+            from jarvis.activity import JarvisState, get_jarvis_state
             get_jarvis_state().set_state(JarvisState.ASLEEP)
         except Exception:
             pass

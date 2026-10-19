@@ -151,6 +151,12 @@ Window visibility is user-controlled: starting or stopping the assistant never s
 
 ### Desktop face presence
 
+`jarvis.activity` owns the shared activity enum and file-backed state manager.
+It uses only the standard library, so core speech, listening, dictation and
+reply paths publish state without importing the desktop or Qt. The face
+observes that state during animation in both bundled and subprocess modes.
+
+
 The face is a compact frameless, translucent tool window, always on top without
 accepting focus or activating when shown. macOS keeps the tool window visible
 when another application is active. It paints an angular amber mask made from
@@ -170,7 +176,7 @@ no filled eye halo to obscure desktop content.
 The default footprint is 220 × 280 logical pixels, with zero layout margins.
 Vector strokes, glows and motion scale together with the face geometry.
 Presence opacity and state-entry animations follow the same frame-level state
-observation for bundled signals and file-backed subprocess updates.
+observation for in-process and file-backed subprocess updates.
 Asleep and idle states have lower window opacity than active listening,
 thinking, speaking or dictation. The native input region follows the face's
 contour with enough padding for breathing and active cues. Empty corners and
