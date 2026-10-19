@@ -53,8 +53,8 @@ def test_available_backend_starts_and_delivers_speech(monkeypatch, backend, caps
     monkeypatch.setattr(engine, loader, lambda: True)
     delivered = []
     done = threading.Event()
-    def synthesise(text):
-        delivered.append(text)
+    def synthesise(request):
+        delivered.append(request.text)
         done.set()
     monkeypatch.setattr(engine, '_speak_once', synthesise)
     try:
