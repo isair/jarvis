@@ -821,7 +821,11 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     quiet: bool = False,
                     cancel_event: Optional[threading.Event] = None,
                     resume_task_id: Optional[str] = None) -> Optional[str]:
-    """Run one reply within its wall-clock budget and cancellation scope."""
+    """Run one reply within its wall-clock budget and cancellation scope.
+
+    A resume_task_id is a trusted caller selection. Preparation decisions can
+    suggest an identifier but cannot create or replace that authority.
+    """
     control = ExecutionControl(
         cancel_event or threading.Event(),
         timeout_sec=float(getattr(cfg, "agentic_query_timeout_sec", 180.0)),
@@ -978,8 +982,8 @@ def _run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                                 timeout_sec=control.remaining(cfg.llm_tools_timeout_sec),
                                 pending_task=pending_task)
         control.check()
-        if prepared and prepared.resume_task_id:
-            resume_task_id = prepared.resume_task_id
+        if prepared and prepared.resume_task_id and prepared.resume_task_id != resume_task_id:
+            debug_log("Ignored advisory task continuation without matching caller selection", "planning")
     # Hot-window cache: router output for the same redacted query and
     # tool catalogue is reused within one conversation. Catalogue
     # signature includes builtin + MCP tool names so a mid-window MCP

@@ -19,12 +19,13 @@ output, including search terms paired with `required: false`, is distinct from
 that decision and fails open to deterministic routing
 and recall. The helper makes no hidden retry or secondary inference call.
 Named-location public weather needs no personal recall; an unnamed personal
-location may require it.
+location may require it. The proposed task ID is advisory. The engine can
+resume only the trusted caller's explicit selection; a preparation decision
+cannot create or replace it.
 
 Plans cannot pre-emptively dismiss the user through `stop`. Execution still
-validates each tool and its arguments against the available schema. Only an ID
-from the supplied task candidate can be resumed, and a task journal's completed
-writes must not be replayed.
+validates each tool and its arguments against the available schema. Any proposed ID must match the supplied task candidate. A task journal's
+completed writes must not be replayed.
 
 The call uses the remaining query budget, capped by `llm_tools_timeout_sec`,
 temperature zero, thinking disabled, an 8192-token context request and a
