@@ -513,36 +513,6 @@ def _extract_text_tool_call(content_field: str, known_names: set):
 
     return None, None, None
 
-def _is_content_word(word: str) -> bool:
-    """True if `word` looks like a meaningful content token (not stop word, not too short)."""
-    return bool(word) and len(word) >= _MIN_CONTENT_WORD_LEN and word not in _STOP_WORDS
-
-
-def _match_question(node_data: str, questions: list[str]) -> str:
-    """Find which extracted question best matches a node's data via keyword overlap.
-
-    Returns the best matching question string, or "" if no meaningful match.
-    """
-    if not questions:
-        return ""
-
-    data_lower = node_data.lower()
-    best_q = ""
-    best_score = 0
-
-    for q in questions:
-        words = {w for w in (w.strip("?.,!'\"") for w in q.lower().split()) if _is_content_word(w)}
-        if not words:
-            continue
-        hits = sum(1 for w in words if w in data_lower)
-        score = hits / len(words)
-        if score > best_score and hits >= 1:
-            best_score = score
-            best_q = q
-
-    return best_q
-
-
 # ── Live-context helpers ────────────────────────────────────────────────────
 #
 # Both the extractor (needs to know what the assistant already sees so it can
