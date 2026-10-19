@@ -2786,6 +2786,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         reply = _UNEXECUTED_ACTION_REPLY
         debug_log("unexecuted planned action: turn budget exhausted without execution", "planning")
 
+    if cancel_event is not None and cancel_event.is_set():
+        return None
+
     # Step 9: Handle error case - return error message if no reply
     if not reply or not reply.strip():
         # Max-turn backstop: the loop exhausted its turns without producing
@@ -2805,6 +2808,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 "planning",
             )
             digested = None
+        if cancel_event is not None and cancel_event.is_set():
+            debug_log("reply cancelled after max-turn digest", "planning")
+            return None
         if digested and digested.strip():
             debug_log(
                 "max-turn cap reached, delivered digest with caveat",

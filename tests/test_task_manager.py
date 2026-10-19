@@ -232,3 +232,88 @@ def test_history_pruning_preserves_cancelled_work_still_in_the_queue():
         finally:
             release.set()
             manager.shutdown()
+
+
+def test_invalid_saved_history_does_not_block_valid_tasks(tmp_path):
+    database = Database(str(tmp_path/'history.db'), sqlite_vss_path=None)
+    record = dict(id='valid', prompt='A retained task', status='completed', result='Done',
+                  error=None, created_at=1.0, started_at=1.0, completed_at=2.0)
+    database.upsert_task_record(record)
+    database.upsert_task_record(dict(record, id='invalid', status='unknown-status'))
+    manager = None
+    try:
+        manager = TaskManager(database, SimpleNamespace(), object())
+        assert manager.get('valid').result == 'Done'
+        assert manager.get('invalid') is None
+        with patch('jarvis.tasks.run_reply_engine', return_value='Still working'):
+            task = manager.submit('A fresh task')
+            manager.wait_for_idle(timeout=2)
+        assert manager.get(task).result == 'Still working'
+    finally:
+        if manager is not None:
+            manager.shutdown()
+        database.close()
+
+
+def test_desktop_task_delivery_is_silent_and_redacted(tmp_path, capsys):
+    import json
+    events = []
+    database = Database(str(tmp_path/'delivery.db'), sqlite_vss_path=None)
+    manager = TaskManager(database, SimpleNamespace(), object(),
+                          event_callback=events.append)
+    secret = 'synthetic-secret-value'
+
+    def reply(db, cfg, tts, prompt, memory, **kwargs):
+        result = f'A useful result, token={secret}'
+        if not kwargs.get('quiet'):
+            print(result)
+        assert tts is None
+        return result
+
+    try:
+        with patch('jarvis.tasks.run_reply_engine', side_effect=reply):
+            task = manager.submit('A desktop task')
+            manager.wait_for_idle(timeout=2)
+        assert manager.get(task).status is TaskStatus.COMPLETED
+        assert secret not in capsys.readouterr().out
+        assert secret not in json.dumps(events)
+        assert secret not in database.get_task_records()[0]['result']
+    finally:
+        manager.shutdown()
+        database.close()
+
+
+@pytest.mark.parametrize('failure', ['reply', 'event', 'persist', 'restore', 'prune'])
+def test_task_errors_do_not_expose_secrets_in_diagnostics(monkeypatch, failure):
+    from jarvis import tasks
+    logs = []
+    monkeypatch.setattr(tasks, 'debug_log', lambda message, *args: logs.append(message))
+
+    def fail(*args, **kwargs):
+        raise RuntimeError('token=synthetic-secret')
+
+    database = SimpleNamespace()
+    for method, boundary in [('upsert_task_record', 'persist'), ('get_task_records', 'restore'),
+                             ('prune_task_records', 'prune')]:
+        if failure == boundary:
+            setattr(database, method, fail)
+    manager = TaskManager(database, SimpleNamespace(), object(),
+                          event_callback=fail if failure == 'event' else None)
+    try:
+        with patch('jarvis.tasks.run_reply_engine', side_effect=fail if failure == 'reply' else None,
+                   return_value='Done'):
+            task = manager.submit('A task with a failing boundary')
+            manager.wait_for_idle(timeout=2)
+        expected = TaskStatus.FAILED if failure == 'reply' else TaskStatus.COMPLETED
+        assert manager.get(task).status is expected
+        assert 'synthetic-secret' not in '\n'.join(logs)
+    finally:
+        manager.shutdown()
+
+
+def test_shutdown_rejects_admission_without_leaving_a_phantom_task():
+    manager = TaskManager(object(), SimpleNamespace(), object())
+    manager.shutdown()
+    with pytest.raises(RuntimeError):
+        manager.submit('A request after shutdown')
+    assert manager.list_tasks() == []

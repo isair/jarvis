@@ -58,3 +58,32 @@ def test_cancellation_during_inference_prevents_the_requested_tool(
     assert result is None
     assert not effect.exists()
     assert not dialogue_memory.has_recent_messages()
+
+
+@pytest.mark.parametrize('digest_failure', [False, True], ids=['empty', 'exception'])
+def test_cancelled_max_turn_digest_does_not_deliver_or_save_fallback(
+    monkeypatch, mock_config, db, dialogue_memory, capsys, digest_failure,
+):
+    cancelled = Event()
+    mock_config.llm_chat_model = 'gpt-oss:20b'
+    mock_config.planner_enabled = False
+    mock_config.agentic_max_turns = 1
+    mock_config.memory_digest_enabled = False
+    monkeypatch.setattr(engine, 'extract_search_params_for_memory', lambda *a, **kw: {})
+    monkeypatch.setattr(engine, 'select_tools', lambda *a, **kw: [])
+    monkeypatch.setattr(engine, 'plan_query', lambda *a, **kw: [])
+    monkeypatch.setattr(engine, 'chat_with_messages', lambda **kw: {
+        'message': {'content': '', 'thinking': 'Considering the request'},
+    })
+
+    def digest(**kwargs):
+        cancelled.set()
+        if digest_failure:
+            raise RuntimeError('Synthetic digest failure')
+        return None
+
+    monkeypatch.setattr(engine, 'digest_loop_for_max_turns', digest)
+    assert engine.run_reply_engine(db, mock_config, None, 'A request.', dialogue_memory,
+                                   cancel_event=cancelled) is None
+    assert not dialogue_memory.has_recent_messages()
+    assert "Sorry, I had trouble processing" not in capsys.readouterr().out

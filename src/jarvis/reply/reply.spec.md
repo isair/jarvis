@@ -460,7 +460,7 @@ access controls; POSIX mode assertions do not describe Windows ACLs.
 ## Cooperative task cancellation
 
 An optional task cancellation event is checked at reply entry, agentic loop
-boundaries, after plan-step resolution and model responses, before protocol
+boundaries, after plan-step resolution, model responses and max-turn digests, before protocol
 fallback and before output or dialogue writes. A cancelled request returns no
 reply and starts no subsequent tool action. In-flight inference and tool calls
 finish under their existing deadlines; cancellation cannot undo completed actions.

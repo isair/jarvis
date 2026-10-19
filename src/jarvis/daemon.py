@@ -1047,7 +1047,6 @@ def _run_daemon(smoke_test: bool = False) -> None:
         db=db,
         cfg=cfg,
         dialogue_memory=_global_dialogue_memory,
-        tts=tts,
         event_callback=_emit_task_event,
     )
     print("📋 Task service ready", flush=True)
@@ -1141,15 +1140,15 @@ def _run_daemon(smoke_test: bool = False) -> None:
             except Exception:
                 pass
 
+        if _global_task_manager is not None:
+            _global_task_manager.shutdown(wait=True)
+            _global_task_manager = None
+
         if tts is not None:
             try:
                 tts.stop()
             except Exception:
                 pass
-
-        if _global_task_manager is not None:
-            _global_task_manager.shutdown(wait=True)
-            _global_task_manager = None
 
         try:
             from .tools.external.mcp_runtime import shutdown_runtime
@@ -1275,6 +1274,10 @@ def _run_daemon(smoke_test: bool = False) -> None:
                 pass
             debug_log("voice thread stopped", "jarvis")
 
+        if _global_task_manager is not None:
+            _global_task_manager.shutdown(wait=True)
+            _global_task_manager = None
+
         # A chat worker that started just before the stop request is still
         # inside run_reply_engine, holding the database connection the
         # diary pass below is about to use and the one db.close() will
@@ -1304,10 +1307,6 @@ def _run_daemon(smoke_test: bool = False) -> None:
 
         if tts is not None:
             tts.stop()
-
-        if _global_task_manager is not None:
-            _global_task_manager.shutdown(wait=True)
-            _global_task_manager = None
 
         # Tear down persistent MCP sessions after task workers have stopped.
         try:

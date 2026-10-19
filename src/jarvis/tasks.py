@@ -6,6 +6,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from enum import Enum
 import threading
+from math import isfinite
 import time
 import uuid
 from typing import Callable, Optional
@@ -60,7 +61,6 @@ class TaskManager:
         db,
         cfg,
         dialogue_memory,
-        tts=None,
         event_callback: Optional[Callable[[dict], None]] = None,
         max_workers: int = 1,
         max_queued_tasks: int = 100,
@@ -69,7 +69,6 @@ class TaskManager:
         self.db = db
         self.cfg = cfg
         self.dialogue_memory = dialogue_memory
-        self.tts = tts
         self.event_callback = event_callback
         self.max_queued_tasks = max_queued_tasks
         self.max_history = max_history
@@ -78,6 +77,7 @@ class TaskManager:
         self._futures: dict[str, Future] = {}
         self._cancel_events: dict[str, threading.Event] = {}
         self._lock = threading.RLock()
+        self._closed = False
         self._restore()
 
     def submit(self, prompt: str) -> str:
@@ -86,6 +86,8 @@ class TaskManager:
             raise ValueError("Task prompt cannot be empty")
         task = Task(id=uuid.uuid4().hex[:12], prompt=prompt)
         with self._lock:
+            if self._closed:
+                raise RuntimeError("Task service is stopping")
             active = sum(not future.done() for future in self._futures.values())
             if active >= self.max_queued_tasks:
                 raise RuntimeError("Task queue is full")
@@ -132,6 +134,7 @@ class TaskManager:
 
     def shutdown(self, wait: bool = True) -> None:
         with self._lock:
+            self._closed = True
             for task_id, task in self._tasks.items():
                 if task.status in {TaskStatus.QUEUED, TaskStatus.RUNNING}:
                     self._cancel_events.setdefault(task_id, threading.Event()).set()
@@ -156,27 +159,29 @@ class TaskManager:
             from .daemon import query_lock
             with query_lock():
                 result = run_reply_engine(
-                    self.db, self.cfg, self.tts, task.prompt, self.dialogue_memory,
-                    cancel_event=cancel_event,
+                    self.db, self.cfg, None, task.prompt, self.dialogue_memory,
+                    quiet=True, cancel_event=cancel_event,
                 )
             with self._lock:
                 if task.status is not TaskStatus.CANCELLED:
                     task.status = TaskStatus.COMPLETED
-                    task.result = result or ""
+                    task.result = redact(result or "")
                     task.completed_at = time.time()
                     self._persist(task)
                     self._emit(task)
+                    if task.result:
+                        print(f"📋 Task result: {task.result}", flush=True)
                 else:
                     self._persist(task)
         except Exception as exc:
             with self._lock:
                 if task.status is not TaskStatus.CANCELLED:
                     task.status = TaskStatus.FAILED
-                    task.error = str(exc)
+                    task.error = redact(str(exc))
                     task.completed_at = time.time()
                     self._persist(task)
                     self._emit(task)
-            debug_log(f"task failed: {task_id}: {exc}", "tasks")
+            debug_log(f"task failed: {task_id} ({type(exc).__name__})", "tasks")
 
     def _emit(self, task: Task) -> None:
         if self.event_callback is None:
@@ -190,7 +195,7 @@ class TaskManager:
                 event["error"] = redact(str(event["error"]))
             self.event_callback(event)
         except Exception as exc:
-            debug_log(f"task event callback failed: {exc}", "tasks")
+            debug_log(f"task event callback failed ({type(exc).__name__})", "tasks")
 
     def _prune_history(self) -> None:
         terminal = sorted(
@@ -208,7 +213,7 @@ class TaskManager:
             try:
                 self.db.prune_task_records(self.max_history)
             except Exception as exc:
-                debug_log(f"task history pruning failed: {exc}", "tasks")
+                debug_log(f"task history pruning failed ({type(exc).__name__})", "tasks")
 
     def _persist(self, task: Task) -> None:
         if not hasattr(self.db, "upsert_task_record"):
@@ -222,7 +227,7 @@ class TaskManager:
         try:
             self.db.upsert_task_record(record)
         except Exception as exc:
-            debug_log(f"task persistence failed: {exc}", "tasks")
+            debug_log(f"task persistence failed ({type(exc).__name__})", "tasks")
 
     def _restore(self) -> None:
         if not hasattr(self.db, "get_task_records"):
@@ -230,16 +235,31 @@ class TaskManager:
         try:
             rows = self.db.get_task_records()
         except Exception as exc:
-            debug_log(f"task restore failed: {exc}", "tasks")
+            debug_log(f"task restore failed ({type(exc).__name__})", "tasks")
             return
         for row in rows:
-            task = Task(
-                id=row["id"], prompt=row["prompt"],
-                status=TaskStatus(row["status"]),
-                result=row["result"], error=row["error"],
-                created_at=row["created_at"], started_at=row["started_at"],
-                completed_at=row["completed_at"],
-            )
+            try:
+                task = Task(
+                    id=row["id"], prompt=row["prompt"],
+                    status=TaskStatus(row["status"]),
+                    result=row["result"], error=row["error"],
+                    created_at=row["created_at"], started_at=row["started_at"],
+                    completed_at=row["completed_at"],
+                )
+                if not isinstance(task.id, str) or not task.id or not isinstance(task.prompt, str):
+                    raise ValueError("Invalid saved task identity")
+                if any(value is not None and not isinstance(value, str)
+                       for value in (task.result, task.error)):
+                    raise ValueError("Invalid saved task text")
+                for value in (task.created_at, task.started_at, task.completed_at):
+                    if value is not None and (
+                        isinstance(value, bool) or not isinstance(value, (int, float))
+                        or not isfinite(value)
+                    ):
+                        raise ValueError("Invalid saved task time")
+            except (KeyError, IndexError, TypeError, ValueError):
+                debug_log("saved task entry skipped: invalid record", "tasks")
+                continue
             if task.status in {TaskStatus.QUEUED, TaskStatus.RUNNING}:
                 task.status = TaskStatus.FAILED
                 task.error = "Task interrupted by daemon restart"

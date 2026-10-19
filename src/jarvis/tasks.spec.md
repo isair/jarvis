@@ -30,3 +30,10 @@ in-process functions. Source-mode desktop runs use newline-delimited `TASK:`
 commands on daemon stdin and `__TASK__:` JSON events on stdout. No task prompt
 or result is sent to a third-party service by this integration. Persisted task
 events are replayed at daemon startup so the desktop can rebuild its history.
+
+Desktop task results are silent. The reply engine runs without a TTS instance
+and with caller-owned logging; delivered task results and failure text use the
+shared redaction rules. Diagnostics omit exception payloads. Invalid saved task
+records are skipped independently so valid history and the assistant can start.
+Shutdown closes task admission and drains workers before final diary saving,
+TTS shutdown, MCP teardown and database closure.
