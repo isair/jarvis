@@ -53,9 +53,9 @@ class DocumentSearchTool(Tool):
         except (TypeError, ValueError):
             top_k = 5
         try:
-            index = self._index_factory(context.db, context.cfg)
-            index.refresh()
-            hits = index.search(query, top_k=top_k)
+            with self._index_factory(context.db, context.cfg) as index:
+                index.refresh()
+                hits = index.search(query, top_k=top_k)
         except Exception as exc:
             debug_log(f"Local document search failed: {exc}", "documents")
             return ToolExecutionResult(False, f"Local document search failed: {exc}")

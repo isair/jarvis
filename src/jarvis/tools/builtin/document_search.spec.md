@@ -9,14 +9,19 @@ until the user enables it and supplies at least one folder.
 Before each search, the tool resolves every configured folder and scans only
 regular files whose resolved path remains inside that folder. Symlinks that
 resolve outside an allowed folder are skipped. Other extensions are ignored.
-File modification time and size are tracked in SQLite, so unchanged files are
-not re-embedded. Changed files are re-chunked and embedded, and deleted files
+Device, inode, byte size and modification/change times identify each source.
+Unchanged files in the same embedding space are not re-embedded. Changed files are re-chunked and embedded, and deleted files
 remove their chunks and vectors. Unavailable or removed roots also remove their
 cached chunks and vectors, including when no authorised root remains.
 
-Chunks are line-aware and use the configured local embedding backend. Vectors
-use the existing cosine-similarity vector store; document metadata and text
-remain in SQLite.
+Chunks are line-aware and use the configured embedding backend. Document text,
+normalised vectors and file identity publish atomically in a dedicated SQLite
+index beside the diary. The index owns and closes its connection independently
+of the diary transaction and vector backend. Failed embeddings or storage writes
+publish no partial file and are retried on a later refresh. Model, endpoint,
+backend and detected dimension changes invalidate incompatible cached vectors.
+Search uses cosine similarity over document candidates only. Sources and current
+folder authority are revalidated before returning cached excerpts.
 
 ### Search results
 

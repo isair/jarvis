@@ -27,6 +27,7 @@ def test_document_metadata_and_vectors_survive_restart(tmp_path, monkeypatch, ba
                   lambda filename: fast_vector_store.FAISSVectorStore(filename, 2))
     conn = sqlite3.connect(path)
     store = make_store(str(path))
+    store.add_vector(42, [1., 0.])
     original_connect = sqlite3.connect
 
     def short_contention_timeout(*args, **kwargs):
@@ -36,11 +37,15 @@ def test_document_metadata_and_vectors_survive_restart(tmp_path, monkeypatch, ba
     monkeypatch.setattr(vector_persistence.sqlite3, 'connect', short_contention_timeout)
     try:
         index = DocumentIndex(SimpleNamespace(db_path=str(path), conn=conn), cfg,
-                              embedding_backend=Embeddings(), vector_store=store)
+                              embedding_backend=Embeddings())
         index.refresh()
-        assert make_store(str(path)).search([1., 0.])
+        assert make_store(str(path)).search([1., 0.]) == [(42, 0.0)]
+        index.close()
         restarted = DocumentIndex(SimpleNamespace(db_path=str(path), conn=conn), cfg,
-                                  embedding_backend=Embeddings(), vector_store=make_store(str(path)))
-        assert restarted.search('source')[0].text == 'owned source excerpt'
+                                  embedding_backend=Embeddings())
+        try:
+            assert restarted.search('source')[0].text == 'owned source excerpt'
+        finally:
+            restarted.close()
     finally:
         conn.close()
