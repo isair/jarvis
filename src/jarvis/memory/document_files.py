@@ -74,7 +74,7 @@ if os.name == 'nt':
                                         ctypes.pointer(text), 0x40 | 0x1000, None, None)
         handle = wintypes.HANDLE()
         status_block = _IoStatus()
-        access = (0x80 | 0x20 | 0x100000) if directory else 0x80000000
+        access = 0x80 | 0x100000 | (0x20 if directory else 0x1)
         if enumerate_entries:
             access |= 0x1  # Only the directory being listed needs list permission.
         status = _nt.NtCreateFile(ctypes.byref(handle), access, ctypes.byref(attributes),
