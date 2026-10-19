@@ -238,9 +238,14 @@ class DocumentIndex:
                                 stack.append((child, owner, child_directory, entries))
                         elif Path(entry.name).suffix.lower() in _ALLOWED_EXTENSIONS:
                             path = (folder / entry.name).resolve(strict=True)
-                            if path not in seen and self._authorised_identity(path, [root]):
-                                seen.add(path)
-                                yield path
+                            if (path in seen or path.suffix.lower() not in _ALLOWED_EXTENSIONS
+                                    or not self._under_root(path, root)):
+                                continue
+                            if self._authorised_identity(path, [root]) is None:
+                                work.coverage.reasons.add('unreadable')
+                                continue
+                            seen.add(path)
+                            yield path
                     except (OSError, RuntimeError):
                         work.coverage.reasons.add('unreadable')
             except OSError:
@@ -422,6 +427,7 @@ class DocumentIndex:
                     break
                 path = Path(file['path'])
                 if self._authorised_identity(path, roots) != file['identity']:
+                    self.coverage.reasons.add('changed')
                     continue
                 if file['dimension'] != vector.size:
                     continue
@@ -448,5 +454,6 @@ class DocumentIndex:
                 if self._authorised_identity(Path(hit.path), current_roots) == identity:
                     hits.append(hit)
             if len(hits) != len(candidates):
+                self.coverage.reasons.add('changed')
                 debug_log('Document results withheld after source authority or identity changed', 'documents')
             return hits

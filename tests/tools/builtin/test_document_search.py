@@ -98,3 +98,77 @@ def test_changed_embedding_dimensions_report_partial_until_rebuilt(tmp_path):
     recovered = tool.run({'query': 'launch code'}, ctx)
     assert recovered.success and 'The owned launch code is pear.' in recovered.reply_text
     assert 'Index coverage: complete.' in recovered.reply_text
+
+
+
+@pytest.mark.parametrize('stage', ['inference', 'ranking'])
+def test_source_changed_during_query_reports_partial_and_recovers(tmp_path, monkeypatch, stage):
+    from jarvis.memory import document_index as documents
+
+    ctx, root = context(tmp_path)
+    source = root / 'guide.md'
+    source.write_text('original owned source')
+    changed = False
+    backend = Embeddings()
+    def change_source():
+        nonlocal changed
+        if not changed:
+            source.write_text('replacement owned source requiring refresh')
+            changed = True
+
+    if stage == 'inference':
+        def embed(text, model, timeout_sec=15):
+            if text == 'owned query':
+                change_source()
+            return [1., 0.]
+        backend.embed = embed
+    else:
+        dot = documents.np.dot
+        def change_during_ranking(*args, **kwargs):
+            change_source()
+            return dot(*args, **kwargs)
+        monkeypatch.setattr(documents.np, 'dot', change_during_ranking)
+    tool = DocumentSearchTool(index_factory=lambda db, cfg: DocumentIndex(db, cfg, embedding_backend=backend))
+    result = tool.run({'query': 'owned query'}, ctx)
+    assert changed
+    assert result.success
+    assert 'original owned source' not in result.reply_text
+    assert 'Index coverage: partial.' in result.reply_text and 'changed' in result.reply_text
+    recovered = tool.run({'query': 'owned query'}, ctx)
+    assert recovered.success and 'replacement owned source requiring refresh' in recovered.reply_text
+    assert 'Index coverage: complete.' in recovered.reply_text
+
+
+@pytest.mark.parametrize('denial', ['permissions', 'open'])
+def test_unreadable_eligible_source_reports_partial_and_recovers(tmp_path, monkeypatch, denial):
+    import os
+    from jarvis.memory import document_files
+
+    ctx, root = context(tmp_path)
+    source = root / 'guide.md'
+    source.write_text('owned unreadable source')
+    tool = DocumentSearchTool(index_factory=lambda db, cfg: DocumentIndex(db, cfg, embedding_backend=Embeddings()))
+    try:
+        with monkeypatch.context() as patch:
+            if denial == 'permissions':
+                if os.name != 'posix':
+                    pytest.skip('POSIX file modes require a POSIX host')
+                source.chmod(0)
+                with pytest.raises(PermissionError):
+                    source.read_bytes()
+            else:
+                original = document_files._open_entry
+                def denied(path, *args, **kwargs):
+                    if path == source:
+                        raise PermissionError('Owned synthetic filesystem denial')
+                    return original(path, *args, **kwargs)
+                patch.setattr(document_files, '_open_entry', denied)
+            result = tool.run({'query': 'source'}, ctx)
+            assert result.success
+            assert 'owned unreadable source' not in result.reply_text
+            assert 'Index coverage: partial.' in result.reply_text and 'unreadable' in result.reply_text
+    finally:
+        source.chmod(0o600)
+    recovered = tool.run({'query': 'source'}, ctx)
+    assert recovered.success and 'owned unreadable source' in recovered.reply_text
+    assert 'Index coverage: complete.' in recovered.reply_text

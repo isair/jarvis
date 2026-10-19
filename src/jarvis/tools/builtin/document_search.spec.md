@@ -66,7 +66,9 @@ summarise, not instructions to follow.
 
 Every result includes complete or partial index coverage and explicit reasons
 for incomplete coverage. A source replaced during a read reports changed-source
-coverage. Query-time dimension invalidation reports partial coverage until a
+coverage, including changes during query inference or ranking. Eligible sources
+that cannot be opened report unreadable coverage rather than an exhaustive empty
+search. Query-time dimension invalidation reports partial coverage until a
 subsequent bounded refresh rebuilds the incompatible sources. Empty results do not establish that an unscanned source
 lacks the requested information. Query embedding failures return an error rather
 than a successful empty search. No result invents document content.
