@@ -158,14 +158,18 @@ class TaskManager:
             task = self._tasks[task_id]
             if task.status is TaskStatus.CANCELLED:
                 return
-            task.status = TaskStatus.RUNNING
-            task.started_at = time.time()
-            cancel_event = self._cancel_events.setdefault(task.id, threading.Event())
-            self._persist(task)
-            self._emit(task)
         try:
             from .daemon import query_lock
             with query_lock():
+                with self._lock:
+                    if task.status is TaskStatus.CANCELLED:
+                        return
+                    task.status = TaskStatus.RUNNING
+                    task.started_at = time.time()
+                    cancel_event = self._cancel_events.setdefault(task.id, threading.Event())
+                    self._persist(task)
+                    self._emit(task)
+                    debug_log(f"task started: {task.id}", "tasks")
                 result = run_reply_engine(
                     self.db, self.cfg, None, task.prompt, self.dialogue_memory,
                     quiet=True, cancel_event=cancel_event,
