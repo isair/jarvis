@@ -4,7 +4,9 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 
 **Configuration source.** Runtime settings and desktop configuration share [one file selection](../src/jarvis/config.spec.md). An explicit `JARVIS_CONFIG_PATH` applies to settings and wizard writes as well as runtime loading. Model tiers, prompts, deadlines and context gates resolve from that selected configuration.
 
-**Cooperative task cancellation.** A caller-owned cancellation event gates
+**Cooperative task cancellation.** Task requests wait for the shared conversation
+before entering the reply engine. Cancellation or shutdown during that wait
+prevents entry, including preparation and model calls. A caller-owned cancellation event gates
 preparation as well as the reply loop. After MCP discovery, routing, planning,
 profile loading, memory extraction, diary/graph retrieval and memory digest,
 cancellation stops later model/resource work. Returned router and extractor

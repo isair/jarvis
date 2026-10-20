@@ -7,7 +7,11 @@ memory and configured tools.
 
 Each task has one of five observable states: `queued`, `running`, `completed`,
 `failed`, or `cancelled`. Empty prompts are rejected. Queued tasks can be
-cancelled before execution. Cancelling a running task signals the reply
+cancelled before execution. A task waiting for the shared conversation remains
+queued, with no start timestamp or running event. After acquiring the
+conversation, the worker checks cancellation before starting the reply engine;
+requests cancelled by the user or shutdown do not execute. Cancelling a running
+task signals the reply
 engine's cooperative cancellation event, which is checked between planner,
 model, and tool-loop steps. An external LLM or tool request already in
 progress cannot be forcibly interrupted; its result is discarded and the
