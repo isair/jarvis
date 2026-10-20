@@ -4,6 +4,11 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 
 **Configuration source.** Runtime settings and desktop configuration share [one file selection](../src/jarvis/config.spec.md). An explicit `JARVIS_CONFIG_PATH` applies to settings and wizard writes as well as runtime loading. Model tiers, prompts, deadlines and context gates resolve from that selected configuration.
 
+**Background task admission.** `background_tasks_enabled` defaults to false.
+Disabled daemon runs do not allocate a task manager or replay task history, and
+submissions cannot enter the reply engine. Enabling the feature preserves the
+configured models and prompts; the switch does not add a model context.
+
 **Cooperative task cancellation.** Task requests wait for the shared conversation
 before entering the reply engine. Cancellation or shutdown during that wait
 prevents entry, including preparation and model calls. A caller-owned cancellation event gates

@@ -278,6 +278,9 @@ class Settings:
     # language.
     wikipedia_fallback_enabled: bool
 
+    # Optional background child runs
+    background_tasks_enabled: bool
+
     # Explicitly authorised local documents
     document_search_enabled: bool
     document_search_paths: list[str]
@@ -666,6 +669,7 @@ def get_default_config() -> Dict[str, Any]:
         "web_search_enabled": True,
         "brave_search_api_key": "",
         "wikipedia_fallback_enabled": True,
+        "background_tasks_enabled": False,
         "document_search_enabled": False,
         "document_search_paths": [],
 
@@ -877,6 +881,7 @@ def load_settings() -> Settings:
     web_search_enabled = bool(merged.get("web_search_enabled", True))
     brave_search_api_key = str(merged.get("brave_search_api_key", "") or "").strip()
     wikipedia_fallback_enabled = bool(merged.get("wikipedia_fallback_enabled", True))
+    background_tasks_enabled = merged["background_tasks_enabled"] is True
     document_search_enabled = bool(merged.get("document_search_enabled", False))
     raw_document_paths = merged.get("document_search_paths", [])
     document_search_paths = [path.strip() for path in raw_document_paths
@@ -1014,6 +1019,7 @@ def load_settings() -> Settings:
         web_search_enabled=web_search_enabled,
         brave_search_api_key=brave_search_api_key,
         wikipedia_fallback_enabled=wikipedia_fallback_enabled,
+        background_tasks_enabled=background_tasks_enabled,
         document_search_enabled=document_search_enabled,
         document_search_paths=document_search_paths,
 

@@ -337,6 +337,10 @@ def _build_field_metadata() -> List[FieldMeta]:
       "location", "bool")
 
     # --- Features ---
+    f("background_tasks_enabled", "Background Tasks",
+      "Enable background work and the Task Centre. Uses extra system resources. "
+      "Restart Jarvis to apply changes to background execution.",
+      "features", "bool")
     f("web_search_enabled", "Web Search",
       "Enable web search tool",
       "features", "bool")
