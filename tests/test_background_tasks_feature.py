@@ -118,3 +118,9 @@ def test_disabled_desktop_submission_does_not_send_ipc():
     with pytest.raises(RuntimeError, match='disabled'):
         tray.submit_task('Do not queue this', request_id='disabled-request')
     assert wire.getvalue() == ''
+
+
+@pytest.mark.parametrize('saved', ['false', 'true', 1, None, [], {'enabled': True}])
+def test_only_an_explicit_boolean_can_enable_background_work(saved):
+    save_setting(saved)
+    assert load_settings().background_tasks_enabled is False

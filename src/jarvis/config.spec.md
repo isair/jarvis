@@ -26,7 +26,8 @@ signal reaches the document tool through the canonical tool context.
 
 ## Background tasks
 
-`background_tasks_enabled` defaults to false. One shared boolean controls daemon
+`background_tasks_enabled` defaults to false. Only the JSON boolean `true`
+enables it; malformed values do not grant task execution. One shared boolean controls daemon
 task-service allocation and submission, and Task Centre visibility. Settings
 exposes the switch in Features. Execution uses the value loaded for the daemon
 run and changes apply on restart. Disabling the feature preserves saved tasks.

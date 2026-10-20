@@ -881,7 +881,7 @@ def load_settings() -> Settings:
     web_search_enabled = bool(merged.get("web_search_enabled", True))
     brave_search_api_key = str(merged.get("brave_search_api_key", "") or "").strip()
     wikipedia_fallback_enabled = bool(merged.get("wikipedia_fallback_enabled", True))
-    background_tasks_enabled = bool(merged["background_tasks_enabled"])
+    background_tasks_enabled = merged["background_tasks_enabled"] is True
     document_search_enabled = bool(merged.get("document_search_enabled", False))
     raw_document_paths = merged.get("document_search_paths", [])
     document_search_paths = [path.strip() for path in raw_document_paths
