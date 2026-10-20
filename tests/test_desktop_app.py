@@ -1391,6 +1391,7 @@ class TestDaemonSmokeTest:
         from jarvis import tasks
 
         daemon, database, listener, dictation = runtime
+        daemon.load_settings.return_value.background_tasks_enabled = True
         state = {'active': True, 'tts_stopped': False}
         completed, saved = [], []
 

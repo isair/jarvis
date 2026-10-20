@@ -112,6 +112,7 @@
   "dictation_thinking_enabled": false,
   "dictation_custom_dictionary": [],
   "mcps": {},
+  "background_tasks_enabled": false,
   "document_search_enabled": false,
   "document_search_paths": []
 }

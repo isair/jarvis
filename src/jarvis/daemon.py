@@ -647,8 +647,20 @@ def get_dictation_engine():
     return _global_dictation_engine
 
 
+def _create_task_service(db, cfg, dialogue_memory):
+    """Allocate task resources only when background work is enabled."""
+    if not cfg.background_tasks_enabled:
+        debug_log("background task service disabled", "tasks")
+        return None
+    from .tasks import TaskManager
+    return TaskManager(db=db, cfg=cfg, dialogue_memory=dialogue_memory,
+                       event_callback=_emit_task_event)
+
+
 def submit_task(prompt: str) -> str:
     """Submit a prompt from an interactive desktop client."""
+    if _global_cfg is None or not _global_cfg.background_tasks_enabled:
+        raise RuntimeError("Background tasks are disabled")
     if _global_task_manager is None:
         raise RuntimeError("Task service is not ready")
     return _global_task_manager.submit(prompt)
@@ -656,7 +668,8 @@ def submit_task(prompt: str) -> str:
 
 def cancel_task(task_id: str) -> bool:
     """Cancel a queued task, or mark a running task as cancelled."""
-    if _global_task_manager is None:
+    if (_global_cfg is None or not _global_cfg.background_tasks_enabled
+            or _global_task_manager is None):
         return False
     return _global_task_manager.cancel(task_id)
 
@@ -1065,14 +1078,9 @@ def _run_daemon(smoke_test: bool = False) -> None:
     _global_tts_engine = tts  # Expose for face widget speaking animation
     _start_tts_engine(tts)
 
-    from .tasks import TaskManager
-    _global_task_manager = TaskManager(
-        db=db,
-        cfg=cfg,
-        dialogue_memory=_global_dialogue_memory,
-        event_callback=_emit_task_event,
-    )
-    print("📋 Task service ready", flush=True)
+    _global_task_manager = _create_task_service(db, cfg, _global_dialogue_memory)
+    if _global_task_manager is not None:
+        print("📋 Task service ready", flush=True)
 
     # Initialize voice listening (only if dependencies available)
     print("🎤 Preparing speech recognition in the background...", flush=True)

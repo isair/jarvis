@@ -374,6 +374,12 @@ assistant input is discarded; this control does not claim to release the device.
 
 ### Task Centre
 
+The task centre is available only when `background_tasks_enabled` is true. The
+switch defaults to false. Disabled startup creates no task window and hides its
+tray action, including the face's shared menu. Saving Settings refreshes this
+visibility; execution changes apply through the normal daemon restart. Disabled
+submission cannot send task IPC or call the bundled task service.
+
 The task centre is available from the tray menu and submits prompts to the
 daemon's local task service. It displays queued, running, completed, failed,
 and cancelled tasks with their result or error. In bundled mode it calls the

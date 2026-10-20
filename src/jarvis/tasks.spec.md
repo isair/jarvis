@@ -1,5 +1,12 @@
 # Local task service
 
+`background_tasks_enabled` defaults to false. The daemon creates no task service,
+executor or task-history replay while disabled. All task submission paths reject
+requests, and the desktop task interface is hidden and unallocated. Saved task
+records remain intact. Enabling the setting requires a daemon restart; disabling
+it hides the interface when Settings is saved and stops execution through the
+normal restart/shutdown lifecycle.
+
 The task service executes prompts submitted by interactive clients through the
 same `run_reply_engine` path used by voice input. It is local-only and keeps a
 bounded worker pool with one active task by default, preserving the dialogue
