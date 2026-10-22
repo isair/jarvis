@@ -281,14 +281,16 @@ def _text_tool_call_guidance(allowed_names: list[str]) -> str:
         "accepted tool-call format is the `tool_calls: [...]` JSON "
         "literal shown above. On a prose turn, write natural-language "
         "sentences — never the scaffolding tokens.\n"
-        "- Multi-part queries: if the query asks for two or more distinct "
-        "pieces of information (e.g. 'who is X AND what Y has X done'), "
-        "plan to make ONE tool call per sub-question. After each tool "
-        "result, count how many sub-questions are still unanswered. If "
-        "any remain, emit another tool_calls: [...] block immediately — "
-        "do NOT write a text answer yet. Only write a plain-sentences "
-        "reply once every sub-question is covered by a tool result. "
-        "Never say 'the search result did not list X' — instead, search for X."
+        "- Multi-part requests: compare every requested outcome and constraint "
+        "with the actual tool results. One result can cover several parts. "
+        "A constraint may already be satisfied without another action. "
+        "Execute requested actions through their available tools and confirm "
+        "the result before reporting completion. "
+        "Use further tools only for outcomes that remain unresolved; do not "
+        "repeat completed actions or treat a failed action as completed. "
+        "For independent information requests, obtain the missing evidence "
+        "before answering. Do not stop with an offer to continue while an "
+        "available tool can obtain the missing evidence."
     )
 
 
@@ -2738,17 +2740,20 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                         remainder_hint = progress_nudge(
                             action_plan, tool_results_so_far
                         )
-                    elif (
-                        _compound_sub_questions
-                        and tool_results_so_far < len(_compound_sub_questions)
-                    ):
-                        remaining = _compound_sub_questions[tool_results_so_far:]
+                    elif _compound_sub_questions:
                         remainder_hint = (
-                            f"\n\n⚠️ You have answered {tool_results_so_far} of "
-                            f"{len(_compound_sub_questions)} parts of the original query. "
-                            f"Still unanswered: \"{remaining[0]}\". "
-                            "You MUST emit another tool_calls block now to search for this. "
-                            "Do NOT reply in text yet."
+                            "\n\n[Review these advisory request parts against all "
+                            "results so far: "
+                            + json.dumps(_compound_sub_questions, ensure_ascii=False)
+                            + ". One result may cover multiple parts, and constraints "
+                            "may already be satisfied. Use another tool only for "
+                            "an unresolved outcome. Check every part: which actual "
+                            "result supports it? If a requested fact or action still "
+                            "lacks supporting results and an available tool can resolve "
+                            "it, your next message MUST use tool_calls with that tool. "
+                            "Do not repeat completed actions or assume failed actions "
+                            "succeeded. Reply in prose only when the results cover the "
+                            "request or available tools cannot resolve what remains.]"
                         )
                     else:
                         remainder_hint = (
