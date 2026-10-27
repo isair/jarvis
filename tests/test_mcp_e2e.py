@@ -153,13 +153,11 @@ def test_tool_name_format():
             self.config = config
 
         def list_tools(self, server_name):
-            if server_name == "my-server":
-                return [
-                    {"name": "tool_with_underscores", "description": "Test tool"},
-                    {"name": "tool-with-dashes", "description": "Another test tool"},
-                    {"name": "simpletool", "description": "Simple tool"}
-                ]
-            return []
+            return [
+                {"name": "tool_with_underscores", "description": "Test tool"},
+                {"name": "tool-with-dashes", "description": "Another test tool"},
+                {"name": "simpletool", "description": "Simple tool"}
+            ]
 
     try:
         with patch('src.jarvis.tools.registry.MCPClient', FakeMCPClient):
