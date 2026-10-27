@@ -35,9 +35,6 @@ def test_configuration_loading():
         mcps = getattr(cfg, 'mcps', {})
 
         print(f"   Found {len(mcps)} configured MCP servers")
-        for server_name, server_config in mcps.items():
-            command = server_config.get('command', 'unknown')
-            print(f"   - {server_name}: {command}")
 
         # Assert that we have at least some MCP configuration
         assert isinstance(mcps, dict), "MCP configuration should be a dictionary"
