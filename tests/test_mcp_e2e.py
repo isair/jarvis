@@ -174,8 +174,6 @@ def test_tool_name_format():
 
         assert actual_names == expected_names, f"Naming mismatch. Expected: {expected_names}, Got: {actual_names}"
         print("   ✅ Tool naming convention is correct")
-        for name in actual_names:
-            print(f"      - {name}")
 
     except Exception as e:
         print(f"   ❌ Naming test failed: {e}")
