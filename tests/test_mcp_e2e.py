@@ -129,8 +129,8 @@ def test_tool_registration_in_descriptions():
 
         # Check that MCP tools appear in description
         success = True
-        for tool_name in mock_mcp_tools:
-            assert tool_name in description
+        assert "server1__tool1" in description
+        assert "server2__tool2" in description
 
         assert success, "Not all MCP tools appear in descriptions"
         print("   ✅ All MCP tools appear in descriptions")
