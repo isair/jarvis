@@ -204,13 +204,8 @@ def test_error_handling():
             mcp_tools, mcp_errors = discover_mcp_tools(mcps_config)
 
         # Should only get tools from the good server
-        if len(mcp_tools) == 1 and "good-server__working_tool" in mcp_tools:
-            print("   ✅ Error handling works correctly")
-            print("      - Good server tools discovered")
-            print("      - Bad server errors handled gracefully")
-        else:
-            print(f"   ❌ Expected 1 tool, got {len(mcp_tools)}: {list(mcp_tools.keys())}")
-            assert False, f"Expected 1 tool, got {len(mcp_tools)}: {list(mcp_tools.keys())}"
+        assert set(mcp_tools) == {"good-server__working_tool"}
+        assert mcp_errors == {"bad-server": "Server connection failed"}
 
     except Exception as e:
         print(f"   ❌ Error handling test failed: {e}")
