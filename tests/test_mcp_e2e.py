@@ -185,21 +185,17 @@ def test_error_handling():
     """Test that MCP errors are handled gracefully."""
     print("⚠️  Testing error handling...")
 
-    from unittest.mock import patch
+    from unittest.mock import patch, Mock
 
-    class FaultyMCPClient:
-        def __init__(self, config):
-            pass
-
-        def list_tools(self, server_name):
-            if server_name == "good-server":
-                return [{"name": "working_tool", "description": "This works"}]
-            elif server_name == "bad-server":
-                raise Exception("Server connection failed")
-            return []
+    client = Mock()
+    client.list_tools.side_effect = [
+        [{"name": "working_tool", "description": "This works"}],
+        ConnectionError("Server connection failed"),
+        [],
+    ]
 
     try:
-        with patch('src.jarvis.tools.registry.MCPClient', FaultyMCPClient):
+        with patch('src.jarvis.tools.registry.MCPClient', return_value=client):
             mcps_config = {
                 "good-server": {"command": "good"},
                 "bad-server": {"command": "bad"},
