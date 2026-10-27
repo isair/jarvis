@@ -86,8 +86,6 @@ def test_mcp_discovery_with_mock():
 
         assert actual_tools == expected_tools, f"Tool mismatch. Expected: {expected_tools}, Got: {actual_tools}"
         print(f"   ✅ Successfully discovered {len(mcp_tools)} tools")
-        for tool_name in mcp_tools:
-            print(f"      - {tool_name}")
 
     except Exception as e:
         print(f"   ❌ Discovery failed: {e}")
