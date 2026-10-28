@@ -532,6 +532,8 @@ class TestPiperTTSThreadSafety:
             tts.start()
             tts.stop()
 
+        assert not tts.is_speaking()
+
     def test_concurrent_speaks(self):
         """Multiple threads calling speak should not crash."""
         from src.jarvis.output.tts import PiperTTS
