@@ -84,7 +84,23 @@ class TestDialogueMemory:
 
 class TestReplyEngineDialogueMemory:
     """Test reply engine dialogue memory integration."""
-    
+
+    @staticmethod
+    def _reply_cfg():
+        return Mock(
+            ollama_base_url="http://localhost:11434",
+            ollama_chat_model="test",
+            llm_chat_model="test",
+            voice_debug=False,
+            llm_tools_timeout_sec=8.0,
+            llm_embedding_timeout_sec=10.0,
+            llm_chat_timeout_sec=45.0,
+            memory_enrichment_max_results=5,
+            location_ip_address=None,
+            location_auto_detect=False,
+            agentic_max_turns=8,
+        )
+
     @patch('src.jarvis.reply.engine.chat_with_messages')
     @patch('src.jarvis.reply.engine.extract_text_from_response')
     def test_dialogue_memory_preserves_message_order(self, mock_extract, mock_chat):
@@ -133,10 +149,9 @@ class TestReplyEngineDialogueMemory:
     @patch('src.jarvis.reply.engine.run_tool_with_retries')
     def test_dialogue_memory_filters_tool_calls(self, mock_tool, mock_extract, mock_chat):
         """Test that JSON tool calls are filtered from dialogue memory."""
-        # Mock dependencies
         mock_tool.return_value = Mock(reply_text="Weather data", error_message=None)
-        
-        # Mock multi-turn conversation: structured tool call then final response
+
+        # Structured tool call, then the final response
         mock_chat.side_effect = [
             {
                 "message": {
@@ -152,49 +167,22 @@ class TestReplyEngineDialogueMemory:
             },
             {"message": {"content": "It's sunny in London today!"}}
         ]
-        mock_extract.side_effect = [
-            "",  # Empty content for tool call
-            "It's sunny in London today!"
-        ]
-        
-        # Mock database and config
-        mock_db = Mock()
-        mock_cfg = Mock()
-        mock_cfg.ollama_base_url = "http://localhost:11434"
-        mock_cfg.ollama_chat_model = "test"
-        mock_cfg.llm_chat_model = "test"
-        mock_cfg.voice_debug = False
-        mock_cfg.llm_tools_timeout_sec = 8.0
-        mock_cfg.llm_embedding_timeout_sec = 10.0
-        mock_cfg.llm_chat_timeout_sec = 45.0
-        mock_cfg.memory_enrichment_max_results = 5
-        mock_cfg.location_ip_address = None
-        mock_cfg.location_auto_detect = False
-        mock_cfg.agentic_max_turns = 8
-
-        # Create dialogue memory
+        mock_extract.side_effect = ["", "It's sunny in London today!"]
         dialogue_memory = DialogueMemory()
 
-        # Run reply engine
-        result = run_reply_engine(
-            db=mock_db,
-            cfg=mock_cfg,
+        run_reply_engine(
+            db=Mock(),
+            cfg=self._reply_cfg(),
             tts=None,
             text="What's the weather in London?",
             dialogue_memory=dialogue_memory
         )
 
-        # Check that dialogue memory was updated
-        chunks = dialogue_memory.get_pending_chunks()
-        assert len(chunks) == 2  # User message and assistant response stored separately
-
-        # Should include user input and final response
-        assert "User: What's the weather in London?" in chunks
-        assert "Assistant: It's sunny in London today!" in chunks
-
-        # Should NOT include the tool call
-        for chunk in chunks:
-            assert 'call_12345' not in chunk
+        # Only the user turn and the final reply are stored, never the tool call
+        assert dialogue_memory.get_pending_chunks() == [
+            "User: What's the weather in London?",
+            "Assistant: It's sunny in London today!",
+        ]
 
 
 class TestDiaryRedaction:
