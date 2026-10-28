@@ -519,6 +519,8 @@ class TestPiperTTSThreadSafety:
         for _ in range(10):
             tts.interrupt()
 
+        assert not tts.is_speaking()
+
     def test_start_stop_cycle(self):
         """Start and stop should be safe to call multiple times."""
         from src.jarvis.output.tts import PiperTTS
