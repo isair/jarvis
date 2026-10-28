@@ -47,19 +47,8 @@ def test_configuration_loading():
 
 @pytest.mark.e2e
 def test_mcp_discovery_with_mock():
-    """Test MCP discovery with mocked servers."""
-    print("🔍 Testing MCP tool discovery (mocked)...")
-
-    # Create a fake MCP configuration
-    fake_mcps = {
-        "test-server": {
-            "command": "echo",
-            "args": ["test"]
-        }
-    }
-
-    # Mock the MCPClient to avoid actual server connections
-    from unittest.mock import patch, Mock
+    """Discovery exposes every tool from a configured local server."""
+    from unittest.mock import patch
 
     class FakeMCPClient:
         def __init__(self, config):
@@ -69,29 +58,19 @@ def test_mcp_discovery_with_mock():
             return [
                 {"name": "read", "description": "Read a file"},
                 {"name": "write", "description": "Write a file"},
-                {"name": "list", "description": "List directory contents"}
+                {"name": "list", "description": "List directory contents"},
             ]
 
-    try:
-        with patch('src.jarvis.tools.registry.MCPClient', FakeMCPClient):
-            mcp_tools, _errors = discover_mcp_tools(fake_mcps)
+    with patch('src.jarvis.tools.registry.MCPClient', FakeMCPClient):
+        tools, errors = discover_mcp_tools({"test-server": {"command": "local-mcp"}})
 
-        expected_tools = {
-            "test-server__read",
-            "test-server__write",
-            "test-server__list"
-        }
-
-        actual_tools = set(mcp_tools.keys())
-
-        assert actual_tools == expected_tools, f"Tool mismatch. Expected: {expected_tools}, Got: {actual_tools}"
-        print(f"   ✅ Successfully discovered {len(mcp_tools)} tools")
-
-    except Exception as e:
-        print(f"   ❌ Discovery failed: {e}")
-        import traceback
-        traceback.print_exc()
-        assert False, f"Discovery failed: {e}"
+    assert errors == {}
+    assert set(tools) == {
+        "test-server__read",
+        "test-server__write",
+        "test-server__list",
+    }
+    assert tools["test-server__read"].description == "Read a file"
 
 
 @pytest.mark.e2e
