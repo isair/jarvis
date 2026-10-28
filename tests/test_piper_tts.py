@@ -551,8 +551,9 @@ class TestPiperTTSThreadSafety:
         for t in threads:
             t.join()
 
-        # Should not crash, queue should have items
-        # (actual number depends on timing)
+        # Should not crash; the unavailable fake voice disables the engine
+        assert tts.enabled is False
+        assert not tts.is_speaking()
 
 
 class TestPiperVoiceDownloadRetry:
