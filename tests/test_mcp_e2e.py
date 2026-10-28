@@ -75,49 +75,27 @@ def test_mcp_discovery_with_mock():
 
 @pytest.mark.e2e
 def test_tool_registration_in_descriptions():
-    """Test that discovered tools appear in tool descriptions."""
-    print("📝 Testing tool description generation...")
-
+    """Descriptions include each allowed MCP tool and its purpose."""
     from src.jarvis.tools.registry import ToolSpec
 
-    # Create mock MCP tools
-    mock_mcp_tools = {
-            "server1__tool1": ToolSpec(
-                name="server1__tool1",
-                description="Test tool 1 from server1",
-                inputSchema={
-                    "type": "object",
-                    "properties": {},
-                    "required": []
-                }
-            ),
-            "server2__tool2": ToolSpec(
-                name="server2__tool2",
-                description="Test tool 2 from server2",
-                inputSchema={
-                    "type": "object",
-                    "properties": {},
-                    "required": []
-                }
-            )
-        }
+    mcp_tools = {
+        "server1__tool1": ToolSpec(
+            name="server1__tool1",
+            description="Test tool 1 from server1",
+            inputSchema={"type": "object", "properties": {}, "required": []},
+        ),
+        "server2__tool2": ToolSpec(
+            name="server2__tool2",
+            description="Test tool 2 from server2",
+            inputSchema={"type": "object", "properties": {}, "required": []},
+        ),
+    }
+    description = generate_tools_description(list(mcp_tools), mcp_tools)
 
-    try:
-        allowed_tools = ["screenshot", "webSearch", "server1__tool1", "server2__tool2"]
-        description = generate_tools_description(allowed_tools, mock_mcp_tools)
-
-        # Check that MCP tools appear in description
-        success = True
-        assert "server1__tool1" in description
-        assert "server2__tool2" in description
-
-        assert success, "Not all MCP tools appear in descriptions"
-        print("   ✅ All MCP tools appear in descriptions")
-        print(f"   📄 Description length: {len(description)} characters")
-
-    except Exception as e:
-        print(f"   ❌ Description generation failed: {e}")
-        assert False, f"Description generation failed: {e}"
+    assert "server1__tool1" in description
+    assert "Test tool 1 from server1" in description
+    assert "server2__tool2" in description
+    assert "Test tool 2 from server2" in description
 
 
 @pytest.mark.e2e
