@@ -495,6 +495,7 @@ class TestCrashMarkerFunctions:
 
         # Should not raise
         mark_session_clean_exit()
+        assert not crash_marker.exists()
 
 
 class TestCheckPreviousCrash:
