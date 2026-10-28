@@ -83,16 +83,20 @@ class TestQueryCollection:
         assert query == "hello world"
         assert sm.get_pending_query() == ""
 
-    def test_silence_timeout_triggers_collection_complete(self):
+    def test_silence_timeout_triggers_collection_complete(self, monkeypatch):
         """Collection times out after silence period."""
+        from types import SimpleNamespace
+        from jarvis.listening import state_manager
+
+        clock = [1000.0]
+        monkeypatch.setattr(state_manager, "time", SimpleNamespace(time=lambda: clock[0]))
         sm = StateManager(voice_collect_seconds=0.05)  # 50ms timeout
         sm.start_collection("test")
 
         # Initially no timeout
         assert sm.check_collection_timeout() is False
 
-        # Wait for timeout
-        time.sleep(0.06)
+        clock[0] += sm.voice_collect_seconds + 0.01
         assert sm.check_collection_timeout() is True
 
     def test_max_duration_timeout(self):
