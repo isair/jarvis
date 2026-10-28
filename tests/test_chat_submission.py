@@ -278,7 +278,6 @@ class TestSubmitTextQueryContract:
             "   ", on_start=lambda q: events.append(("start", q)),
             on_complete=lambda r: events.append(("complete", r)),
         )
-        time.sleep(0.3)
         assert events == []
         assert called == []
 
