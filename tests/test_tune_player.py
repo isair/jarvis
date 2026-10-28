@@ -136,6 +136,7 @@ def test_stop_is_idempotent():
     tp = TunePlayer(enabled=False)
     tp.stop_tune()
     tp.stop_tune()
+    assert not tp.is_playing()
 
 
 def test_double_start_is_ignored(monkeypatch):
