@@ -99,16 +99,23 @@ class TestQueryCollection:
         clock[0] += sm.voice_collect_seconds + 0.01
         assert sm.check_collection_timeout() is True
 
-    def test_max_duration_timeout(self):
+    def test_max_duration_timeout(self, monkeypatch):
         """Collection times out after max duration."""
+        from types import SimpleNamespace
+        from jarvis.listening import state_manager
+
+        clock = [1000.0]
+        monkeypatch.setattr(state_manager, "time", SimpleNamespace(time=lambda: clock[0]))
         sm = StateManager(max_collect_seconds=0.05)  # 50ms max
         sm.start_collection("test")
 
-        # Keep adding to prevent silence timeout
-        for _ in range(3):
-            time.sleep(0.02)
-            sm.add_to_collection("more")
+        # Keep adding just before the cap so silence never times out
+        clock[0] += sm.max_collect_seconds - 0.01
+        sm.add_to_collection("more")
+        assert sm.check_collection_timeout() is False
 
+        clock[0] += 0.02
+        sm.add_to_collection("more")
         assert sm.check_collection_timeout() is True
 
 
