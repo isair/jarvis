@@ -187,19 +187,32 @@ class TestHotWindowActivation:
 
         sm.stop()
 
-    def test_hot_window_not_activated_during_collection(self):
+    def test_hot_window_not_activated_during_collection(self, monkeypatch):
         """Hot window doesn't activate if already collecting."""
+        timers = []
+
+        class FakeTimer:
+            def __init__(self, interval, function):
+                self.function = function
+                timers.append(self)
+
+            def start(self):
+                pass
+
+            def cancel(self):
+                pass
+
+        monkeypatch.setattr(threading, "Timer", FakeTimer)
         sm = StateManager(echo_tolerance=0.05, hot_window_seconds=1.0)
 
         with patch('builtins.print'):
             sm.schedule_hot_window_activation()
 
             # Start collection before activation
-            time.sleep(0.02)
             sm.start_collection("new query")
 
-            # Wait past activation time
-            time.sleep(0.1)
+            # Activation timer fires while collecting
+            timers[0].function()
 
             # Should still be in COLLECTING, not HOT_WINDOW
             assert sm.get_state() == ListeningState.COLLECTING
