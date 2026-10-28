@@ -277,16 +277,15 @@ class TestDictationHistoryWindow:
             if widget is not None:
                 assert widget.parent() is container
 
+    @staticmethod
+    def _layout_widgets(window):
+        layout = window._list_layout
+        return [layout.itemAt(i).widget() for i in range(layout.count())]
+
     def test_on_new_entry_is_safe_when_window_hidden(self, qapp, tmp_path):
-        """A dictation can complete before the user ever opens the history
-        window.  In bundled mode the daemon runs in-process, so the engine's
-        on_dictation_result callback fires while the window is still hidden.
-        That path must not manipulate the widget tree — on Windows Qt 6 the
-        combination of creating cards and triggering queued event delivery
-        while the window has never been shown fast-fails inside Qt6Core.dll
-        (0xc0000409) (installer-mode-only crash reported after a successful
-        paste).  When the user later opens the window, showEvent pulls the
-        fresh entries from history and rebuilds from scratch.
+        """A dictation finishing while the window is hidden must not touch the
+        widget tree (Qt6Core.dll fast-fail on Windows); the entry appears once
+        the window rebuilds on show.
         """
         from src.desktop_app.dictation_history import DictationHistoryWindow
         from src.jarvis.dictation.history import DictationHistory
@@ -294,39 +293,17 @@ class TestDictationHistoryWindow:
         history = DictationHistory(path=tmp_path / "h.json")
         window = DictationHistoryWindow(history=history)
         assert not window.isVisible()
+        before = self._layout_widgets(window)
 
-        # Snapshot the layout contents before the signal.
-        before = [
-            window._list_layout.itemAt(i).widget()
-            for i in range(window._list_layout.count())
-        ]
-
-        entry = history.add("late-arriving dictation", duration=1.0)
-        window._on_new_entry(entry)
-
-        # No new cards should be added while the window is hidden.
-        after = [
-            window._list_layout.itemAt(i).widget()
-            for i in range(window._list_layout.count())
-        ]
-        assert before == after, (
-            "_on_new_entry must be a no-op while the window is hidden; "
-            "widget manipulation during hidden state caused a Qt6Core.dll "
-            "fast-fail on Windows."
+        window._on_new_entry(history.add("late-arriving dictation", duration=1.0))
+        assert self._layout_widgets(window) == before, (
+            "_on_new_entry must be a no-op while the window is hidden"
         )
 
-        # Later, when the user opens the window, the new entry must appear.
-        # Exercise the same code path showEvent runs (reload + rebuild) without
-        # actually showing a window — avoids platform-specific headless issues.
+        # Same reload + rebuild path that showEvent runs
         history.reload_from_disk()
         window._reload()
-        rendered_texts = []
-        for i in range(window._list_layout.count()):
-            item = window._list_layout.itemAt(i)
-            widget = item.widget() if item else None
-            e = getattr(widget, "_entry", None)
-            if e is not None:
-                rendered_texts.append(e["text"])
+        rendered_texts = [getattr(w, "_entry", {}).get("text") for w in self._layout_widgets(window)]
         assert "late-arriving dictation" in rendered_texts
 
     def test_show_event_is_safely_re_callable(self, qapp, tmp_path):
