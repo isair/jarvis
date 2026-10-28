@@ -286,10 +286,11 @@ class TestSubmitTextQueryContract:
         the reply (complete(None)) instead of displaying it."""
         _install_dialogue_memory(cfg=object(), db=object())
         started = threading.Event()
+        release_engine = threading.Event()
 
         def slow_engine(*a, **k):
             started.set()
-            time.sleep(0.3)  # let cancel fire mid-run
+            assert release_engine.wait(timeout=2)
             return "the reply that should be dropped"
 
         monkeypatch.setattr("jarvis.reply.engine.run_reply_engine", slow_engine)
@@ -299,6 +300,7 @@ class TestSubmitTextQueryContract:
         )
         assert started.wait(timeout=2)
         daemon.cancel_active_chat_query()
+        release_engine.set()
         _wait_for_complete(events)
         assert events[-1] == ("complete", None)
 
