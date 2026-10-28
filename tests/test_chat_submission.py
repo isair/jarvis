@@ -370,11 +370,13 @@ class TestSubmitTextQueryConcurrency:
         does NOT call the reply engine a second time."""
         _install_dialogue_memory(cfg=object(), db=object())
         call_count = {"n": 0}
+        first_started = threading.Event()
         slow_done = threading.Event()
 
         def slow_engine(*a, **k):
             call_count["n"] += 1
-            slow_done.wait(timeout=5)
+            first_started.set()
+            assert slow_done.wait(timeout=5)
             return "first reply"
 
         monkeypatch.setattr("jarvis.reply.engine.run_reply_engine", slow_engine)
@@ -384,8 +386,7 @@ class TestSubmitTextQueryConcurrency:
         on_busy = lambda: events.append(("busy", None))  # noqa: E731
 
         daemon.submit_text_query("first", on_complete=on_complete, on_busy=on_busy)
-        # Give the worker a moment to acquire the lock.
-        time.sleep(0.1)
+        assert first_started.wait(timeout=2)
         daemon.submit_text_query("second", on_complete=on_complete, on_busy=on_busy)
 
         assert ("busy", None) in events
