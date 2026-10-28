@@ -255,17 +255,32 @@ class TestHotWindowExpiry:
 
         sm.stop()
 
-    def test_manual_expire_hot_window(self):
+    def test_manual_expire_hot_window(self, monkeypatch):
         """Can manually expire hot window."""
+        timers = []
+
+        class FakeTimer:
+            def __init__(self, interval, function):
+                self.function = function
+                timers.append(self)
+
+            def start(self):
+                pass
+
+            def cancel(self):
+                pass
+
+        monkeypatch.setattr(threading, "Timer", FakeTimer)
         sm = StateManager(echo_tolerance=0.02, hot_window_seconds=10.0)
 
         with patch('builtins.print'):
             sm.schedule_hot_window_activation()
-            time.sleep(0.04)
+            timers[0].function()
             assert sm.is_hot_window_active() is True
 
             sm.expire_hot_window()
             assert sm.is_hot_window_active() is False
+            assert sm.get_state() == ListeningState.WAKE_WORD
 
         sm.stop()
 
