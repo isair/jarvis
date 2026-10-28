@@ -654,8 +654,7 @@ class TestChatSessionControls:
         assert daemon.get_hot_window_messages() == []
 
     def test_new_chat_session_noops_when_daemon_not_booted(self):
-        # Globals are None; must not raise.
-        daemon.new_chat_session()
+        assert daemon.new_chat_session() is False
 
     def test_rewind_chat_to_user_truncates_shared_memory(self):
         dm = self._seeded_memory()
