@@ -108,13 +108,17 @@ class TestMutationListenerRegistry:
         finally:
             unregister_graph_mutation_listener(boom)
 
-    def test_unregister_is_idempotent(self):
+    def test_unregister_is_idempotent(self, graph_store):
+        events = []
+
         def cb(**_):
-            pass
+            events.append(True)
 
         register_graph_mutation_listener(cb)
         unregister_graph_mutation_listener(cb)
-        unregister_graph_mutation_listener(cb)  # second remove must not raise
+        unregister_graph_mutation_listener(cb)
+        graph_store.create_node("Bob", "a user fact", parent_id=BRANCH_USER)
+        assert events == []
 
     def test_resolve_branch_returns_none_past_depth_cap(self, graph_store):
         """A chain longer than ``MAX_TRAVERSAL_DEPTH`` must terminate
