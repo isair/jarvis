@@ -203,9 +203,9 @@ def test_fetch_web_page_success(monkeypatch):
             self.encoding = 'utf-8'
 
         def iter_content(self, chunk_size):
-            for offset in range(0, len(self.content), chunk_size):
-                yield self.content[offset:offset + chunk_size]
-        
+            # The fixture page is smaller than any read chunk
+            return iter([self.content])
+
         def raise_for_status(self):
             pass
 
