@@ -286,14 +286,13 @@ class TestEmbeddingStrategy:
     @pytest.mark.unit
     def test_returns_minimum_tools(self):
         """Should return at least _MIN_SELECTED tools even if similarity is low."""
-        call_count = [0]
-        def _embed(text, model, timeout_sec=10.0):
-            call_count[0] += 1
-            if call_count[0] == 1:  # query
-                return [1.0, 0.0, 0.0, 0.0]
-            return [0.0, 0.0, 0.0, 1.0]
+        from itertools import chain, repeat
+
+        query_vec = [1.0, 0.0, 0.0, 0.0]
+        tool_vec = [0.0, 0.0, 0.0, 1.0]
         backend = MagicMock()
-        backend.embed.side_effect = _embed
+        # First embed call is the query; every later call is a tool summary
+        backend.embed.side_effect = chain([query_vec], repeat(tool_vec))
 
         result = select_tools(
             "something obscure",
