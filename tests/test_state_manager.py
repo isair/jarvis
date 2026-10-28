@@ -415,21 +415,43 @@ class TestTimestampBasedHotWindowDetection:
 
         sm.stop()
 
-    def test_speech_after_expiry_not_detected(self):
+    def test_speech_after_expiry_not_detected(self, monkeypatch):
         """Speech starting after hot window expired returns False."""
+        from types import SimpleNamespace
+        from jarvis.listening import state_manager
+
+        timers = []
+
+        class FakeTimer:
+            def __init__(self, interval, function):
+                self.function = function
+                timers.append(self)
+
+            def start(self):
+                pass
+
+            def cancel(self):
+                pass
+
+        clock = [1000.0]
+        monkeypatch.setattr(state_manager, "time", SimpleNamespace(time=lambda: clock[0]))
+        monkeypatch.setattr(threading, "Timer", FakeTimer)
         sm = StateManager(echo_tolerance=0.02, hot_window_seconds=0.05)
 
         with patch('builtins.print'):
             sm.schedule_hot_window_activation()
-            time.sleep(0.04)
+            clock[0] += sm.echo_tolerance
+            timers[0].function()
             assert sm.is_hot_window_active() is True
 
-            # Wait for expiry
-            time.sleep(0.08)
+            # Expiry timer fires once the window duration elapses
+            clock[0] += sm.hot_window_seconds
+            timers[1].function()
             assert sm.is_hot_window_active() is False
 
             # Speech starts AFTER expiry
-            speech_start = time.time()
+            clock[0] += 0.03
+            speech_start = clock[0]
             assert sm.was_speech_during_hot_window(speech_start) is False
 
         sm.stop()
