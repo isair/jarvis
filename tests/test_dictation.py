@@ -937,11 +937,15 @@ class TestDictationProcessingCallback:
 
         engine = _make_engine(on_dictation_processing_start=None)
 
+        audio_frames = []
+
         with patch.object(de, "_close_stream"), \
              patch.object(de, "_play_beep"), \
-             patch.object(engine, "_transcribe_and_paste"):
+             patch.object(engine, "_transcribe_and_paste") as mock_transcribe:
             # Should not raise
-            engine._finalise_and_transcribe(stream=MagicMock(), audio_frames=[], start_time=time.time())
+            engine._finalise_and_transcribe(stream=MagicMock(), audio_frames=audio_frames, start_time=time.time())
+
+        mock_transcribe.assert_called_once_with(audio_frames)
 
 
 # ---------------------------------------------------------------------------
