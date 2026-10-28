@@ -122,8 +122,23 @@ class TestQueryCollection:
 class TestHotWindowActivation:
     """Tests for hot window activation timer."""
 
-    def test_schedule_hot_window_activation(self):
+    def test_schedule_hot_window_activation(self, monkeypatch):
         """Hot window activates after echo tolerance delay."""
+        timers = []
+
+        class FakeTimer:
+            def __init__(self, interval, function):
+                self.interval = interval
+                self.function = function
+                timers.append(self)
+
+            def start(self):
+                pass
+
+            def cancel(self):
+                pass
+
+        monkeypatch.setattr(threading, "Timer", FakeTimer)
         sm = StateManager(echo_tolerance=0.05, hot_window_seconds=1.0)
 
         # Patch print to avoid test output
@@ -132,9 +147,10 @@ class TestHotWindowActivation:
 
             # Not active immediately
             assert sm.is_hot_window_active() is False
+            assert timers[0].interval == sm.echo_tolerance
 
-            # Wait for activation
-            time.sleep(0.1)
+            # Fire the activation timer once the echo delay elapses
+            timers[0].function()
             assert sm.is_hot_window_active() is True
 
         sm.stop()
