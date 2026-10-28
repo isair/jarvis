@@ -628,11 +628,22 @@ class TestClipboard:
         # window has focus and pop open System Settings.
         mock_cge.assert_called_once()
 
-    def test_clipboard_paste_empty_string_is_noop(self):
+    @patch("src.jarvis.dictation.dictation_engine._clipboard_linux")
+    @patch("src.jarvis.dictation.dictation_engine._clipboard_macos")
+    @patch("src.jarvis.dictation.dictation_engine._clipboard_windows")
+    @patch("src.jarvis.dictation.dictation_engine.pynput_keyboard")
+    def test_clipboard_paste_empty_string_is_noop(
+        self, mock_kb, mock_clip_win, mock_clip_mac, mock_clip_linux
+    ):
         from src.jarvis.dictation.dictation_engine import _clipboard_paste
         # Should return immediately without error
         _clipboard_paste("")
         _clipboard_paste(None)
+
+        mock_clip_win.assert_not_called()
+        mock_clip_mac.assert_not_called()
+        mock_clip_linux.assert_not_called()
+        mock_kb.Controller.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
