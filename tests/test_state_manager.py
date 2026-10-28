@@ -155,19 +155,34 @@ class TestHotWindowActivation:
 
         sm.stop()
 
-    def test_cancel_hot_window_activation(self):
+    def test_cancel_hot_window_activation(self, monkeypatch):
         """Can cancel pending hot window activation."""
+        timers = []
+
+        class FakeTimer:
+            def __init__(self, interval, function):
+                self.function = function
+                self.cancelled = False
+                timers.append(self)
+
+            def start(self):
+                pass
+
+            def cancel(self):
+                self.cancelled = True
+
+        monkeypatch.setattr(threading, "Timer", FakeTimer)
         sm = StateManager(echo_tolerance=0.1, hot_window_seconds=1.0)
 
         with patch('builtins.print'):
             sm.schedule_hot_window_activation()
 
             # Cancel before activation
-            time.sleep(0.02)
             sm.cancel_hot_window_activation()
+            assert timers[0].cancelled is True
 
-            # Wait past activation time
-            time.sleep(0.15)
+            # A late callback from the cancelled timer must not activate
+            timers[0].function()
             assert sm.is_hot_window_active() is False
 
         sm.stop()
