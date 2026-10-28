@@ -210,13 +210,16 @@ class TestSubmitTextQueryContract:
     def test_callbacks_are_optional(self, monkeypatch):
         """With no callbacks registered, submit_text_query still runs the
         engine and returns without error."""
-        monkeypatch.setattr(
-            "jarvis.reply.engine.run_reply_engine", lambda *a, **k: "ok"
-        )
+        engine_finished = threading.Event()
+
+        def run_engine(*_args, **_kwargs):
+            engine_finished.set()
+            return "ok"
+
+        monkeypatch.setattr("jarvis.reply.engine.run_reply_engine", run_engine)
         _install_dialogue_memory(cfg=object(), db=object())
         daemon.submit_text_query("hi")
-        time.sleep(0.5)
-        # No assertion needed — reaching here without hanging means it worked.
+        assert engine_finished.wait(timeout=2)
 
     def test_daemon_not_initialised_fires_complete_none(self, monkeypatch):
         """When the daemon globals are None (daemon not booted), submit_text_query
