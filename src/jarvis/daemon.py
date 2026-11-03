@@ -21,16 +21,44 @@ os.environ.setdefault('OMP_NUM_THREADS', '1')
 if sys.platform == 'win32' and not getattr(sys, 'frozen', False):
     try:
         import io
-        # Only wrap if stdout has a proper binary buffer (not a custom writer)
-        if hasattr(sys.stdout, 'buffer') and hasattr(sys.stdout.buffer, 'write'):
-            sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-        if hasattr(sys.stderr, 'buffer') and hasattr(sys.stderr.buffer, 'write'):
-            sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+
+        def _wrap_real_console_stream(stream):
+            """Wrap only real console streams to avoid pytest capture file churn."""
+            if stream is None or getattr(stream, 'closed', False):
+                return None
+
+            module_name = type(stream).__module__ or ""
+            if module_name.startswith('_pytest') or module_name.startswith('pytest'):
+                return stream
+
+            buffer = getattr(stream, 'buffer', None)
+            if buffer is None or getattr(buffer, 'closed', False):
+                return stream
+
+            try:
+                stream.fileno()
+            except (AttributeError, OSError, ValueError):
+                return stream
+
+            try:
+                return io.TextIOWrapper(buffer, encoding='utf-8', errors='replace')
+            except Exception:
+                return stream
+
+        for _stream_name in ('stdout', 'stderr'):
+            stream = getattr(sys, _stream_name)
+            wrapped = _wrap_real_console_stream(stream)
+            if wrapped is not None:
+                setattr(sys, _stream_name, wrapped)
     except Exception:
         pass
 
 from typing import Optional
-from faster_whisper import WhisperModel
+
+try:
+    from faster_whisper import WhisperModel
+except Exception:  # pragma: no cover - optional dependency may be absent in CI/dev setups
+    WhisperModel = None  # type: ignore[assignment]
 
 from .config import load_settings
 from .memory.db import Database

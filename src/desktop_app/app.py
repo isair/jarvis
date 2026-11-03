@@ -2351,14 +2351,36 @@ def _smoke_test_main() -> int:
     # capture objects that must not be re-wrapped.
     try:
         import io
+
+        def _wrap_if_real_console(_stream):
+            """Wrap only real console streams, not pytest capture handles."""
+            if _stream is None or getattr(_stream, "closed", False):
+                return io.StringIO()
+
+            module_name = type(_stream).__module__ or ""
+            if module_name.startswith("_pytest") or module_name.startswith("pytest"):
+                return _stream
+
+            buffer = getattr(_stream, "buffer", None)
+            if buffer is None or getattr(buffer, "closed", False):
+                return _stream
+
+            try:
+                _stream.fileno()
+            except (AttributeError, OSError, ValueError):
+                return _stream
+
+            try:
+                return io.TextIOWrapper(buffer, encoding="utf-8", errors="replace")
+            except Exception:
+                return _stream
+
         for _stream_name in ("stdout", "stderr"):
             _stream = getattr(sys, _stream_name)
             if _stream is None:
                 setattr(sys, _stream_name, io.StringIO())
-            elif (getattr(sys, "frozen", False) or sys.platform == "win32") \
-                    and hasattr(_stream, "buffer") and hasattr(_stream.buffer, "write"):
-                setattr(sys, _stream_name, io.TextIOWrapper(
-                    _stream.buffer, encoding="utf-8", errors="replace"))
+            elif (getattr(sys, "frozen", False) or sys.platform == "win32"):
+                setattr(sys, _stream_name, _wrap_if_real_console(_stream))
     except Exception:
         pass
 
@@ -2410,11 +2432,35 @@ def main() -> int:
     if sys.platform == 'win32' and not getattr(sys, 'frozen', False):
         try:
             import io
-            # Only wrap if stdout has a proper binary buffer
-            if hasattr(sys.stdout, 'buffer') and hasattr(sys.stdout.buffer, 'write'):
-                sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-            if hasattr(sys.stderr, 'buffer') and hasattr(sys.stderr.buffer, 'write'):
-                sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+
+            def _wrap_real_console_stream(stream):
+                """Wrap only real console files so pytest capture objects remain untouched."""
+                if stream is None or getattr(stream, 'closed', False):
+                    return None
+
+                module_name = type(stream).__module__ or ""
+                if module_name.startswith('_pytest') or module_name.startswith('pytest'):
+                    return stream
+
+                buffer = getattr(stream, 'buffer', None)
+                if buffer is None or getattr(buffer, 'closed', False):
+                    return stream
+
+                try:
+                    stream.fileno()
+                except (AttributeError, OSError, ValueError):
+                    return stream
+
+                try:
+                    return io.TextIOWrapper(buffer, encoding='utf-8', errors='replace')
+                except Exception:
+                    return stream
+
+            for _stream_name in ('stdout', 'stderr'):
+                stream = getattr(sys, _stream_name)
+                wrapped = _wrap_real_console_stream(stream)
+                if wrapped is not None:
+                    setattr(sys, _stream_name, wrapped)
         except Exception:
             pass
 
