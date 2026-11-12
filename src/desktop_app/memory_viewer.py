@@ -12,6 +12,7 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import urlsplit
 
 from flask import Flask, jsonify, request, Response
 
@@ -21,6 +22,33 @@ from jarvis.memory.graph import FIXED_BRANCH_IDS, GraphMemoryStore
 
 
 app = Flask(__name__)
+
+
+@app.before_request
+def protect_local_viewer() -> Optional[tuple[Response, int]]:
+    """Keep browser requests within the viewer's loopback origin."""
+    try:
+        target = urlsplit(request.host_url)
+        if (target.hostname not in {'localhost', '127.0.0.1', '::1'}
+                or target.username is not None or target.password is not None):
+            raise ValueError('non-loopback host')
+        target_port = target.port if target.port is not None else (443 if target.scheme == 'https' else 80)
+        target_origin = (target.scheme, target.hostname, target_port)
+        if request.headers.get('Sec-Fetch-Site') == 'cross-site':
+            raise ValueError('cross-site browser request')
+        for header in ('Origin', 'Referer'):
+            value = request.headers.get(header)
+            if value is None:
+                continue
+            source = urlsplit(value)
+            source_port = source.port if source.port is not None else (443 if source.scheme == 'https' else 80)
+            source_origin = (source.scheme, source.hostname, source_port)
+            if source.username is not None or source.password is not None or source_origin != target_origin:
+                raise ValueError('foreign browser origin')
+    except ValueError as exc:
+        debug_log(f'Memory viewer rejected request: {exc}', 'memory')
+        return jsonify({'error': 'The memory viewer accepts only its local browser origin.'}), 403
+    return None
 
 # Global database connection
 _db_conn: Optional[sqlite3.Connection] = None

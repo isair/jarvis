@@ -490,6 +490,7 @@ sequenceDiagram
 A Flask-based web interface for browsing conversation history:
 
 - Runs on `localhost:5050`
+- Every viewer route rejects non-loopback Host headers and browser requests from another origin before accessing memory stores. Only `localhost`, `127.0.0.1` and `::1` are accepted; Origin and Referer metadata, when present, must match the viewer's scheme, host and port. Cross-site Fetch Metadata is rejected. Direct local navigation remains available without browser metadata.
 - **Bundled mode**: Flask runs in a daemon thread
 - **Development mode**: Flask runs as subprocess
 - Opens in embedded QWebEngineView or the system browser (macOS bundle, unavailable or failed WebEngine). Browser mode opens directly without showing or focusing a native placeholder window.
