@@ -108,6 +108,17 @@ def test_public_redirect_cannot_reach_a_private_destination(page_network, destin
     assert 'Private fixture secret' not in result.reply_text
 
 
+@pytest.mark.parametrize('redirect', [False, True])
+def test_credentials_in_page_urls_are_rejected_before_authenticated_requests(page_network, redirect):
+    credential_url = 'http://owned-login:owned-password@public.test/private'
+    page_network.redirect = credential_url
+    url = 'http://public.test/redirect' if redirect else credential_url
+    result = FetchWebPageTool().run({'url': url}, page_network.context)
+    assert not result.success
+    assert page_network.paths == (['/redirect'] if redirect else [])
+    assert all('Authorization' not in headers for headers in page_network.headers)
+
+
 def test_mixed_public_and_private_dns_is_rejected(page_network):
     page_network.mixed = True
     result = FetchWebPageTool().run({'url': 'http://public.test/article'}, page_network.context)
