@@ -2,6 +2,7 @@ from __future__ import annotations
 import platform
 import subprocess
 import threading
+import asyncio
 import queue
 import shutil
 import signal
@@ -12,6 +13,7 @@ import sys
 import time
 import warnings
 from pathlib import Path
+from dataclasses import dataclass, field
 from typing import Optional, Callable
 from urllib.parse import urlparse
 
@@ -25,6 +27,7 @@ from ..utils.audio_lock import portaudio_lock
 # Default voice model for automatic download
 # en_GB-alan-medium: Good quality, ~60MB, British English male
 PIPER_DEFAULT_VOICE = "en_GB-alan-medium"
+_PIPER_DOWNLOAD_MAX_RETRIES = 4
 PIPER_VOICE_BASE_URL = "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0"
 
 
@@ -38,6 +41,84 @@ def _get_piper_models_dir() -> Path:
 def _get_default_piper_model_path() -> str:
     """Get the path to the default Piper voice model."""
     return str(_get_piper_models_dir() / f"{PIPER_DEFAULT_VOICE}.onnx")
+
+
+def _download_piper_file(url, target_path, desc, log, progress_callback):
+    """Publish a complete voice file after bounded transport/rate-limit retries."""
+    import requests
+
+    for attempt in range(_PIPER_DOWNLOAD_MAX_RETRIES + 1):
+        response = None
+        temp_path = None
+        retry_error = None
+        try:
+            response = requests.get(url, stream=True, timeout=60)
+            response.raise_for_status()
+            total_size = int(response.headers.get("content-length", 0))
+            downloaded = 0
+            started_at = time.monotonic()
+            last_update = started_at
+
+            def report_progress(complete=False):
+                elapsed = max(time.monotonic() - started_at, 0.001)
+                size = downloaded / 1_000_000
+                rate = size / elapsed
+                if total_size:
+                    pct = 100 if complete else min(99, int(downloaded * 100 / total_size))
+                    message = f"📥 Piper {desc}: {pct}%|| {size:.1f}/{total_size / 1_000_000:.1f} MB · {rate:.1f} MB/s"
+                else:
+                    if complete:
+                        message = f"📥 Piper {desc}: 100%|| {size:.1f} MB received · total size unknown"
+                    else:
+                        message = f"📥 Piper {desc}: {size:.1f} MB [total size unknown · {rate:.1f} MB/s]"
+                if progress_callback:
+                    progress_callback(message)
+
+            report_progress()
+            with tempfile.NamedTemporaryFile(mode="wb", dir=target_path.parent,
+                                    prefix=f".{target_path.name}.", suffix=".tmp",
+                                    delete=False) as file:
+                temp_path = Path(file.name)
+                for chunk in response.iter_content(chunk_size=8192):
+                    file.write(chunk)
+                    downloaded += len(chunk)
+                    if time.monotonic() - last_update >= 1:
+                        report_progress()
+                        last_update = time.monotonic()
+
+            temp_path.replace(target_path)
+            temp_path = None
+            report_progress(complete=True)
+            debug_log(f"Piper {desc} available: {target_path.name}", "tts")
+            return
+        except requests.exceptions.SSLError:
+            # Certificate and TLS configuration failures require user action.
+            raise
+        except requests.exceptions.HTTPError as exc:
+            if getattr(exc.response, "status_code", None) != 429:
+                raise
+            retry_error = exc
+        except (requests.ConnectionError, requests.Timeout,
+                requests.exceptions.ChunkedEncodingError) as exc:
+            retry_error = exc
+        finally:
+            try:
+                if response is not None:
+                    response.close()
+            finally:
+                if temp_path is not None:
+                    try:
+                        temp_path.unlink(missing_ok=True)
+                    except OSError as cleanup_error:
+                        log(f"  ⚠️ Cannot remove partial {target_path.name} download: {cleanup_error}")
+                        raise
+
+        if attempt == _PIPER_DOWNLOAD_MAX_RETRIES:
+            raise retry_error
+        wait = 2 ** (attempt + 1)
+        log(f"  ⏳ Piper {desc} download interrupted, retrying in {wait}s "
+            f"({attempt + 1}/{_PIPER_DOWNLOAD_MAX_RETRIES}): {retry_error}")
+        time.sleep(wait)
 
 
 def _download_piper_voice(voice_name: str, progress_callback: Optional[Callable[[str], None]] = None) -> Optional[str]:
@@ -63,7 +144,7 @@ def _download_piper_voice(voice_name: str, progress_callback: Optional[Callable[
     # Example: en_US-lessac-medium -> en/en_US/lessac/medium/en_US-lessac-medium.onnx
     parts = voice_name.split("-")
     if len(parts) < 3:
-        log(f"Invalid voice name format: {voice_name}")
+        log(f"❌ Invalid voice name format: {voice_name}")
         return None
 
     lang_region = parts[0]  # e.g., "en_US"
@@ -89,59 +170,16 @@ def _download_piper_voice(voice_name: str, progress_callback: Optional[Callable[
             (json_url, json_path, "config"),
         ]:
             if target_path.exists():
-                log(f"  {desc} already exists: {target_path.name}")
+                log(f"  📦 {desc} already exists: {target_path.name}")
                 continue
 
-            log(f"  Downloading {desc}...")
-
-            # Stream download with retry on rate limiting (HTTP 429)
-            max_retries = 4
-            response = None
-            for attempt in range(max_retries + 1):
-                response = requests.get(url, stream=True, timeout=60)
-                try:
-                    response.raise_for_status()
-                    break  # Success
-                except requests.exceptions.HTTPError as http_err:
-                    response.close()
-                    status = getattr(http_err.response, "status_code", None)
-                    if status == 429 and attempt < max_retries:
-                        wait = 2 ** (attempt + 1)
-                        log(f"  ⏳ Rate limited by HuggingFace, retrying in {wait}s ({attempt + 1}/{max_retries})...")
-                        time.sleep(wait)
-                        continue
-                    raise  # Non-429 or retries exhausted
-
-            total_size = int(response.headers.get("content-length", 0))
-            downloaded = 0
-
-            # Write to temp file first, then rename (atomic)
-            temp_path = target_path.with_suffix(".tmp")
-            with open(temp_path, "wb") as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    f.write(chunk)
-                    downloaded += len(chunk)
-                    if total_size > 0 and progress_callback:
-                        pct = (downloaded / total_size) * 100
-                        if downloaded % (1024 * 1024) < 8192:  # Log every ~1MB
-                            log(f"  Downloading {desc}... {pct:.0f}%")
-
-            # Rename temp to final
-            temp_path.rename(target_path)
-            log(f"  Downloaded {desc}: {target_path.name}")
+            _download_piper_file(url, target_path, desc, log, progress_callback)
 
         return str(onnx_path)
 
-    except requests.RequestException as e:
-        log(f"  Download failed: {e}")
-        # Clean up partial downloads
-        for p in [onnx_path, json_path]:
-            tmp = p.with_suffix(".tmp")
-            if tmp.exists():
-                tmp.unlink()
-        return None
-    except Exception as e:
-        log(f"  Download error: {e}")
+    except Exception as exc:
+        label = 'Download failed' if isinstance(exc, requests.RequestException) else 'Download error'
+        log(f"  ❌ {label}: {exc}")
         return None
 
 
@@ -347,7 +385,295 @@ def _preprocess_for_speech(text: str) -> str:
     return result
 
 
-class ChatterboxTTS:
+def _call_speech_callback(callback: Callable, arguments: tuple, label: str) -> None:
+    """Isolate observer failures, including cancellation of an observer's own task."""
+    try:
+        callback(*arguments)
+    except (Exception, asyncio.CancelledError) as exc:
+        debug_log(f'Speech {label} callback failed: {type(exc).__name__}', 'tts')
+
+
+_PlaybackStart = Callable[['SpeechRequest', float], None]
+_PlaybackEnd = Callable[['SpeechRequest', str], None]
+
+
+@dataclass(eq=False)
+class SpeechRequest:
+    """One cancellable utterance with success and terminal ownership callbacks."""
+
+    text: str
+    completion_callback: Optional[Callable[[], None]] = None
+    duration_callback: Optional[Callable[[float], None]] = None
+    terminal_callback: Optional[Callable[[str], None]] = None
+    _cancel_callback: Optional[Callable[['SpeechRequest'], None]] = None
+    _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
+    _active: bool = field(default=False, init=False)
+    _cancelled: bool = field(default=False, init=False)
+    _interrupted: bool = field(default=False, init=False)
+    _finished: bool = field(default=False, init=False)
+    _playback_started: bool = field(default=False, init=False)
+    _playback_started_at: float = field(default=0.0, init=False)
+    _playback_callbacks: tuple[Optional[_PlaybackStart], Optional[_PlaybackEnd]] = field(default=(None, None), init=False, repr=False)
+    _activity_release: Optional[Callable[[], None]] = field(default=None, init=False, repr=False)
+
+    def _claim(self) -> bool:
+        with self._lock:
+            if self._finished or self._cancelled:
+                return False
+            self._active = True
+            return True
+
+    @property
+    def abandoned(self) -> bool:
+        with self._lock:
+            return self._cancelled or self._interrupted
+
+    def _interrupt(self) -> None:
+        with self._lock:
+            self._interrupted = True
+
+    def cancel(self) -> None:
+        self._abandon('cancelled')
+
+    def interrupt(self) -> None:
+        """Interrupt this utterance without affecting a queued replacement."""
+        self._abandon('interrupted')
+
+    def _abandon(self, outcome: str) -> None:
+        with self._lock:
+            if self._finished:
+                return
+            if outcome == 'cancelled':
+                self._cancelled = True
+            else:
+                self._interrupted = True
+            active, interrupt = self._active, self._cancel_callback
+        try:
+            if active and interrupt is not None:
+                interrupt(self)
+        finally:
+            if not active:
+                self._finish(outcome)
+
+    def _finish(self, outcome: str) -> None:
+        with self._lock:
+            if self._finished:
+                return
+            self._finished = True
+            if self._cancelled:
+                outcome = 'cancelled'
+            elif self._interrupted:
+                outcome = 'interrupted'
+            callbacks = []
+            if self._playback_started and self._playback_callbacks[1] is not None:
+                callbacks.append((self._playback_callbacks[1], (self, outcome), 'playback finish'))
+            if outcome == 'completed' and self.completion_callback is not None:
+                callbacks.append((self.completion_callback, (), 'completion'))
+            if self._activity_release is not None:
+                callbacks.append((self._activity_release, (), 'activity release'))
+            if self.terminal_callback is not None:
+                callbacks.append((self.terminal_callback, (outcome,), 'terminal'))
+            self.completion_callback = self.duration_callback = self.terminal_callback = None
+            self._cancel_callback = self._activity_release = None
+            self._playback_callbacks = (None, None)
+        for callback, arguments, label in callbacks:
+            _call_speech_callback(callback, arguments, label)
+
+
+class _QueuedSpeech:
+    """Own worker admission and request release independently of synthesis."""
+
+    def __init__(self) -> None:
+        self._q: queue.Queue[Optional[SpeechRequest]] = queue.Queue()
+        self._thread: Optional[threading.Thread] = None
+        self._lifecycle_lock = threading.RLock()
+        self._lifecycle_generation = 0
+        self._stop = threading.Event()
+        self._is_speaking = threading.Event()
+        self._last_spoken_text = ''
+        self._should_interrupt = threading.Event()
+        self._active_request: Optional[SpeechRequest] = None
+        self._preparation_started_at = 0.0
+        self._playback_callbacks: tuple[Optional[_PlaybackStart], Optional[_PlaybackEnd]] = (None, None)
+
+    def preparing_request_at(self, capture_time: float) -> Optional[SpeechRequest]:
+        """Identify still-active speech whose synthesis overlaps this capture."""
+        with self._lifecycle_lock:
+            request = self._active_request
+            if (request is not None and not request.abandoned
+                    and 0 < self._preparation_started_at <= capture_time <= time.time()
+                    and (not request._playback_started
+                         or capture_time < request._playback_started_at)):
+                return request
+            return None
+
+    def set_playback_callbacks(self, started: Optional[_PlaybackStart],
+                               finished: Optional[_PlaybackEnd]) -> None:
+        """Observe future playback, retaining the matching termination callback."""
+        with self._lifecycle_lock:
+            self._playback_callbacks = started, finished
+
+    def _begin_playback(self, request: SpeechRequest, duration: float) -> bool:
+        with self._lifecycle_lock:
+            if self._stop.is_set() or request.abandoned:
+                return False
+            request._playback_callbacks = self._playback_callbacks
+            request._playback_started = True
+            request._playback_started_at = time.time()
+            self._last_spoken_text = request.text
+            self._is_speaking.set()
+            try:
+                from jarvis.activity import JarvisState, get_jarvis_state
+                manager = get_jarvis_state()
+                owner = manager.acquire_state(
+                    JarvisState.SPEAKING, restore_state=JarvisState.IDLE,
+                    protected_states={JarvisState.DICTATING, JarvisState.DICTATION_PROCESSING},
+                )
+                debug_log(f'Playback activity ownership: {owner is not None}', 'tts')
+                if owner is not None:
+                    request._activity_release = lambda: manager.release_state(owner)
+            except Exception as exc:
+                debug_log(f'Speech activity unavailable: {type(exc).__name__}', 'tts')
+        callback = request._playback_callbacks[0]
+        if callback is not None:
+            _call_speech_callback(callback, (request, duration), 'playback start')
+        return not self._stop.is_set() and not request.abandoned
+
+    def start(self) -> None:
+        with self._lifecycle_lock:
+            generation = self._lifecycle_generation
+        self._start_if_current(generation)
+
+    def _start_if_current(self, generation: int) -> None:
+        with self._lifecycle_lock:
+            if (generation != self._lifecycle_generation or not self.enabled
+                    or (self._thread is not None and self._thread.is_alive())):
+                return
+        available, error = self._prepare_speech()
+        with self._lifecycle_lock:
+            if (generation != self._lifecycle_generation or not self.enabled
+                    or (self._thread is not None and self._thread.is_alive())):
+                return
+            if not available:
+                self.enabled = False
+                message = f'{type(self).__name__} speech output unavailable: {error}'
+                print(f'  ⚠️ {message}', flush=True)
+                debug_log(message, 'tts')
+                return
+            discarded = self._drain_pending_speech()
+            self._stop.clear()
+            self._thread = threading.Thread(target=self._run, daemon=True)
+            self._thread.start()
+        for request in discarded:
+            request._finish('cancelled')
+
+    def _drain_pending_speech(self) -> list[SpeechRequest]:
+        requests = []
+        while True:
+            try:
+                request = self._q.get_nowait()
+            except queue.Empty:
+                return requests
+            if request is not None:
+                requests.append(request)
+
+    def stop(self) -> None:
+        with self._lifecycle_lock:
+            self._lifecycle_generation += 1
+            self._stop.set()
+            self.interrupt()
+            discarded = self._drain_pending_speech()
+            worker = self._thread
+            if worker is not None:
+                self._q.put_nowait(None)
+        for request in discarded:
+            request._finish('cancelled')
+        if worker is None:
+            return
+        if worker is not threading.current_thread():
+            worker.join(timeout=2.0)
+        with self._lifecycle_lock:
+            if self._thread is worker and not worker.is_alive():
+                self._thread = None
+            elif worker.is_alive():
+                debug_log('Speech worker is draining after stop', 'tts')
+
+    def speak(self, text: str, completion_callback: Optional[Callable[[], None]] = None,
+              duration_callback: Optional[Callable[[float], None]] = None, *,
+              terminal_callback: Optional[Callable[[str], None]] = None) -> SpeechRequest:
+        request = SpeechRequest(text, completion_callback, duration_callback,
+                                terminal_callback, self._cancel_request)
+        admitted = False
+        outcome = 'rejected'
+        try:
+            if not self.enabled or not text.strip():
+                return request
+            with self._lifecycle_lock:
+                generation = self._lifecycle_generation
+            outcome = 'failed'
+            self._start_if_current(generation)
+            with self._lifecycle_lock:
+                if generation != self._lifecycle_generation or self._stop.is_set():
+                    outcome = 'cancelled'
+                    return request
+                if not self.enabled:
+                    outcome = 'rejected'
+                    return request
+                request.text = _preprocess_for_speech(text)
+                self._q.put_nowait(request)
+                admitted = True
+            return request
+        finally:
+            if not admitted:
+                request._finish(outcome)
+
+    def _interrupt_active_request(self) -> None:
+        with self._lifecycle_lock:
+            if self._active_request is not None:
+                self._active_request._interrupt()
+            self._should_interrupt.set()
+
+    def _cancel_request(self, request: SpeechRequest) -> None:
+        with self._lifecycle_lock:
+            if self._active_request is request:
+                self.interrupt()
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            try:
+                request = self._q.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            if request is None:
+                continue
+            outcome = 'cancelled'
+            try:
+                with self._lifecycle_lock:
+                    active = not self._stop.is_set() and request._claim()
+                    if active:
+                        self._active_request = request
+                        self._preparation_started_at = time.time()
+                if active:
+                    outcome = 'completed' if self._speak_once(request) is True else 'failed'
+                    if self._stop.is_set():
+                        outcome = 'cancelled'
+                    elif self._should_interrupt.is_set():
+                        outcome = 'interrupted'
+            except Exception as exc:
+                outcome = 'failed'
+                debug_log(f'Speech worker failed: {exc}', 'tts')
+            finally:
+                try:
+                    request._finish(outcome)
+                finally:
+                    # Replacement waits for this worker; retain its request
+                    # identity until terminal commitment and callback release.
+                    self._active_request = None
+                    self._preparation_started_at = 0.0
+                    del request
+
+
+class ChatterboxTTS(_QueuedSpeech):
     """Experimental TTS implementation using Resemble AI's Chatterbox model."""
 
     def __init__(self, enabled: bool = True, voice: Optional[str] = None, rate: Optional[int] = None,
@@ -361,15 +687,7 @@ class ChatterboxTTS:
         self.exaggeration = exaggeration
         self.cfg_weight = cfg_weight
 
-        # Threading and queue setup (same as TextToSpeech)
-        self._q: queue.Queue[str] = queue.Queue()
-        self._thread: Optional[threading.Thread] = None
-        self._stop = threading.Event()
-        self._is_speaking = threading.Event()
-        self._last_spoken_text: str = ""
-        self._completion_callback: Optional[Callable[[], None]] = None
-        self._duration_callback: Optional[Callable[[float], None]] = None
-        self._should_interrupt = threading.Event()
+        super().__init__()
 
         # Chatterbox model (eagerly loaded during initialization)
         self._model = None
@@ -435,79 +753,27 @@ class ChatterboxTTS:
             return False
         return False
 
-    def start(self) -> None:
-        if not self.enabled or self._thread is not None:
-            return
-        # Initialize on first actual start
-        self._ensure_initialized()
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
-
-    def stop(self) -> None:
-        if self._thread is None:
-            return
-        # Ensure any active speech is interrupted immediately
-        try:
-            self.interrupt()
-        except Exception:
-            pass
-        self._stop.set()
-        try:
-            self._q.put_nowait("")
-        except Exception:
-            pass
-        self._thread.join(timeout=2.0)
-        self._thread = None
-        self._stop.clear()
-
-    def speak(self, text: str, completion_callback: Optional[Callable[[], None]] = None,
-              duration_callback: Optional[Callable[[float], None]] = None) -> None:
-        if not self.enabled or not text.strip():
-            return
-        # Lazy start the worker thread and lazy init on first speak
-        if self._thread is None:
-            self.start()
-        self._completion_callback = completion_callback
-        self._duration_callback = duration_callback
-        # Preprocess text for speech (convert links to readable descriptions)
-        processed_text = _preprocess_for_speech(text)
-        try:
-            self._q.put_nowait(processed_text)
-        except Exception:
-            pass
+    def _prepare_speech(self) -> tuple[bool, Optional[str]]:
+        return self._ensure_model(), self._model_error
 
     def interrupt(self) -> None:
-        """Stop current speech immediately"""
-        self._should_interrupt.set()
+        """Stop current speech immediately."""
+        self._interrupt_active_request()
 
-    def _run(self) -> None:
-        while not self._stop.is_set():
-            try:
-                text = self._q.get(timeout=0.5)
-            except queue.Empty:
-                continue
-            if not text:
-                continue
-            try:
-                self._speak_once(text)
-            except Exception:
-                continue
-
-    def _speak_once(self, text: str) -> None:
-        self._is_speaking.set()
-        self._last_spoken_text = text
-        self._should_interrupt.clear()
-        interrupted = False
+    def _speak_once(self, request: SpeechRequest) -> bool:
+        text = request.text
+        with self._lifecycle_lock:
+            if self._stop.is_set() or request.abandoned:
+                return False
+            self._should_interrupt.clear()
         
-        # Signal speaking state to face widget
-        self._notify_speaking_state(True)
 
         try:
             # Check if model is available
             if not self._ensure_model():
                 # Fall back to system TTS if Chatterbox fails
                 warnings.warn("Chatterbox TTS not available, skipping speech synthesis")
-                return
+                return False
 
             # Generate audio using Chatterbox
             import tempfile
@@ -522,16 +788,16 @@ class ChatterboxTTS:
                 cfg_weight=self.cfg_weight
             )
 
+            if self._stop.is_set() or self._should_interrupt.is_set():
+                return False
+
             # Calculate exact duration from audio samples
             exact_duration = wav.shape[-1] / self._model.sr
             debug_log(f"Chatterbox TTS synthesis complete: {exact_duration:.2f}s", "tts")
 
             # Notify listener of exact duration for precise echo detection
-            if self._duration_callback is not None:
-                try:
-                    self._duration_callback(exact_duration)
-                except Exception as e:
-                    debug_log(f"Chatterbox TTS duration callback error: {e}", "tts")
+            if request.duration_callback is not None:
+                _call_speech_callback(request.duration_callback, (exact_duration,), 'duration')
 
             # Save to temporary file
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
@@ -545,13 +811,17 @@ class ChatterboxTTS:
                 # Play audio using pygame (cross-platform)
                 pygame.mixer.init(frequency=self._model.sr, size=-16, channels=1, buffer=1024)
                 pygame.mixer.music.load(tmp_path)
-                pygame.mixer.music.play()
+                if not self._begin_playback(request, exact_duration):
+                    return False
+                with self._lifecycle_lock:
+                    if self._stop.is_set() or self._should_interrupt.is_set():
+                        return False
+                    pygame.mixer.music.play()
 
                 # Wait for playback to complete or interruption
                 while pygame.mixer.music.get_busy():
                     if self._should_interrupt.is_set():
                         pygame.mixer.music.stop()
-                        interrupted = True
                         break
                     pygame.time.wait(100)  # Check every 100ms
 
@@ -563,42 +833,15 @@ class ChatterboxTTS:
                 except Exception:
                     pass
 
+            return True
+
         except Exception as e:
             warnings.warn(f"Chatterbox TTS error: {e}")
         finally:
             self._is_speaking.clear()
             
-            # Signal speaking stopped to face widget
-            self._notify_speaking_state(False)
-            
-            # Call completion callback if set and not interrupted
-            if self._completion_callback is not None and not interrupted:
-                try:
-                    self._completion_callback()
-                except Exception:
-                    pass
-                self._completion_callback = None
+        return False
     
-    def _notify_speaking_state(self, is_speaking: bool) -> None:
-        """Notify the face widget of speaking state changes.
-
-        Uses file-based approach to work across processes:
-        - Dev mode runs daemon as subprocess (different process)
-        - File-based state works across process boundaries
-        """
-        # Import here to avoid circular dependencies
-        try:
-            from desktop_app.face_widget import get_jarvis_state, JarvisState
-            state_manager = get_jarvis_state()
-            if is_speaking:
-                debug_log("setting face state to SPEAKING (chatterbox)", "tts")
-                state_manager.set_state(JarvisState.SPEAKING)
-            # Note: When speaking ends, we don't change state here - let daemon manage transitions
-        except ImportError:
-            debug_log("face widget not available (ImportError) (chatterbox)", "tts")
-        except Exception as e:
-            # Don't let face widget errors affect TTS
-            debug_log(f"failed to set face state to SPEAKING (chatterbox): {e}", "tts")
 
     # Loopback guard helpers (same interface as TextToSpeech)
     def is_speaking(self) -> bool:
@@ -608,7 +851,7 @@ class ChatterboxTTS:
         return self._last_spoken_text
 
 
-class PiperTTS:
+class PiperTTS(_QueuedSpeech):
     """TTS implementation using Piper (local neural TTS with exact duration).
 
     Piper generates actual audio samples, enabling precise duration calculation
@@ -638,15 +881,7 @@ class PiperTTS:
         self.noise_w = noise_w
         self.sentence_silence = sentence_silence
 
-        # Threading and queue setup (same pattern as other TTS engines)
-        self._q: queue.Queue[str] = queue.Queue()
-        self._thread: Optional[threading.Thread] = None
-        self._stop = threading.Event()
-        self._is_speaking = threading.Event()
-        self._last_spoken_text: str = ""
-        self._completion_callback: Optional[Callable[[], None]] = None
-        self._duration_callback: Optional[Callable[[float], None]] = None
-        self._should_interrupt = threading.Event()
+        super().__init__()
 
         # Piper voice (lazy loaded)
         self._voice = None
@@ -740,50 +975,13 @@ class PiperTTS:
             self._initialized = True
             return self._voice is not None
 
-    def start(self) -> None:
-        if not self.enabled or self._thread is not None:
-            return
-        # Initialize model eagerly at startup (downloads if needed)
-        # This provides better UX - download happens during startup, not first speech
-        self._ensure_initialized()
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
 
-    def stop(self) -> None:
-        if self._thread is None:
-            return
-        try:
-            self.interrupt()
-        except Exception:
-            pass
-        self._stop.set()
-        try:
-            self._q.put_nowait("")
-        except Exception:
-            pass
-        self._thread.join(timeout=2.0)
-        self._thread = None
-        self._stop.clear()
-
-    def speak(self, text: str, completion_callback: Optional[Callable[[], None]] = None,
-              duration_callback: Optional[Callable[[float], None]] = None) -> None:
-        if not self.enabled or not text.strip():
-            return
-        # Lazy start the worker thread
-        if self._thread is None:
-            self.start()
-        self._completion_callback = completion_callback
-        self._duration_callback = duration_callback
-        # Preprocess text for speech
-        processed_text = _preprocess_for_speech(text)
-        try:
-            self._q.put_nowait(processed_text)
-        except Exception:
-            pass
+    def _prepare_speech(self) -> tuple[bool, Optional[str]]:
+        return self._ensure_initialized(), self._init_error
 
     def interrupt(self) -> None:
         """Stop current speech immediately."""
-        self._should_interrupt.set()
+        self._interrupt_active_request()
         with self._audio_lock:
             if self._audio_stream is not None:
                 try:
@@ -792,35 +990,21 @@ class PiperTTS:
                 except Exception:
                     pass
 
-    def _run(self) -> None:
-        while not self._stop.is_set():
-            try:
-                text = self._q.get(timeout=0.5)
-            except queue.Empty:
-                continue
-            if not text:
-                continue
-            try:
-                self._speak_once(text)
-            except Exception as e:
-                debug_log(f"Piper TTS error in _speak_once: {e}", "tts")
-                continue
 
-    def _speak_once(self, text: str) -> None:
-        self._is_speaking.set()
-        self._last_spoken_text = text
-        self._should_interrupt.clear()
-        interrupted = False
+    def _speak_once(self, request: SpeechRequest) -> bool:
+        text = request.text
+        with self._lifecycle_lock:
+            if self._stop.is_set() or request.abandoned:
+                return False
+            self._should_interrupt.clear()
 
-        # Signal speaking state to face widget
-        self._notify_speaking_state(True)
 
         try:
             # Initialize on first use
             if not self._ensure_initialized():
                 if self._init_error:
                     print(f"  ⚠️ Piper TTS: {self._init_error}", flush=True)
-                return
+                return False
 
             import sounddevice as sd
             import numpy as np
@@ -832,7 +1016,7 @@ class PiperTTS:
             # Check for interruption before synthesis
             if self._should_interrupt.is_set():
                 debug_log("Piper TTS interrupted before synthesis", "tts")
-                return
+                return False
 
             # Synthesize audio - synthesize() returns an iterable of AudioChunks
             from piper.config import SynthesisConfig
@@ -846,120 +1030,112 @@ class PiperTTS:
             for chunk in self._voice.synthesize(text, syn_config):
                 if self._should_interrupt.is_set():
                     debug_log("Piper TTS interrupted during synthesis", "tts")
-                    return
+                    return False
                 audio_chunks.append(chunk.audio_int16_array)
 
             # Check for interruption after synthesis
             if self._should_interrupt.is_set():
                 debug_log("Piper TTS interrupted after synthesis", "tts")
-                return
+                return False
 
             # Concatenate all audio chunks
             if not audio_chunks:
                 debug_log("Piper TTS: no audio chunks generated", "tts")
-                return
+                return False
 
             full_audio = np.concatenate(audio_chunks)
 
             if len(full_audio) == 0:
                 debug_log("Piper TTS: no audio generated", "tts")
-                return
+                return False
 
             # Calculate exact duration from actual samples
             exact_duration = len(full_audio) / self._sample_rate
             debug_log(f"Piper TTS synthesis complete: {exact_duration:.2f}s, {len(full_audio)} samples", "tts")
 
             # Notify listener of exact duration for precise echo detection
-            if self._duration_callback is not None:
-                try:
-                    self._duration_callback(exact_duration)
-                except Exception as e:
-                    debug_log(f"Piper TTS duration callback error: {e}", "tts")
+            if request.duration_callback is not None:
+                _call_speech_callback(request.duration_callback, (exact_duration,), 'duration')
 
             # Play audio with streaming for interruption support
             play_position = [0]
             blocksize = 1024  # Small blocks for responsive interruption
 
+            drained = threading.Event()
+            callback_failed = threading.Event()
+
             def audio_callback(outdata, frames, time_info, status):
-                if self._should_interrupt.is_set():
-                    raise sd.CallbackAbort()
+                try:
+                    if self._should_interrupt.is_set():
+                        raise sd.CallbackAbort()
 
-                start = play_position[0]
-                end = start + frames
-                chunk = full_audio[start:end]
+                    start = play_position[0]
+                    end = start + frames
+                    chunk = full_audio[start:end]
 
-                if len(chunk) < frames:
-                    # Pad with zeros if we're at the end
-                    outdata[:len(chunk), 0] = chunk
-                    outdata[len(chunk):, 0] = 0
-                    raise sd.CallbackStop()
-                else:
+                    if len(chunk) < frames:
+                        outdata[:len(chunk), 0] = chunk
+                        outdata[len(chunk):, 0] = 0
+                        drained.set()
+                        raise sd.CallbackStop()
                     outdata[:, 0] = chunk
+                    play_position[0] = end
+                except (sd.CallbackAbort, sd.CallbackStop):
+                    raise
+                except Exception:
+                    callback_failed.set()
+                    raise sd.CallbackAbort() from None
 
-                play_position[0] = end
-
-            with self._audio_lock:
+            stream = None
+            try:
+                if self._stop.is_set() or request.abandoned:
+                    return False
                 with portaudio_lock:
-                    self._audio_stream = sd.OutputStream(
+                    stream = sd.OutputStream(
                         samplerate=self._sample_rate,
                         channels=1,
                         dtype='int16',
                         blocksize=blocksize,
                         callback=audio_callback,
                     )
-                    self._audio_stream.start()
+                if not self._begin_playback(request, exact_duration):
+                    return False
+                with self._lifecycle_lock, self._audio_lock:
+                    if self._stop.is_set() or request.abandoned:
+                        return False
+                    self._audio_stream = stream
+                    with portaudio_lock:
+                        stream.start()
 
-            # Wait for playback to complete
-            try:
-                while self._audio_stream is not None and self._audio_stream.active:
+                while stream.active:
                     if self._should_interrupt.is_set():
-                        interrupted = True
-                        with self._audio_lock:
-                            if self._audio_stream is not None:
-                                with portaudio_lock:
-                                    self._audio_stream.abort()
+                        with portaudio_lock:
+                            stream.abort()
                         break
                     time.sleep(0.05)
             finally:
                 with self._audio_lock:
-                    if self._audio_stream is not None:
-                        try:
-                            with portaudio_lock:
-                                self._audio_stream.close()
-                        except Exception:
-                            pass
+                    if self._audio_stream is stream:
                         self._audio_stream = None
+                if stream is not None:
+                    try:
+                        with portaudio_lock:
+                            stream.close()
+                    except Exception as exc:
+                        debug_log(f'Piper stream cleanup failed: {type(exc).__name__}', 'tts')
 
             actual_duration = time.time() - start_time
-            debug_log(f"Piper TTS complete: actual={actual_duration:.2f}s (audio={exact_duration:.2f}s)", "tts")
+            successful = drained.is_set() and not callback_failed.is_set()
+            debug_log(f"Piper playback ended: successful={successful}, actual={actual_duration:.2f}s (audio={exact_duration:.2f}s)", "tts")
+            return successful
 
         except Exception as e:
             debug_log(f"Piper TTS error: {e}", "tts")
             print(f"  ⚠️ Piper TTS error: {e}", flush=True)
         finally:
             self._is_speaking.clear()
-            self._notify_speaking_state(False)
+        return False
 
-            # Call completion callback if set and not interrupted
-            if self._completion_callback is not None and not interrupted:
-                try:
-                    self._completion_callback()
-                except Exception as e:
-                    print(f"  ⚠️ Piper TTS completion callback error: {e}", flush=True)
-                self._completion_callback = None
-
-    def _notify_speaking_state(self, is_speaking: bool) -> None:
-        """Notify the face widget of speaking state changes."""
-        try:
-            from desktop_app.face_widget import get_jarvis_state, JarvisState
-            state_manager = get_jarvis_state()
-            if is_speaking:
-                debug_log("setting face state to SPEAKING (piper)", "tts")
-                state_manager.set_state(JarvisState.SPEAKING)
-        except ImportError:
-            debug_log("face widget not available (ImportError) (piper)", "tts")
-        except Exception as e:
-            debug_log(f"failed to set face state to SPEAKING (piper): {e}", "tts")
 
     # Loopback guard helpers (same interface as TextToSpeech)
     def is_speaking(self) -> bool:

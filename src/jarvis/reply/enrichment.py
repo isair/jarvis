@@ -6,6 +6,9 @@ from ..llm import get_llm_backend, resolve_model, Tier
 from ..debug import debug_log
 
 
+_MEMORY_SEARCH_PARAMETER_TOKEN_BUDGET = 1024
+
+
 def call_llm_direct(*, cfg, chat_model, system_prompt, user_content,
                     timeout_sec=10.0, thinking=False, num_ctx=4096,
                     temperature=None, max_tokens=None):
@@ -35,7 +38,7 @@ def extract_search_params_for_memory(query: str, cfg, chat_model: str,
     so it can still resolve relative time expressions.
     """
     if not (chat_model or "").strip():
-        # Mirror the planner/evaluator gate: no model configured ⇒ skip the
+        # No model configured means the extractor skips the
         # round-trip. Without this guard the OpenAI/Ollama backends would burn
         # one HTTP call per reply that lands here, cost a "model is required"
         # error, and silently fall through to ``return {}`` after the broad
@@ -56,34 +59,45 @@ def extract_search_params_for_memory(query: str, cfg, chat_model: str,
 
         system_prompt = """Extract search parameters from the user's query for conversation memory search.
 
-Extract:
-1. CONTENT KEYWORDS: 3-5 relevant topics/subjects (ignore time words). Include general, high-level category tags that would be suitable for blog-style tagging when applicable (e.g., "cooking", "fitness", "travel", "finance").
-2. TIME RANGE: If mentioned, convert to exact timestamps
-3. QUESTIONS: What implicit personal questions does this query need answered from stored knowledge about the user? These are things the assistant would need to know about the user to give a personalised answer. Omit if the query needs no personal context, OR if the answer is already visible in the ALREADY IN CONTEXT block of the user message.
+First set recall_required to false or true: does the answer need saved conversation history or missing personal facts? A topic alone is not a reason to set it to true.
+General facts, definitions, arithmetic and current time checks do not need saved history merely because they contain a topic. For these self-contained requests, output exactly {"recall_required": false, "from": null, "to": null, "keywords": [], "questions": []}.
+Requests about earlier conversations, personal history, preferences or personalised recommendations do need memory. A general definition of a topic needs no memory; asking what we discussed about that topic does. Apply this distinction by meaning in every language.
+
+Set recall_required=true only for a needed memory lookup, then extract:
+1. TIME RANGE: Read the whole request, including its time expressions, before extracting topics. Determine the requested date or period in its original language and convert it to UTC timestamps using the reference clock. For a request without a date or period, from and to are null.
+2. MEMORY KEYWORDS: Extract 3-5 relevant topics/subjects for the needed history lookup only. Time words are excluded only from the keywords, not from the requested time range. Include suitable category tags such as cooking, fitness, travel or finance.
+3. QUESTIONS: What implicit personal questions does this query need answered from stored knowledge about the user? These are things the assistant would need to know about the user to give a personalised answer. Use an empty questions list only if the query needs no personal context, or if all the needed personal facts are already visible in the ALREADY IN CONTEXT block of the user message. Personalised recommendations and news need both preference keywords and questions about missing personal facts.
 
 The user message may include an ALREADY IN CONTEXT block listing facts the assistant can already see (current time/location, recent dialogue). When present, do NOT generate questions whose answers are already there — those facts do not need to be pulled from long-term memory.
 
-Respond ONLY with JSON in this format:
-{"keywords": ["keyword1", "keyword2"], "questions": ["what are the user's food preferences?"], "from": "2025-08-21T00:00:00Z", "to": "2025-08-21T23:59:59Z"}
-
+Respond ONLY with one valid JSON object, without markdown fences. Close every string with a double quote and close every array and object. Always include these five fields:
+{"recall_required": true, "from": null, "to": null, "keywords": ["keyword1", "keyword2"], "questions": []}
+For a needed memory lookup, resolve the requested time range first. Fill from and to with UTC ISO timestamps for a dated request; use null for both when the request has no date or period. The reference clock anchors calculation and does not request a filter.
 Rules:
 - keywords: content topics only (no time words like "yesterday", "today"). Include both specific terms and general category tags when applicable (e.g., for recipes or meal prep you could include "cooking" and "nutrition").
 - prefer concise noun phrases; lowercase; no punctuation; deduplicate similar terms
-- questions: short personal questions about the user that this query implies. Omit for factual/utility queries (time, maths, definitions) that need no personal context. Also omit any question whose answer is already present in the ALREADY IN CONTEXT block (e.g. do not ask "where is the user located?" when a location is shown there, and do not ask about topics the user just mentioned in the recent dialogue).
+- questions: short personal questions about the user that this query implies. Use an empty list for factual/utility queries (time, maths, definitions) that need no personal context. Exclude any question whose answer is already present in the ALREADY IN CONTEXT block (e.g. do not ask "where is the user located?" when a location is shown there, and do not ask about topics the user just mentioned in the recent dialogue).
 - from/to: only if time mentioned, convert to exact UTC timestamps
-- omit from/to if no time mentioned
+- from and to are null only for a request without a date or period
 
 Examples:
-"what did we discuss about the warhammer project?" → {"keywords": ["warhammer", "project", "figures", "gaming", "tabletop"]}
-"what did I eat yesterday?" → {"keywords": ["eat", "food", "cooking", "nutrition"], "from": "2025-08-21T00:00:00Z", "to": "2025-08-21T23:59:59Z"}
-"remember that password I mentioned today?" → {"keywords": ["password", "accounts", "security", "credentials"], "from": "2025-08-22T00:00:00Z", "to": "2025-08-22T23:59:59Z"}
-"what news might interest me?" → {"keywords": ["interests", "hobbies", "preferences", "likes", "passionate"], "questions": ["what topics interest the user?", "what are the user's hobbies?"]}
-"news of interest to me" / "news that would interest me" / "news interesting for me" / "recall my interests and search for news on them" → {"keywords": ["interests", "hobbies", "preferences", "likes", "passionate"], "questions": ["what topics interest the user?", "what are the user's hobbies?"]}
-"recommend a restaurant I'd enjoy" (no location in context) → {"keywords": ["food preferences", "restaurants", "cuisine", "dining", "favorites"], "questions": ["what cuisine does the user like?", "where is the user located?"]}
-"recommend a restaurant I'd enjoy" (location already in context) → {"keywords": ["food preferences", "restaurants", "cuisine", "dining", "favorites"], "questions": ["what cuisine does the user like?"]}
-"suggest a movie for me" → {"keywords": ["movies", "films", "entertainment", "preferences", "genres"], "questions": ["what film genres does the user enjoy?", "what movies has the user watched recently?"]}
-"what time is it?" → {"keywords": []}
-"""
+"what did we discuss about the warhammer project?" → {"recall_required": true, "from": null, "to": null, "keywords": ["warhammer", "project", "figures", "gaming", "tabletop"], "questions": []}
+"what news might interest me?" → {"recall_required": true, "from": null, "to": null, "keywords": ["interests", "hobbies", "preferences", "likes", "passionate"], "questions": ["what topics interest the user?"]}
+"news of interest to me" / "news that would interest me" / "news interesting for me" / "recall my interests and search for news on them" → {"recall_required": true, "from": null, "to": null, "keywords": ["interests", "hobbies", "preferences", "likes", "passionate"], "questions": ["what topics interest the user?"]}
+"recommend a restaurant I'd enjoy" (no location in context) → {"recall_required": true, "from": null, "to": null, "keywords": ["food preferences", "restaurants", "cuisine", "dining", "favourites"], "questions": ["what cuisine does the user like?", "where is the user located?"]}
+"recommend a restaurant I'd enjoy" (location already in context) → {"recall_required": true, "from": null, "to": null, "keywords": ["food preferences", "restaurants", "cuisine", "dining", "favourites"], "questions": ["what cuisine does the user like?"]}
+"suggest a movie for me" → {"recall_required": true, "from": null, "to": null, "keywords": ["movies", "films", "entertainment", "preferences", "genres"], "questions": ["what film genres does the user enjoy?", "what movies has the user watched recently?"]}
+"what time is it?" → {"recall_required": false, "from": null, "to": null, "keywords": [], "questions": []}
+
+Date-scoped example: reference clock = 2030-04-10 12:00 UTC; request = "what did I eat yesterday?"; output = {"recall_required": true, "from": "2030-04-09T00:00:00Z", "to": "2030-04-09T23:59:59Z", "keywords": ["food", "cooking", "nutrition"], "questions": []}
+Timeless example: reference clock = 2030-04-10 12:00 UTC; request = "what did we discuss about cooking?"; output = {"recall_required": true, "from": null, "to": null, "keywords": ["cooking"], "questions": []}
+Date-scoped example: reference clock = 2030-04-10 12:00 UTC; request = "which books did I mention today?"; output = {"recall_required": true, "from": "2030-04-10T00:00:00Z", "to": "2030-04-10T23:59:59Z", "keywords": ["books", "reading"], "questions": []}
+The reference clock supplies the anchor for requested dates. Decide whether a date range is needed from the request itself.
+Resolve time expressions in the language of the request, then express the requested interval in UTC. A non-English request needs the same date range as its English meaning.
+Date-scoped example: reference clock = 2030-04-10 12:00 UTC; request = "dün hangi kitaplardan bahsettim?"; output = {"recall_required": true, "from": "2030-04-09T00:00:00Z", "to": "2030-04-09T23:59:59Z", "keywords": ["kitap", "okuma"], "questions": []}
+Timeless example: reference clock = 2030-04-10 12:00 UTC; request = "hangi kitaplardan bahsettim?"; output = {"recall_required": true, "from": null, "to": null, "keywords": ["kitap", "okuma"], "questions": []}
+Date-scoped example: reference clock = 2030-04-10 12:00 UTC; request = "bugün hangi kitaplardan bahsettim?"; output = {"recall_required": true, "from": "2030-04-10T00:00:00Z", "to": "2030-04-10T23:59:59Z", "keywords": ["kitap", "okuma"], "questions": []}
+For a needed memory lookup about a dated period, both from and to must contain that period, never null. Apply this to the user request using its actual reference clock."""
 
         # Per-call data (the hint or the UTC anchor) rides in the user message
         # so the system prompt above stays byte-static across calls — the
@@ -101,7 +115,7 @@ Examples:
                 user_content=user_content,
                 timeout_sec=timeout_sec,
                 thinking=thinking,
-                max_tokens=50,
+                max_tokens=_MEMORY_SEARCH_PARAMETER_TOKEN_BUDGET,
             )
 
             if response:
@@ -111,8 +125,13 @@ Examples:
                 if json_match:
                     try:
                         params = json.loads(json_match.group())
-                        if 'keywords' in params and isinstance(params['keywords'], list):
-                            return params
+                        if isinstance(params, dict):
+                            recall_required = params.pop('recall_required', None)
+                            if recall_required is False:
+                                debug_log('memory extraction: query does not require saved context', 'memory')
+                                return {'from': None, 'to': None, 'keywords': [], 'questions': []}
+                            if 'keywords' in params and isinstance(params['keywords'], list):
+                                return params
                     except json.JSONDecodeError:
                         pass
 
@@ -139,10 +158,12 @@ _DIGEST_MIN_CHARS = 400
 # concatenate the per-batch notes. Roughly ~500 tokens at 4 chars/token.
 _DIGEST_BATCH_MAX_CHARS = 2000
 
-# Upper bound on EACH per-batch digest. The final combined digest is at
-# most `_DIGEST_MAX_CHARS * num_batches`, but in practice most batches
-# return NONE or a one-sentence note.
+# Per-batch note length before a truncation ellipsis. The combined digest
+# joins surviving notes with newline separators.
 _DIGEST_MAX_CHARS = 500
+
+# Includes reasoning and the final relevance note for each bounded batch.
+_MEMORY_DIGEST_TOKEN_BUDGET = 1024
 
 _NONE_SENTINELS = {"NONE", "(NONE)", "[NONE]", "N/A", "NIL"}
 
@@ -278,6 +299,7 @@ def _distil_batch(
     chat_model: str,
     timeout_sec: float,
     thinking: bool,
+    transcript_context: str = "",
 ) -> str:
     """Run one distil LLM call over ``raw_block``; returns the relevance note or ""."""
     user_content = (
@@ -285,6 +307,8 @@ def _distil_batch(
         f"PAST MEMORY SNIPPETS:\n{raw_block}\n\n"
         "Produce the short relevance note now (or NONE)."
     )
+    if transcript_context:
+        user_content += "\n\n" + transcript_context
     try:
         response = call_llm_direct(
             cfg=cfg,
@@ -293,7 +317,7 @@ def _distil_batch(
             user_content=user_content,
             timeout_sec=timeout_sec,
             thinking=thinking,
-            max_tokens=200,
+            max_tokens=_MEMORY_DIGEST_TOKEN_BUDGET,
         )
     except Exception as e:
         debug_log(f"memory digest batch failed: {e}", "memory")
@@ -319,6 +343,7 @@ def digest_memory_for_query(
     chat_model: str,
     timeout_sec: float = 8.0,
     thinking: bool = False,
+    transcript_context: str = "",
 ) -> str:
     """Condense raw memory dumps into a short relevance-filtered note.
 
@@ -377,7 +402,7 @@ def digest_memory_for_query(
     if len(raw_block) <= _DIGEST_BATCH_MAX_CHARS:
         cleaned = _distil_batch(
             query, raw_block, cfg, chat_model,
-            timeout_sec, thinking,
+            timeout_sec, thinking, transcript_context,
         )
         if not cleaned:
             debug_log("memory digest: NONE — no relevant memory", "memory")
@@ -398,7 +423,7 @@ def digest_memory_for_query(
         block = _compose(batch, [])
         note = _distil_batch(
             query, block, cfg, chat_model,
-            timeout_sec, thinking,
+            timeout_sec, thinking, transcript_context,
         )
         if note:
             notes.append(note)
@@ -406,7 +431,7 @@ def digest_memory_for_query(
         block = _compose([], batch)
         note = _distil_batch(
             query, block, cfg, chat_model,
-            timeout_sec, thinking,
+            timeout_sec, thinking, transcript_context,
         )
         if note:
             notes.append(note)
@@ -448,6 +473,9 @@ _TOOL_DIGEST_BATCH_MAX_CHARS = 2500
 # rare in practice, but when it happens each batch's distil gets clipped
 # here so the combined output stays bounded.
 _TOOL_DIGEST_MAX_CHARS = 600
+
+# Generation includes backend reasoning as well as the attributed fact note.
+_TOOL_DIGEST_TOKEN_BUDGET = 1024
 
 _TOOL_DIGEST_SYSTEM_PROMPT = (
     "You are a fact extractor for a personal AI assistant. You will be "
@@ -512,6 +540,7 @@ def _distil_tool_batch(
     chat_model: str,
     timeout_sec: float,
     thinking: bool,
+    transcript_context: str = "",
 ) -> str:
     """Run one distil LLM call over ``raw_block``; returns the fact note or ""."""
     user_content = (
@@ -519,6 +548,8 @@ def _distil_tool_batch(
         f"TOOL OUTPUT:\n{raw_block}\n\n"
         "Produce the short attributed fact note now (or NONE)."
     )
+    if transcript_context:
+        user_content += "\n\n" + transcript_context
     try:
         response = call_llm_direct(
             cfg=cfg,
@@ -527,7 +558,7 @@ def _distil_tool_batch(
             user_content=user_content,
             timeout_sec=timeout_sec,
             thinking=thinking,
-            max_tokens=300,
+            max_tokens=_TOOL_DIGEST_TOKEN_BUDGET,
         )
     except Exception as e:
         debug_log(f"tool digest batch failed: {e}", "tools")
@@ -583,6 +614,7 @@ def digest_tool_result_for_query(
     chat_model: str,
     timeout_sec: float = 8.0,
     thinking: bool = False,
+    transcript_context: str = "",
 ) -> str:
     """Condense a raw tool-result payload into a short, attributed fact note.
 
@@ -625,7 +657,7 @@ def digest_tool_result_for_query(
     if len(raw) <= _TOOL_DIGEST_BATCH_MAX_CHARS:
         cleaned = _distil_tool_batch(
             framed_query, raw, cfg, chat_model,
-            timeout_sec, thinking,
+            timeout_sec, thinking, transcript_context,
         )
         if not cleaned:
             debug_log(
@@ -647,7 +679,7 @@ def digest_tool_result_for_query(
     for chunk in chunks:
         note = _distil_tool_batch(
             framed_query, chunk, cfg, chat_model,
-            timeout_sec, thinking,
+            timeout_sec, thinking, transcript_context,
         )
         if note:
             notes.append(note)
@@ -683,6 +715,9 @@ _LOOP_DIGEST_TOOL_RESULT_EXCERPT_CHARS = 300
 
 # Upper bound on the returned digest text.
 _LOOP_DIGEST_MAX_CHARS = 800
+
+# Includes reasoning and the caveat-prefixed partial reply.
+_LOOP_DIGEST_TOKEN_BUDGET = 1024
 
 _LOOP_DIGEST_SYSTEM_PROMPT = (
     "You are summarising what an AI assistant accomplished in a "
@@ -816,6 +851,7 @@ def digest_loop_for_max_turns(
     user_query: str,
     loop_messages: list[dict],
     cfg,
+    transcript_context: str = "",
 ) -> str | None:
     """Summarise what the agentic loop produced when it hit max turns.
 
@@ -854,6 +890,8 @@ def digest_loop_for_max_turns(
         "language as the user's original request."
     )
 
+    if transcript_context:
+        user_content += "\n\n" + transcript_context
     try:
         raw = call_llm_direct(
             cfg=cfg,
@@ -862,7 +900,7 @@ def digest_loop_for_max_turns(
             user_content=user_content,
             timeout_sec=timeout_sec,
             thinking=thinking,
-            max_tokens=200,
+            max_tokens=_LOOP_DIGEST_TOKEN_BUDGET,
         )
     except Exception as e:
         debug_log(f"max-turn loop digest failed: {e}", "planning")

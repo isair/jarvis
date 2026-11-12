@@ -4,7 +4,7 @@ Prefers the user's local timezone (derived from location) so the assistant can
 answer "what time is it?" in the form the user expects, instead of UTC.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 try:
@@ -18,12 +18,20 @@ _UTC_FORMAT = "%A, %B %d, %Y at %H:%M UTC"
 _LOCAL_FORMAT = "%A, %B %d, %Y at %H:%M %Z"
 
 
+def _format_local_clock(local: datetime, pattern: str) -> str:
+    """Describe the selected clock with unambiguous local calendar dates."""
+    today = local.date()
+    tomorrow = today + timedelta(days=1)
+    return (f"{local.strftime(pattern)}; Today: {today.isoformat()}; "
+            f"Tomorrow: {tomorrow.isoformat()}")
+
+
 def format_time_context(
     tz_name: Optional[str] = None,
     *,
     now_utc: Optional[datetime] = None,
 ) -> str:
-    """Return a human-readable string describing the current time.
+    """Return the local clock with human-readable and ISO calendar dates.
 
     Resolution order:
     1. ``tz_name`` via ``zoneinfo`` (when GeoIP exposes an IANA zone).
@@ -36,15 +44,15 @@ def format_time_context(
         try:
             local = now.astimezone(ZoneInfo(tz_name))
             if local.tzname():
-                return local.strftime(_LOCAL_FORMAT)
+                return _format_local_clock(local, _LOCAL_FORMAT)
         except (ZoneInfoNotFoundError, KeyError, ValueError):
             pass
 
     try:
         system_local = now.astimezone()
         if system_local.tzname():
-            return system_local.strftime(_LOCAL_FORMAT)
+            return _format_local_clock(system_local, _LOCAL_FORMAT)
     except (ValueError, OSError):
         pass
 
-    return now.strftime(_UTC_FORMAT)
+    return _format_local_clock(now, _UTC_FORMAT)

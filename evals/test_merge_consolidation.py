@@ -25,7 +25,7 @@ from typing import List
 import pytest
 
 from conftest import requires_judge_llm
-from helpers import JUDGE_MODEL, JUDGE_BASE_URL
+from helpers import JUDGE_MODEL
 
 from jarvis.memory.graph_ops import merge_node_data
 
@@ -346,7 +346,7 @@ class TestNearDuplicateDedupe:
 
     @requires_judge_llm
     @pytest.mark.parametrize("case", DEDUPE_CASES)
-    def test_near_duplicates_collapse(self, case, graph_store):
+    def test_near_duplicates_collapse(self, case, graph_store, mock_config):
         case = case.values[0] if hasattr(case, 'values') else case
 
         node = graph_store.create_node(
@@ -360,8 +360,8 @@ class TestNearDuplicateDedupe:
             store=graph_store,
             node_id=node.id,
             new_facts=case.new_facts,
-            ollama_base_url=JUDGE_BASE_URL,
-            ollama_chat_model=JUDGE_MODEL,
+            cfg=mock_config,
+            chat_model=JUDGE_MODEL,
             timeout_sec=30.0,
         )
 
@@ -393,7 +393,7 @@ class TestPatternConsolidation:
 
     @requires_judge_llm
     @pytest.mark.parametrize("case", PATTERN_CASES)
-    def test_repeated_activities_consolidate(self, case, graph_store):
+    def test_repeated_activities_consolidate(self, case, graph_store, mock_config):
         case = case.values[0] if hasattr(case, 'values') else case
 
         node = graph_store.create_node(
@@ -407,8 +407,8 @@ class TestPatternConsolidation:
             store=graph_store,
             node_id=node.id,
             new_facts=case.new_facts,
-            ollama_base_url=JUDGE_BASE_URL,
-            ollama_chat_model=JUDGE_MODEL,
+            cfg=mock_config,
+            chat_model=JUDGE_MODEL,
             timeout_sec=30.0,
         )
 
@@ -441,7 +441,7 @@ class TestPatternBoundary:
 
     @requires_judge_llm
     @pytest.mark.parametrize("case", PATTERN_BOUNDARY_CASES)
-    def test_distinct_one_offs_stay_distinct(self, case, graph_store):
+    def test_distinct_one_offs_stay_distinct(self, case, graph_store, mock_config):
         case = case.values[0] if hasattr(case, 'values') else case
 
         node = graph_store.create_node(
@@ -455,8 +455,8 @@ class TestPatternBoundary:
             store=graph_store,
             node_id=node.id,
             new_facts=case.new_facts,
-            ollama_base_url=JUDGE_BASE_URL,
-            ollama_chat_model=JUDGE_MODEL,
+            cfg=mock_config,
+            chat_model=JUDGE_MODEL,
             timeout_sec=30.0,
         )
 
@@ -482,7 +482,7 @@ class TestIndependenceOfUnrelatedFacts:
 
     @requires_judge_llm
     @pytest.mark.parametrize("case", INDEPENDENCE_CASES)
-    def test_independent_facts_coexist(self, case, graph_store):
+    def test_independent_facts_coexist(self, case, graph_store, mock_config):
         case = case.values[0] if hasattr(case, 'values') else case
 
         node = graph_store.create_node(
@@ -496,8 +496,8 @@ class TestIndependenceOfUnrelatedFacts:
             store=graph_store,
             node_id=node.id,
             new_facts=case.new_facts,
-            ollama_base_url=JUDGE_BASE_URL,
-            ollama_chat_model=JUDGE_MODEL,
+            cfg=mock_config,
+            chat_model=JUDGE_MODEL,
             timeout_sec=30.0,
         )
 
@@ -529,7 +529,7 @@ class TestMetaNarrativePruning:
 
     @requires_judge_llm
     @pytest.mark.parametrize("case", META_NARRATIVE_CASES)
-    def test_meta_narrative_dropped_real_facts_kept(self, case, graph_store):
+    def test_meta_narrative_dropped_real_facts_kept(self, case, graph_store, mock_config):
         case = case.values[0] if hasattr(case, 'values') else case
 
         node = graph_store.create_node(
@@ -543,8 +543,8 @@ class TestMetaNarrativePruning:
             store=graph_store,
             node_id=node.id,
             new_facts=case.new_facts,
-            ollama_base_url=JUDGE_BASE_URL,
-            ollama_chat_model=JUDGE_MODEL,
+            cfg=mock_config,
+            chat_model=JUDGE_MODEL,
             timeout_sec=30.0,
         )
 
@@ -587,7 +587,7 @@ class TestBatchedMerge:
 
     @requires_judge_llm
     @pytest.mark.parametrize("case", BATCHED_CASES)
-    def test_all_batched_facts_land(self, case, graph_store):
+    def test_all_batched_facts_land(self, case, graph_store, mock_config):
         case = case.values[0] if hasattr(case, 'values') else case
 
         node = graph_store.create_node(
@@ -601,8 +601,8 @@ class TestBatchedMerge:
             store=graph_store,
             node_id=node.id,
             new_facts=case.new_facts,
-            ollama_base_url=JUDGE_BASE_URL,
-            ollama_chat_model=JUDGE_MODEL,
+            cfg=mock_config,
+            chat_model=JUDGE_MODEL,
             timeout_sec=30.0,
         )
 

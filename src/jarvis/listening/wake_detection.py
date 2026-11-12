@@ -2,80 +2,70 @@
 
 from typing import List, Optional
 import difflib
+import re
+import unicodedata
 
 from ..debug import debug_log
 
 
+def _wake_name_pattern(text: str, wake_word: str, aliases: List[str]) -> Optional[re.Pattern[str]]:
+    """Match literal configured names at Unicode word boundaries."""
+    names = {unicodedata.normalize("NFC", name.strip())
+             for name in [wake_word, *aliases] if name.strip()}
+    if not names:
+        return None
+    alternatives = "|".join(re.escape(name) for name in sorted(names, key=len, reverse=True))
+    marks = {char for char in text if unicodedata.category(char).startswith("M")}
+    word = r"[\w" + re.escape("".join(sorted(marks))) + "]"
+    return re.compile(r"(?<!" + word + r")(?:" + alternatives + r")(?!" + word + ")", re.IGNORECASE)
+
+
+def _is_word_character(char: str) -> bool:
+    return char.isalnum() or char == "_" or unicodedata.category(char).startswith("M")
+
+
+def normalise_wake_aliases(text: str, aliases: List[str], assistant_name: str) -> str:
+    """Canonicalise the judge's text copy and replace complete literal aliases."""
+    if not text or not aliases:
+        return text
+    canonical = unicodedata.normalize("NFC", text)
+    pattern = _wake_name_pattern(canonical, "", aliases)
+    return pattern.sub(lambda match: assistant_name, canonical) if pattern else text
+
+
 def is_wake_word_detected(text_lower: str, wake_word: str, aliases: List[str], fuzzy_ratio: float = 0.78) -> bool:
-    """
-    Check if text contains wake word using exact and fuzzy matching.
-    
-    Args:
-        text_lower: Lowercase text to check
-        wake_word: Primary wake word
-        aliases: List of wake word aliases
-        fuzzy_ratio: Threshold for fuzzy matching (0.0-1.0)
-    
-    Returns:
-        True if wake word detected
-    """
+    """Accept whole configured names or a close primary-name token."""
     if not text_lower or not text_lower.strip():
         return False
-    
-    # Combine wake word and aliases
-    all_aliases = set(aliases) | {wake_word}
-    
-    # Check exact match first
-    if wake_word in text_lower:
+
+    text_lower = unicodedata.normalize("NFC", text_lower)
+    pattern = _wake_name_pattern(text_lower, wake_word, aliases)
+    if pattern and pattern.search(text_lower):
         return True
-    
-    # Check aliases exact match
-    for alias in aliases:
-        if alias in text_lower:
+
+    # Aliases already represent known mishearings; do not approximate them again.
+    primary = unicodedata.normalize("NFC", wake_word.strip()).casefold()
+    if not primary or any(char.isspace() for char in primary):
+        return False
+    tokens = "".join(char if _is_word_character(char) else " "
+                     for char in text_lower.casefold()).split()
+    for token in tokens:
+        # Longer tokens stay near the name; shorter pronunciations use the threshold.
+        if len(token) > len(primary) + 1:
+            continue
+        ratio = difflib.SequenceMatcher(a=primary, b=token).ratio()
+        if ratio >= fuzzy_ratio:
+            debug_log(f"primary wake name fuzzy match (ratio={ratio:.3f})", "wake")
             return True
-    
-    # Fuzzy matching for close variations
-    try:
-        heard_tokens = [t.strip(".,!?;:()[]{}\"'`).-_/") for t in text_lower.split() if t.strip()]
-        for token in heard_tokens:
-            for alias in all_aliases:
-                ratio = difflib.SequenceMatcher(a=alias, b=token).ratio()
-                if ratio >= fuzzy_ratio:
-                    debug_log(f"wake word fuzzy match: '{alias}' ~ '{token}' (ratio: {ratio:.3f})", "wake")
-                    return True
-    except Exception:
-        pass
-    
     return False
 
 
-def extract_query_after_wake(text_lower: str, wake_word: str, aliases: List[str]) -> str:
-    """
-    Extract the query portion after removing wake word.
-    
-    Args:
-        text_lower: Lowercase text containing wake word
-        wake_word: Primary wake word
-        aliases: List of wake word aliases
-    
-    Returns:
-        Query text with wake word removed
-    """
-    if not text_lower:
-        return ""
-    
-    all_aliases = set(aliases) | {wake_word}
-    fragment = text_lower
-    
-    # Remove all aliases from the text
-    for alias in all_aliases:
-        fragment = fragment.replace(alias, " ")
-    
-    # Clean up punctuation that might be left after wake word removal
-    fragment = fragment.strip().lstrip(",.!?;:")
-    fragment = fragment.strip()
-    
-    return fragment if fragment else ""
+def _normalise_control_text(value: str) -> str:
+    """Keep composed word content while separating Unicode punctuation."""
+    value = unicodedata.normalize("NFC", value).casefold()
+    value = "".join(" " if unicodedata.category(char).startswith("P") else char
+                    for char in value)
+    return " ".join(value.split())
 
 
 def is_stop_command(text_lower: str, stop_commands: List[str], fuzzy_ratio: float = 0.8) -> bool:
@@ -93,25 +83,33 @@ def is_stop_command(text_lower: str, stop_commands: List[str], fuzzy_ratio: floa
     if not text_lower or not text_lower.strip():
         return False
     
-    # Check for exact matches
-    detected_commands = []
-    for cmd in stop_commands:
-        if cmd in text_lower:
-            detected_commands.append(cmd)
-    
-    # Check fuzzy matches for short inputs (2 words or less)
-    if len(text_lower.split()) <= 2:
-        try:
-            for word in text_lower.split():
-                for cmd in stop_commands:
-                    ratio = difflib.SequenceMatcher(a=cmd, b=word).ratio()
-                    if ratio >= fuzzy_ratio:
-                        detected_commands.append(f"{cmd}~{word}")
-        except Exception:
-            pass
-    
-    if detected_commands:
-        debug_log(f"stop command detected: {detected_commands[0]} in '{text_lower}'", "voice")
-        return True
-    
+    heard = _normalise_control_text(text_lower)
+    commands = [control for command in stop_commands
+                if (control := _normalise_control_text(command))]
+    if not heard:
+        return False
+    for command in commands:
+        if f" {command} " in f" {heard} ":
+            debug_log(f"stop command detected: {command} in '{heard}'", "voice")
+            return True
+
+    # Approximate a complete short control, rather than a word in other speech.
+    if len(heard.split()) <= 2:
+        for command in commands:
+            if difflib.SequenceMatcher(a=command, b=heard).ratio() >= fuzzy_ratio:
+                debug_log(f"stop command detected: {command}~{heard}", "voice")
+                return True
     return False
+
+
+def is_stop_command_echo(text: str, tts_text: str, stop_commands: List[str], fuzzy_ratio: float = 0.8) -> bool:
+    """Recognise literal TTS echo while preserving standalone control priority."""
+    heard = _normalise_control_text(text)
+    spoken = _normalise_control_text(tts_text)
+    if not heard or not spoken:
+        return False
+    for command in stop_commands:
+        control = _normalise_control_text(command)
+        if control and difflib.SequenceMatcher(a=heard, b=control).ratio() >= fuzzy_ratio:
+            return False
+    return heard in spoken

@@ -1,27 +1,21 @@
-"""
-End-to-end eval — single-turn flow where the user's location lives in the
-User branch of the knowledge graph (warm profile). The warm profile is
-always-loaded into the system prompt, so the chat model and planner can
-ground ``getWeather`` on it without a ``searchMemory`` step.
+"""Warm-profile location facts ground weather tool arguments and answers.
 
-This stresses the warm-profile-injection path. It complements:
-  - ``evals/test_followup_supplies_missing_tool_arg.py`` (hot-window
-    carry-over, two-turn).
-  - ``evals/test_diary_supplies_missing_tool_arg.py`` (diary recall via
-    planner-emitted ``searchMemory``).
-
-Run: EVAL_JUDGE_MODEL=gemma4:e2b ./scripts/run_evals.sh graph_supplies_missing_tool_arg
+GeoIP is disabled. The User branch supplies Edinburgh without an explicit
+memory-search step. Model inference uses the selected evaluation transport.
 """
 
 from unittest.mock import patch
+from contextlib import closing
 
 import pytest
+
+from evals.memory_tool_grounding import assert_forecast_reply
 
 from conftest import requires_judge_llm
 from helpers import (
     ToolCallCapture,
-    assert_not_fallback_reply,
     JUDGE_MODEL,
+    voice_config,
 )
 
 
@@ -46,6 +40,12 @@ def _make_runner(capture: ToolCallCapture):
                         "I couldn't auto-detect your location. Please "
                         "tell me which city to check the weather for."
                     ),
+                    missing_context="location",
+                )
+            if "edinburgh" not in location.casefold():
+                return ToolExecutionResult(
+                    success=False,
+                    reply_text="This fixture has no weather for that location.",
                 )
             return ToolExecutionResult(
                 success=True,
@@ -59,55 +59,43 @@ def _make_runner(capture: ToolCallCapture):
 @pytest.mark.eval
 @requires_judge_llm
 class TestGraphSuppliesMissingToolArg:
-    """Warm-profile injection path: a User-branch fact ("lives in
-    Edinburgh") is always loaded into the system prompt, so the chat
-    model can supply it as the location argument without an extra
-    memory search."""
+    """A persisted User-branch residence grounds weather through the shared
+    missing-context protocol without a planner memory-search step."""
 
     def test_warm_profile_user_fact_grounds_get_weather_call(
-        self, mock_config, eval_db, eval_dialogue_memory,
+        self, eval_dialogue_memory, graph_store,
     ):
         from jarvis.reply.engine import run_reply_engine
 
-        mock_config.ollama_base_url = "http://localhost:11434"
-        mock_config.ollama_chat_model = JUDGE_MODEL
+        cfg = voice_config()
         # Geoip disabled — the only way the model gets a location is from
         # the warm profile loaded out of the graph.
-        mock_config.location_enabled = False
+        cfg.location_enabled = False
 
         capture = ToolCallCapture()
 
-        # Inject a User-branch fact directly into the warm-profile builder
-        # rather than seeding the SQLite-backed graph store. The warm-
-        # profile path the engine relies on is `build_warm_profile` →
-        # `format_warm_profile_block`; seeding via the public API replays
-        # the production shape without depending on graph-mutation
-        # listeners or branch-root bootstrapping in the test DB.
-        warm_profile = {
-            "user": "The user lives in Edinburgh.",
-            "directives": "",
-        }
+        from jarvis.memory.db import Database
+        cfg.db_path = graph_store.db_path
+        graph_store.create_node('Home', 'User residence',
+                                data='The user lives in Edinburgh.', parent_id='user')
 
-        with patch(
-            "jarvis.memory.graph_ops.build_warm_profile",
-            return_value=warm_profile,
-        ), patch(
+        with closing(Database(graph_store.db_path)) as persisted_db, patch(
             "jarvis.reply.engine.run_tool_with_retries",
             side_effect=_make_runner(capture),
         ):
             response = run_reply_engine(
-                db=eval_db, cfg=mock_config, tts=None,
+                db=persisted_db, cfg=cfg, tts=None,
                 text="how's the weather, Jarvis?",
                 dialogue_memory=eval_dialogue_memory,
             )
 
-        print(f"\n  Graph Supplies Missing Tool Arg ({JUDGE_MODEL}):")
-        print(f"  Tools called: {capture.tool_names()}")
+        print(f"\n  🧠 Graph Supplies Missing Tool Arg ({JUDGE_MODEL}):")
+        print(f"  🛠️ Tools called: {capture.tool_names()}")
         for c in capture.calls:
-            print(f"    - {c['name']}({c['args']})")
-        print(f"  Response: {(response or '')[:300]}")
+            print(f"    🔧 {c['name']}({c['args']})")
+        print(f"  💬 Response: {(response or '')[:300]}")
 
-        assert_not_fallback_reply(response, context="warm-profile")
+        assert_forecast_reply(response, _EDINBURGH_FORECAST, "warm-profile")
 
         weather_calls = [c for c in capture.calls if c["name"] == "getWeather"]
         edinburgh_calls = [

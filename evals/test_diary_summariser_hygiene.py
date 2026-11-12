@@ -17,8 +17,8 @@ Run: EVAL_JUDGE_MODEL=gemma4:e2b ./scripts/run_evals.sh test_diary_summariser
 
 import pytest
 
-from conftest import requires_judge_llm
-from helpers import JUDGE_BASE_URL, JUDGE_MODEL
+from evals.conftest import requires_judge_llm
+from evals.helpers import JUDGE_MODEL, voice_config
 
 
 # Exact deflection phrases the summariser must not preserve verbatim.
@@ -56,11 +56,11 @@ class TestDiarySummariserHygieneLive:
         summary, topics = generate_conversation_summary(
             recent_chunks=chunks,
             previous_summary=None,
-            ollama_base_url=JUDGE_BASE_URL,
-            ollama_chat_model=JUDGE_MODEL,
+            cfg=voice_config(),
             timeout_sec=60.0,
         )
-        return summary or "", topics or ""
+        assert summary and topics, "Empty or incomplete diary inference is not successful hygiene"
+        return summary, topics
 
     def test_omits_deflection_narration_for_unknown_entity(self):
         """A conversation where the assistant deflected on an unknown entity,
@@ -73,7 +73,7 @@ class TestDiarySummariserHygieneLive:
             "Assistant: Possessor is a 2020 science-fiction horror film directed by Brandon Cronenberg, starring Andrea Riseborough.",
         ]
         summary, _ = self._summarise(chunks)
-        print(f"\n  Summary: {summary}")
+        print(f"\n  📔 Summary: {summary}")
 
         lowered = summary.lower()
         hits = [p for p in _DEFLECTION_PHRASES if p in lowered]
@@ -98,7 +98,7 @@ class TestDiarySummariserHygieneLive:
             "Assistant: It's 15 degrees and cloudy in London.",
         ]
         summary, _ = self._summarise(chunks)
-        print(f"\n  Summary: {summary}")
+        print(f"\n  📔 Summary: {summary}")
 
         lowered = summary.lower()
         # The topic (Piranesi) may appear, but phrases narrating the
@@ -131,7 +131,7 @@ class TestDiarySummariserHygieneLive:
             "Assistant: My name is a nod to the MCU character Jarvis, the AI created by Tony Stark and later embodied by Vision.",
         ]
         summary, _ = self._summarise(chunks)
-        print(f"\n  Summary: {summary}")
+        print(f"\n  📔 Summary: {summary}")
 
         import re
         sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', summary) if s.strip()]
@@ -177,7 +177,7 @@ class TestDiarySummariserHygieneLive:
             "Assistant: Noted.",
         ]
         summary, _ = self._summarise(chunks)
-        print(f"\n  Summary: {summary}")
+        print(f"\n  📔 Summary: {summary}")
 
         lowered = summary.lower()
         assert "celsius" in lowered, f"Preference dropped from summary: {summary}"
@@ -203,7 +203,7 @@ class TestDiarySummariserHygieneLive:
             "Assistant: Londra'da hava 12 derece ve parçalı bulutlu.",
         ]
         summary, _ = self._summarise(chunks)
-        print(f"\n  Summary: {summary}")
+        print(f"\n  📔 Summary: {summary}")
 
         lowered = summary.lower()
         # Turkish deflection markers: assistant denying having information.

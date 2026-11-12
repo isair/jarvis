@@ -26,8 +26,8 @@ Run:
 
 import pytest
 
-from conftest import requires_judge_llm
-from helpers import JUDGE_BASE_URL, JUDGE_MODEL
+from evals.tool_routing import requires_judge_llm, routing_config, route_tools
+from evals.helpers import JUDGE_MODEL
 
 
 _TIME_LOCATION_HINT = (
@@ -41,19 +41,10 @@ _TIME_ONLY_HINT = "Current local time: Sunday, 2026-04-20 17:42 UTC."
 
 def _route(query: str, context_hint):
     """Invoke the real LLM router with the builtin tool catalogue."""
-    from jarvis.tools.registry import BUILTIN_TOOLS
-    from jarvis.tools.selection import select_tools, ToolSelectionStrategy
-
-    return select_tools(
-        query=query,
-        builtin_tools=BUILTIN_TOOLS,
-        mcp_tools={},
-        strategy=ToolSelectionStrategy.LLM,
-        llm_base_url=JUDGE_BASE_URL,
-        llm_model=JUDGE_MODEL,
-        llm_timeout_sec=30.0,
-        context_hint=context_hint,
+    selected, _ = route_tools(
+        routing_config(), query, timeout_sec=30.0, context_hint=context_hint,
     )
+    return selected
 
 
 @pytest.mark.eval

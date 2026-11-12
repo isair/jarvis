@@ -11,8 +11,20 @@ memory.
    Answer / Definition fields. When present, these are preferred — they're
    short, authoritative, and don't need a page fetch.
 2. **Link extraction**: scrape `https://lite.duckduckgo.com/lite/` for the
-   top ~5 search results (title + URL). The DDG redirector URLs
-   (`//duckduckgo.com/l/?uddg=…`) are unwrapped to the real destination.
+   first five non-empty HTTP(S) results (title + URL) in page order. Result
+   anchors use DDG's `result-link` or `result__a` classes; navigation links
+   are excluded without language-specific title filters or minimum title lengths.
+   Malformed URLs are skipped. DDG redirector URLs
+   (`//duckduckgo.com/l/?uddg=…` or the HTTPS equivalent) are unwrapped once,
+   preserving percent-encoded characters within the destination URL.
+   The HTML request uses `curl_cffi`'s matched Chrome TLS and HTTP profile,
+   with no JavaScript, browser installation, browser profile, imported cookies
+   or persistent session. A native content callback caps decoded HTML at
+   512 KiB; oversized responses are discarded before parsing. The total
+   request timeout is at most 10 seconds and shrinks to the remaining chain
+   budget. Non-finite or sub-millisecond budgets are rejected before a
+   session is opened. Redirect responses are not followed. Challenge detection and
+   fallback providers apply to this single HTML attempt.
 3. **Parallel cascade fetch**: if there's no instant answer and we have
    result URLs, fetch the top 3 results **in parallel** under a single
    `_CASCADE_WALL_CLOCK_SEC` (8s) wall-clock cap. Selection rules:
@@ -49,6 +61,12 @@ Redirects are walked manually (`allow_redirects=False`) up to
 `_MAX_REDIRECTS` (3). Each hop is re-validated. Responses are stream-read
 with a `_MAX_FETCH_BYTES` (512 KB) cap so a hostile server can't exhaust
 memory by ferrying us to a firehose.
+
+The shared `tools/http_response.py` response hook closes redirect bodies before
+Requests prepares the next request, including when automatic redirects are
+disabled. Only headers are needed for the manual hop validation. Each final
+response is closed after extraction, byte-cap truncation, HTTP errors or parser
+failures. Streaming decompression uses urllib3 2.8 or later.
 
 ### Prompt-injection fence
 
@@ -250,4 +268,4 @@ Regression tests assert:
   or a user-pluggable provider registry is possible but out of scope.
 - JS rendering — we fetch raw HTML only. SPA-heavy pages may return
   nothing useful; the cascade handles this by trying the next result.
-- User-agent rotation — a single desktop Chrome UA is used.
+- User-agent rotation: the HTML request uses the Chrome profile provided by the pinned local client.

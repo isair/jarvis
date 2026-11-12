@@ -5,6 +5,8 @@ from unittest.mock import patch
 
 import pytest
 
+pytestmark = pytest.mark.unit
+
 from jarvis.reply.engine import (
     _build_enrichment_context_hint,
     _match_question,
@@ -170,8 +172,7 @@ class TestExtractorPromptRendering:
         """No chat model configured ⇒ no LLM call burned. A confused or
         partially-configured user otherwise pays for an Ollama "model is
         required" round-trip on every reply that passes through enrichment.
-        Other resolvers (planner, evaluator) gate explicitly; this one must
-        too for parity."""
+        An empty model must skip extraction before backend dispatch."""
         with patch("jarvis.reply.enrichment.call_llm_direct") as mock_call:
             result = extract_search_params_for_memory(
                 "q", _cfg(), "", timeout_sec=0.1,
@@ -228,7 +229,6 @@ class TestGraphEnrichmentGating:
             llm_embedding_timeout_sec=0.1,
             llm_chat_timeout_sec=0.1,
             agentic_max_turns=0,
-            active_profiles=["developer"],
             voice_debug=False,
             memory_enrichment_source=enrichment_source,
             memory_enrichment_max_results=0,
@@ -244,6 +244,9 @@ class TestGraphEnrichmentGating:
 
         class _FakeStore:
             def __init__(self, *a, **kw):
+                pass
+
+            def close(self):
                 pass
 
             def search_nodes(self, query, limit=5):
@@ -319,6 +322,9 @@ class TestGraphContextReachesSystemMessage:
             def __init__(self, *a, **kw):
                 pass
 
+            def close(self):
+                pass
+
             def search_nodes(self, query, limit=5):
                 return [_Node()]
 
@@ -345,7 +351,6 @@ class TestGraphContextReachesSystemMessage:
             llm_embedding_timeout_sec=0.1,
             llm_chat_timeout_sec=0.1,
             agentic_max_turns=1,
-            active_profiles=["developer"],
             voice_debug=False,
             memory_enrichment_source="all",
             memory_enrichment_max_results=0,

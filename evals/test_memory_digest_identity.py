@@ -1,30 +1,9 @@
-"""
-Memory Digest — Identity-Query Fact Surfacing (Live)
-
-Guards that the memory digest distiller (``enrichment.digest_memory_for_query``)
-surfaces user-stated facts about the user (location, interests, ongoing
-plans, biography) when the current query asks who the user is or what the
-assistant knows about them, rather than surfacing past Q&A topics the user
-merely asked about.
-
-Motivating field incident:
-  The user asked "what do you know about me?". The diary contained a
-  user-stated fact ("goes boxing near E3 2WS") alongside a past Q&A where
-  the user asked for the area of a rectangle. The digest surfaced the
-  rectangle question, which is not a fact about the user at all — leading
-  the reply model to miss the actual identity signal entirely.
-
-General principle (encoded in the digest prompt): for identity queries,
-user-stated facts dominate over past Q&A topics, and multiple such facts
-should be surfaced when present.
-
-Run: EVAL_JUDGE_MODEL=gemma4:e2b pytest evals/test_memory_digest_identity.py -v
-"""
+"""Memory-digest evals preserve user-stated identity facts and their attribution."""
 
 import pytest
 
-from conftest import requires_judge_llm
-from helpers import JUDGE_BASE_URL, JUDGE_MODEL
+from evals.tool_routing import requires_judge_llm
+from evals.memory_digest import digest_for_eval
 
 
 @pytest.mark.eval
@@ -33,15 +12,7 @@ class TestMemoryDigestSurfacesIdentityFacts:
     """Live tests that the digest prefers user-stated facts for identity queries."""
 
     def _digest(self, query: str, diary_entries: list[str]) -> str:
-        from jarvis.reply.enrichment import digest_memory_for_query
-        return digest_memory_for_query(
-            query=query,
-            diary_entries=diary_entries,
-            graph_parts=[],
-            ollama_base_url=JUDGE_BASE_URL,
-            ollama_chat_model=JUDGE_MODEL,
-            timeout_sec=60.0,
-        )
+        return digest_for_eval(query, diary_entries)
 
     def test_identity_query_surfaces_user_stated_fact_over_past_qa(self):
         """Reproduces the field incident directly at the digest layer.
@@ -66,11 +37,7 @@ class TestMemoryDigestSurfacesIdentityFacts:
         digest = self._digest("what do you know about me?", diary)
         print(f"\n  Digest: {digest!r}")
 
-        if not digest:
-            pytest.xfail(
-                f"Small judge model {JUDGE_MODEL} returned NONE for an "
-                f"identity query despite user-stated facts being present."
-            )
+        assert digest and digest.strip(), "🧠 Relevant memory must produce a nonempty digest"
 
         lowered = digest.lower()
         surfaced_fact = "boxing" in lowered or "e3" in lowered
@@ -116,11 +83,7 @@ class TestMemoryDigestSurfacesIdentityFacts:
         digest = self._digest("tell me about myself", diary)
         print(f"\n  Digest: {digest!r}")
 
-        if not digest:
-            pytest.xfail(
-                f"Small judge model {JUDGE_MODEL} returned NONE for an "
-                f"identity query despite multiple user-stated facts."
-            )
+        assert digest and digest.strip(), "🧠 Relevant memory must produce a nonempty digest"
 
         lowered = digest.lower()
         facts_hit = sum(
@@ -192,11 +155,7 @@ class TestMemoryDigestSurfacesIdentityFacts:
         digest = self._digest("what do you know about me?", diary)
         print(f"\n  Digest: {digest!r}")
 
-        if not digest:
-            pytest.xfail(
-                f"Small judge model {JUDGE_MODEL} returned NONE for an "
-                f"identity query despite user-stated facts present."
-            )
+        assert digest and digest.strip(), "🧠 Relevant memory must produce a nonempty digest"
 
         lowered = digest.lower()
         user_fact_surfaced = any(
@@ -244,11 +203,7 @@ class TestMemoryDigestSurfacesIdentityFacts:
         digest = self._digest("what should I watch tonight?", diary)
         print(f"\n  Digest: {digest!r}")
 
-        if not digest:
-            pytest.xfail(
-                f"Small judge model {JUDGE_MODEL} returned NONE for a "
-                f"recommendation query despite engagement signals present."
-            )
+        assert digest and digest.strip(), "🧠 Relevant memory must produce a nonempty digest"
 
         lowered = digest.lower()
         engagement_surfaced = any(

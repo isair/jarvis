@@ -6,6 +6,8 @@ Tests model size detection and prompt component selection.
 
 import pytest
 
+pytestmark = pytest.mark.unit
+
 
 class TestModelSizeDetection:
     """Tests for detect_model_size function."""
@@ -85,7 +87,7 @@ class TestPromptComponents:
 
     def test_large_model_has_tool_constraints(self):
         """Large models also get constraints — a shorter restatement of the
-        named-entity and auto-derive rules. gpt-oss:20b and similar
+        named-entity and auto-derive rules. qwen3.8:27b and similar
         confabulate specifics and occasionally ask for tool args the tool
         already auto-derives, so the large variant is not a no-op."""
         from jarvis.reply.prompts import get_system_prompts, ModelSize

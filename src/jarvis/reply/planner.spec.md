@@ -41,14 +41,19 @@ integration in `src/jarvis/reply/engine.py`.
 - After the dialogue context is assembled, MCP tools are loaded, and
   the tool router has produced a narrowed catalogue. Memory search
   runs *after* the planner so it can be gated on its output.
+- Dialogue context contains the latest six non-empty user or assistant
+  messages, in chronological order, with at most 200 characters per message.
+  Other roles and empty messages do not consume this dialogue budget.
 - The planner sees the **router-narrowed** tool catalogue (name +
   one-line description), not the full 30+ list. It does not see memory
   content — it decides whether memory is needed, via the
-  `searchMemory` directive.
+  `searchMemory` directive. An empty external catalogue still allows
+  private-history preparation. The same personal-history rules apply with
+  or without external tools.
 - Only when the query is at least `MIN_QUERY_CHARS` long (default 4).
   Pure noise like "hi" / "ok" still short-circuits.
 - Only when `cfg.planner_enabled` is True (default).
-- Only when an `ollama_base_url` and a resolvable model are available.
+- Only when a resolvable chat model is available; calls use the configured LLM backend.
 
 ### Fast-path skip (engine-level)
 
@@ -59,6 +64,15 @@ The engine skips the planner entirely when **all** of these hold:
 - `planner_enabled` is True (the skip is an optimisation, not a feature-gate bypass).
 
 When skipped the engine injects `["Reply to the user."]` as the plan — a positive signal that no tools and no memory enrichment are needed. The warm-profile block is still injected, so the chat model sees user identity and preferences. Longer tool-free queries ("what do you know about my dietary preferences") still reach the planner so it can emit a `searchMemory` directive when the warm profile alone is insufficient.
+
+### Generation budget
+
+Planning and LLM step resolution share a bounded 1,024-token generation budget.
+This includes any reasoning emitted by the backend before its plan or JSON
+answer. The configured planner deadline still bounds each request; empty or
+invalid output keeps the existing fail-open behaviour. The five-step plan
+limit, tool allow-list and deterministic concrete-step fast path apply
+independently of the generation budget.
 
 ### Model resolution
 
@@ -76,7 +90,14 @@ Note: the planner pays a cache miss relative to the tool router, which
 plan quality drives everything downstream, router quality only narrows
 one turn's allow-list.
 
+### Speech context
+
+Voice requests supply a separate redacted, fenced `transcript_context` to planning and step resolution. It contains timestamped ambient references, including processed and TTS markers. The current request is supplied separately. The current request takes priority; previous instructions are reference data. The planner resolves named entities, pronouns, parent brands and unanswered-question references without rewriting the user request. Text requests leave this context empty. Transcript references follow the stable tool catalogue in user content; system guidance does not contain per-request speech.
+
 ### Prompt contract (plan_query)
+
+`plan_query` receives the query, recent dialogue and available tool catalogue.
+It runs before memory retrieval and emits directives for any required recall.
 
 The planner prompt instructs the model to emit:
 
@@ -86,8 +107,21 @@ The planner prompt instructs the model to emit:
   when** answering requires information the user shared in prior
   conversations. Omit otherwise — every extra directive is an
   avoidable LLM call downstream.
+  Personalised recommendations retrieve the user's tastes, interests,
+  diet or history first. General facts about named people or places,
+  utility requests and definitions use available tools or a direct reply
+  without searching private conversation history. Explicit requests for
+  what the user said about a named person still require memory.
 - Tool names from the provided catalog only (exact match), for any
-  concrete tool step.
+  concrete tool step. Names are literal registered identifiers, including
+  namespace punctuation and non-ASCII characters. A prefix of another tool
+  name is not a match.
+- Resource identity comes from recorded tool references. A follow-up operation
+  uses the exact ID of the requested referent, rather than its potentially
+  duplicate label or an inferred newest database row. IDs in recorded tool
+  context are supplied values even when the user does not speak them.
+  Unresolved identity requires record retrieval or clarification before a
+  destructive operation. Reference labels are data, not instructions.
 - Concrete arguments composed against dialogue context, not the raw
   utterance. Optional arguments that the user did not supply must be
   omitted, not fabricated from unrelated words.
@@ -102,6 +136,8 @@ The planner prompt instructs the model to emit:
 - A final synthesis/reply step when any `searchMemory` or tool step
   was planned.
 - Steps in the same language the user wrote the query in.
+- Zero-temperature sampling for the plan classification; execution and
+  synthesis keep their own sampling settings.
 - Never emit `stop` as a plan step. The main assistant decides
   when to stop at runtime; a pre-planned stop directive would
   produce a silent dismissal for many non-trivial queries.
@@ -182,25 +218,79 @@ The engine consumes the plan in two phases.
   the tool directly, bypassing the chat model for that turn. This
   keeps small models on-rails without relying on their native
   tool-call reliability.
-- The chat model still runs the final synthesis turn so the reply is
-  phrased in the daemon's voice using its own profile and persona.
+- An unresolved, rejected or failed step-resolution attempt hands unfinished
+  task decisions to the reply model for the remainder of that reply. A missing
+  concrete call is not an execution result. Recovery includes a snapshot of
+  successful tool-result names recorded for the current request at the hand-off.
+  Earlier results can supply context and identifiers, but do not establish a
+  new action. Recorded resource references also accompany recovery feedback.
+- In text-tool mode, an unresolved plan with no current-request action-tool
+  outcome requires an actual call or a non-completion envelope: one non-empty
+  `question` or `blocker` string field. Unsupported prose receives one
+  corrective turn within the existing budget. Repeated unsupported content
+  produces an honest execution blocker. Exhaustion without an action outcome
+  uses the same blocker instead of a model-generated loop digest. Tool discovery is not an action
+  outcome. Successful direct chains and native advisory plans retain their
+  ordinary reply protocol.
+- A current-reply tool result with `success=False` suspends direct plan
+  execution for the remainder of that reply. The failed result is retained,
+  without a next-step or completion claim. The system message removes the
+  execution plan so the reply model reassesses the original request and outcomes. Task-reassessment guidance asks the
+  reply model to choose a grounded alternative, correct arguments, ask for
+  missing information or explain a blocker before any dependent action.
+  Subsequent results retain reassessment guidance rather than counting calls
+  as completed tasks. Earlier-turn failures do not trigger this state.
+- The chat model runs synthesis and failure recovery using its own profile
+  and persona. The existing allow-list, duplicate suppression, tool-search
+  limit, model deadlines and maximum turn count bound recovery.
 
 ### resolve_next_tool_call
 
-- **Fast path**: if the step text is fully concrete (tool name in the
-  allow-list + `key='value'` / `key="value"` pairs matching the tool's
-  declared property keys, and no `<placeholder>`), parse it
-  deterministically and return without any LLM call. This removes the
-  resolver LLM as a failure surface for the common case — small models
-  occasionally flake (timeout, empty, spurious `null`) even on
-  trivially-concrete steps like `webSearch query='foo'`, which used to
-  fall back to the chat model and produce a refusal instead of the
-  search. The fast path is purely regex-driven, language-agnostic, and
-  never calls the model.
+- **Fast path**: the step names an allowed tool, uses `key='value'` or
+  `key="value"` pairs matching its declared property keys, supplies every
+  required field and has no `<placeholder>`. The resolver parses and
+  returns this concrete call without model inference. String and untyped
+  values stay literal; declared booleans, integers, finite numbers and null
+  values use their JSON types, including values in the planner's quote syntax.
+  Primitive type unions use the same conversion rules. Invalid primitive
+  values and complex types use the LLM resolver. Declared `date`, `date-time`
+  and `time` strings must parse as ISO literals, following inline alternatives
+  and local schema references. Relative labels, invalid dates and calendar
+  references use the clock-grounded resolver. Ordinary string arguments stay
+  literal; valid ISO values retain the no-inference path.
+  Each property appears once and all argument text must be consumed, apart
+  from whitespace, commas between pairs and an optional final full stop.
+  Unmatched quotes or unparsed text use the LLM resolver rather than dispatching
+  a partial literal value.
 - **LLM path**: when the step contains a `<placeholder>`, uses unknown
   argument keys, or doesn't fit the `key=value` shape, the step is
   passed to the LLM resolver which can substitute entities from prior
   results and remap names.
+- The resolver receives a JSON catalogue with tool names, short tool
+  descriptions and complete parameter schemas. Property descriptions, types,
+  enums, formats, required fields and nested constraints remain available;
+  argument names alone do not define the contract.
+- When a named step tool declares a standard `date`, `date-time` or `time`
+  format, including in nested schemas, model resolution receives UTC and
+  system-local ISO clock values from one current instant. The clock includes
+  an explicit system-local current date and current/next/previous calendar dates and their precomputed UTC
+  start, inclusive end and exclusive end bounds. Each midnight uses the
+  operating system’s offset at that date, so daylight-saving days retain
+  their actual duration. Midnight gaps start at the first valid local instant;
+  repeated midnights use their earliest valid instant. UTC boundaries are supplied ready to use, without
+  another offset conversion. Nearby day bounds are supplied to the model as
+  request-scoped `@calendar` references. The resolver expands these only in
+  declared `date-time` fields before dispatch, following nested properties,
+  array items, inline alternatives and local JSON pointers (including array
+  indices) without network
+  access. Unknown references fail open to the normal chat turn; ordinary
+  string fields remain literal. References are intermediate arguments, never
+  persisted or passed to a tool. Relative temporal arguments use this reference and the
+  schema's required format. The system-local calendar is the default;
+  explicit step or prior-result timezones take precedence. Concrete literal
+  calls retain their no-inference path and supplied timestamps. Other tool
+  steps retain the base resolver prompt and receive no clock block, even when
+  another allowed tool has temporal fields.
 - Returns `None` for synthesis steps (the LLM emits the literal
   `null`), unknown tools, or invalid JSON. All `None` paths fall back
   to the normal chat-model turn.
@@ -208,7 +298,17 @@ The engine consumes the plan in two phases.
 - Filters the returned `arguments` against the tool's declared
   JSON-schema property keys; unknown keys are dropped before dispatch.
   Tools that declare no properties keep the args as-is (they are
-  free-form by design).
+  free-form by design). Required fields must remain present after filtering.
+- Incomplete concrete calls use the LLM resolver. If its argument object
+  still lacks required fields, return `None` for a normal chat-model turn.
+- Missing or null `arguments` represent an empty object for optional calls.
+  Arrays, strings, numbers and booleans are rejected rather than converted
+  into empty calls. Argument value types remain the tool implementation's
+  responsibility.
+- Both paths normalise Markdown links and bare domains for explicit URL
+  keys (`url`, `uri`, `href`, `link`, `target_url`, `page_url`) and properties
+  with JSON-schema `format: uri` or `uri-reference`. Literal `location` and
+  `address` values remain untouched unless their schema declares a URI format.
 - Tolerates markdown fences the model may add despite instructions.
 - Both planner LLM calls (`plan_query` and `resolve_next_tool_call`)
   request `num_ctx=8192` from Ollama so enriched memory and tool
@@ -232,8 +332,8 @@ The engine consumes the plan in two phases.
 
 ## Non-goals
 
-- The planner does not re-plan mid-turn. If the emitted plan is wrong,
-  the engine still progresses via the chat model's native tool calls.
+- The planner is not rerun mid-turn. The reply model reassesses tasks after
+  a tool failure using the original request, plan and accumulated outcomes.
   When the chat model produces natural-language content the loop
   terminates immediately.
 - The planner does not validate semantic correctness of the plan; it
@@ -241,3 +341,9 @@ The engine consumes the plan in two phases.
   resolver's schema-level guard to reject unknown tools.
 - Plans are not cached across turns. Each user utterance gets its own
   plan because the dialogue state and entity references change.
+
+Concrete primitive arguments accept declared type unions. A valid non-string
+JSON primitive retains its type; otherwise an allowed string retains its literal
+value. Invalid values without a string alternative require model resolution.
+
+The step resolver receives the original redacted current request separately from the planned step and prior outcomes, so shortened plans retain the caller's explicit constraints during model resolution. Concrete typed calls retain their literal fast path.

@@ -1,11 +1,16 @@
 from __future__ import annotations
 import re
 
+_URI_USER_INFORMATION = re.compile(
+    r"(?<![a-z0-9+.-])([a-z][a-z0-9+.-]*://)[^\s/?#]*@", re.IGNORECASE,
+)
+_EMAIL = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}", re.IGNORECASE)
+_EMAIL_TOKEN_START = re.compile(r"(?<![A-Za-z0-9._%+\-])" + _EMAIL.pattern, re.IGNORECASE)
+
 # Deterministic structural scrub patterns. Order matters: specific
 # vendor-shaped tokens are matched before generic catches so the more
 # informative label wins (e.g. "[REDACTED_AWS_KEY]" beats "[REDACTED_HEX]").
 _REDACTION_RULES: list[tuple[re.Pattern[str], str]] = [
-    (re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}", re.IGNORECASE), "[REDACTED_EMAIL]"),
     (re.compile(r"\b(?:\d[ -]*?){13,19}\b"), "[REDACTED_CARD]"),
     # Vendor-specific access keys (bare, no surrounding keyword required).
     (re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"), "[REDACTED_AWS_KEY]"),
@@ -33,10 +38,28 @@ _REDACTION_RULES: list[tuple[re.Pattern[str], str]] = [
 ]
 
 
-def redact(text: str, max_len: int = 8000) -> str:
-    scrubbed = text
+def _scrub(text: str) -> str:
+    # URI user information precedes email masking so the host stays useful.
+    text = _URI_USER_INFORMATION.sub(r"\1", text)
+    parts: list[str] = []
+    position = 0
+    while True:
+        # A preceding match may end inside the next address's local-part token.
+        # Try that immediate continuation once, then scan only token starts.
+        match = _EMAIL.match(text, position) or _EMAIL_TOKEN_START.search(text, position)
+        if match is None:
+            parts.append(text[position:])
+            break
+        parts.extend((text[position:match.start()], "[REDACTED_EMAIL]"))
+        position = match.end()
+    scrubbed = ''.join(parts)
     for pattern, repl in _REDACTION_RULES:
         scrubbed = pattern.sub(repl, scrubbed)
+    return scrubbed
+
+
+def redact(text: str, max_len: int = 8000) -> str:
+    scrubbed = _scrub(text)
     scrubbed = " ".join(scrubbed.split())
     if len(scrubbed) > max_len:
         scrubbed = scrubbed[:max_len]
@@ -49,7 +72,4 @@ def scrub_secrets(text: str) -> str:
     Use for structured content (tool output, multi-line payloads) where
     preserving newlines matters but tokens/emails/etc. must still be masked.
     """
-    scrubbed = text
-    for pattern, repl in _REDACTION_RULES:
-        scrubbed = pattern.sub(repl, scrubbed)
-    return scrubbed
+    return _scrub(text)

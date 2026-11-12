@@ -1,6 +1,6 @@
 """Behaviour tests for the pluggable LLM backend abstraction.
 
-PR 1 covers the Ollama backend only. These tests pin the
+These tests exercise the
 provider-agnostic ``LLMBackend`` interface against the ``OllamaBackend``
 implementation, and confirm that the function-style entry points
 (``call_llm_direct``, ``call_llm_streaming``, ``chat_with_messages``)
@@ -14,16 +14,20 @@ details such as which exact URL was hit.
 from __future__ import annotations
 
 import json
+from inspect import signature
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+pytestmark = pytest.mark.unit
+
 
 def _make_response(*, json_data=None, iter_lines=None, status_code=200, raise_http=None):
     """Build a MagicMock that behaves like a ``requests.Response`` with
-    context-manager support, since the real code uses ``with requests.post(...)``.
+    context-manager support, since the real code uses ``with http.post(...)``.
     """
     resp = MagicMock()
+    resp.__enter__.return_value = resp
     resp.status_code = status_code
     if json_data is not None:
         resp.json.return_value = json_data
@@ -44,7 +48,7 @@ def _make_response(*, json_data=None, iter_lines=None, status_code=200, raise_ht
 
 
 class TestOllamaBackendDirect:
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_returns_assistant_text(self, mock_post):
         from jarvis.llm import OllamaBackend
 
@@ -55,7 +59,7 @@ class TestOllamaBackendDirect:
 
         assert result == "hello"
 
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_strips_trailing_slash_from_base_url(self, mock_post):
         from jarvis.llm import OllamaBackend
 
@@ -66,7 +70,7 @@ class TestOllamaBackendDirect:
         url = mock_post.call_args[0][0]
         assert url == "http://localhost:11434/api/chat"
 
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_returns_none_on_empty_content(self, mock_post):
         from jarvis.llm import OllamaBackend
 
@@ -75,7 +79,7 @@ class TestOllamaBackendDirect:
 
         assert backend.direct("gemma4:e2b", "sys", "user") is None
 
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_returns_none_on_request_failure(self, mock_post):
         from jarvis.llm import OllamaBackend
 
@@ -86,7 +90,7 @@ class TestOllamaBackendDirect:
 
 
 class TestOllamaBackendStreaming:
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_invokes_on_token_per_chunk_and_returns_full_text(self, mock_post):
         from jarvis.llm import OllamaBackend
 
@@ -106,7 +110,7 @@ class TestOllamaBackendStreaming:
         assert seen == ["hel", "lo", " world"]
         assert result == "hello world"
 
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_returns_none_when_stream_is_empty(self, mock_post):
         from jarvis.llm import OllamaBackend
 
@@ -117,7 +121,7 @@ class TestOllamaBackendStreaming:
 
 
 class TestOllamaBackendChat:
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_returns_raw_response_dict(self, mock_post):
         from jarvis.llm import OllamaBackend
 
@@ -129,7 +133,7 @@ class TestOllamaBackendChat:
 
         assert result == payload
 
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_raises_tools_not_supported_on_http_400_with_tools(self, mock_post):
         import requests
         from jarvis.llm import OllamaBackend, ToolsNotSupportedError
@@ -146,7 +150,7 @@ class TestOllamaBackendChat:
                 tools=[{"type": "function", "function": {"name": "x"}}],
             )
 
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_translates_max_tokens_to_num_predict(self, mock_post):
         """``extra_options["max_tokens"]`` is the canonical generation cap
         across backends — Ollama receives it as ``options.num_predict`` and
@@ -166,7 +170,7 @@ class TestOllamaBackendChat:
         assert sent["options"]["temperature"] == 0.0
         assert "max_tokens" not in sent["options"]
 
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_translates_nested_options_max_tokens(self, mock_post):
         """An explicitly nested ``options.max_tokens`` is translated too."""
         from jarvis.llm import OllamaBackend
@@ -184,7 +188,7 @@ class TestOllamaBackendChat:
         assert sent["options"]["num_ctx"] == 4096
         assert "max_tokens" not in sent["options"]
 
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_returns_none_on_http_400_without_tools(self, mock_post):
         import requests
         from jarvis.llm import OllamaBackend
@@ -196,7 +200,7 @@ class TestOllamaBackendChat:
 
         assert backend.chat("any", [{"role": "user", "content": "hi"}]) is None
 
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_returns_none_on_http_500(self, mock_post):
         import requests
         from jarvis.llm import OllamaBackend
@@ -217,7 +221,7 @@ class TestOllamaBackendChat:
             is None
         )
 
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_propagates_connection_error(self, mock_post):
         """``chat`` re-raises ``ConnectionError`` so callers can distinguish
         an unreachable server from a transient HTTP failure and apply their
@@ -231,7 +235,7 @@ class TestOllamaBackendChat:
         with pytest.raises(requests.exceptions.ConnectionError):
             backend.chat("any", [{"role": "user", "content": "hi"}])
 
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_returns_none_on_timeout(self, mock_post):
         import requests
         from jarvis.llm import OllamaBackend
@@ -241,7 +245,7 @@ class TestOllamaBackendChat:
 
         assert backend.chat("any", [{"role": "user", "content": "hi"}]) is None
 
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_returns_none_on_generic_exception(self, mock_post):
         from jarvis.llm import OllamaBackend
 
@@ -250,7 +254,7 @@ class TestOllamaBackendChat:
 
         assert backend.chat("any", [{"role": "user", "content": "hi"}]) is None
 
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_extra_options_merge_into_payload(self, mock_post):
         from jarvis.llm import OllamaBackend
 
@@ -268,7 +272,7 @@ class TestOllamaBackendChat:
         assert sent["options"]["temperature"] == 0.5
         assert sent["options"]["num_ctx"] == 16384
 
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_extra_options_none_keeps_defaults(self, mock_post):
         from jarvis.llm import OllamaBackend
 
@@ -286,7 +290,7 @@ class TestOllamaBackendPromptCaching:
     the server keeps the KV state of the request and reuses it when the
     next request starts with the same prefix."""
 
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_chat_payload_requests_prompt_caching(self, mock_post):
         from jarvis.llm import OllamaBackend
 
@@ -298,7 +302,7 @@ class TestOllamaBackendPromptCaching:
         sent = mock_post.call_args.kwargs["json"]
         assert sent["cache_prompt"] is True
 
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_direct_payload_requests_prompt_caching(self, mock_post):
         from jarvis.llm import OllamaBackend
 
@@ -310,7 +314,7 @@ class TestOllamaBackendPromptCaching:
         sent = mock_post.call_args.kwargs["json"]
         assert sent["cache_prompt"] is True
 
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_streaming_payload_requests_prompt_caching(self, mock_post):
         from jarvis.llm import OllamaBackend
 
@@ -331,7 +335,7 @@ class TestOllamaBackendPromptCaching:
 
 
 class TestOllamaBackendDirectEdgeCases:
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_returns_none_for_unknown_response_shape(self, mock_post):
         """When the response carries no recognised content key, ``direct``
         falls through to the empty-content debug log path and returns None."""
@@ -342,7 +346,7 @@ class TestOllamaBackendDirectEdgeCases:
 
         assert backend.direct("gemma4:e2b", "sys", "user") is None
 
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_temperature_forwarded_when_set(self, mock_post):
         from jarvis.llm import OllamaBackend
 
@@ -354,7 +358,7 @@ class TestOllamaBackendDirectEdgeCases:
         sent = mock_post.call_args.kwargs["json"]
         assert sent["options"]["temperature"] == 0.0
 
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_temperature_omitted_when_none(self, mock_post):
         from jarvis.llm import OllamaBackend
 
@@ -373,7 +377,7 @@ class TestOllamaBackendDirectEdgeCases:
 
 
 class TestOllamaBackendStreamingEdgeCases:
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_works_without_on_token_callback(self, mock_post):
         """``streaming`` must accumulate the full text even when the caller
         does not provide an ``on_token`` callback."""
@@ -388,7 +392,7 @@ class TestOllamaBackendStreamingEdgeCases:
 
         assert backend.streaming("gemma4:e2b", "sys", "user") == "ab"
 
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_skips_lines_with_invalid_json(self, mock_post):
         """Malformed JSONL lines must be skipped silently rather than aborting
         the stream — Ollama occasionally interleaves keepalive frames."""
@@ -449,11 +453,12 @@ class TestExtractTextFromResponse:
 
 
 class TestOllamaBackendEmbed:
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_returns_vector(self, mock_post):
         from jarvis.llm import OllamaBackend
 
         resp = MagicMock()
+        resp.__enter__.return_value = resp
         resp.json.return_value = {"embedding": [0.1, 0.2, 0.3]}
         resp.raise_for_status = MagicMock()
         mock_post.return_value = resp
@@ -463,7 +468,7 @@ class TestOllamaBackendEmbed:
 
         assert vec == [0.1, 0.2, 0.3]
 
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_returns_none_on_error(self, mock_post):
         from jarvis.llm import OllamaBackend
 
@@ -474,11 +479,12 @@ class TestOllamaBackendEmbed:
 
 
 class TestOllamaBackendListModels:
-    @patch("jarvis.llm.requests.get")
+    @patch("jarvis.llm.http.get")
     def test_returns_model_names(self, mock_get):
         from jarvis.llm import OllamaBackend
 
         resp = MagicMock()
+        resp.__enter__.return_value = resp
         resp.json.return_value = {
             "models": [
                 {"name": "gemma4:e2b"},
@@ -491,7 +497,7 @@ class TestOllamaBackendListModels:
 
         assert backend.list_models() == ["gemma4:e2b", "gpt-oss:20b"]
 
-    @patch("jarvis.llm.requests.get")
+    @patch("jarvis.llm.http.get")
     def test_returns_empty_list_on_failure(self, mock_get):
         from jarvis.llm import OllamaBackend
 
@@ -507,7 +513,7 @@ class TestOllamaBackendListModels:
 
 
 class TestCheckVersion:
-    @patch("jarvis.llm.ollama.requests.get")
+    @patch("jarvis.llm.http.get")
     def test_returns_true_and_version_on_success(self, mock_get):
         from jarvis.llm import check_version
 
@@ -516,7 +522,7 @@ class TestCheckVersion:
         assert ok is True
         assert ver == "0.5.1"
 
-    @patch("jarvis.llm.ollama.requests.get")
+    @patch("jarvis.llm.http.get")
     def test_returns_false_on_connection_error(self, mock_get):
         from jarvis.llm import check_version
 
@@ -525,7 +531,7 @@ class TestCheckVersion:
         assert ok is False
         assert ver is None
 
-    @patch("jarvis.llm.ollama.requests.get")
+    @patch("jarvis.llm.http.get")
     def test_returns_false_on_non_200_status(self, mock_get):
         from jarvis.llm import check_version
 
@@ -534,7 +540,7 @@ class TestCheckVersion:
         assert ok is False
         assert ver is None
 
-    @patch("jarvis.llm.ollama.requests.get")
+    @patch("jarvis.llm.http.get")
     def test_returns_false_when_json_missing_version_key(self, mock_get):
         from jarvis.llm import check_version
 
@@ -543,11 +549,12 @@ class TestCheckVersion:
         assert ok is False
         assert ver is None
 
-    @patch("jarvis.llm.ollama.requests.get")
+    @patch("jarvis.llm.http.get")
     def test_returns_false_when_response_not_json(self, mock_get):
         from jarvis.llm import check_version
 
         resp = MagicMock()
+        resp.__enter__.return_value = resp
         resp.status_code = 200
         resp.json.side_effect = ValueError("not json")
         mock_get.return_value = resp
@@ -555,7 +562,7 @@ class TestCheckVersion:
         assert ok is False
         assert ver is None
 
-    @patch("jarvis.llm.ollama.requests.get")
+    @patch("jarvis.llm.http.get")
     def test_returns_false_when_version_is_empty_string(self, mock_get):
         from jarvis.llm import check_version
 
@@ -564,7 +571,7 @@ class TestCheckVersion:
         assert ok is False
         assert ver is None
 
-    @patch("jarvis.llm.ollama.requests.get")
+    @patch("jarvis.llm.http.get")
     def test_returns_false_when_version_is_not_a_string(self, mock_get):
         from jarvis.llm import check_version
 
@@ -573,7 +580,7 @@ class TestCheckVersion:
         assert ok is False
         assert ver is None
 
-    @patch("jarvis.llm.ollama.requests.get")
+    @patch("jarvis.llm.http.get")
     def test_response_is_not_a_dict(self, mock_get):
         from jarvis.llm import check_version
 
@@ -589,8 +596,8 @@ class TestCheckVersion:
 
 
 class TestOllamaBackendWarmUp:
-    @patch("jarvis.llm.requests.post")
-    @patch("jarvis.llm.requests.get")
+    @patch("jarvis.llm.http.post")
+    @patch("jarvis.llm.http.get")
     def test_warmup_succeeds_when_server_is_ollama(self, mock_get, mock_post):
         from jarvis.llm import OllamaBackend
 
@@ -604,8 +611,8 @@ class TestOllamaBackendWarmUp:
         post_url = mock_post.call_args[0][0]
         assert "api/chat" in post_url
 
-    @patch("jarvis.llm.requests.post")
-    @patch("jarvis.llm.requests.get")
+    @patch("jarvis.llm.http.post")
+    @patch("jarvis.llm.http.get")
     def test_warmup_fails_when_version_endpoint_unreachable(self, mock_get, mock_post):
         from jarvis.llm import OllamaBackend
 
@@ -614,8 +621,8 @@ class TestOllamaBackendWarmUp:
 
         assert backend.warm_up("gemma4:e2b") is False
 
-    @patch("jarvis.llm.requests.post")
-    @patch("jarvis.llm.requests.get")
+    @patch("jarvis.llm.http.post")
+    @patch("jarvis.llm.http.get")
     def test_warmup_fails_when_version_response_not_200(self, mock_get, mock_post):
         from jarvis.llm import OllamaBackend
 
@@ -624,8 +631,8 @@ class TestOllamaBackendWarmUp:
 
         assert backend.warm_up("gemma4:e2b") is False
 
-    @patch("jarvis.llm.requests.post")
-    @patch("jarvis.llm.requests.get")
+    @patch("jarvis.llm.http.post")
+    @patch("jarvis.llm.http.get")
     def test_warmup_fails_when_version_json_missing_version_key(self, mock_get, mock_post):
         from jarvis.llm import OllamaBackend
 
@@ -634,12 +641,13 @@ class TestOllamaBackendWarmUp:
 
         assert backend.warm_up("gemma4:e2b") is False
 
-    @patch("jarvis.llm.requests.post")
-    @patch("jarvis.llm.requests.get")
+    @patch("jarvis.llm.http.post")
+    @patch("jarvis.llm.http.get")
     def test_warmup_fails_when_version_response_not_json(self, mock_get, mock_post):
         from jarvis.llm import OllamaBackend
 
         resp = MagicMock()
+        resp.__enter__.return_value = resp
         resp.status_code = 200
         resp.json.side_effect = ValueError("not json")
         mock_get.return_value = resp
@@ -647,8 +655,8 @@ class TestOllamaBackendWarmUp:
 
         assert backend.warm_up("gemma4:e2b") is False
 
-    @patch("jarvis.llm.requests.post")
-    @patch("jarvis.llm.requests.get")
+    @patch("jarvis.llm.http.post")
+    @patch("jarvis.llm.http.get")
     def test_warmup_fails_when_chat_fails_after_version_check(self, mock_get, mock_post):
         from jarvis.llm import OllamaBackend
 
@@ -658,19 +666,27 @@ class TestOllamaBackendWarmUp:
 
         assert backend.warm_up("gemma4:e2b") is False
 
-    @patch("jarvis.llm.requests.post")
-    @patch("jarvis.llm.requests.get")
-    def test_warmup_sends_chat_request_with_correct_payload(self, mock_get, mock_post):
+    @pytest.mark.parametrize(
+        "keep_alive", [None, "47s", "0"], ids=["default", "caller", "unload"],
+    )
+    @patch("jarvis.llm.http.post")
+    @patch("jarvis.llm.http.get")
+    def test_warmup_sends_chat_request_with_correct_payload(self, mock_get, mock_post, keep_alive):
         from jarvis.llm import OllamaBackend
 
         mock_get.return_value = _make_response(json_data={"version": "0.5.1"})
         mock_post.return_value = _make_response(status_code=200)
         backend = OllamaBackend("http://localhost:11434")
 
-        assert backend.warm_up("gemma4:e2b") is True
+        options = {} if keep_alive is None else {"keep_alive": keep_alive}
+        assert backend.warm_up("gemma4:e2b", **options) is True
         post_body = mock_post.call_args[1]["json"]
         assert post_body["model"] == "gemma4:e2b"
-        assert post_body["keep_alive"] == "30m"
+        expected_residency = (
+            signature(OllamaBackend.warm_up).parameters["keep_alive"].default
+            if keep_alive is None else keep_alive
+        )
+        assert post_body["keep_alive"] == expected_residency
         assert post_body["stream"] is False
         # Must use chat endpoint with messages to exercise full inference pipeline
         assert "messages" in post_body
@@ -679,8 +695,8 @@ class TestOllamaBackendWarmUp:
         assert post_body["messages"][1]["role"] == "user"
         assert post_body["options"]["num_predict"] == 1
 
-    @patch("jarvis.llm.requests.post")
-    @patch("jarvis.llm.requests.get")
+    @patch("jarvis.llm.http.post")
+    @patch("jarvis.llm.http.get")
     def test_warmup_returns_false_for_empty_model(self, mock_get, mock_post):
         from jarvis.llm import OllamaBackend
 
@@ -688,13 +704,12 @@ class TestOllamaBackendWarmUp:
         assert backend.warm_up("") is False
         assert backend.warm_up(None) is False
 
-    @patch("jarvis.llm.requests.post")
-    @patch("jarvis.llm.requests.get")
+    @patch("jarvis.llm.http.post")
+    @patch("jarvis.llm.http.get")
     def test_warmup_returns_false_for_empty_base_url(self, mock_get, mock_post):
         from jarvis.llm import OllamaBackend
 
         backend = OllamaBackend("")
-        assert backend.warm_up("gemma4:e2b") is False
         assert backend.warm_up("gemma4:e2b") is False
 
 
@@ -718,7 +733,7 @@ class TestFactory:
 
 
 class TestFunctionStyleEntryPoints:
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_call_llm_direct_returns_text(self, mock_post):
         from jarvis.llm import call_llm_direct
 
@@ -726,7 +741,7 @@ class TestFunctionStyleEntryPoints:
 
         assert call_llm_direct("http://localhost:11434", "gemma4:e2b", "sys", "u") == "hello"
 
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_chat_with_messages_returns_dict(self, mock_post):
         from jarvis.llm import chat_with_messages
 
@@ -739,7 +754,7 @@ class TestFunctionStyleEntryPoints:
         assert isinstance(result, dict)
         assert result["message"]["content"] == "ok"
 
-    @patch("jarvis.llm.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_call_llm_streaming_invokes_callback(self, mock_post):
         from jarvis.llm import call_llm_streaming
 
@@ -888,7 +903,7 @@ class TestOllamaBackendSanitizesMessages:
     """OllamaBackend.chat() strips non-standard fields from messages before
     sending them to the wire."""
 
-    @patch("jarvis.llm.ollama.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_tool_name_not_in_wire_payload(self, mock_post):
         from jarvis.llm import OllamaBackend
 
@@ -924,7 +939,7 @@ class TestOllamaBackendSanitizesMessages:
         assert "tool_name" not in tool_msg, "tool_name field must be stripped"
         assert "tool_failed" not in tool_msg, "tool_failed field must be stripped"
 
-    @patch("jarvis.llm.ollama.requests.post")
+    @patch("jarvis.llm.http.post")
     def test_system_is_context_injected_stripped(self, mock_post):
         from jarvis.llm import OllamaBackend
 

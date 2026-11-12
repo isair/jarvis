@@ -19,6 +19,9 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal, QObject, QTimer
 from PyQt6.QtGui import QFont
 
+from jarvis.dictation.history import HistoryUpdateError
+from jarvis.debug import debug_log
+
 from desktop_app.themes import JARVIS_THEME_STYLESHEET, COLORS
 
 
@@ -123,6 +126,7 @@ class _DictationCard(QFrame):
         # Text content
         text = entry.get("text", "")
         text_label = QLabel(text)
+        text_label.setTextFormat(Qt.TextFormat.PlainText)
         text_label.setWordWrap(True)
         text_label.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse
@@ -235,7 +239,7 @@ class DictationHistoryWindow(QMainWindow):
 
         # File-watch timer: poll the history file for changes so the window
         # updates even when the daemon runs in a separate process.
-        self._last_file_mtime: float = 0.0
+        self._last_file_version = None
         self._file_watch_timer = QTimer(self)
         self._file_watch_timer.setInterval(1500)  # 1.5 s
         self._file_watch_timer.timeout.connect(self._check_file_changed)
@@ -248,6 +252,7 @@ class DictationHistoryWindow(QMainWindow):
     def set_history(self, history) -> None:
         """Set the DictationHistory backend and load existing entries."""
         self._history = history
+        self._last_file_version = None
         self._reload()
 
     # ------------------------------------------------------------------
@@ -263,7 +268,7 @@ class DictationHistoryWindow(QMainWindow):
         # Running after showEvent returns lets the window complete its
         # initial layout/paint before we swap the list contents.
         QTimer.singleShot(0, self._refresh_from_disk_and_reload)
-        self._last_file_mtime = self._get_history_file_mtime()
+        self._last_file_version = self._get_history_file_version()
         self._file_watch_timer.start()
 
     def _refresh_from_disk_and_reload(self) -> None:
@@ -280,8 +285,8 @@ class DictationHistoryWindow(QMainWindow):
     def _is_dictation_enabled(self) -> bool:
         """Check whether dictation is enabled in config."""
         try:
-            from jarvis.config import default_config_path, _load_json, get_default_config
-            config = _load_json(default_config_path()) or {}
+            from jarvis.config import get_config_path, _load_json, get_default_config
+            config = _load_json(get_config_path()) or {}
             defaults = get_default_config()
             return bool(config.get("dictation_enabled", defaults.get("dictation_enabled", True)))
         except Exception:
@@ -349,20 +354,23 @@ class DictationHistoryWindow(QMainWindow):
         else:
             self._subtitle.setText(f"{len(entries)} dictation(s)")
 
-    def _get_history_file_mtime(self) -> float:
-        """Return the mtime of the history JSON file, or 0 if missing."""
+    def _get_history_file_version(self) -> tuple | None:
+        """Identify the selected store and its current file state."""
+        if self._history is None:
+            return None
+        path = self._history.path
         try:
-            from jarvis.dictation.history import _default_history_path
-            p = _default_history_path()
-            return p.stat().st_mtime if p.exists() else 0.0
-        except Exception:
-            return 0.0
+            stat = path.stat()
+        except OSError:
+            return path, None
+        return path, (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns)
 
     def _check_file_changed(self) -> None:
         """Called by the timer — reload if the history file was modified."""
-        mtime = self._get_history_file_mtime()
-        if mtime > self._last_file_mtime:
-            self._last_file_mtime = mtime
+        version = self._get_history_file_version()
+        if version != self._last_file_version:
+            debug_log("dictation history store changed, refreshing", "desktop")
+            self._last_file_version = version
             # Re-read from disk via the public, lock-safe method
             if self._history is not None:
                 self._history.reload_from_disk()
@@ -391,12 +399,16 @@ class DictationHistoryWindow(QMainWindow):
     def _on_delete(self, entry_id: str) -> None:
         """Delete a single entry."""
         if self._history:
-            self._history.delete(entry_id)
+            try:
+                self._history.delete(entry_id, wait_for_writer=False)
+            except HistoryUpdateError:
+                QMessageBox.warning(self, "Dictation History", "Unable to update your saved dictations. Please try again.")
+                return
         self._reload()
 
     def _clear_all(self) -> None:
         """Delete all entries after confirmation."""
-        if self._history is None or self._history.count == 0:
+        if self._history is None or not self.findChildren(_DictationCard):
             return
         reply = QMessageBox.question(
             self,
@@ -406,5 +418,9 @@ class DictationHistoryWindow(QMainWindow):
             QMessageBox.StandardButton.No,
         )
         if reply == QMessageBox.StandardButton.Yes:
-            self._history.clear()
+            try:
+                self._history.clear(wait_for_writer=False)
+            except HistoryUpdateError:
+                QMessageBox.warning(self, "Dictation History", "Unable to update your saved dictations. Please try again.")
+                return
             self._reload()

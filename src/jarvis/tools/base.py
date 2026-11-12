@@ -22,6 +22,8 @@ class ToolContext:
         max_retries: int,
         user_print: Callable[[str], None],
         language: Optional[str] = None,
+        transcript_context: str = "",
+        cancel_event=None,
     ):
         self.db = db
         self.cfg = cfg
@@ -36,6 +38,8 @@ class ToolContext:
         # treat absence as "no signal" and fall back to their own default
         # rather than assuming English.
         self.language = language
+        self.transcript_context = transcript_context
+        self.cancel_event = cancel_event
 
 
 class Tool(ABC):
@@ -97,6 +101,8 @@ class Tool(ABC):
         max_retries: int,
         user_print: Callable[[str], None],
         language: Optional[str] = None,
+        transcript_context: str = "",
+        cancel_event=None,
     ) -> ToolExecutionResult:
         """Execute the tool (internal method used by registry).
 
@@ -112,5 +118,7 @@ class Tool(ABC):
             max_retries=max_retries,
             user_print=user_print,
             language=language,
+            transcript_context=transcript_context,
+            cancel_event=cancel_event,
         )
         return self.run(tool_args, context)

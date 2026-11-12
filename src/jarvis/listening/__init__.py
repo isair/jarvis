@@ -12,11 +12,11 @@ def __getattr__(name: str):
     """Lazily import public names on first access."""
     _imports = {
         "VoiceListener": ".listener",
+        "LowConfidenceEvent": ".listener",
         "EchoDetector": ".echo_detection",
         "StateManager": ".state_manager",
         "ListeningState": ".state_manager",
         "is_wake_word_detected": ".wake_detection",
-        "extract_query_after_wake": ".wake_detection",
         "is_stop_command": ".wake_detection",
         "TranscriptBuffer": ".transcript_buffer",
         "TranscriptSegment": ".transcript_buffer",
@@ -33,11 +33,11 @@ def __getattr__(name: str):
 
 __all__ = [
     "VoiceListener",
+    "LowConfidenceEvent",
     "EchoDetector",
     "StateManager",
     "ListeningState",
     "is_wake_word_detected",
-    "extract_query_after_wake",
     "is_stop_command",
     "TranscriptBuffer",
     "TranscriptSegment",

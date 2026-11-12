@@ -2,6 +2,8 @@
 
 import pytest
 
+pytestmark = pytest.mark.unit
+
 from jarvis.reply.compound_query import (
     CJK_MIN_CLAUSE_CHARS,
     DEFAULT_MIN_CLAUSE_CHARS,

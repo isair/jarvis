@@ -8,6 +8,7 @@ profiles, or TTS). Uses a shared Whisper model reference to avoid double memory.
 from __future__ import annotations
 
 import contextlib
+from functools import partial
 import io
 import math
 import os
@@ -16,11 +17,13 @@ import struct
 import sys
 import threading
 import time
+import wave
 from typing import Any, Callable, Optional
 
 from ..debug import debug_log
 from ..utils.audio_lock import portaudio_lock
-from .history import DictationHistory
+from ..utils.audio_capture import mono_capture, open_input_stream, resolve_input_device
+from .history import DictationHistory, HistoryUpdateError
 
 # Optional imports — graceful degradation when dependencies are missing.
 # sounddevice raises OSError (not ImportError) when the PortAudio shared
@@ -40,6 +43,24 @@ try:
 except Exception as _pynput_import_error:
     pynput_keyboard = None
     debug_log(f"pynput unavailable, dictation hotkey disabled: {_pynput_import_error!r}", "dictation")
+
+
+def _create_keyboard_listener(*, on_press, on_release):
+    """Create a hotkey listener with Quartz-native character decoding on macOS."""
+    listener_class = pynput_keyboard.Listener
+    if sys.platform == "darwin":
+        from pynput._util.darwin import ListenerMixin
+
+        class QuartzKeyboardListener(listener_class):
+            def _run(self):
+                # Key characters come from CGEventKeyboardGetUnicodeString.
+                # The keyboard-layout context is unused by the event decoder
+                # and its Carbon TSM query requires the main dispatch queue.
+                ListenerMixin._run(self)
+
+        listener_class = QuartzKeyboardListener
+        debug_log("using Quartz hotkey listener without Carbon keyboard-layout queries", "dictation")
+    return listener_class(on_press=on_press, on_release=on_release)
 
 
 # ---------------------------------------------------------------------------
@@ -62,27 +83,11 @@ def _generate_beep_wav(freq: float = 520, duration: float = 0.10) -> bytes:
         samples.append(max(-32768, min(32767, sample_int)))
 
     buf = io.BytesIO()
-    num_channels = 1
-    bits = 16
-    byte_rate = sample_rate * num_channels * bits // 8
-    block_align = num_channels * bits // 8
-    data_size = num_samples * block_align
-
-    buf.write(b"RIFF")
-    buf.write(struct.pack("<I", 36 + data_size))
-    buf.write(b"WAVE")
-    buf.write(b"fmt ")
-    buf.write(struct.pack("<I", 16))
-    buf.write(struct.pack("<H", 1))
-    buf.write(struct.pack("<H", num_channels))
-    buf.write(struct.pack("<I", sample_rate))
-    buf.write(struct.pack("<I", byte_rate))
-    buf.write(struct.pack("<H", block_align))
-    buf.write(struct.pack("<H", bits))
-    buf.write(b"data")
-    buf.write(struct.pack("<I", data_size))
-    for s in samples:
-        buf.write(struct.pack("<h", s))
+    with wave.open(buf, 'wb') as audio:
+        audio.setnchannels(1)
+        audio.setsampwidth(2)
+        audio.setframerate(sample_rate)
+        audio.writeframes(struct.pack(f'<{len(samples)}h', *samples))
 
     return buf.getvalue()
 
@@ -157,7 +162,8 @@ def _clipboard_paste(text: str) -> None:
             _clipboard_linux(text)
         debug_log(f"clipboard set ({len(text)} chars)", "dictation")
     except Exception as exc:
-        debug_log(f"clipboard write failed: {exc}", "dictation")
+        debug_log(f"clipboard write failed: {type(exc).__name__}", "dictation")
+        print("  ⚠️ Dictation could not be copied to the clipboard.", flush=True)
         return
 
     # --- simulate paste keystroke ---
@@ -167,55 +173,53 @@ def _clipboard_paste(text: str) -> None:
     # On macOS, use CGEvent API directly — avoids pynput modifier state
     # conflicts and doesn't need separate osascript permissions.
     if system == "darwin":
-        global _accessibility_warned
-        if not _accessibility_warned and not _check_macos_accessibility():
-            _accessibility_warned = True
-            debug_log(
-                "Accessibility permission required for paste — "
-                "opened System Settings. Grant permission and restart Jarvis.",
-                "dictation",
-            )
-            return
-        if _paste_cgevent():
+        if _check_macos_accessibility() and _paste_cgevent():
             debug_log("paste sent via CGEvent", "dictation")
             return
-        debug_log("CGEvent paste failed, falling back to pynput", "dictation")
-
-    if pynput_keyboard is None:
-        debug_log("pynput unavailable — cannot simulate paste", "dictation")
+        debug_log("native paste unavailable; dictated text retained on clipboard", "dictation")
+        print("  ⚠️  Dictation could not be pasted automatically. The text is on your "
+              "clipboard; paste it manually with Cmd+V.", flush=True)
         return
 
-    ctrl = pynput_keyboard.Controller()
-    mod = pynput_keyboard.Key.cmd if system == "darwin" else pynput_keyboard.Key.ctrl
+    if pynput_keyboard is not None:
+        try:
+            ctrl = pynput_keyboard.Controller()
+            mod = pynput_keyboard.Key.ctrl
 
-    # Explicitly release common modifiers so the OS doesn't see e.g.
-    # Ctrl+Alt+Cmd+V instead of just Cmd+V.
-    try:
-        for release_key in (
-            pynput_keyboard.Key.ctrl_l,
-            pynput_keyboard.Key.ctrl_r,
-            pynput_keyboard.Key.alt_l,
-            pynput_keyboard.Key.alt_r,
-            pynput_keyboard.Key.shift_l,
-            pynput_keyboard.Key.shift_r,
-            pynput_keyboard.Key.cmd,
-            pynput_keyboard.Key.cmd_r,
-        ):
+            # Release held hotkey modifiers before sending the paste shortcut.
             try:
-                ctrl.release(release_key)
+                for release_key in (
+                    pynput_keyboard.Key.ctrl_l,
+                    pynput_keyboard.Key.ctrl_r,
+                    pynput_keyboard.Key.alt_l,
+                    pynput_keyboard.Key.alt_r,
+                    pynput_keyboard.Key.shift_l,
+                    pynput_keyboard.Key.shift_r,
+                    pynput_keyboard.Key.cmd,
+                    pynput_keyboard.Key.cmd_r,
+                ):
+                    try:
+                        ctrl.release(release_key)
+                    except Exception:
+                        pass
             except Exception:
                 pass
-    except Exception:
-        pass
 
-    time.sleep(0.05)
-    try:
-        ctrl.press(mod)
-        ctrl.tap("v")
-        ctrl.release(mod)
-        debug_log("paste keystroke sent via pynput", "dictation")
-    except Exception as exc:
-        debug_log(f"paste keystroke failed: {exc}", "dictation")
+            time.sleep(0.05)
+            try:
+                ctrl.press(mod)
+                ctrl.tap("v")
+            finally:
+                ctrl.release(mod)
+            debug_log("paste keystroke sent via pynput", "dictation")
+            return
+        except Exception as exc:
+            debug_log(f"automatic paste failed: {type(exc).__name__}", "dictation")
+    else:
+        debug_log("pynput unavailable, cannot simulate paste", "dictation")
+
+    print("  ⚠️ Dictation could not complete automatic paste. The text is on your "
+          "clipboard; use Ctrl+V if needed.", flush=True)
 
 
 def _clipboard_windows(text: str) -> None:
@@ -276,6 +280,7 @@ def _check_macos_accessibility() -> bool:
     Returns True if granted, False if not. On first denial, opens
     System Settings to the Accessibility pane so the user can grant it.
     """
+    global _accessibility_warned
     try:
         import ctypes
         ats = ctypes.cdll.LoadLibrary(
@@ -284,8 +289,9 @@ def _check_macos_accessibility() -> bool:
         # AXIsProcessTrusted() -> Boolean
         ats.AXIsProcessTrusted.restype = ctypes.c_bool
         trusted = ats.AXIsProcessTrusted()
-        if not trusted:
-            debug_log("Accessibility permission not granted — opening System Settings", "dictation")
+        if not trusted and not _accessibility_warned:
+            _accessibility_warned = True
+            debug_log("Accessibility permission not granted, opening System Settings", "dictation")
             import subprocess
             subprocess.Popen([
                 "open",
@@ -294,7 +300,7 @@ def _check_macos_accessibility() -> bool:
         return trusted
     except Exception as exc:
         debug_log(f"Accessibility check failed: {exc}", "dictation")
-        return True  # Assume granted if check fails
+        return False
 
 
 # Track whether we've already warned about Accessibility
@@ -321,36 +327,39 @@ def _paste_cgevent() -> bool:
         ]
         # CGEventSetFlags(event, flags)
         cg.CGEventSetFlags.argtypes = [ctypes.c_void_p, ctypes.c_uint64]
+        cg.CGEventSetFlags.restype = None
         # CGEventPost(tap, event)
         cg.CGEventPost.argtypes = [ctypes.c_uint32, ctypes.c_void_p]
+        cg.CGEventPost.restype = None
         # CFRelease(cf) — lives in CoreFoundation
         cf.CFRelease.argtypes = [ctypes.c_void_p]
+        cf.CFRelease.restype = None
 
         kCGHIDEventTap = 0
         kVK_V = 9  # macOS virtual keycode for 'v'
         kCGEventFlagMaskCommand = 0x100000
 
-        # Key down with Cmd
+        # Prepare the complete key pair before sending any input.
         event_down = cg.CGEventCreateKeyboardEvent(None, kVK_V, True)
         if not event_down:
             debug_log("CGEvent: failed to create key-down event", "dictation")
             return False
-        cg.CGEventSetFlags(event_down, kCGEventFlagMaskCommand)
-        cg.CGEventPost(kCGHIDEventTap, event_down)
-        cf.CFRelease(event_down)
-
-        time.sleep(0.01)
-
-        # Key up with Cmd
-        event_up = cg.CGEventCreateKeyboardEvent(None, kVK_V, False)
-        if not event_up:
-            debug_log("CGEvent: failed to create key-up event", "dictation")
-            return False
-        cg.CGEventSetFlags(event_up, kCGEventFlagMaskCommand)
-        cg.CGEventPost(kCGHIDEventTap, event_up)
-        cf.CFRelease(event_up)
-
-        return True
+        event_up = None
+        try:
+            event_up = cg.CGEventCreateKeyboardEvent(None, kVK_V, False)
+            if not event_up:
+                debug_log("CGEvent: failed to create key-up event", "dictation")
+                return False
+            cg.CGEventSetFlags(event_down, kCGEventFlagMaskCommand)
+            cg.CGEventSetFlags(event_up, kCGEventFlagMaskCommand)
+            cg.CGEventPost(kCGHIDEventTap, event_down)
+            time.sleep(0.01)
+            cg.CGEventPost(kCGHIDEventTap, event_up)
+            return True
+        finally:
+            if event_up:
+                cf.CFRelease(event_up)
+            cf.CFRelease(event_down)
     except Exception as exc:
         debug_log(f"CGEvent paste failed: {exc}", "dictation")
         return False
@@ -663,10 +672,13 @@ class DictationEngine:
         self._audio_frames: list = []
         self._stream: Optional[Any] = None
         self._listener: Optional[Any] = None
+        self._listener_generation = 0
         self._pressed_modifiers: set = set()
         self._record_start_time: float = 0.0
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._started = False
+        self._stopped = False
+        self._lifecycle_active = False
         # Monotonic recording-session token. Each press increments it; the
         # _begin_recording worker only mutates engine state while its token
         # is still current, so a stale worker from a superseded press can
@@ -674,7 +686,7 @@ class DictationEngine:
         self._session = 0
 
         # Double-tap detection for hands-free mode
-        self._last_hotkey_release_time: float = 0.0
+        self._last_hotkey_release_time: Optional[float] = None
         self._double_tap_window: float = 0.4  # seconds
 
         # Suppress recording activation during clipboard paste (the pynput
@@ -697,11 +709,9 @@ class DictationEngine:
         if self._started:
             return
 
-        # macOS 26+ enforces that TSM (Text Services Manager) calls happen on
-        # the main dispatch queue.  pynput's keyboard Listener runs a CGEventTap
-        # on a background thread whose callback triggers TSM input-source
-        # queries, violating this assertion and crashing the process (SIGTRAP).
-        # Disable pynput on macOS 26+ until an alternative backend is available.
+        # macOS 26+ hotkey support is disabled by the platform safety policy.
+        # Synthetic Quartz decoding checks do not establish that live event
+        # taps work safely on this release with Accessibility permission.
         if sys.platform == "darwin":
             try:
                 mac_ver = platform.mac_ver()[0]
@@ -720,9 +730,16 @@ class DictationEngine:
                 )
                 return
 
-        self._listener = pynput_keyboard.Listener(
-            on_press=self._on_key_press,
-            on_release=self._on_key_release,
+        with self._lock:
+            self._listener_generation += 1
+            generation = self._listener_generation
+            self._pressed_modifiers.clear()
+            self._last_hotkey_release_time = None
+            self._stopped = False
+
+        self._listener = _create_keyboard_listener(
+            on_press=partial(self._handle_listener_key, generation, True),
+            on_release=partial(self._handle_listener_key, generation, False),
         )
         self._listener.start()
         self._started = True
@@ -730,8 +747,18 @@ class DictationEngine:
 
     def stop(self) -> None:
         """Stop the dictation engine and clean up."""
-        if self._recording:
-            self._stop_recording(discard=True)
+        with self._lock:
+            if not self._stopped:
+                self._stopped = True
+                self._session += 1
+                self._listener_generation += 1
+            self._pressed_modifiers.clear()
+            self._last_hotkey_release_time = None
+            token = self._session
+        self._stop_recording(discard=True)
+        with self._lock:
+            if self._lifecycle_active:
+                self._notify_session(token, 'idle')
         if self._listener is not None:
             self._listener.stop()
             self._listener = None
@@ -750,6 +777,15 @@ class DictationEngine:
     # Key event handlers
     # ------------------------------------------------------------------
 
+    def _handle_listener_key(self, generation: int, pressed: bool, key) -> None:
+        with self._lock:
+            if self._stopped or generation != self._listener_generation:
+                return
+            if pressed:
+                self._on_key_press(key)
+            else:
+                self._on_key_release(key)
+
     def _normalise_key(self, key) -> Any:
         """Normalise a key event to compare against our parsed trigger/modifiers."""
         # pynput sometimes gives KeyCode with vk but char=None for modified combos
@@ -763,8 +799,12 @@ class DictationEngine:
             return False
         if nkey == target or key == target:
             return True
-        if getattr(key, "name", None) == getattr(target, "name", None):
-            return True
+        target_name = getattr(target, "name", None)
+        key_name = getattr(key, "name", None)
+        if target_name is not None and key_name is not None:
+            if (key_name.removesuffix('_l').removesuffix('_r')
+                    == target_name.removesuffix('_l').removesuffix('_r')):
+                return True
         if hasattr(key, "char") and key.char:
             if pynput_keyboard.KeyCode.from_char(key.char.lower()) == target:
                 return True
@@ -773,8 +813,8 @@ class DictationEngine:
     def _all_modifiers_held(self) -> bool:
         """Return True when every required modifier is currently pressed."""
         return all(
-            m in self._pressed_modifiers or any(
-                getattr(p, "name", None) == getattr(m, "name", None)
+            any(
+                self._key_matches(p, self._normalise_key(p), m)
                 for p in self._pressed_modifiers
             )
             for m in self._modifiers
@@ -833,28 +873,28 @@ class DictationEngine:
         if self._hands_free:
             return
 
-        # Normal hold-to-dictate: any required key released → stop
+        # Hold-to-dictate ends when the trigger or a required modifier is released.
         if self._recording:
             trigger_released = self._key_matches(key, nkey, self._trigger)
             modifier_released = any(
                 self._key_matches(key, nkey, m) for m in self._modifiers
             )
-            if trigger_released or modifier_released:
+            if trigger_released or (modifier_released and not self._all_modifiers_held()):
                 # Check for double-tap: if released quickly, transition to hands-free
-                now = time.time()
+                now = time.monotonic()
                 hold_duration = now - self._record_start_time
                 if hold_duration < self._double_tap_window:
-                    time_since_last = now - self._last_hotkey_release_time
-                    if time_since_last < self._double_tap_window:
+                    last_release = self._last_hotkey_release_time
+                    if last_release is not None and now - last_release < self._double_tap_window:
                         # Double-tap detected → switch to hands-free
                         self._hands_free = True
                         debug_log("hands-free mode activated (double-tap)", "dictation")
-                        self._last_hotkey_release_time = 0.0
+                        self._last_hotkey_release_time = None
                         return
                     # First quick tap — stop recording but remember the time
                     self._last_hotkey_release_time = now
                 else:
-                    self._last_hotkey_release_time = 0.0
+                    self._last_hotkey_release_time = None
                 self._stop_recording()
 
     # ------------------------------------------------------------------
@@ -868,7 +908,7 @@ class DictationEngine:
         # long, and opening PortAudio streams there raced the listener's
         # audio threads into a native abort (#462).
         with self._lock:
-            if self._recording:
+            if self._stopped or self._recording:
                 return
             self._recording = True
             self._session += 1
@@ -891,6 +931,24 @@ class DictationEngine:
             self._recording = False
             return True
 
+    def _notify_session(self, token: int, phase: str) -> None:
+        """Deliver a lifecycle notification atomically with session ownership."""
+        with self._lock:
+            if self._session != token or (phase == 'recording' and not self._recording):
+                debug_log("dictation lifecycle notification superseded", "dictation")
+                return
+            callback = {
+                'recording': self._on_dictation_start,
+                'processing': self._on_dictation_processing_start,
+                'idle': self._on_dictation_end,
+            }[phase]
+            self._lifecycle_active = phase != 'idle'
+            if callback:
+                try:
+                    callback()
+                except Exception as exc:
+                    debug_log(f"dictation lifecycle callback error: {exc}", "dictation")
+
     def _begin_recording(self, token: int) -> None:
         """Worker: open the audio stream and start capturing."""
         # Check Whisper readiness
@@ -898,7 +956,8 @@ class DictationEngine:
         backend = self._whisper_backend_ref()
         if model is None and backend != "mlx":
             debug_log("whisper model not loaded — dictation skipped", "dictation")
-            self._abandon_session(token)
+            if self._abandon_session(token):
+                self._notify_session(token, 'idle')
             return
 
         # Bail early if the press was already released/superseded while the
@@ -906,60 +965,59 @@ class DictationEngine:
         with self._lock:
             if self._session != token or not self._recording:
                 return
+            self._audio_frames = []
+            self._record_start_time = time.monotonic()
 
         debug_log("dictation recording started", "dictation")
-        self._audio_frames = []
-        self._record_start_time = time.time()
 
-        # Notify listeners (face state, pause main listener)
-        if self._on_dictation_start:
-            try:
-                self._on_dictation_start()
-            except Exception as exc:
-                debug_log(f"on_dictation_start callback error: {exc}", "dictation")
+        # Notify listeners (face state, pause main listener).
+        self._notify_session(token, 'recording')
 
         # Play start beep
         _play_beep(_get_start_beep())
 
-        # Open dedicated audio stream.
-        # Always use the device's native sample rate to avoid PortAudio errors
-        # (e.g. -50 on macOS when requesting 16 kHz on a 48 kHz device).
-        # Audio is resampled to the Whisper target rate after recording.
-        stream_kwargs: dict[str, Any] = {}
-        if self._voice_device:
-            try:
-                stream_kwargs["device"] = int(self._voice_device)
-            except (ValueError, TypeError):
-                pass
+        # Prefer the device's native rate for dictation. The capture helper
+        # negotiates channel counts and other supported rates on that input.
+        try:
+            stream_kwargs = resolve_input_device(sd, self._voice_device)
+        except Exception as exc:
+            print(f'  ❌ Dictation microphone unavailable: {exc}', flush=True)
+            debug_log(f'failed to select dictation microphone: {exc}', 'dictation')
+            if self._abandon_session(token):
+                self._notify_session(token, 'idle')
+            return
 
         # Query native sample rate
         try:
-            if "device" in stream_kwargs:
-                dev_info = sd.query_devices(stream_kwargs["device"])
-            else:
-                dev_info = sd.query_devices(kind="input")
+            dev_info = sd.query_devices(stream_kwargs["device"])
             native_rate = int(dev_info.get("default_samplerate", self._target_sample_rate))
         except Exception:
             native_rate = self._target_sample_rate
 
         try:
-            with portaudio_lock:
-                with _suppress_stderr():
-                    stream = sd.InputStream(
-                        samplerate=native_rate,
-                        channels=1,
-                        dtype="float32",
-                        blocksize=int(native_rate * 0.1),
-                        callback=self._audio_callback,
-                        **stream_kwargs,
-                    )
-            self._stream_sample_rate = native_rate
-            if native_rate != self._target_sample_rate:
-                debug_log(f"dictation stream at native {native_rate} Hz (will resample to {self._target_sample_rate})", "dictation")
+            with _suppress_stderr():
+                stream, stream_sample_rate, channels = open_input_stream(
+                    sd, native_rate, 100, stream_kwargs,
+                    callback=partial(self._audio_callback, token), log_category='dictation',
+                    fallback_rate=self._target_sample_rate,
+                )
+            debug_log(
+                f'dictation stream at {stream_sample_rate} Hz, {channels} channel(s) '
+                f'(resamples to {self._target_sample_rate} Hz)', 'dictation',
+            )
         except Exception as exc:
             debug_log(f"failed to open dictation audio stream: {exc}", "dictation")
-            if self._abandon_session(token) and self._on_dictation_end:
-                self._on_dictation_end()
+            if self._abandon_session(token):
+                self._notify_session(token, 'idle')
+            return
+
+        with self._lock:
+            current = self._session == token and self._recording
+            if current:
+                self._stream_sample_rate = stream_sample_rate
+        if not current:
+            debug_log("dictation session superseded before stream start", "dictation")
+            _close_stream(stream)
             return
 
         try:
@@ -968,8 +1026,8 @@ class DictationEngine:
         except Exception as exc:
             debug_log(f"failed to start dictation audio stream: {exc}", "dictation")
             _close_stream(stream)
-            if self._abandon_session(token) and self._on_dictation_end:
-                self._on_dictation_end()
+            if self._abandon_session(token):
+                self._notify_session(token, 'idle')
             return
 
         # The hotkey may have been released (or pressed again, starting a
@@ -984,18 +1042,16 @@ class DictationEngine:
             debug_log("dictation session superseded before stream opened — closing", "dictation")
             _close_stream(stream)
 
-    def _audio_callback(self, indata, frames, time_info, status) -> None:
-        """sounddevice callback — accumulate audio frames."""
-        # ``self._recording`` is read without the engine lock.  This is safe
-        # because writes happen under the lock in _start_recording and
-        # _stop_recording, and a single-word bool read/write is atomic under
-        # the GIL.  Worst case is one extra frame captured just after stop
-        # or one missed frame just after start — both benign.
-        if not self._recording:
+    def _audio_callback(self, token: int, indata, frames, time_info, status) -> None:
+        """Accept audio only for the active recording that opened this stream."""
+        if self._session != token or not self._recording:
             return
-        # No max duration cap — the user controls when to stop (release hotkey).
-        # A cap would paste prematurely mid-dictation and restart recording.
-        self._audio_frames.append(indata[:, 0].copy())
+        audio = mono_capture(indata).copy()
+        # Conversion stays outside the state lock. Release and session changes
+        # may occur during it, so acceptance rechecks ownership under the lock.
+        with self._lock:
+            if self._session == token and self._recording:
+                self._audio_frames.append(audio)
 
     def _stop_recording(self, discard: bool = False) -> None:
         # Flip state and snapshot the work queue atomically, under minimal
@@ -1016,21 +1072,19 @@ class DictationEngine:
             audio_frames = self._audio_frames
             self._audio_frames = []
             start_time = self._record_start_time
+            stream_sample_rate = self._stream_sample_rate
+            token = self._session
 
         if discard:
             # Shutdown path — tear down synchronously so the caller knows
             # everything is finished before the engine is gone.
             _close_stream(stream)
-            if self._on_dictation_end:
-                try:
-                    self._on_dictation_end()
-                except Exception:
-                    pass
+            self._notify_session(token, 'idle')
             return
 
         threading.Thread(
             target=self._finalise_and_transcribe,
-            args=(stream, audio_frames, start_time),
+            args=(stream, audio_frames, start_time, stream_sample_rate, token),
             daemon=True,
         ).start()
 
@@ -1039,49 +1093,31 @@ class DictationEngine:
         stream: Any,
         audio_frames: list,
         start_time: float,
+        stream_sample_rate: int,
+        token: int,
     ) -> None:
-        """Worker: close stream, play beep, transcribe, paste.
+        """Finalise captured audio and notify only its owning session.
 
-        Runs on a background thread so the pynput hotkey callback returns
-        immediately.  See ``_stop_recording`` for the rationale.
-
-        ``_on_dictation_end`` is normally fired from ``_transcribe_and_paste``'s
-        finally block.  We wrap the whole body in try/except so a failure in
-        ``_close_stream`` or ``_play_beep`` (before we reach the transcribe
-        step) still unpauses the voice listener and resets the face state —
-        otherwise a single beep error would strand the UI in ``DICTATING``.
+        Stream teardown, beeps, transcription and paste run off the hotkey
+        thread. The completion notification also covers teardown failures.
         """
-        end_fired = False
         try:
             _close_stream(stream)
             _play_beep(_get_stop_beep())
-
-            duration = time.time() - start_time
+            duration = time.monotonic() - start_time
             debug_log(f"dictation recording stopped ({duration:.1f}s)", "dictation")
-
-            if self._on_dictation_processing_start:
-                try:
-                    self._on_dictation_processing_start()
-                except Exception as exc:
-                    debug_log(f"on_dictation_processing_start callback error: {exc}", "dictation")
-
-            # _transcribe_and_paste has its own finally that fires
-            # _on_dictation_end, so we defer to it on the happy path.
-            end_fired = True
-            self._transcribe_and_paste(audio_frames)
+            self._notify_session(token, 'processing')
+            self._transcribe_and_paste(audio_frames, stream_sample_rate)
         except Exception as exc:
             debug_log(f"dictation finalise error: {exc}", "dictation")
-            if not end_fired and self._on_dictation_end:
-                try:
-                    self._on_dictation_end()
-                except Exception:
-                    pass
+        finally:
+            self._notify_session(token, 'idle')
 
     # ------------------------------------------------------------------
     # Transcription & paste
     # ------------------------------------------------------------------
 
-    def _transcribe_and_paste(self, frames: list) -> None:
+    def _transcribe_and_paste(self, frames: list, stream_sample_rate: int) -> None:
         try:
             if not frames:
                 debug_log("no audio frames captured", "dictation")
@@ -1090,8 +1126,8 @@ class DictationEngine:
             audio = np.concatenate(frames)
 
             # Resample to target rate if stream ran at a different rate
-            if self._stream_sample_rate != self._target_sample_rate:
-                audio = _resample(audio, self._stream_sample_rate, self._target_sample_rate)
+            if stream_sample_rate != self._target_sample_rate:
+                audio = _resample(audio, stream_sample_rate, self._target_sample_rate)
 
             # Require at least 0.3s of audio
             if len(audio) < self._target_sample_rate * 0.3:
@@ -1117,7 +1153,12 @@ class DictationEngine:
                 finally:
                     self._paste_in_progress = False
                 # Persist to history
-                entry = self.history.add(text, duration=duration)
+                try:
+                    entry = self.history.add(text, duration=duration)
+                except HistoryUpdateError:
+                    debug_log("dictation history save failed; result not recorded", "dictation")
+                    print("  ⚠️ Dictation could not be saved to history.", flush=True)
+                    return
                 if self._on_dictation_result:
                     try:
                         self._on_dictation_result(entry)
@@ -1127,19 +1168,12 @@ class DictationEngine:
                 debug_log("empty transcription — no paste", "dictation")
         except Exception as exc:
             debug_log(f"dictation transcribe/paste error: {exc}", "dictation")
-        finally:
-            if self._on_dictation_end:
-                try:
-                    self._on_dictation_end()
-                except Exception:
-                    pass
 
     def _transcribe(self, audio) -> str:
         """Transcribe audio using the shared Whisper model."""
-        backend = self._whisper_backend_ref()
-        model = self._whisper_model_ref()
-
         with self._transcribe_lock:
+            backend = self._whisper_backend_ref()
+            model = self._whisper_model_ref()
             if backend == "mlx":
                 return self._transcribe_mlx(audio)
             elif model is not None:

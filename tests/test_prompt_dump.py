@@ -1,33 +1,25 @@
-"""
-Unit tests for the opt-in prompt dump (src/jarvis/reply/prompt_dump.py).
-
-The dump exists because PR #232's harness evals cannot reproduce the live
-Possessor→"Under the Skin" confab. We need a way to capture the *exact*
-messages array the field hits so a deterministic eval can replay it.
-
-Tests focus on behaviours rather than internals:
-  * OFF by default (no file when env var unset).
-  * ON when env var is set — file lands in the expected directory with the
-    full messages array round-tripped.
-  * Failures during dump never propagate (diagnostics must not break replies).
-"""
+"""Private prompt diagnostics retain complete data without interrupting replies."""
 
 from __future__ import annotations
 
 import json
 import os
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
 from jarvis.reply import prompt_dump
 
+pytestmark = pytest.mark.unit
+
 
 @pytest.fixture
 def tmp_home(tmp_path, monkeypatch):
     """Redirect Path.home() so dumps land in a sandbox."""
-    monkeypatch.setattr(prompt_dump.Path, "home", lambda: tmp_path)
+    from unittest.mock import MagicMock
+    owned_path = MagicMock(wraps=Path)
+    owned_path.home.return_value = tmp_path
+    monkeypatch.setattr(prompt_dump, "Path", owned_path)
     return tmp_path
 
 
@@ -109,14 +101,95 @@ class TestDumpContents:
             def __repr__(self):
                 raise RuntimeError("nope")
 
-        with patch("jarvis.reply.prompt_dump.json.dumps", side_effect=RuntimeError("boom")):
-            result = prompt_dump.dump_reply_turn(
-                session_id="abc",
-                turn=1,
-                query="q",
-                model="m",
-                messages=[],
-                tools_schema=None,
-                use_text_tools=False,
-            )
+        result = prompt_dump.dump_reply_turn(
+            session_id="abc", turn=1, query="q", model="m", messages=[],
+            tools_schema=None, use_text_tools=False, response=Unserialisable(),
+        )
         assert result is None  # swallowed, not raised
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX permissions")
+@pytest.mark.parametrize("existing", [False, True])
+def test_diagnostics_are_private_under_a_permissive_umask(tmp_path, existing):
+    import subprocess
+    import sys
+
+    script = r'''
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+import json, os, stat, sys, time
+root = Path(sys.argv[1])
+config = root / 'private-config.json'
+config.write_text(json.dumps({'_config_version': 3, 'db_path': str(root/'synthetic.sqlite'), 'voice_debug': False}))
+os.environ['JARVIS_CONFIG_PATH'] = str(config)
+os.environ['JARVIS_DUMP_PROMPTS'] = '1'
+from jarvis.reply import prompt_dump
+owned_path = MagicMock(wraps=Path)
+owned_path.home.return_value = root
+prompt_dump.Path = owned_path
+prompt_dump.time = SimpleNamespace(time=time.time, strftime=lambda fmt: 'fixed')
+os.umask(0o022)
+target = root/'.local/share/jarvis/prompts/turn-fixed-fixture-t01.json'
+if sys.argv[2] == 'existing':
+    target.parent.mkdir(parents=True)
+    target.write_text('Retained old diagnostic')
+    target.chmod(0o644)
+path = prompt_dump.dump_reply_turn(session_id='fixture', turn=1, query='Synthetic private query', model='fixture', messages=[], tools_schema=None, use_text_tools=False)
+print('DIAG_RESULT:' + json.dumps({'mode': stat.S_IMODE(path.stat().st_mode), 'directory_mode': stat.S_IMODE(path.parent.stat().st_mode), 'query': json.loads(path.read_text())['query']}))
+'''
+    env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[1] / "src"))
+    result = subprocess.run([sys.executable, "-c", script, str(tmp_path), "existing" if existing else "new"],
+                            env=env, text=True, capture_output=True, check=True)
+    report = json.loads(next(line.removeprefix("DIAG_RESULT:") for line in result.stdout.splitlines()
+                             if line.startswith("DIAG_RESULT:")))
+    assert report["mode"] == 0o600
+    if not existing:
+        assert report["directory_mode"] == 0o700
+    assert report["query"] == "Synthetic private query"
+
+
+def test_failed_serialisation_preserves_saved_diagnostics_and_private_errors(tmp_home, monkeypatch):
+    monkeypatch.setenv("JARVIS_DUMP_PROMPTS", "1")
+    from types import SimpleNamespace
+    import time
+    monkeypatch.setattr(prompt_dump, "time", SimpleNamespace(time=time.time, strftime=lambda fmt: "fixed"))
+    options = dict(session_id="fixture", turn=1, query="Retained query", model="fixture",
+                   messages=[], tools_schema=None, use_text_tools=False)
+    saved = prompt_dump.dump_reply_turn(**options)
+    original = saved.read_bytes()
+    before = set(saved.parent.iterdir())
+    secret = "private-fixture-value"
+    logs = []
+    monkeypatch.setattr(prompt_dump, "debug_log", lambda message, category: logs.append(message))
+
+    class FailedValue:
+        def __str__(self):
+            raise ValueError(secret)
+
+    assert prompt_dump.dump_reply_turn(**options, response=FailedValue()) is None
+    assert saved.read_bytes() == original
+    assert set(saved.parent.iterdir()) == before
+    assert all(secret not in message for message in logs)
+
+
+def test_failed_publication_preserves_saved_diagnostics_and_cleans_temporary_files(tmp_home, monkeypatch):
+    monkeypatch.setenv("JARVIS_DUMP_PROMPTS", "1")
+    from types import SimpleNamespace
+    import time
+    monkeypatch.setattr(prompt_dump, "time", SimpleNamespace(time=time.time, strftime=lambda fmt: "fixed"))
+    options = dict(session_id="fixture", turn=1, query="Retained query", model="fixture",
+                   messages=[], tools_schema=None, use_text_tools=False)
+    saved = prompt_dump.dump_reply_turn(**options)
+    original = saved.read_bytes()
+    before = set(saved.parent.iterdir())
+    owned_os = SimpleNamespace(**vars(os))
+
+    def blocked_replace(*args):
+        raise PermissionError("Synthetic publication failure")
+
+    owned_os.replace = blocked_replace
+    monkeypatch.setattr(prompt_dump, "os", owned_os)
+    assert prompt_dump.dump_reply_turn(**options, response="New fixture response") is None
+    assert saved.read_bytes() == original
+    assert set(saved.parent.iterdir()) == before

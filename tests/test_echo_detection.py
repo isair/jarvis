@@ -7,6 +7,8 @@ when heard audio is an echo of TTS output vs genuine user speech.
 
 import time
 import pytest
+
+pytestmark = pytest.mark.unit
 from jarvis.listening.echo_detection import EchoDetector
 
 
@@ -819,3 +821,67 @@ class TestRightmostEchoBoundarySalvage:
         # No echo prefix at all — no salvage needed; caller keeps the text as-is.
         result = detector.salvage_after_echo_tail(heard)
         assert result is None
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize('during_tts', [True, False])
+@pytest.mark.parametrize('echo_prefix', [True, False])
+@pytest.mark.parametrize('spoken,suffix', [
+    ('الطقس مشمس اليوم', 'أخبرني كيف يمكنني إعداد وجبة صحية'),
+    ('сегодня погода солнечная', 'расскажи мне как приготовить вкусный завтрак'),
+    ('ο καιρός καλός', 'πες μου πώς γίνεται αυτό σήμερα'),
+])
+def test_unicode_echo_cleanup_retains_actual_user_speech(spoken, suffix, echo_prefix, during_tts):
+    detector = EchoDetector()
+    detector.track_tts_start(spoken)
+    heard = spoken + ' ' + suffix if echo_prefix else suffix
+    if during_tts:
+        result = detector.cleanup_leading_echo_during_tts(
+            heard, tts_rate=200, utterance_start_time=detector._tts_start_time + 0.1,
+        )
+    else:
+        result = detector.cleanup_leading_echo(heard)
+    assert result == suffix
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize('minimum', [2, 4])
+@pytest.mark.parametrize('qualifies', [True, False])
+def test_during_tts_echo_cleanup_obeys_shared_minimum(minimum, qualifies):
+    detector = EchoDetector()
+    detector.min_salvage_words = minimum
+    spoken = 'the weather outside is clear now today'
+    detector.track_tts_start(spoken)
+    overlap = minimum if qualifies else minimum - 1
+    prefix = ' '.join(spoken.split()[-overlap:])
+    user_speech = 'please explain quantum gravity for beginners'
+    heard = prefix + ' ' + user_speech
+    result = detector.cleanup_leading_echo_during_tts(
+        heard, tts_rate=200, utterance_start_time=detector._tts_start_time + 0.1,
+    )
+    assert result == (user_speech if qualifies else heard)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize('user_speech', [
+    'who made it?', 'please explain the main design decisions',
+    'can you tell me who built this project?',
+])
+def test_fuzzy_during_tts_cleanup_preserves_complete_follow_up(user_speech):
+    detector = EchoDetector()
+    detector.track_tts_start('Jarvis explores projects through practical experiments and clear examples.')
+    heard = 'laws projects through practical experiments and clear examples. ' + user_speech
+    assert detector.cleanup_leading_echo_during_tts(
+        heard, tts_rate=200, utterance_start_time=detector._tts_start_time + 0.1,
+    ) == user_speech
+
+
+@pytest.mark.unit
+def test_fuzzy_echo_cleanup_handles_expanded_spoken_units():
+    detector = EchoDetector()
+    detector.track_tts_start('It is 9°C outside')
+    user_speech = 'who made it?'
+    heard = 'it is 9 degrees celsius outside ' + user_speech
+    assert detector.cleanup_leading_echo_during_tts(
+        heard, tts_rate=200, utterance_start_time=detector._tts_start_time + 0.1,
+    ) == user_speech

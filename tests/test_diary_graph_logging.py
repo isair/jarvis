@@ -48,7 +48,7 @@ class TestKnowledgeGraphConsoleLogging:
                 llm_provider="ollama",
                 llm_base_url="http://localhost:11434",
                 llm_chat_model="test",
-                embedding_model="test",
+                embedding_model="",
                 ollama_base_url="http://localhost:11434",
                 ollama_chat_model="test",
                 ollama_embed_model="test",

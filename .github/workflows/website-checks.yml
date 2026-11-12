@@ -1,0 +1,27 @@
+name: website-checks
+
+on:
+  pull_request:
+    paths:
+      - 'website/**'
+      - 'tests/test_public_website.py'
+      - 'docs/img/face.png'
+      - 'docs/img/chat-window.png'
+      - 'docs/img/setup-provider.png'
+      - '.github/workflows/website-checks.yml'
+      - '.github/workflows/public-site.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Website build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: 🏗️ Build the public pages without the assistant runtime
+        run: python website/build.py --output _site

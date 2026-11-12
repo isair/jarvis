@@ -1,10 +1,8 @@
-"""Planner — Small-talk with tools available (Live)
+"""Planner: Small-talk with tools available (Live)
 
-Guards that the task-list planner trusts the tool router's judgment when
-a relevant tool is in the catalogue — even for seemingly trivial queries
-like "tell me a joke". The old rule 9 ("small-talk → reply only") made
-the planner override the router's signal and emit a reply-only plan,
-which produced stale, dismissive replies.
+Guards that the task-list planner trusts the tool router's judgement when
+a relevant tool is in the catalogue, even for seemingly trivial queries
+like "tell me a joke". Pure greetings still use a direct reply.
 
 Run: EVAL_JUDGE_MODEL=gemma4:e2b pytest evals/test_planner_trivial_with_tools.py -v
 """
@@ -13,19 +11,8 @@ import re
 
 import pytest
 
-from conftest import requires_judge_llm
-from helpers import JUDGE_BASE_URL, JUDGE_MODEL
-
-
-def _cfg():
-    from types import SimpleNamespace
-    return SimpleNamespace(
-        ollama_base_url=JUDGE_BASE_URL,
-        ollama_chat_model=JUDGE_MODEL,
-        fast_model="",
-        planner_enabled=True,
-        planner_timeout_sec=20.0,
-    )
+from evals.conftest import requires_judge_llm
+from evals.helpers import planner_config
 
 
 _TOOL_CATALOG = [
@@ -53,7 +40,7 @@ def _tool_names_in_plan(plan):
 class TestPlannerUsesToolsForTrivialQueriesWhenRouterIncludesThem:
     """When the router included a tool in the available-tools catalogue,
     the planner must plan to use it rather than emitting a reply-only
-    plan — even for queries that look like small-talk."""
+    plan, even for queries that look like small-talk."""
 
     @pytest.mark.parametrize(
         "query",
@@ -70,16 +57,17 @@ class TestPlannerUsesToolsForTrivialQueriesWhenRouterIncludesThem:
         from jarvis.reply.planner import plan_query
 
         plan = plan_query(
-            cfg=_cfg(),
+            cfg=planner_config(),
             query=query,
             dialogue_context="",
             tools=_TOOL_CATALOG,
+            timeout_sec=20.0,
         )
         print(f"\n  Query: {query!r}")
         print(f"  Plan: {plan}")
 
         assert plan, (
-            f"Planner returned empty plan for {query!r} — expected a "
+            f"Planner returned empty plan for {query!r}: expected a "
             f"plan with at least a webSearch step."
         )
         tool_names = _tool_names_in_plan(plan)
@@ -101,14 +89,15 @@ class TestPlannerUsesToolsForTrivialQueriesWhenRouterIncludesThem:
     )
     def test_pure_greeting_still_uses_reply_only(self, query):
         """Pure greetings with no tool-relevant content still get a
-        reply-only plan — no external information needed."""
+        reply-only plan: no external information needed."""
         from jarvis.reply.planner import plan_query
 
         plan = plan_query(
-            cfg=_cfg(),
+            cfg=planner_config(),
             query=query,
             dialogue_context="",
             tools=_TOOL_CATALOG,
+            timeout_sec=20.0,
         )
         print(f"\n  Query: {query!r}")
         print(f"  Plan: {plan}")

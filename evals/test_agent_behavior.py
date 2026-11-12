@@ -15,7 +15,7 @@ from typing import List, Optional, Tuple
 import pytest
 from unittest.mock import patch
 
-from conftest import requires_judge_llm
+from evals.tool_routing import requires_judge_llm
 from helpers import (
     MockConfig, ToolCallCapture,
     create_mock_llm_response, create_tool_call,
@@ -426,15 +426,14 @@ class TestMemoryEnrichment:
     def test_enrichment_extracts_correct_keywords(self, query: str, expected_keywords: list, mock_config):
         """Enrichment should extract keywords that find relevant memory context."""
         from jarvis.reply.enrichment import extract_search_params_for_memory
-        from helpers import JUDGE_MODEL
+        from helpers import voice_config
 
-        mock_config.ollama_base_url = "http://localhost:11434"
-        mock_config.ollama_chat_model = JUDGE_MODEL
+        mock_config = voice_config()
 
         result = extract_search_params_for_memory(
             query=query,
-            ollama_base_url=mock_config.ollama_base_url,
-            ollama_chat_model=mock_config.ollama_chat_model,
+            cfg=mock_config,
+            chat_model=mock_config.fast_model,
             timeout_sec=15.0
         )
 
@@ -464,10 +463,9 @@ class TestMemoryEnrichment:
         information — we don't want to pull it from long-term memory redundantly.
         """
         from jarvis.reply.enrichment import extract_search_params_for_memory
-        from helpers import JUDGE_MODEL
+        from helpers import voice_config
 
-        mock_config.ollama_base_url = "http://localhost:11434"
-        mock_config.ollama_chat_model = JUDGE_MODEL
+        mock_config = voice_config()
 
         context_hint = (
             "Current local time: Sunday, 2026-04-19 14:30 local. "
@@ -479,8 +477,8 @@ class TestMemoryEnrichment:
 
         result = extract_search_params_for_memory(
             query="recommend a restaurant I'd enjoy",
-            ollama_base_url=mock_config.ollama_base_url,
-            ollama_chat_model=mock_config.ollama_chat_model,
+            cfg=mock_config,
+            chat_model=mock_config.fast_model,
             timeout_sec=15.0,
             context_hint=context_hint,
         )

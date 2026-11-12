@@ -1,17 +1,14 @@
 """Tests for the node graph memory system (v2)."""
 
-import os
-import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from src.jarvis.memory.graph import (
+from jarvis.memory.graph import (
     GraphMemoryStore,
     MemoryNode,
     _estimate_tokens,
-    SPLIT_THRESHOLD,
-    MERGE_THRESHOLD,
+    DECAY_HALF_LIFE_DAYS,
     FIXED_BRANCHES,
 )
 
@@ -111,60 +108,24 @@ class TestGraphMemoryStoreBootstrap:
 
 
 @pytest.mark.unit
-class TestMigrateLegacyShape:
-    """Startup wipe when the on-disk graph predates the User/Directives/World taxonomy."""
-
-    def test_no_wipe_on_fresh_graph(self, store):
-        """Freshly seeded graph (root + 3 branches, no data) is conforming."""
-        assert store.migrate_legacy_shape() is False
-        assert store.get_node_count() == BOOTSTRAP_NODE_COUNT
-
-    def test_no_wipe_when_only_descendants_of_fixed_branches(self, store):
-        """Children grown under User/Directives/World are fine — the shape
-        check only looks at direct root children."""
-        store.create_node(
-            name="Identity", description="who the user is",
-            data="User's name is Baris.", parent_id="user",
-        )
-        assert store.migrate_legacy_shape() is False
-        # Content preserved
-        assert any(
-            n.name == "Identity" for n in store.get_all_nodes()
-        )
-
-    def test_wipes_when_root_has_rogue_child(self, store):
-        """Pre-taxonomy nodes sitting directly under root trigger a wipe."""
-        store.create_node(
-            name="People", description="pre-taxonomy category",
-            data="Alice is a friend.", parent_id="root",
-        )
-        assert store.migrate_legacy_shape() is True
-        # After wipe: only root + seeded branches, no rogue child
-        names = {n.name for n in store.get_all_nodes()}
-        assert "People" not in names
-        assert store.get_node_count() == BOOTSTRAP_NODE_COUNT
-
-    def test_wipes_when_root_itself_has_data(self, store):
-        """Cold-start facts appended to root before the taxonomy existed
-        also count as non-conforming."""
-        store.conn.execute(
-            "UPDATE memory_nodes SET data = ? WHERE id = 'root'",
-            ("Some pre-taxonomy fact on root.",),
-        )
-        store.conn.commit()
-        assert store.migrate_legacy_shape() is True
-        root = store.get_root()
-        assert root.data == ""
-
-    def test_reseeds_fixed_branches_after_wipe(self, store):
-        """After a wipe the three fixed branches are present again."""
-        store.create_node(
-            name="Rogue", description="x", data="y", parent_id="root",
-        )
-        assert store.migrate_legacy_shape() is True
-        children = store.get_children("root")
-        child_ids = {c.id for c in children}
-        assert child_ids == {b[0] for b in FIXED_BRANCHES}
+@pytest.mark.parametrize("root_data, extra_child, expected", [
+    ("", False, False),
+    ("   ", False, False),
+    ("A saved root fact", False, True),
+    ("", True, True),
+    ("A saved root fact", True, True),
+])
+def test_root_content_inspection_preserves_all_saved_nodes(store, root_data, extra_child, expected):
+    store.create_node("Identity", "Personal fact", data="Lives in Example City", parent_id="user")
+    store.create_node("Instructions", "Standing instruction", data="Use concise replies", parent_id="directives")
+    store.create_node("Knowledge", "World fact", data="Water freezes at zero Celsius", parent_id="world")
+    store.update_node("root", data=root_data)
+    if extra_child:
+        store.create_node("Manual note", "Unclassified note", data="Keep this note", parent_id="root")
+    before = list(store.conn.iterdump())
+    assert store.has_unclassified_root_content() is expected
+    assert store.has_unclassified_root_content() is expected
+    assert list(store.conn.iterdump()) == before
 
 
 @pytest.mark.unit
@@ -530,62 +491,23 @@ class TestSafetyGuards:
 class TestAccessDecay:
     """Tests for time-decayed access scoring."""
 
-    def test_recently_accessed_node_ranks_higher(self, store):
-        """A node accessed today should rank above one accessed long ago,
-        even if the stale node has a higher raw access_count.
-
-        With a 14-day half-life:
-        - Stale: 20 accesses, 60 days ago → 20 / (1 + 60/14) ≈ 3.78
-        - Fresh: 5 accesses, today → 5 / (1 + 0/14) = 5.0
-        """
-        from datetime import timedelta
-
+    @pytest.mark.parametrize('ranking', ['top', 'children'])
+    def test_fresh_access_outranks_stale_raw_count(self, store, ranking):
+        """Both entry points rank by configured decay rather than raw count."""
         stale = store.create_node(name="Stale", description="Old node", parent_id="root")
         fresh = store.create_node(name="Fresh", description="New node", parent_id="root")
-
-        # Give the stale node moderate accesses but set last_accessed to 60 days ago
         store.conn.execute(
             "UPDATE memory_nodes SET access_count = 20, last_accessed = ? WHERE id = ?",
-            ((datetime.now(timezone.utc) - timedelta(days=60)).isoformat(), stale.id),
+            ((datetime.now(timezone.utc) - timedelta(days=4 * DECAY_HALF_LIFE_DAYS)).isoformat(), stale.id),
         )
         store.conn.commit()
-
-        # Fresh node: fewer accesses but just now
         for _ in range(5):
             store.touch_node(fresh.id)
-
-        top = store.get_top_nodes(limit=2)
-        assert len(top) >= 2
-        assert top[0].id == fresh.id, (
+        nodes = store.get_top_nodes(limit=2) if ranking == 'top' else store.get_children('root')
+        assert len(nodes) >= 2
+        assert nodes[0].id == fresh.id, (
             "Freshly accessed node should rank above stale node"
         )
-
-    def test_children_ordered_by_decayed_score(self, store):
-        """get_children should order by decayed score, not raw count.
-
-        With a 14-day half-life:
-        - Old child: 10 accesses, 90 days ago → 10 / (1 + 90/14) ≈ 1.35
-        - New child: 3 accesses, today → 3 / (1 + 0/14) = 3.0
-        """
-        from datetime import timedelta
-
-        old_child = store.create_node(name="Old Child", description="", parent_id="root")
-        new_child = store.create_node(name="New Child", description="", parent_id="root")
-
-        # Old child: moderate count, very stale
-        store.conn.execute(
-            "UPDATE memory_nodes SET access_count = 10, last_accessed = ? WHERE id = ?",
-            ((datetime.now(timezone.utc) - timedelta(days=90)).isoformat(), old_child.id),
-        )
-        store.conn.commit()
-
-        # New child: low count, fresh
-        for _ in range(3):
-            store.touch_node(new_child.id)
-
-        children = store.get_children("root")
-        child_ids = [c.id for c in children]
-        assert child_ids[0] == new_child.id
 
     def test_same_age_nodes_ordered_by_count(self, store):
         """When two nodes were accessed at the same time, higher count wins."""

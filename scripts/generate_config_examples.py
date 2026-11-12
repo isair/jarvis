@@ -20,23 +20,23 @@ from jarvis.config import export_example_config
 def generate_config_example() -> None:
     """Generate examples/config.json from defaults."""
     config = export_example_config(include_db_path=False)
-    
+
     # Generate the config file
     config_path = project_root / "examples" / "config.json"
     with config_path.open("w", encoding="utf-8") as f:
         json.dump(config, f, indent=2)
         f.write("\n")  # Add trailing newline
-    
-    print(f"Generated {config_path}")
+
+    print(f"📝 Generated {config_path}")
 
 
 def main() -> None:
     """Generate all example configuration files."""
-    print("Generating configuration examples from defaults...")
-    
+    print("⚙️ Generating configuration examples from defaults...")
+
     generate_config_example()
-    
-    print("\nDone! Example files are now in sync with config.py defaults.")
+
+    print("\n✅ Configuration examples match the canonical defaults.")
 
 
 if __name__ == "__main__":

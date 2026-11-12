@@ -3,10 +3,26 @@
 import time
 from typing import Optional, List
 import re
+import unicodedata
 
 from ..debug import debug_log
 
 from rapidfuzz import fuzz
+
+
+def _normalise_echo_token(token: str) -> str:
+    """Retain Unicode word content and canonical internal apostrophes."""
+    normalised = unicodedata.normalize("NFC", token).casefold()
+    kept = []
+    for index, char in enumerate(normalised):
+        if char in "'‘’":
+            if (0 < index < len(normalised) - 1
+                    and all(unicodedata.category(normalised[neighbour])[0] in "LM"
+                            for neighbour in (index - 1, index + 1))):
+                kept.append("'")
+        elif char.isalnum() or unicodedata.category(char).startswith('M'):
+            kept.append(char)
+    return "".join(kept)
 
 
 class EchoDetector:
@@ -35,8 +51,6 @@ class EchoDetector:
         # natural follow-ups ("tell me more please") while high enough to
         # reject Whisper's echo-tail hallucinations ("…regions like Steneti").
         self.min_salvage_words: int = 3
-        # Backwards-compat alias — older callers used the overlap name.
-        self._min_overlap_accept_words: int = self.min_salvage_words
         
         # Utterance timing
         self._utterance_start_time: float = 0.0
@@ -132,6 +146,21 @@ class EchoDetector:
             debug_log(f"text similarity match: score={best_score:.1f} (threshold={threshold}), heard='{heard_lower}', tts='{tts_lower[:100]}...'", "echo")
 
         return is_similar
+
+    def is_hot_window_echo(self, heard_text: str, tts_text: str) -> bool:
+        """Require complete token matches for short possible TTS fragments."""
+        heard_words = [token for word in heard_text.split()
+                       if (token := _normalise_echo_token(word))]
+        tts_words = [token for word in tts_text.split()
+                     if (token := _normalise_echo_token(word))]
+        if not heard_words or not tts_words:
+            return False
+        if min(len(heard_words), len(tts_words)) <= 4:
+            return any(tts_words[start:start+len(heard_words)] == heard_words
+                       for start in range(len(tts_words)-len(heard_words)+1))
+        heard_count, tts_count = len(heard_text.split()), len(tts_text.split())
+        return (heard_count <= max(tts_count*1.3, tts_count+3)
+                and fuzz.partial_ratio(heard_text.lower(), tts_text.lower()) >= 70)
     
     def _matches_tts_segment(self, heard_text: str, tts_rate: float, utterance_start_time: float) -> bool:
         """Checks if heard text matches the likely TTS segment playing at a given time.
@@ -214,19 +243,13 @@ class EchoDetector:
             return heard_text
 
         tts_words = self._last_tts_text.lower().strip().split()
-        heard_words = heard_text.lower().strip().split()
+        heard_words = heard_text.strip().split()
 
         if not tts_words or not heard_words:
             return heard_text
 
-        # Normalize tokens to ignore punctuation and curly quotes while comparing
-        def _clean_token(token: str) -> str:
-            t = token.replace("'", "'")
-            # drop all non-alphanumeric except apostrophe
-            return re.sub(r"[^a-z0-9']+", "", t)
-
-        tts_clean = [_clean_token(w) for w in tts_words]
-        heard_clean = [_clean_token(w) for w in heard_words]
+        tts_clean = [_normalise_echo_token(w) for w in tts_words]
+        heard_clean = [_normalise_echo_token(w) for w in heard_words]
 
         # Phase 1: Try timing-based segment first (faster for typical cases)
         time_offset = utterance_start_time - self._tts_start_time
@@ -254,84 +277,58 @@ class EchoDetector:
         # Always try to find the longest overlap at TTS end, not just timing-based segment
         # This handles timing drift and finds cases where entire heard text is TTS
         limit = min(len(tts_clean), len(heard_clean))
-        for i in range(limit, max(max_overlap, self._min_overlap_accept_words - 1), -1):
+        for i in range(limit, max(max_overlap, self.min_salvage_words - 1), -1):
             if tts_clean[-i:] == heard_clean[:i]:
                 if i > max_overlap:
                     debug_log(f"salvage: found longer match at TTS end ({i} vs {max_overlap} words)", "echo")
                     max_overlap = i
                 break
 
-        if 0 < max_overlap < len(heard_words) and max_overlap >= self._min_overlap_accept_words:
+        if 0 < max_overlap < len(heard_words) and max_overlap >= self.min_salvage_words:
             cleaned_text = " ".join(heard_words[max_overlap:])
             overlap_text = " ".join(heard_words[:max_overlap])
             debug_log(f"cleaned leading echo during TTS. Overlap: '{overlap_text}'. Cleaned: '{cleaned_text}'", "echo")
             return cleaned_text
 
-        # Phase 3: Fuzzy matching fallback for transcription differences
-        # When exact word matching fails (e.g., "cuppa" vs "cup"), try fuzzy matching
-        # on prefixes of heard text against the TTS TAIL (not full TTS)
-        if len(heard_words) > self._min_overlap_accept_words:
-            # Get the tail of TTS (last ~50% of words) - this is what would be echoed
-            # when mic picks up the end of TTS playback
-            tts_words_list = self._last_tts_text.lower().strip().split()
-            tts_tail_start = max(0, len(tts_words_list) // 2)
-            tts_tail = " ".join(tts_words_list[tts_tail_start:])
-            tts_tail_normalized = self._normalize_for_comparison(tts_tail)
+        # Compare complete candidate prefixes with equally sized TTS endings.
+        # A partial match can contain both echo and real user speech.
+        if len(heard_words) > self.min_salvage_words:
+            tts_normalised_words = self._normalize_for_comparison(self._last_tts_text).split()
+            best_prefix = None
+            best_score = 0.0
+            max_prefix_words = min(len(tts_normalised_words), len(heard_words) - self.min_salvage_words)
+            for prefix_len in range(self.min_salvage_words, max_prefix_words + 1):
+                heard_prefix = self._normalize_for_comparison(" ".join(heard_words[:prefix_len]))
+                normalised_length = len(heard_prefix.split())
+                if normalised_length > len(tts_normalised_words):
+                    continue
+                tts_ending = " ".join(tts_normalised_words[-normalised_length:])
+                score = fuzz.ratio(heard_prefix, tts_ending)
+                if score < 85 or score <= best_score:
+                    continue
+                suffix = " ".join(heard_words[prefix_len:])
+                suffix_score = fuzz.partial_ratio(self._normalize_for_comparison(suffix), tts_ending)
+                if suffix_score >= 70:
+                    continue
+                best_prefix, best_score = prefix_len, score
 
-            # Try different split points in the heard text
-            # Start from around 70% of words (likely some echo) and work down to min overlap
-            min_prefix_words = self._min_overlap_accept_words
-            max_prefix_words = min(len(heard_words) - 2, int(len(heard_words) * 0.85))
-
-            for prefix_len in range(max_prefix_words, min_prefix_words - 1, -1):
-                heard_prefix = " ".join(heard_words[:prefix_len])
-                heard_prefix_normalized = self._normalize_for_comparison(heard_prefix)
-
-                # Check if this prefix matches the TTS TAIL using partial_ratio
-                # This ensures we're matching the END of TTS (the echo) not middle content
-                score = fuzz.partial_ratio(heard_prefix_normalized, tts_tail_normalized)
-
-                if score >= 85:
-                    suffix = " ".join(heard_words[prefix_len:])
-                    # Make sure suffix is meaningful (not just a word or two)
-                    # AND that the suffix doesn't also match TTS (would mean pure echo)
-                    if len(suffix.split()) >= 2:
-                        suffix_normalized = self._normalize_for_comparison(suffix)
-                        suffix_match = fuzz.partial_ratio(suffix_normalized, tts_tail_normalized)
-                        # Only salvage if suffix is sufficiently DIFFERENT from TTS
-                        if suffix_match < 70:
-                            debug_log(
-                                f"salvage (fuzzy): prefix_score={score}, suffix_score={suffix_match}, "
-                                f"prefix='{heard_prefix[:40]}...', suffix='{suffix}'", "echo"
-                            )
-                            return suffix
+            if best_prefix is not None:
+                suffix = " ".join(heard_words[best_prefix:])
+                debug_log(f"salvage (fuzzy): prefix_score={best_score}, overlap_words={best_prefix}, "
+                          f"suffix='{suffix[:80]}'", "echo")
+                return suffix
 
         return heard_text
     
     def salvage_after_echo_tail(self, heard_text: str) -> Optional[str]:
-        """Find the rightmost echo-like window in heard and salvage the rest.
+        """Find an echo-like word window and preserve the following user speech.
 
-        The existing salvage paths (cleanup_leading_echo, the fuzzy Phase 3
-        inside cleanup_leading_echo_during_tts) both have a blind spot for
-        the common field pattern where:
+        Scan word boundaries right-to-left against the captured TTS tail. A
+        candidate must leave the shared minimum of user words, and that suffix
+        must differ from the TTS text. This supports mis-transcribed echo words
+        when leading-prefix cleanup cannot identify the boundary.
 
-          * Whisper mis-transcribes the first echo word (e.g. 'explores' →
-            'laws'), breaking exact word-match salvage.
-          * The real follow-up is short (1–3 words: "Who made it?"), so the
-            fuzzy iteration — which prefers the shortest suffix — truncates
-            it by one word ("made it" instead of "who made it").
-
-        This helper scans right-to-left over word boundaries in `heard` and
-        asks: does the window of N words ending here look like it came
-        from the TTS tail? The rightmost position where that's true marks
-        the end of the echo; everything after it is the user's real speech.
-
-        Returns the salvaged tail, or None when the text is pure echo,
-        pure non-echo, or too short to reason about.
-
-        Kept separate from the existing salvage helpers rather than merged
-        into them so their current behaviour (and callers) don't change —
-        this runs as a last-resort salvage when the others return unchanged.
+        Return the salvaged tail, or None without a qualifying boundary.
         """
         if not heard_text or not self._last_tts_text:
             return None
@@ -439,28 +436,26 @@ class EchoDetector:
 
         heard_words = heard_normalized.split()
         tts_words = tts_normalized.split()
-        original_heard_words = heard_text.lower().strip().split()
+        original_heard_words = heard_text.strip().split()
 
         if not heard_words or not tts_words:
             return heard_text
 
-        # Strip punctuation from words for comparison (handles "kensington," vs "kensington")
-        def strip_punct(word: str) -> str:
-            return re.sub(r"[^\w']", "", word)
-
-        heard_clean = [strip_punct(w) for w in heard_words]
-        tts_clean = [strip_punct(w) for w in tts_words]
+        heard_clean = [_normalise_echo_token(w) for w in heard_words]
+        tts_clean = [_normalise_echo_token(w) for w in tts_words]
 
         def _words_match(a: list, b: list) -> bool:
             """Check if two word lists match, allowing fuzzy per-word comparison."""
             if len(a) != len(b):
                 return False
+            fuzzy_allowed = (min(sum(bool(word) for word in a), sum(bool(word) for word in b))
+                             >= self.min_salvage_words)
             for wa, wb in zip(a, b):
                 if wa == wb:
                     continue
                 # Allow fuzzy match for words Whisper may transcribe differently
                 # (e.g. "tbilisi" vs "tvalisi")
-                if fuzz.ratio(wa, wb) >= 70:
+                if fuzzy_allowed and fuzz.ratio(wa, wb) >= 70:
                     continue
                 return False
             return True
@@ -472,7 +467,8 @@ class EchoDetector:
                 break
 
         # Only cleanup if there's a remainder and the overlap is at least 2 words.
-        if 0 < max_overlap < len(heard_words) and max_overlap >= 2:
+        if (0 < max_overlap < len(heard_words)
+                and sum(bool(word) for word in heard_clean[:max_overlap]) >= 2):
             # Use original words for output (preserving capitalization etc.)
             # But we need to map normalized word count to original word count
             # This is approximate - normalized may have different word count
@@ -481,12 +477,13 @@ class EchoDetector:
             if original_word_count == normalized_word_count:
                 cleaned_text = " ".join(original_heard_words[max_overlap:])
             else:
-                # Word count differs due to normalization - use normalized words
-                cleaned_text = " ".join(heard_words[max_overlap:])
+                # An uncertain source boundary must not manufacture replacement speech.
+                return heard_text
             overlap_text = " ".join(heard_words[:max_overlap])
             debug_log(f"cleaned leading echo. Overlap: '{overlap_text}'. Cleaned: '{cleaned_text}'", "echo")
             return cleaned_text
 
+        debug_log("🗣️ Echo prefix not established; retaining recognised speech", "echo")
         return heard_text
     
     def should_reject_as_echo(self, heard_text: str, current_energy: float,
