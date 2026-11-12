@@ -3,10 +3,10 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
+import requests
 
 from jarvis.tools.base import ToolContext
 from jarvis.tools.builtin.fetch_web_page import FetchWebPageTool
-from jarvis.tools import public_http
 
 pytestmark = pytest.mark.unit
 
@@ -31,10 +31,14 @@ def page_argument_server(monkeypatch, mock_config):
     worker = threading.Thread(target=server.serve_forever, daemon=True)
     worker.start()
     url = f'http://127.0.0.1:{server.server_port}/page'
-    def owned_addresses(host, port):
-        assert (host, port) == ('127.0.0.1', server.server_port)
-        return ['127.0.0.1']
-    monkeypatch.setattr(public_http, '_public_addresses', owned_addresses)
+    original_get = requests.get
+
+    def private_get(requested_url, *args, **kwargs):
+        if requested_url != url:
+            raise requests.RequestException('Private fixture blocks non-local requests')
+        return original_get(requested_url, *args, **kwargs)
+
+    monkeypatch.setattr(requests, 'get', private_get)
     context = ToolContext(None, mock_config, '', '', '', 0, lambda message: None)
     yield FetchWebPageTool(), context, url, paths
     server.shutdown()

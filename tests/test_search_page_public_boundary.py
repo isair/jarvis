@@ -1,6 +1,7 @@
-"""Web pages cannot turn public requests into reads from private services."""
+"""Untrusted search pages retain the public-address boundary."""
 
 import ipaddress
+import select
 import socket
 import ssl
 import subprocess
@@ -11,7 +12,7 @@ from types import SimpleNamespace
 import pytest
 from urllib3.util import connection
 
-from jarvis.tools.builtin.fetch_web_page import FetchWebPageTool
+from jarvis.tools.builtin.web_search import _fetch_page_content
 from jarvis.tools import public_http
 
 
@@ -42,6 +43,7 @@ def page_network(monkeypatch, tmp_path, request):
             pass
 
     server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    state.port = server.server_port
     certificate_name = getattr(request, 'param', None)
     if certificate_name:
         state.certificate = tmp_path / 'certificate.pem'
@@ -75,7 +77,7 @@ def page_network(monkeypatch, tmp_path, request):
 
     monkeypatch.setattr(socket, 'getaddrinfo', resolve)
     monkeypatch.setattr(connection, 'create_connection', dial)
-    for key in ('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy'):
+    for key in ('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy', 'NO_PROXY', 'no_proxy'):
         monkeypatch.delenv(key, raising=False)
     state.context = SimpleNamespace(user_print=lambda message: None)
     yield state
@@ -93,44 +95,42 @@ def page_network(monkeypatch, tmp_path, request):
     'http://[fec0::1]/private', 'http://[::127.0.0.1]/private',
 ])
 def test_private_destinations_return_no_content(page_network, url):
-    result = FetchWebPageTool().run({'url': url}, page_network.context)
-    assert not result.success
-    assert 'Private fixture secret' not in result.reply_text
+    content = _fetch_page_content(url)
+    assert content is None
     assert not page_network.paths, 'Private destination must not receive an HTTP request'
 
 
 @pytest.mark.parametrize('destination', ['http://127.0.0.1/private', 'http://private.test/private', 'http://[::1]/private'])
 def test_public_redirect_cannot_reach_a_private_destination(page_network, destination):
     page_network.redirect = destination
-    result = FetchWebPageTool().run({'url': 'http://public.test/redirect'}, page_network.context)
-    assert not result.success
+    content = _fetch_page_content('http://public.test/redirect')
+    assert content is None
     assert page_network.paths == ['/redirect']
-    assert 'Private fixture secret' not in result.reply_text
 
 
 @pytest.mark.parametrize('redirect', [False, True])
-def test_credentials_in_page_urls_are_rejected_before_authenticated_requests(page_network, redirect):
+def test_search_pages_retain_explicit_origin_authentication(page_network, redirect):
     credential_url = 'http://owned-login:owned-password@public.test/private'
     page_network.redirect = credential_url
     url = 'http://public.test/redirect' if redirect else credential_url
-    result = FetchWebPageTool().run({'url': url}, page_network.context)
-    assert not result.success
-    assert page_network.paths == (['/redirect'] if redirect else [])
-    assert all('Authorization' not in headers for headers in page_network.headers)
+    content = _fetch_page_content(url)
+    assert content == 'Private fixture secret.'
+    assert page_network.paths == (['/redirect', '/private'] if redirect else ['/private'])
+    assert page_network.headers[-1]['Authorization'].startswith('Basic ')
 
 
 def test_mixed_public_and_private_dns_is_rejected(page_network):
     page_network.mixed = True
-    result = FetchWebPageTool().run({'url': 'http://public.test/article'}, page_network.context)
-    assert not result.success
+    content = _fetch_page_content('http://public.test/article')
+    assert content is None
     assert not page_network.paths
 
 
 @pytest.mark.parametrize('address', ['fec0::1', '::127.0.0.1'])
 def test_non_public_ipv6_dns_answers_are_rejected(page_network, address):
     page_network.answers = ['1.1.1.1', address]
-    result = FetchWebPageTool().run({'url': 'http://public.test/article'}, page_network.context)
-    assert not result.success
+    content = _fetch_page_content('http://public.test/article')
+    assert content is None
     assert not page_network.paths
 
 
@@ -138,24 +138,85 @@ def test_non_public_ipv6_dns_answers_are_rejected(page_network, address):
 def test_public_pages_use_validated_numeric_destinations(page_network, redirect):
     page_network.redirect = '/article'
     url = 'http://public.test/' + ('redirect' if redirect else 'article')
-    result = FetchWebPageTool().run({'url': url}, page_network.context)
-    assert result.success, result.reply_text
-    assert 'Owned public article.' in result.reply_text
+    content = _fetch_page_content(url)
+    assert content is not None
+    assert 'Owned public article.' in content
     assert page_network.dialled
     assert all(ipaddress.ip_address(host).is_global for host in page_network.dialled)
 
 
-def test_public_page_does_not_receive_ambient_credentials_or_proxy_requests(page_network, monkeypatch, tmp_path):
+def test_search_page_retains_host_specific_netrc_credentials(page_network, monkeypatch, tmp_path):
     netrc = tmp_path / 'netrc'
     netrc.write_text('machine public.test login owned-login password owned-password\n')
     monkeypatch.setenv('NETRC', str(netrc))
-    monkeypatch.setenv('HTTP_PROXY', 'http://private.test:8080')
     monkeypatch.delenv('NO_PROXY', raising=False)
-    result = FetchWebPageTool().run({'url': 'http://public.test/article'}, page_network.context)
-    assert result.success, result.reply_text
-    assert 'Authorization' not in page_network.headers[0]
+    content = _fetch_page_content('http://public.test/article')
+    assert content is not None
+    assert page_network.headers[0]['Authorization'].startswith('Basic ')
     assert page_network.paths == ['/article']
     assert all(ipaddress.ip_address(host).is_global for host in page_network.dialled)
+
+
+def test_search_proxy_bypass_uses_a_validated_direct_connection(page_network, monkeypatch):
+    monkeypatch.setenv('HTTP_PROXY', 'http://unused-proxy.invalid:1')
+    monkeypatch.setenv('NO_PROXY', 'public.test')
+    assert _fetch_page_content('http://public.test/article') == 'Owned public article.'
+    assert page_network.paths == ['/article']
+    assert all(ipaddress.ip_address(host).is_global for host in page_network.dialled)
+
+
+@pytest.mark.parametrize('page_network', ['public.test'], indirect=True)
+def test_https_search_retains_authenticated_proxy_and_certificate_checks(page_network, monkeypatch):
+    targets = []
+    stopped = threading.Event()
+    finished = threading.Event()
+
+    class Proxy(BaseHTTPRequestHandler):
+        def do_CONNECT(self):
+            targets.append((self.path, self.headers.get('Proxy-Authorization')))
+            assert self.path == f'public.test:{page_network.port}'
+            try:
+                with socket.create_connection(('127.0.0.1', page_network.port), timeout=2) as upstream:
+                    self.send_response(200)
+                    self.end_headers()
+                    peers = (self.connection, upstream)
+                    while not stopped.is_set():
+                        readable, _, _ = select.select(peers, [], [], 0.2)
+                        for source in readable:
+                            data = source.recv(65536)
+                            if not data:
+                                return
+                            destination = upstream if source is self.connection else self.connection
+                            destination.sendall(data)
+            finally:
+                finished.set()
+
+        def log_message(self, *args):
+            pass
+
+    proxy = ThreadingHTTPServer(('127.0.0.1', 0), Proxy)
+    worker = threading.Thread(target=proxy.serve_forever)
+    worker.start()
+
+    def proxy_connection(address, *args, **kwargs):
+        assert address == ('proxy.test', proxy.server_port)
+        return socket.create_connection(('127.0.0.1', proxy.server_port), timeout=3)
+
+    monkeypatch.setattr(connection, 'create_connection', proxy_connection)
+    monkeypatch.setenv('HTTPS_PROXY', f'http://proxy-user:proxy-password@proxy.test:{proxy.server_port}')
+    monkeypatch.setenv('REQUESTS_CA_BUNDLE', str(page_network.certificate))
+    try:
+        content = _fetch_page_content(f'https://public.test:{page_network.port}/article')
+        assert content == 'Owned public article.'
+        assert targets == [(f'public.test:{page_network.port}', 'Basic cHJveHktdXNlcjpwcm94eS1wYXNzd29yZA==')]
+        assert page_network.headers[-1]['Host'] == f'public.test:{page_network.port}'
+    finally:
+        stopped.set()
+        proxy.shutdown()
+        proxy.server_close()
+        worker.join(timeout=2)
+        assert not worker.is_alive()
+        assert finished.wait(timeout=2)
 
 
 @pytest.mark.parametrize('page_network', ['public.test'], indirect=True)

@@ -26,7 +26,7 @@ def test_reading_large_pages_preserves_facts_and_unread_footer(partial, sample):
         headers={'Content-Type': 'text/html; charset=utf-8'}, url='https://example.test/article',
         iter_content=lambda chunk_size: (body[i:i+chunk_size] for i in range(0,len(body),chunk_size)),
     )
-    with patch.object(fetch_web_page.public_http, 'get', return_value=nullcontext(response)), patch.object(
+    with patch.object(fetch_web_page.requests, 'get', return_value=nullcontext(response)), patch.object(
             fetch_web_page, '_MAX_FETCH_BYTES', 4096 if partial else 4*1024*1024):
         result = fetch_web_page.FetchWebPageTool().run(
             {'url': response.url}, SimpleNamespace(user_print=Mock()),

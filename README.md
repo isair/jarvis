@@ -127,7 +127,6 @@ Open Chat for silent replies in the same conversation. **Pause Voice Listening**
 Jarvis is developed primarily on macOS. Windows and Linux behaviour may differ. See the [evaluation results](EVALS.md) for tested capabilities.
 
 - **Accuracy and speed depend on your models and hardware.** Smaller models can miss parts of complex requests, and slow speech recognition can drop utterances.
-- **Web page tools read public websites.** They cannot fetch private network pages and do not use your environment's proxy or saved netrc credentials.
 - **Dictation is unavailable on macOS 26+** ([#172](https://github.com/isair/jarvis/issues/172)). Linux dictation requires X11, with limited Wayland support.
 - **Spoken “stop” can be mistaken for echo** while Jarvis is speaking ([#24](https://github.com/isair/jarvis/issues/24)).
 - **No mobile app** is available ([#17](https://github.com/isair/jarvis/issues/17)).

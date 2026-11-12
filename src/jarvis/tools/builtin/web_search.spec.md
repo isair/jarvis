@@ -57,12 +57,16 @@ through `_is_public_url` before any request fires. Rejected:
   DNS could return `[1.1.1.1, 127.0.0.1]` — we reject on the first private
   hit, not the first public hit.
 
-Page connections use the shared `tools/public_http.py` transport. At connection
-time, all DNS addresses must be global unicast addresses, and the socket dials
-one of those validated numeric addresses. The original hostname remains in HTTP
-Host, TLS SNI and certificate verification. A DNS change between URL filtering
-and connecting cannot redirect the socket into a private network. Page requests
-exclude credential-bearing URLs and ignore ambient proxy and netrc settings.
+Search page connections use `tools/public_http.py`. Direct connections validate
+all DNS addresses as public unicast addresses and dial a validated numeric
+address. The original hostname remains in HTTP Host, TLS SNI and certificate
+verification. A hostname change cannot alter the validated socket destination.
+Configured proxies and
+`NO_PROXY` remain supported, with the proxy owning onward DNS and routing; local
+URL validation cannot guarantee the proxy's destination. Requests authentication,
+proxy credentials and configured certificate trust are preserved. Supplied-URL
+fetching is a separate path that retains local/intranet access and Requests
+environment behaviour.
 
 Redirects are walked manually (`allow_redirects=False`) up to
 `_MAX_REDIRECTS` (3). Each hop is re-validated. Responses are stream-read

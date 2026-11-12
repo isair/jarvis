@@ -57,7 +57,7 @@ class TestFetchWebPageTool:
         assert result.success is False
         assert "url" in result.reply_text.lower()
 
-    @patch('jarvis.tools.builtin.fetch_web_page.public_http.get')
+    @patch('requests.get')
     def test_run_success(self, mock_get):
         """Test successful web page fetch."""
         mock_response = _make_response_mock(
@@ -77,7 +77,7 @@ class TestFetchWebPageTool:
         assert "example.com" in result.reply_text
         self.context.user_print.assert_called()
 
-    @patch('jarvis.tools.builtin.fetch_web_page.public_http.get')
+    @patch('requests.get')
     def test_run_http_error(self, mock_get):
         """Test fetch web page with HTTP error."""
         mock_response = _make_response_mock(status_code=404)
@@ -91,7 +91,7 @@ class TestFetchWebPageTool:
         assert result.success is False
         assert "Failed to fetch page" in result.reply_text
 
-    @patch('jarvis.tools.builtin.fetch_web_page.public_http.get')
+    @patch('requests.get')
     def test_run_request_error(self, mock_get):
         """Test fetch web page with network error."""
         mock_get.side_effect = requests.exceptions.RequestException("Network error")
@@ -111,7 +111,7 @@ class TestFetchWebPageTool:
         assert result.success is False
         assert "failed" in result.reply_text.lower() or "error" in result.reply_text.lower()
 
-    @patch('jarvis.tools.builtin.fetch_web_page.public_http.get')
+    @patch('requests.get')
     def test_run_with_links_extraction(self, mock_get):
         """Test fetch web page including link extraction when include_links=True."""
         html = (

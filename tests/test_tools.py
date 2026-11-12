@@ -223,7 +223,7 @@ def test_fetch_web_page_success(monkeypatch):
     def mock_requests_get(url, **kwargs):
         return MockResponse()
     
-    monkeypatch.setattr(fetch_web_page.public_http, 'get', mock_requests_get)
+    monkeypatch.setattr(fetch_web_page.requests, 'get', mock_requests_get)
     
     db = DummyDB()
     cfg = DummyCfg()

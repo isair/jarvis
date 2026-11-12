@@ -1,6 +1,6 @@
 # Fetch web page tool
 
-`fetchWebPage` fetches a supplied public HTTP or HTTPS URL and returns extracted page text without an LLM call. Scheme-less URLs use HTTPS. Requests follow redirects with a 15-second network timeout. The shared `tools/public_http.py` transport validates all resolved addresses and connects to a validated numeric address on every connection, including redirects. Private, loopback, link-local, shared, reserved and multicast destinations, credential-bearing URLs and ambient proxy or netrc settings are excluded. Host headers, TLS SNI and certificate verification retain the original hostname. The shared `tools/http_response.py` hook closes redirect bodies before reading while retaining Requests' redirect header and cookie handling.
+`fetchWebPage` fetches a supplied HTTP or HTTPS URL and returns extracted page text without an LLM call. Scheme-less URLs use HTTPS. Requests follow redirects with a 15-second network timeout. The shared `tools/http_response.py` hook closes redirect bodies before reading while retaining Requests' redirect header and cookie handling.
 
 - Decoded responses stream in 64 KiB chunks using urllib3 2.8 or later for bounded decompression. The read loop checks its 15-second deadline between chunks and reads at most 32 MiB of decoded content. Redirect and network waits retain the Requests timeout contract.
 - The `url` field must be a JSON string and `include_links`, when supplied, must be a JSON boolean. Invalid fields fail before a request. The omitted link flag defaults to false.

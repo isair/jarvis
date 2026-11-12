@@ -1,4 +1,4 @@
-"""HTTP page transport confined to validated public network addresses."""
+"""Search-page transport with validated direct connections and trusted proxies."""
 
 import ipaddress
 import socket
@@ -36,9 +36,8 @@ def _public_addresses(host: str, port: int) -> list[str]:
 
 def _page_target(url: str) -> tuple[str, int]:
     parsed = urlsplit(url)
-    if (parsed.scheme not in {'http', 'https'} or not parsed.hostname
-            or parsed.username is not None or parsed.password is not None):
-        raise ValueError('Web pages require an HTTP(S) URL without credentials')
+    if parsed.scheme not in {'http', 'https'} or not parsed.hostname:
+        raise ValueError('Search pages require an HTTP(S) URL')
     return parsed.hostname, parsed.port if parsed.port is not None else (443 if parsed.scheme == 'https' else 80)
 
 
@@ -98,16 +97,20 @@ class _PublicAdapter(requests.adapters.HTTPAdapter):
 
     def send(self, request, **kwargs):
         try:
-            _page_target(request.url)
-        except ValueError as exc:
+            target = _page_target(request.url)
+            if requests.utils.select_proxy(request.url, kwargs.get('proxies', {})):
+                # Configured proxies own their onward routing and DNS. Validate
+                # the URL locally, then retain the proxy's standard transport.
+                _public_addresses(*target)
+                debug_log('Search page uses a configured proxy for onward routing', 'web')
+        except (OSError, ValueError) as exc:
             raise requests.exceptions.InvalidURL(str(exc)) from exc
         return super().send(request, **kwargs)
 
 
 def get(url: str, **kwargs) -> requests.Response:
-    """Fetch a page with public-only connections, including every redirect."""
+    """Read an untrusted search page, retaining configured proxy/TLS settings."""
     with requests.Session() as session:
-        session.trust_env = False
         adapter = _PublicAdapter()
         session.mount('http://', adapter)
         session.mount('https://', adapter)
