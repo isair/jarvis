@@ -124,6 +124,16 @@ def _should_emit_as_log(line: str) -> bool:
     return not line.startswith((CHAT_IPC_PREFIX, VOICE_STATUS_IPC_PREFIX, TASK_EVENT_PREFIX))
 
 
+def _background_tasks_enabled() -> bool:
+    """Read the shared task opt-in; unavailable settings do not enable work."""
+    try:
+        from jarvis.config import load_settings
+        return load_settings().background_tasks_enabled
+    except Exception as exc:
+        debug_log(f"task feature settings unavailable ({type(exc).__name__})", "desktop")
+        return False
+
+
 def _collect_runtime_status_snapshot(
     *,
     is_listening: bool,
@@ -1805,13 +1815,6 @@ class JarvisSystemTray:
         self.log_signals.new_log.connect(self.log_viewer.append_log)
         self.log_signals.voice_status.connect(self._on_voice_pause_status)
 
-        from desktop_app.task_centre import TaskCentreWindow
-        self.task_centre = TaskCentreWindow(
-            submit_callback=self.submit_task,
-            cancel_callback=self.cancel_task,
-        )
-        self.log_signals.task_event.connect(self.task_centre.process_log_line)
-
         # Create memory viewer window (hidden by default)
         self.memory_viewer = MemoryViewerWindow()
 
@@ -1861,6 +1864,7 @@ class JarvisSystemTray:
 
         # Create context menu
         self.create_menu()
+        self.log_signals.task_event.connect(self._process_task_event)
         self.face_window.set_tray_menu(self.menu)
 
         # Set up status checking timer
@@ -1933,9 +1937,11 @@ class JarvisSystemTray:
         self.menu.addAction(self.logs_action)
 
         # Task centre action
+        self.task_centre = None
         self.tasks_action = QAction("🧭 Task Centre")
         self.tasks_action.triggered.connect(self.show_task_centre)
         self.menu.addAction(self.tasks_action)
+        self._refresh_task_interface()
 
         # Memory viewer action
         self.memory_action = QAction("🧠 Memory Viewer")
@@ -2117,6 +2123,9 @@ class JarvisSystemTray:
         dialog = SettingsWindow()
         result = dialog.exec()
 
+        if result == QDialog.DialogCode.Accepted:
+            self._refresh_task_interface()
+
         # If settings were saved and daemon is running, offer to restart
         if result == QDialog.DialogCode.Accepted and self.is_listening:
             reply = QMessageBox.question(
@@ -2253,14 +2262,37 @@ class JarvisSystemTray:
         self.log_viewer.raise_()
         self.log_viewer.activateWindow()
 
+    def _refresh_task_interface(self) -> bool:
+        """Keep the task window and menu behind the shared configuration switch."""
+        enabled = _background_tasks_enabled()
+        self.tasks_action.setVisible(enabled)
+        if enabled and self.task_centre is None:
+            from desktop_app.task_centre import TaskCentreWindow
+            self.task_centre = TaskCentreWindow(
+                submit_callback=self.submit_task, cancel_callback=self.cancel_task,
+            )
+        elif not enabled and self.task_centre is not None:
+            self.task_centre.close()
+            self.task_centre.deleteLater()
+            self.task_centre = None
+        return enabled
+
+    def _process_task_event(self, line: str) -> None:
+        if self.task_centre is not None:
+            self.task_centre.process_log_line(line)
+
     def show_task_centre(self) -> None:
-        """Show the interactive task centre."""
+        """Show the interactive task centre when background work is enabled."""
+        if not self._refresh_task_interface():
+            return
         self.task_centre.show()
         self.task_centre.raise_()
         self.task_centre.activateWindow()
 
     def submit_task(self, prompt: str, *, request_id: str):
         """Submit a prompt to the in-process or subprocess daemon."""
+        if not _background_tasks_enabled():
+            raise RuntimeError("Background tasks are disabled")
         if self.is_bundled:
             from jarvis.daemon import submit_task
             return submit_task(prompt)
@@ -2275,6 +2307,8 @@ class JarvisSystemTray:
 
     def cancel_task(self, task_id: str):
         """Cancel a prompt in the in-process or subprocess daemon."""
+        if not _background_tasks_enabled():
+            return False
         if self.is_bundled:
             from jarvis.daemon import cancel_task
             return cancel_task(task_id)

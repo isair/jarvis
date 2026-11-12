@@ -1,5 +1,12 @@
 # Local task service
 
+`background_tasks_enabled` defaults to false. The daemon creates no task service,
+executor or task-history replay while disabled. All task submission paths reject
+requests, and the desktop task interface is hidden and unallocated. Saved task
+records remain intact. Enabling the setting requires a daemon restart; disabling
+it hides the interface when Settings is saved and stops execution through the
+normal restart/shutdown lifecycle.
+
 The task service executes prompts submitted by interactive clients through the
 same `run_reply_engine` path used by voice input. It is local-only and keeps a
 bounded worker pool with one active task by default, preserving the dialogue
@@ -7,7 +14,11 @@ memory and configured tools.
 
 Each task has one of five observable states: `queued`, `running`, `completed`,
 `failed`, or `cancelled`. Empty prompts are rejected. Queued tasks can be
-cancelled before execution. Cancelling a running task signals the reply
+cancelled before execution. A task waiting for the shared conversation remains
+queued, with no start timestamp or running event. After acquiring the
+conversation, the worker checks cancellation before starting the reply engine;
+requests cancelled by the user or shutdown do not execute. Cancelling a running
+task signals the reply
 engine's cooperative cancellation event, which is checked between planner,
 model, and tool-loop steps. An external LLM or tool request already in
 progress cannot be forcibly interrupted; its result is discarded and the

@@ -45,6 +45,11 @@ top-level comment. A common shape: owner answers at the top level, reporter
 replies underneath, owner replies underneath that. The newest message is two
 levels deep, and you'll miss it if you only look at the top-level list.
 
+Assess feature requests against `AGENTS.md`'s **Product vision and scope** gate
+before promoting them to implementation. A request's existence is not evidence
+that it belongs in Jarvis. Keep valid defects distinct from optional scope;
+questioning a feature does not resolve its reported failures or authorise closure.
+
 Classify each thread into one of:
 
 - **Untriaged**: no owner (`isair`) reply yet. Act now.

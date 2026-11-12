@@ -16,6 +16,12 @@ Design principles enforced by the engine:
 - Language-Agnostic Design: Prompts and ASR guidance avoid language-specific phrasing.
 - Data Privacy: Inputs are redacted and logging is concise and purposeful via `debug_log`.
 
+The caller-owned cancellation event is forwarded through planned and model-issued
+tool dispatch into `ToolContext`. The registry rejects already cancelled calls;
+cooperative tools can stop between bounded work units. Document indexing checks
+this event before embeddings and atomic publication. In-flight transport calls
+retain their own deadlines.
+
 ### Entry and Inputs
 - Entry point: the reply engine receives a user query from the ingestion layer.
 - Inputs:
@@ -92,7 +98,7 @@ Design principles enforced by the engine:
        - Re-send without the `tools` parameter
        - Parse responses for `` ```tool_call ``` `` fences instead of `tool_calls` field
      - Parse response using standard OpenAI-compatible message format:
-       - `tool_calls` field (native path): Execute tools and continue loop
+       - `tool_calls` field (native path): Execute recognisable requests serially in their listed order, then continue the loop. Every retained request has a unique identifier and a matching success or failure result before another model request. Missing or repeated identifiers are normalised in both request and result history. Malformed arguments and unavailable tools receive failed outcomes without execution; unnamed entries are omitted with a diagnostic. Discovery can expose tools to the next model turn, not grant permission to other requests already queued in the same batch. Cancellation and `stop` prevent later actions. Each request consumes a slot in `agentic_max_turns`; a batch larger than the remaining budget receives explicit failed outcomes without performing its actions. A valid `stop` request still dismisses the reply, including within an oversized batch.
        - `` ```tool_call ``` `` fence (text path): Execute tools and continue loop
        - `thinking` field: Internal reasoning (not shown to user), continue loop
        - `content` field: Natural language response to user
@@ -394,6 +400,7 @@ Behaviour:
 - **Short-circuit**: if the raw result is below `_TOOL_DIGEST_MIN_CHARS` (400 chars), it's passed through unchanged.
 - **Single-batch fast path**: if the raw result fits under `_TOOL_DIGEST_BATCH_MAX_CHARS` (2500 chars), one distil call produces the note. This is the typical case for webSearch.
 - **Multi-batch fallback**: if the raw result exceeds the per-batch cap, it's split on paragraph boundaries (blank-line-separated) so envelope framing and fence markers stay in whichever chunk contains them; each chunk is distilled independently and surviving notes are joined.
+- **Boundary metadata preserved**: successful tools can supply structured result metadata, rendered as data independently of lossy prose digests. Document retrieval preserves index coverage, incomplete reasons and exact source path/line citations through this channel, including empty partial searches.
 - **Source attribution preserved**: the distil prompt requires a source framing ("According to the web extract…", "The search result says…"); bare claims are explicitly forbidden. This keeps the untrusted-vs-established-fact distinction visible to the main model.
 - **No new facts**: the distil is forbidden from adding facts not present in the tool output — no year, cast, director etc. unless they appear verbatim in the payload.
 - **NONE sentinel**: when the distil judges nothing relevant it returns NONE; the caller keeps the raw payload (suppressing it entirely is worse than a noisy substrate). A user-facing `🧩 Tool digest: no relevant facts — using raw payload (Nch)` line prints on this branch so the fallback is visible in the field.

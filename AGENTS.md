@@ -2,6 +2,33 @@ Data privacy comes first, always.
 
 Jarvis is offline-first by principle. Do not add integrations that depend on a specific proprietary cloud vendor (e.g. ElevenLabs TTS, or any SaaS that requires shipping user audio/text/data to a third party's servers), not even as an opt-in feature. The line is the offline path: a backend is acceptable only if it can run fully locally. Generic, self-hostable protocols where the user points at their own endpoint (Ollama, OpenAI-compatible servers, LM Studio) are fine precisely because they can be local; a vendor-locked cloud service with no local option is not. When a feature request asks for such a service, decline it on principle and redirect to the offline equivalent (e.g. better local TTS voices rather than cloud TTS).
 
+## Product vision and scope
+
+Jarvis is a privacy-first, offline-first, voice-first assistant with one coherent
+conversation. Text chat, visual feedback and settings support that experience.
+They should not require users to enter a separate workflow for capabilities
+that belong in the shared assistant.
+
+Assess whether work belongs in Jarvis before investing in implementation, during
+PR review and again before merging. For a feature or substantial abstraction,
+state the concrete user problem, how people use it through the existing
+voice/chat experience, and how the proposal compares with extending or
+simplifying that experience. Weigh its benefit against interaction complexity, extra UI,
+latency, resource use, privacy exposure and ongoing maintenance.
+
+Prefer a reliable, coherent core over optional features or speculative
+frameworks. Passing tests, sound engineering, an existing contribution and
+reducing issue/PR counts do not establish product fit. When the value is weak,
+recommend simplification, consolidation or rejection before polishing the
+implementation. Record unresolved scope decisions explicitly. Routine fixes can
+state their user impact briefly; they do not need a separate product essay.
+
+Voice-first does not prohibit useful text interfaces, accessibility or visual
+controls. Judge whether they serve the shared assistant rather than creating a
+parallel product. Questioning an existing feature does not authorise deleting
+user data, removing functionality or closing valid defects; follow the existing
+specification and approval rules.
+
 All user-facing command line output should make use of emojis. Especially an initial emoji to start off the lines that depict what the line is about. Output should make use of indentation spacing to establish a visual hierarchy and aim to make output as easy to sift through as possible. Exception: Windows .bat scripts cannot use emojis (cmd.exe doesn't render Unicode properly).
 
 Any important point in our logical flows should have debug logs using the `debug_log` method from `src/jarvis/debug.py`. Avoid excessive logging to keep the logs easily readable and actionable.
@@ -25,6 +52,7 @@ Any code change must either adhere to our spec files perfectly or you should ask
 | `src/jarvis/reply/reply.spec.md` | LLM reply generation, tool use, profiles | Tools return raw data; profiles handle formatting |
 | `src/jarvis/reply/evaluator.spec.md` | **Deprecated** — evaluator no longer runs in the reply engine; preserved for reference | Replaced by the planner; see planner.spec.md |
 | `src/jarvis/reply/planner.spec.md` | Task-list planner: pre-loop query decomposition + direct-exec step resolver for small models | Fail-open; rides warm small model chain; advisory for large models, direct-exec for small |
+| `src/jarvis/tools/builtin/document_search.spec.md` | Opt-in local collection retrieval, filesystem authority, bounded isolated indexing and cited results | Explicit folders; no outside-source reads; honest partial coverage |
 | `src/jarvis/tools/builtin/local_files.spec.md` | Local file operations and listing boundaries | Home-directory confinement; literal UTF-8 content; boolean recursion |
 | `src/jarvis/tools/builtin/tool_search.spec.md` | toolSearchTool escape hatch for mid-loop tool routing | Re-runs the same router; never removes stop/self; capped per reply |
 | `src/jarvis/tools/external/mcp_runtime.spec.md` | Persistent MCP runtime: per-server long-lived stdio session, queue-based dispatch, retry on transient session loss | One worker per server keyed by config; calls to the same server serialise; `MCPServerSessionError` for session-level failures; opt-in `idle_timeout_sec` for stateless servers |

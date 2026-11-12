@@ -58,6 +58,9 @@ def test_retained_history_is_bounded_and_active_tasks_stay_usable(qapp):
 
 @pytest.mark.parametrize('accepted', [False, True], ids=['rejected', 'accepted'])
 def test_source_submission_waits_for_correlated_admission(qapp, monkeypatch, capsys, accepted):
+    from jarvis.config import get_config_path, load_settings
+    get_config_path().write_text(json.dumps({'background_tasks_enabled': True}))
+    monkeypatch.setattr(daemon, '_global_cfg', load_settings())
     wire = io.StringIO()
     tray = desktop.JarvisSystemTray.__new__(desktop.JarvisSystemTray)
     tray.is_bundled = False

@@ -27,6 +27,11 @@ def pytest_sessionstart(session):
                         "RawInputStream", "RawOutputStream", "Stream", "RawStream"),
         "winsound": ("PlaySound", "Beep", "MessageBeep"),
         "pygame": ("init", "mixer.init", "mixer.music.play"),
+        "PyQt6.QtMultimedia": (
+            "QSoundEffect", "QMediaPlayer", "QAudioSink", "QAudioSource",
+            "QAudioOutput", "QAudioInput",
+        ),
+        "PyQt6.QtWidgets": ("QApplication.beep",),
     }
     for backend, names in operations.items():
         try:

@@ -1336,7 +1336,9 @@ class TestDaemonSmokeTest:
     def test_smoke_test_prints_marker_and_returns(self, runtime, capsys):
         daemon, database, listener, dictation = runtime
         daemon.main(smoke_test=True)
-        assert "SMOKE_TEST_INIT_OK" in capsys.readouterr().out
+        output = capsys.readouterr().out
+        assert "SMOKE_TEST_INIT_OK" in output
+        assert "Task service ready" not in output
         assert daemon.VoiceListener.call_args.kwargs.get("on_low_confidence") is None
         database.close.assert_called_once()
         listener.stop.assert_called_once()
@@ -1391,6 +1393,7 @@ class TestDaemonSmokeTest:
         from jarvis import tasks
 
         daemon, database, listener, dictation = runtime
+        daemon.load_settings.return_value.background_tasks_enabled = True
         state = {'active': True, 'tts_stopped': False}
         completed, saved = [], []
 
