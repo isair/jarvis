@@ -13,6 +13,7 @@ from ..base import Tool, ToolContext
 from ..types import ToolExecutionResult
 from ..http_response import discard_redirect_body
 from ..page_content import PageText
+from .. import public_http
 
 
 _MAX_FETCH_BYTES = 32 * 1024 * 1024
@@ -78,7 +79,7 @@ class FetchWebPageTool(Tool):
                 'Upgrade-Insecure-Requests': '1',
             }
             deadline = time.monotonic() + _FETCH_SECONDS
-            with requests.get(url, headers=headers, timeout=_FETCH_SECONDS,
+            with public_http.get(url, headers=headers, timeout=_FETCH_SECONDS,
                               allow_redirects=True, stream=True,
                               hooks={"response": discard_redirect_body}) as response:
                 response.raise_for_status()

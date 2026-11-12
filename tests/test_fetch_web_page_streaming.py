@@ -18,7 +18,7 @@ def read_page(monkeypatch, body, *, headers=None, include_links=False, chunk_byt
         encoding='utf-8', headers=headers or {'Content-Type': 'text/html; charset=utf-8'},
         url='https://example.test/final/page',
     )
-    monkeypatch.setattr(fetch_web_page.requests, 'get', lambda *a, **kw: nullcontext(response))
+    monkeypatch.setattr(fetch_web_page.public_http, 'get', lambda *a, **kw: nullcontext(response))
     return fetch_web_page.FetchWebPageTool().run(
         {'url': 'https://example.test/start', 'include_links': include_links},
         SimpleNamespace(user_print=Mock()),
@@ -112,7 +112,7 @@ def test_spaced_http_charset_keeps_non_utf8_text(monkeypatch):
         headers={'Content-Type': 'text/html; charset = "iso-8859-1"'},
         url='https://example.test/article',
     )
-    monkeypatch.setattr(fetch_web_page.requests, 'get', lambda *a, **kw: nullcontext(response))
+    monkeypatch.setattr(fetch_web_page.public_http, 'get', lambda *a, **kw: nullcontext(response))
     result = fetch_web_page.FetchWebPageTool().run(
         {'url': response.url}, SimpleNamespace(user_print=Mock()),
     )

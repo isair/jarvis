@@ -49,6 +49,10 @@ def bounded_page_server(monkeypatch, mock_config):
             except (BrokenPipeError, ConnectionResetError): pass
         def log_message(self, *args): pass
     server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    def owned_addresses(host, port):
+        assert (host, port) == ('127.0.0.1', server.server_port)
+        return ['127.0.0.1']
+    monkeypatch.setattr(fetch_web_page.public_http, '_public_addresses', owned_addresses)
     worker = threading.Thread(target=server.serve_forever, daemon=True)
     worker.start()
     context = ToolContext(None, mock_config, '', '', '', 0, lambda message: None)

@@ -57,6 +57,13 @@ through `_is_public_url` before any request fires. Rejected:
   DNS could return `[1.1.1.1, 127.0.0.1]` — we reject on the first private
   hit, not the first public hit.
 
+Page connections use the shared `tools/public_http.py` transport. At connection
+time, all DNS addresses must be global unicast addresses, and the socket dials
+one of those validated numeric addresses. The original hostname remains in HTTP
+Host, TLS SNI and certificate verification. A DNS change between URL filtering
+and connecting cannot redirect the socket into a private network. Page requests
+exclude credential-bearing URLs and ignore ambient proxy and netrc settings.
+
 Redirects are walked manually (`allow_redirects=False`) up to
 `_MAX_REDIRECTS` (3). Each hop is re-validated. Responses are stream-read
 with a `_MAX_FETCH_BYTES` (512 KB) cap so a hostile server can't exhaust
