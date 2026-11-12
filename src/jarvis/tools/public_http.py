@@ -25,7 +25,8 @@ def _public_addresses(host: str, port: int) -> list[str]:
     for resolved_address in resolved:
         address = ipaddress.ip_address(resolved_address)
         classified = getattr(address, 'ipv4_mapped', None) or address
-        if not classified.is_global or classified.is_multicast:
+        if (not classified.is_global or classified.is_multicast or classified.is_reserved
+                or getattr(classified, 'is_site_local', False)):
             raise ValueError('Web pages must use public network addresses')
         addresses.append(str(address))
     if not addresses:

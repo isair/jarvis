@@ -7,7 +7,7 @@ and closes session pools on return or failure. Callers close streamed responses.
 Redirect handling and cookies within a fetch retain Requests' normal behaviour.
 
 Every new HTTP or HTTPS connection resolves its destination once. Empty DNS
-answers, lookup failures and any non-global or multicast address reject the
+answers, lookup failures and any non-global, reserved, site-local or multicast address reject the
 connection before a socket is opened. IPv4-mapped IPv6 addresses use their IPv4
 classification. Literal IP addresses are classified without DNS. A mixed public
 and private answer is rejected as a whole.

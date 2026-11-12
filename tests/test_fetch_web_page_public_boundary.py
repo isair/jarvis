@@ -20,7 +20,7 @@ pytestmark = pytest.mark.unit
 
 @pytest.fixture
 def page_network(monkeypatch, tmp_path, request):
-    state = SimpleNamespace(paths=[], headers=[], dialled=[], redirect=None, mixed=False)
+    state = SimpleNamespace(paths=[], headers=[], dialled=[], redirect=None, mixed=False, answers=None)
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
@@ -62,8 +62,9 @@ def page_network(monkeypatch, tmp_path, request):
 
     def resolve(host, port, *args, **kwargs):
         if host == 'public.test':
-            addresses = ['1.1.1.1', '127.0.0.1'] if state.mixed else ['1.1.1.1']
-            return [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, '', (address, port or 80))
+            addresses = state.answers or (['1.1.1.1', '127.0.0.1'] if state.mixed else ['1.1.1.1'])
+            return [(socket.AF_INET6 if ':' in address else socket.AF_INET, socket.SOCK_STREAM,
+                     socket.IPPROTO_TCP, '', (address, port or 80, 0, 0) if ':' in address else (address, port or 80))
                     for address in addresses]
         # All other names in this synthetic network resolve privately.
         return original_resolve('127.0.0.1', port, *args, **kwargs)
@@ -89,6 +90,7 @@ def page_network(monkeypatch, tmp_path, request):
     'http://10.0.0.1/private', 'http://[::1]/private', 'http://private.test/private',
     'http://100.64.0.1/private',
     'http://[::ffff:127.0.0.1]/private', 'http://2130706433/private',
+    'http://[fec0::1]/private', 'http://[::127.0.0.1]/private',
 ])
 def test_private_destinations_return_no_content(page_network, url):
     result = FetchWebPageTool().run({'url': url}, page_network.context)
@@ -108,6 +110,14 @@ def test_public_redirect_cannot_reach_a_private_destination(page_network, destin
 
 def test_mixed_public_and_private_dns_is_rejected(page_network):
     page_network.mixed = True
+    result = FetchWebPageTool().run({'url': 'http://public.test/article'}, page_network.context)
+    assert not result.success
+    assert not page_network.paths
+
+
+@pytest.mark.parametrize('address', ['fec0::1', '::127.0.0.1'])
+def test_non_public_ipv6_dns_answers_are_rejected(page_network, address):
+    page_network.answers = ['1.1.1.1', address]
     result = FetchWebPageTool().run({'url': 'http://public.test/article'}, page_network.context)
     assert not result.success
     assert not page_network.paths
