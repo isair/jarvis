@@ -64,6 +64,7 @@ except ImportError:
     QWebEngineView = None
 
 from jarvis.debug import debug_log
+from jarvis.utils.console import configure_utf8_streams
 from jarvis.llm.model_names import missing_ollama_models
 from jarvis.config import get_config_path, _default_db_path, get_model_recommendations, Settings
 from desktop_app.diary_dialog import DiaryUpdateDialog
@@ -3279,30 +3280,7 @@ def _smoke_test_main() -> int:
     import multiprocessing
     multiprocessing.freeze_support()
 
-    # Ensure stdout/stderr use UTF-8.  PyInstaller GUI-subsystem executables
-    # (console=False) can attach an ANSI-code-page stdout (Windows) or even
-    # None when there is no console at all; the daemon prints emoji
-    # (✅, ✓, 🧠…), so a non-UTF-8 stream raises UnicodeEncodeError (or
-    # AttributeError when stdout is None) and the smoke test exits 1 before
-    # ever reaching the daemon.  Wrap in UTF-8 when a binary buffer is
-    # available and fall back to a sink so prints can never crash the test.
-    # Only wrap the real console streams: pytest swaps in its own capture
-    # objects that must not be re-wrapped (wrapping them detaches and
-    # closes their buffers, corrupting output capture for the process).
-    try:
-        import io
-        for _stream_name in ("stdout", "stderr"):
-            _stream = getattr(sys, _stream_name)
-            _real = getattr(sys, "__" + _stream_name, None)
-            if _stream is None:
-                setattr(sys, _stream_name, io.StringIO())
-            elif (getattr(sys, "frozen", False) or sys.platform == "win32") \
-                    and (getattr(sys, "frozen", False) or _stream is _real) \
-                    and hasattr(_stream, "buffer") and hasattr(_stream.buffer, "write"):
-                setattr(sys, _stream_name, io.TextIOWrapper(
-                    _stream.buffer, encoding="utf-8", errors="replace"))
-    except Exception:
-        pass
+    configure_utf8_streams(sys)
 
     # The smoke test never renders UI, so force Qt's offscreen platform on
     # Linux regardless of whether xvfb supplies a $DISPLAY.  This keeps the
@@ -3406,22 +3384,9 @@ def main() -> int:
     if "--smoke-test" in set(sys.argv[1:]):
         return _smoke_test_main()
 
-    # Fix Windows console encoding for Unicode/emoji characters
-    # Only for non-frozen apps - frozen apps redirect stdout to crash log
-    # Only wrap the real console streams (sys.__stdout__/sys.__stderr__):
-    # test harnesses replace sys.stdout with capture objects whose buffers
-    # must not be detached.
+    # Source consoles share the same Unicode setup as the daemon and smoke gate.
     if sys.platform == 'win32' and not getattr(sys, 'frozen', False):
-        try:
-            import io
-            if (sys.stdout is sys.__stdout__ and hasattr(sys.stdout, 'buffer')
-                    and hasattr(sys.stdout.buffer, 'write')):
-                sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-            if (sys.stderr is sys.__stderr__ and hasattr(sys.stderr, 'buffer')
-                    and hasattr(sys.stderr.buffer, 'write')):
-                sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
-        except Exception:
-            pass
+        configure_utf8_streams(sys)
 
     # Required for PyInstaller: must be called before any multiprocessing
     # Without this, bundled apps can spawn infinite copies of themselves
