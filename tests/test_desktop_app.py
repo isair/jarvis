@@ -1457,6 +1457,43 @@ class TestDesktopSmokeTest:
         daemon_main.assert_called_once_with(smoke_test=True)
         assert "SMOKE_TEST_PASSED" in capsys.readouterr().out
 
+    @pytest.mark.parametrize('stream_name', ['stdout', 'stderr'])
+    @pytest.mark.parametrize('frozen', [False, True])
+    def test_smoke_keeps_capture_usable_after_stream_restoration(self, runtime, stream_name, frozen):
+        import io
+        app, _, _ = runtime
+        app.sys.stdout = io.StringIO()
+        app.sys.stderr = io.StringIO()
+        app.sys.frozen = frozen
+        buffer = io.BytesIO()
+        captured = io.TextIOWrapper(buffer, encoding='cp1252' if frozen else 'utf-8')
+        setattr(app.sys, stream_name, captured)
+        try:
+            assert app._smoke_test_main() == 0
+            # The test harness restores its capture after the entry point exits.
+            setattr(app.sys, stream_name, captured)
+            captured.write('🧠 Captured output remains usable')
+            captured.flush()
+            assert buffer.getvalue().decode('utf-8') == '🧠 Captured output remains usable'
+        finally:
+            captured.close()
+
+    @pytest.mark.parametrize('stream_name', ['stdout', 'stderr'])
+    @pytest.mark.parametrize('unavailable', ['missing', 'closed'])
+    def test_smoke_provides_usable_output_without_an_open_console(self, runtime, stream_name, unavailable):
+        import io
+        app, _, _ = runtime
+        app.sys.stdout = io.StringIO()
+        app.sys.stderr = io.StringIO()
+        app.sys.frozen = True
+        stream = None
+        if unavailable == 'closed':
+            stream = io.StringIO()
+            stream.close()
+        setattr(app.sys, stream_name, stream)
+        assert app._smoke_test_main() == 0
+        getattr(app.sys, stream_name).write('🧠 Output without a console')
+
     @pytest.mark.parametrize("failure", ["qt", "daemon"])
     def test_failure_returns_one_with_diagnostics(self, runtime, capsys, failure):
         app, qt, daemon_main = runtime

@@ -18,23 +18,12 @@ os.environ.setdefault('OPENBLAS_NUM_THREADS', '1')
 os.environ.setdefault('MKL_NUM_THREADS', '1')
 os.environ.setdefault('OMP_NUM_THREADS', '1')
 
-# Fix Windows console encoding for Unicode/emoji characters
-# Skip in bundled mode (frozen) - encoding is handled by desktop_app.py
+from .utils.console import configure_utf8_streams
+
+
+# Bundled output is prepared by the desktop entry point.
 if sys.platform == 'win32' and not getattr(sys, 'frozen', False):
-    try:
-        import io
-        # Only wrap the real console streams. Test harnesses (pytest) and
-        # embedding code replace sys.stdout/sys.stderr with their own capture
-        # objects; wrapping those detaches and closes their buffers, which
-        # corrupts output capture for the rest of the process.
-        if (sys.stdout is sys.__stdout__ and hasattr(sys.stdout, 'buffer')
-                and hasattr(sys.stdout.buffer, 'write')):
-            sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-        if (sys.stderr is sys.__stderr__ and hasattr(sys.stderr, 'buffer')
-                and hasattr(sys.stderr.buffer, 'write')):
-            sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
-    except Exception:
-        pass
+    configure_utf8_streams(sys)
 
 from typing import Optional
 
