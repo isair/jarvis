@@ -24,7 +24,13 @@ jobs:
           npm install --prefix "$RUNNER_TEMP/release-plugin" --ignore-scripts --no-audit --no-fund @semantic-release/github@9
           node tests/release_publication.mjs "$RUNNER_TEMP/release-plugin/node_modules/@semantic-release/github"
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y portaudio19-dev libegl1 libxkbcommon0
+        run: sudo apt-get update && sudo apt-get install -y portaudio19-dev pulseaudio libegl1 libxkbcommon0
+      - name: 🔇 Start owned virtual audio backend
+        run: |
+          pulseaudio --daemonize=yes --exit-idle-time=-1 --disallow-exit \
+            --use-pid-file=no --disable-shm=yes -n \
+            --load=module-native-protocol-unix \
+            --load='module-null-sink sink_name=jarvis_test_audio'
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
