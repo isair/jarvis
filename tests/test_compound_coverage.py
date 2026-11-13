@@ -98,11 +98,16 @@ def coverage_engine(mock_config, db, dialogue_memory, monkeypatch):
         def __init__(self):
             self.entries = {'tea', 'soup'}
             self.operations = []
+            self.references = []
+            self.metadata = None
 
         def run(self, args, context):
             self.operations.append(dict(args))
             self.entries.remove(args['name'])
-            return ToolExecutionResult(True, json.dumps({'remaining': sorted(self.entries)}))
+            return ToolExecutionResult(
+                True, json.dumps({'remaining': sorted(self.entries)}),
+                resource_references=tuple(self.references), result_metadata=self.metadata,
+            )
 
     tool = OwnedRemoval()
     monkeypatch.setitem(registry.BUILTIN_TOOLS, tool.name, tool)
@@ -118,8 +123,12 @@ def coverage_engine(mock_config, db, dialogue_memory, monkeypatch):
 
 @pytest.mark.usefixtures('no_network')
 @pytest.mark.parametrize('repeat_proposal', [False, True])
-def test_coverage_executes_once_before_delivering_completion(coverage_engine, repeat_proposal):
+@pytest.mark.parametrize('with_metadata', [False, True])
+def test_coverage_executes_once_before_delivering_completion(coverage_engine, repeat_proposal, with_metadata):
     cfg, tool, db, memory = coverage_engine
+    if with_metadata:
+        tool.references = [{'kind': 'reminder', 'id': 'owned-soup-record', 'label': 'soup'}]
+        tool.metadata = {'remaining_state_confirmed': True}
     proposed = json.dumps({'name': tool.name, 'arguments': {'name': 'tea'}})
     backend = Mock()
     backend.direct.side_effect = [proposed, proposed if repeat_proposal else '{"complete":true}']
@@ -137,10 +146,16 @@ def test_coverage_executes_once_before_delivering_completion(coverage_engine, re
     first = json.loads(backend.direct.call_args_list[0].args[2])
     assert first['results'] == [], 'Undelivered claims are not evidence'
     second = json.loads(backend.direct.call_args_list[1].args[2])
-    assert second['results'] == [{
-        'name': tool.name, 'arguments': {'name': 'tea'}, 'success': True,
-        'result': json.dumps({'remaining': sorted(tool.entries)}),
-    }]
+    if with_metadata:
+        result = second['results'][0]['result']
+        assert tool.references[0]['id'] in result
+        assert json.dumps(tool.metadata) in result
+    else:
+        assert second['results'] == [{
+            'name': tool.name, 'arguments': {'name': 'tea'}, 'success': True,
+            'result': json.dumps({'remaining': sorted(tool.entries)}),
+        }]
+
 
 
 @pytest.mark.usefixtures('no_network')

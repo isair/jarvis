@@ -319,7 +319,7 @@ LLM routing strategy and its prompts are independent of this cache.
 
 - **Source**: `reply/compound_query.py::resolve_uncovered_request`, called from the reply engine before prose delivery for text-mode compound requests without a plan.
 - **Model**: `resolve_model(cfg, Tier.CHAT)` through the configured self-hostable backend. No additional model weights are selected.
-- **Input**: redacted original request, compact current-request executed names, arguments, success flags and raw results and permitted schemas, serialised as untrusted JSON data. Packets above 6,000 UTF-8 bytes are skipped.
+- **Input**: redacted original request, permitted schemas and compact current-request execution records (names, arguments, success flags and effective result text with metadata and record identities), serialised as untrusted JSON data. Packets above 6,000 UTF-8 bytes are skipped.
 - **Prompt**: `_COVERAGE_PROMPT` compares every requested outcome with actual execution evidence.
 - **Output**: one proposed `{name, arguments}` for an unresolved outcome, or a completion decision. Only supplied names and top-level schema-shaped arguments enter the ordinary tool dispatch and duplicate protections. The check does not execute tools itself.
 - **Limits**: at most two checks per reply, 8,192 context tokens, 512 output tokens, temperature zero, thinking disabled, timeout `min(20, llm_chat_timeout_sec)`. Missing/invalid responses preserve the ordinary reply loop. Cancellation after the check prevents dispatch.

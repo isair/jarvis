@@ -2616,11 +2616,12 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 cancel_event=cancel_event,
             )
 
-            coverage_evidence.append({
+            coverage_record = {
                 'name': tool_name, 'arguments': json.loads(stable_args) if stable_args is not None else tool_args,
                 'success': bool(result.success),
                 'result': result.reply_text or result.error_message or '',
-            })
+            }
+            coverage_evidence.append(coverage_record)
 
             # Handle stop tool - end conversation without response
             if result.reply_text == STOP_SIGNAL:
@@ -2749,6 +2750,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 effective_result, resource_records = _tool_result_content(
                     cfg, redacted, tool_name, result, transcript_context,
                 )
+                coverage_record['result'] = effective_result
 
                 if use_text_tools:
                     # Plan-aware remainder nudge. When a pre-loop plan exists,
