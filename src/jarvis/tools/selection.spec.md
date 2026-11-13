@@ -39,12 +39,28 @@ Regardless of strategy, these tools are **always** included:
 ### Embedding Strategy
 
 1. Embed the user query through the supplied `embedding_backend`, resolved by `get_embedding_backend(cfg)`, with the configured embedding model.
-2. For each tool (excluding always-included), build a summary string from the tool name (camelCase split) and description, then embed it.
+2. For each tool (excluding always-included), build a summary string from the tool name (camelCase split) and description, then embed it on a catalogue cache miss.
 3. Compute cosine similarity between the query embedding and each tool embedding.
 4. Select tools using a **relative threshold**: keep tools whose similarity >= `top_score * _RELATIVE_THRESHOLD` (0.97 — nomic-embed-text has a high baseline similarity, so a loose threshold lets the entire catalogue through).
 5. If fewer than `_MIN_SELECTED` (3) tools pass the threshold, return the top 3 by similarity.
 6. Append always-included tools.
 7. If the query embedding fails, fall back to returning all tools.
+
+The embedding factory owns the latest configured stateless backend across reply
+turns. Each backend has at most one complete cached catalogue, keyed by model,
+query vector dimension and ordered tool names/descriptions. Changing provider,
+endpoint or credentials replaces the factory's retained backend. Changing the
+model or catalogue replaces its cached vectors; returning to a superseded
+catalogue requires embedding it again. Query embeddings are never cached here.
+
+Only complete catalogues with compatible finite vectors are reusable. Missing,
+non-finite or dimension-mismatched tool vectors are skipped for that request and
+retried on the next request. Cached vector and UTF-8 key payloads are limited to
+4 MiB per backend; larger catalogues work uncached. Weak ownership releases
+vectors with their backend. Cache lookup/publication is synchronised without
+holding a lock during embedding HTTP requests; concurrent cold requests may
+independently build the same catalogue. External backends without weak-reference
+support work uncached. Query failure retains the existing all-tools fallback.
 
 Note: embedding is **not** the default strategy because nomic-embed-text produces tightly clustered similarities across all tools — the filter struggles to separate "good match" from "generic cluster" when a realistic MCP catalogue (20–40 tools) is in play. The `llm` strategy is cheaper in prompt size and more discriminative on small chat models.
 

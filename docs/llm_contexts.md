@@ -176,6 +176,17 @@ requests do not supply this event.
 - **Caching**: selections reuse a namespaced canonical-JSON fingerprint of the redacted query, strategy, live context hint, redacted speech snapshot and builtin/MCP definitions (names, descriptions and input schemas). Changed dialogue, live facts or capabilities require fresh routing. Dictionary insertion order does not affect identity, and keys remain bounded. Cleared on `stop` and new-conversation entry.
 - **Carry-over guard (engine-side overlay)**: after the cache lookup/write, the engine inspects the previous assistant turn's tool calls. When a previous tool reported `success=False` on its `ToolExecutionResult` (read via the `tool_failed` flag stamped onto each recorded tool result), that tool name is unioned back into the local `routed_tools` for this turn only. Compensates for small routers that misroute follow-ups where the user is supplying missing info (e.g. "I'm in London" routing to `webSearch` after a stalled `getWeather` chain). Successful chains do not carry over — a genuine new short ask after a completed chain keeps the router pick clean. The augmentation never touches the cache; replays of the same query in future turns get the raw router output. See `src/jarvis/reply/reply.spec.md` §6 (Tool allow-list per turn) for the full contract.
 
+Embedding-strategy tool routing embeds each current query. Its configured
+embedding backend survives repeated factory lookups; one complete catalogue of
+normalised tool vectors is reusable for the same model, vector dimension and
+ordered names/descriptions. Provider/endpoint/credential changes evict the
+factory backend. Catalogue changes replace cached vectors, with a 4 MiB vector
+and UTF-8 key payload limit per backend. Partial or invalid catalogues retry;
+larger catalogues run uncached. The cache retains no query text or query vectors
+and performs no background inference. Selection arithmetic, thresholds and
+per-call embedding timeouts apply to both cold and warm routing. The default
+LLM routing strategy and its prompts are independent of this cache.
+
 ## 8. Tool Searcher (mid-loop escape hatch)
 
 - **File**: [src/jarvis/tools/builtin/tool_search.py](src/jarvis/tools/builtin/tool_search.py) — `toolSearchTool`.
