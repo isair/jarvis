@@ -9,6 +9,7 @@ import pytest
 
 from jarvis.memory.conversation import DialogueMemory
 from jarvis.reply.engine import run_reply_engine
+from jarvis.tools.types import ToolExecutionResult
 
 
 def _mock_cfg():
@@ -50,10 +51,7 @@ def test_tool_carryover_makes_prior_result_visible_to_next_turn(
     mock_chat, mock_extract, mock_tool, _mock_extract, _mock_plan
 ):
     # Turn 1: model emits webSearch call, then final text.
-    mock_tool.return_value = Mock(
-        reply_text="Justin Bieber is a Canadian singer.",
-        error_message=None,
-    )
+    mock_tool.return_value = ToolExecutionResult(True, "Justin Bieber is a Canadian singer.")
     mock_chat.side_effect = [
         # Turn 1a: tool call
         {"message": {"content": "", "tool_calls": [{
@@ -123,8 +121,8 @@ def test_stop_signal_clears_tool_carryover(
     from jarvis.tools.builtin.stop import STOP_SIGNAL
 
     mock_tool.side_effect = [
-        Mock(reply_text="Justin Bieber is a Canadian singer.", error_message=None),
-        Mock(reply_text=STOP_SIGNAL, error_message=None),
+        ToolExecutionResult(True, "Justin Bieber is a Canadian singer."),
+        ToolExecutionResult(True, STOP_SIGNAL),
     ]
     mock_chat.side_effect = [
         # Turn 1a: tool call
@@ -174,9 +172,7 @@ def test_tool_carryover_text_tool_mode(
     cfg.ollama_chat_model = "gemma4:e2b"  # triggers SMALL/text-tool path
     cfg.llm_chat_model = "gemma4:e2b"  # triggers SMALL/text-tool path
 
-    mock_tool.return_value = Mock(
-        reply_text="Paris is the capital of France.", error_message=None,
-    )
+    mock_tool.return_value = ToolExecutionResult(True, "Paris is the capital of France.")
     fence_call = (
         "```tool_call\n"
         '{"name": "webSearch", "arguments": {"query": "paris"}}\n'

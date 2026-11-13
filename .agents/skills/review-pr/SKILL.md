@@ -45,6 +45,14 @@ Read through the diff file by file. For each changed file, also read the
 surrounding context (not just the diff lines) to understand how the change
 fits into the module.
 
+### Product fit before implementation quality
+
+Apply `AGENTS.md`'s **Product vision and scope** gate to the complete changeset.
+Explain briefly whether it belongs in Jarvis and whether the existing voice/chat
+experience can meet the need more simply. Surface unresolved scope as a readiness
+blocker, even when the implementation and CI are sound. Useful text/visual
+interfaces are judged by their contribution to the shared assistant.
+
 ### Review Checklist
 
 #### Correctness
@@ -93,7 +101,7 @@ fits into the module.
 ## PR Review: <title>
 
 ### Summary
-<2-3 sentences: what the PR does and overall assessment>
+<2-3 sentences: what the PR does, its product fit and overall assessment>
 
 ### CI Status
 <All green, OR per-failure diagnosis>
@@ -111,6 +119,7 @@ fits into the module.
 ### Verdict rules
 | State | Verdict |
 |-------|---------|
+| Unresolved product-fit blocker | **REQUEST_CHANGES** |
 | Any critical or high issue | **REQUEST_CHANGES** |
 | Only medium/low issues | **COMMENT** |
 | No issues | **APPROVE** |

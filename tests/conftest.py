@@ -41,6 +41,7 @@ class MockConfig:
     # branch get the legacy alias promoted into ``llm_chat_model`` by
     # ``__post_init__`` — same shape ``load_settings()`` produces.
     llm_chat_model: str = ""
+    background_tasks_enabled: bool = field(default_factory=lambda: get_default_config()['background_tasks_enabled'])
     wake_word: str = "jarvis"
     wake_aliases: list = field(default_factory=list)
     whisper_model: str = "small"

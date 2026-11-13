@@ -14,6 +14,7 @@ details such as which exact URL was hit.
 from __future__ import annotations
 
 import json
+from inspect import signature
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -326,37 +327,6 @@ class TestOllamaBackendPromptCaching:
 
         sent = mock_post.call_args.kwargs["json"]
         assert sent["cache_prompt"] is True
-
-
-# ---------------------------------------------------------------------------
-# OllamaBackend — warmup
-# ---------------------------------------------------------------------------
-
-
-class TestOllamaBackendWarmUp:
-    @patch("jarvis.llm.http.post")
-    def test_warmup_uses_default_keep_alive(self, mock_post):
-        from jarvis.llm import OllamaBackend
-
-        mock_post.return_value = MagicMock(status_code=200)
-        backend = OllamaBackend("http://localhost:11434")
-
-        assert backend.warm_up("gemma4:e2b") is True
-
-        sent = mock_post.call_args.kwargs["json"]
-        assert sent["keep_alive"] == "30m"
-
-    @patch("jarvis.llm.http.post")
-    def test_warmup_uses_caller_keep_alive(self, mock_post):
-        from jarvis.llm import OllamaBackend
-
-        mock_post.return_value = MagicMock(status_code=200)
-        backend = OllamaBackend("http://localhost:11434")
-
-        assert backend.warm_up("gemma4:e2b", keep_alive="1m") is True
-
-        sent = mock_post.call_args.kwargs["json"]
-        assert sent["keep_alive"] == "1m"
 
 
 # ---------------------------------------------------------------------------
@@ -696,19 +666,27 @@ class TestOllamaBackendWarmUp:
 
         assert backend.warm_up("gemma4:e2b") is False
 
+    @pytest.mark.parametrize(
+        "keep_alive", [None, "47s", "0"], ids=["default", "caller", "unload"],
+    )
     @patch("jarvis.llm.http.post")
     @patch("jarvis.llm.http.get")
-    def test_warmup_sends_chat_request_with_correct_payload(self, mock_get, mock_post):
+    def test_warmup_sends_chat_request_with_correct_payload(self, mock_get, mock_post, keep_alive):
         from jarvis.llm import OllamaBackend
 
         mock_get.return_value = _make_response(json_data={"version": "0.5.1"})
         mock_post.return_value = _make_response(status_code=200)
         backend = OllamaBackend("http://localhost:11434")
 
-        assert backend.warm_up("gemma4:e2b") is True
+        options = {} if keep_alive is None else {"keep_alive": keep_alive}
+        assert backend.warm_up("gemma4:e2b", **options) is True
         post_body = mock_post.call_args[1]["json"]
         assert post_body["model"] == "gemma4:e2b"
-        assert post_body["keep_alive"] == "30m"
+        expected_residency = (
+            signature(OllamaBackend.warm_up).parameters["keep_alive"].default
+            if keep_alive is None else keep_alive
+        )
+        assert post_body["keep_alive"] == expected_residency
         assert post_body["stream"] is False
         # Must use chat endpoint with messages to exercise full inference pipeline
         assert "messages" in post_body
@@ -732,7 +710,6 @@ class TestOllamaBackendWarmUp:
         from jarvis.llm import OllamaBackend
 
         backend = OllamaBackend("")
-        assert backend.warm_up("gemma4:e2b") is False
         assert backend.warm_up("gemma4:e2b") is False
 
 

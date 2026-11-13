@@ -98,4 +98,29 @@ def test_smoke_promotion_preserves_main_for_unqualified_commits(tmp_path, tested
     assert dispatched.returncode == 0, dispatched.stdout + dispatched.stderr
     assert commands.exists() == (tested_ref == "develop")
     if tested_ref == "develop":
-        assert commands.read_text().strip() == "workflow run release.yml --ref main --repo synthetic/repository"
+        assert commands.read_text().splitlines() == [
+            "workflow run release.yml --ref main --repo synthetic/repository",
+            "workflow run public-site.yml --ref main --repo synthetic/repository",
+        ]
+
+
+@pytest.mark.parametrize("failed_workflow", ["release.yml", "public-site.yml"])
+def test_main_workflow_dispatch_reports_failure(tmp_path, failed_workflow):
+    workflow = yaml.safe_load(Path(".github/workflows/release-smoke.yml").read_text())
+    dispatch = next(step for step in workflow["jobs"]["release"]["steps"]
+                    if "gh workflow run release.yml" in step.get("run", ""))
+    commands = tmp_path / "commands"
+    stub = tmp_path / "gh"
+    stub.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$JARVIS_TEST_COMMAND_LOG"\n'
+                    '[ "$3" != "$JARVIS_TEST_FAILED_WORKFLOW" ]\n')
+    stub.chmod(0o755)
+    environment = dict(os.environ, PATH=str(tmp_path) + os.pathsep + os.environ["PATH"],
+                       JARVIS_RELEASE_PROMOTED="true", JARVIS_RELEASE_REPOSITORY="synthetic/repository",
+                       JARVIS_TEST_COMMAND_LOG=str(commands), JARVIS_TEST_FAILED_WORKFLOW=failed_workflow)
+    result = subprocess.run([shutil.which("bash"), "-c", dispatch["run"]], cwd=tmp_path,
+                            env=environment, capture_output=True, text=True, timeout=10)
+    assert result.returncode != 0
+    expected = ["workflow run release.yml --ref main --repo synthetic/repository"]
+    if failed_workflow == "public-site.yml":
+        expected.append("workflow run public-site.yml --ref main --repo synthetic/repository")
+    assert commands.read_text().splitlines() == expected

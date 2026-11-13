@@ -8,6 +8,7 @@ Reads/writes config.json directly and groups settings by category.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -336,6 +337,10 @@ def _build_field_metadata() -> List[FieldMeta]:
       "location", "bool")
 
     # --- Features ---
+    f("background_tasks_enabled", "Background Tasks",
+      "Enable background work and the Task Centre. Uses extra system resources. "
+      "Restart Jarvis to apply changes to background execution.",
+      "features", "bool")
     f("web_search_enabled", "Web Search",
       "Enable web search tool",
       "features", "bool")
@@ -347,6 +352,12 @@ def _build_field_metadata() -> List[FieldMeta]:
       "Use Wikipedia as a last-resort source when other search engines fail. "
       "No key, no account, privacy-light.",
       "features", "bool")
+    f("document_search_enabled", "Local Document Search",
+      "Search the text and Markdown folders you choose",
+      "features", "bool")
+    f("document_search_paths", "Document Search Folders",
+      "Folders Jarvis may read for document search (.txt and .md files only)",
+      "features", "list")
     f("low_power_mode", "Low Power Mode",
       "Reduce background LLM residency and skip LLM startup warmup",
       "features", "bool")
@@ -1140,7 +1151,7 @@ class _MCPCatalogueDialog(QDialog):
         """Check if Node.js (npx) is available on the system."""
         try:
             from jarvis.tools.external.mcp_client import _resolve_command
-            _resolve_command("npx")
+            _resolve_command("npx", os.environ.get("PATH", ""))
             return True
         except (FileNotFoundError, Exception):
             return False

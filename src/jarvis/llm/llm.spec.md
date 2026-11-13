@@ -62,6 +62,14 @@ Each backend parses its own stream format internally (Ollama JSONL or OpenAI SSE
 
 `embed()` is part of the same backend interface so the same provider can serve both chat and embeddings when capable. The `embedding_provider` config key lets users on runtimes without embeddings (e.g. some oMLX builds) route embeddings through Ollama while keeping chat on their preferred runtime. Every embedding call site under `src/jarvis/` resolves through `get_embedding_backend(cfg)`.
 
+The embedding factory retains one latest stateless backend, keyed by the resolved
+provider, trailing-slash-normalised URL and effective API key. Repeated factory
+lookups with the same effective configuration share this transport. A different
+configuration evicts the retained backend; active callers may finish with their
+own references. The backend owns no model process or persistent HTTP session.
+Chat factories keep their independent construction contract. Model names remain
+per-request inputs, including the model key used by the tool catalogue cache.
+
 ## Configuration
 
 Provider-aware fields in `Settings` (see [src/jarvis/config.py](../config.py)):

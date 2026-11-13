@@ -1,13 +1,23 @@
 """Wizard controls stay readable when the page exceeds the display height."""
 
 import pytest
-from PyQt6.QtCore import QPoint
+from PyQt6.QtCore import QPoint, Qt
+from PyQt6.QtGui import QPixmap
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QComboBox, QDoubleSpinBox, QLineEdit, QPushButton, QScrollArea, QWizard
 
 from desktop_app import setup_wizard as ui
 
 pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("no_network")]
+
+
+def _layout_wizard():
+    """Exercise page geometry without loading artwork from the host desktop."""
+    wizard = QWizard()
+    background = QPixmap(1, 1)
+    background.fill(Qt.GlobalColor.transparent)
+    wizard.setPixmap(QWizard.WizardPixmap.BackgroundPixmap, background)
+    return wizard
 
 
 def _assert_content_and_navigation_are_reachable(wizard, scroll):
@@ -33,7 +43,7 @@ def _assert_content_and_navigation_are_reachable(wizard, scroll):
 def test_controls_fit_on_short_display(qapp, monkeypatch, page_type, width, height):
     # Exercise real styled layouts without discovery, installs or config writes.
     monkeypatch.setattr(page_type, "initializePage", lambda self: None)
-    wizard = QWizard()
+    wizard = _layout_wizard()
     wizard.setWizardStyle(QWizard.WizardStyle.ModernStyle)
     wizard.setStyleSheet(ui.JARVIS_THEME_STYLESHEET + ui.WIZARD_STYLESHEET)
     page = page_type()
@@ -77,7 +87,7 @@ def test_wizard_initial_size_fits_available_screen(qapp, monkeypatch):
 @pytest.mark.parametrize("width,height", [(700, 600), (960, 780)])
 def test_expanded_memory_estimates_remain_usable(qapp, monkeypatch, width, height):
     monkeypatch.setattr(ui.OpenAICompatiblePage, "initializePage", lambda self: None)
-    wizard = QWizard()
+    wizard = _layout_wizard()
     wizard.setStyleSheet(ui.JARVIS_THEME_STYLESHEET + ui.WIZARD_STYLESHEET)
     page = ui.OpenAICompatiblePage()
     wizard.addPage(page)
@@ -108,7 +118,7 @@ def test_whisper_install_buttons_fit_status_text(qapp, monkeypatch, installed):
         ffmpeg_path="/opt/homebrew/bin/ffmpeg" if installed else None,
         is_mlx_whisper_installed=installed,
     ))
-    wizard = QWizard()
+    wizard = _layout_wizard()
     wizard.setStyleSheet(ui.JARVIS_THEME_STYLESHEET + ui.WIZARD_STYLESHEET)
     page = ui.WhisperSetupPage()
     wizard.addPage(page)

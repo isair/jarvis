@@ -142,9 +142,11 @@ class LocalFilesTool(Tool):
                 if not target.exists() or not target.is_file():
                     return ToolExecutionResult(success=False, reply_text=f"File not found: {target}")
                 try:
-                    data = target.read_text(encoding="utf-8", errors="replace")
                     max_chars = 10000
+                    with target.open("r", encoding="utf-8", errors="replace") as stream:
+                        data = stream.read(max_chars + 1)
                     if len(data) > max_chars:
+                        debug_log("localFiles: read reached the character limit", "tools")
                         data = data[:max_chars] + f"\n... (truncated, showing first {max_chars} chars)"
                     return ToolExecutionResult(success=True, reply_text=data)
                 except Exception as e:

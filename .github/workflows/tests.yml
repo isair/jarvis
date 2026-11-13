@@ -24,7 +24,13 @@ jobs:
           npm install --prefix "$RUNNER_TEMP/release-plugin" --ignore-scripts --no-audit --no-fund @semantic-release/github@9
           node tests/release_publication.mjs "$RUNNER_TEMP/release-plugin/node_modules/@semantic-release/github"
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y portaudio19-dev libegl1 libxkbcommon0
+        run: sudo apt-get update && sudo apt-get install -y portaudio19-dev pulseaudio libegl1 libxkbcommon0
+      - name: 🔇 Start owned virtual audio backend
+        run: |
+          pulseaudio --daemonize=yes --exit-idle-time=-1 --disallow-exit \
+            --use-pid-file=no --disable-shm=yes -n \
+            --load=module-native-protocol-unix \
+            --load='module-null-sink sink_name=jarvis_test_audio'
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
@@ -127,3 +133,99 @@ jobs:
           env['JARVIS_SEARCH_PROBE_EXE'] = str(Path('build/search-native/dist/search-probe', executable).resolve())
           subprocess.run([sys.executable, '-m', 'pytest', '-q', '-m', 'integration',
                           'tests/test_search_http.py'], env=env, check=True)
+
+  mcp-environment:
+    name: MCP environment (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Install MCP test dependencies
+        shell: python
+        run: |
+          from pathlib import Path
+          import subprocess
+          import sys
+          prefixes = ('mcp==', 'pydantic', 'pytest==', 'python-dotenv==', 'psutil')
+          dependencies = [line for line in Path('requirements.txt').read_text().splitlines()
+                          if line.startswith(prefixes)]
+          subprocess.run([sys.executable, '-m', 'pip', 'install', *dependencies], check=True)
+      - name: 🧪 Verify configured server environments
+        shell: python
+        run: |
+          import os
+          from pathlib import Path
+          import subprocess
+          import sys
+          import tempfile
+          with tempfile.TemporaryDirectory(prefix='jarvis-mcp-environment-') as directory:
+              owned = Path(directory)
+              scenario = owned / 'scenario.py'
+              scenario.write_text(
+                  "import os, pytest\nfrom pathlib import Path\n"
+                  "data = Path(os.environ['WORKER_PROBE_ROOT'])\n"
+                  "raise SystemExit(pytest.main(['-q', 'tests/test_mcp_configured_path.py', "
+                  "'--basetemp', str(data/'tests'), '-o', 'cache_dir='+str(data/'cache'), "
+                  "'-o', 'log_file='+str(data/'pytest.log')]))\n"
+              )
+              env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1')
+              subprocess.run([sys.executable, 'tests/fixtures/worker_probe.py',
+                              str(owned), str(scenario)], env=env, check=True)
+
+  wizard-resources:
+    name: Wizard resources (macos-latest)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Install native wizard test dependencies
+        shell: python
+        run: |
+          from pathlib import Path
+          import subprocess
+          import sys
+          prefixes = ('PyQt6>=', 'psutil', 'pytest==', 'python-dotenv==', 'requests==', 'filelock')
+          dependencies = [line for line in Path('requirements.txt').read_text().splitlines()
+                          if line.startswith(prefixes)]
+          subprocess.run([sys.executable, '-m', 'pip', 'install', *dependencies,
+                          'pyobjc-framework-Cocoa'], check=True)
+      - name: 🧪 Open setup without optional system artwork
+        shell: python
+        run: |
+          import os
+          from pathlib import Path
+          import shutil
+          import subprocess
+          import sys
+          import tempfile
+          with tempfile.TemporaryDirectory(prefix='jarvis-wizard-resources-') as directory:
+              owned = Path(directory)
+              scenario = owned / 'scenario.py'
+              shutil.copyfile('tests/fixtures/wizard_resource_probe.py', scenario)
+              env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1', PYTHONPATH='src')
+              subprocess.run([sys.executable, 'tests/fixtures/worker_probe.py',
+                              str(owned), str(scenario)], env=env, check=True, timeout=30)
+
+  document-capabilities:
+    name: Document capabilities (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Verify native document capability boundaries
+        run: python tests/fixtures/document_windows_probe.py

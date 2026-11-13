@@ -91,6 +91,11 @@ flowchart TD
 |------|---------|
 | `--smoke-test` | CI smoke-test mode. Creates a minimal offscreen QApplication, runs the daemon initialisation (`daemon.main(smoke_test=True)`), prints `SMOKE_TEST_PASSED` on success (or the error + traceback on failure), and exits with code 0 or 1. Forces UTF-8 stdout/stderr on every OS (emoji-safe even when the console is an ANSI code page or absent) and Qt's offscreen platform on Linux so the gate never depends on xvfb/xcb. Bypasses the single-instance lock, crash detection, splash screen, setup wizard, Ollama checks, model verification, tray icon, and event loop. Used by the `release-smoke.yml` workflow to verify the bundled binary starts without missing DLLs or broken imports before fast-forwarding `main` to `develop`. |
 
+Console preparation reconfigures open text writers in place through the shared
+`jarvis.utils.console` helper. Capture buffers retain their ownership, and
+missing or closed streams receive text sinks. Windows source desktop and daemon
+startup share that helper.
+
 The Release Smoke Test workflow defaults to validation only. It builds and
 smoke-tests the selected ref without publishing a stable release. Promotion
 requires an explicit release run on `develop` with `validate_only=false`. The
@@ -374,6 +379,12 @@ assistant input is discarded; this control does not claim to release the device.
 
 ### Task Centre
 
+The task centre is available only when `background_tasks_enabled` is true. The
+switch defaults to false. Disabled startup creates no task window and hides its
+tray action, including the face's shared menu. Saving Settings refreshes this
+visibility; execution changes apply through the normal daemon restart. Disabled
+submission cannot send task IPC or call the bundled task service.
+
 The task centre is available from the tray menu and submits prompts to the
 daemon's local task service. It displays queued, running, completed, failed,
 and cancelled tasks with their result or error. In bundled mode it calls the
@@ -484,6 +495,7 @@ sequenceDiagram
 A Flask-based web interface for browsing conversation history:
 
 - Runs on `localhost:5050`
+- Every viewer route rejects non-loopback Host headers and browser requests from another origin before accessing memory stores. Only `localhost`, `127.0.0.1` and `::1` are accepted; Origin and Referer metadata, when present, must match the viewer's scheme, host and port. Cross-site Fetch Metadata is rejected. Direct local navigation remains available without browser metadata.
 - **Bundled mode**: Flask runs in a daemon thread
 - **Development mode**: Flask runs as subprocess
 - Opens in embedded QWebEngineView or the system browser (macOS bundle, unavailable or failed WebEngine). Browser mode opens directly without showing or focusing a native placeholder window.

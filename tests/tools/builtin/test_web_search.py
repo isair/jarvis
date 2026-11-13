@@ -50,6 +50,13 @@ def public_example_dns(monkeypatch):
     monkeypatch.setattr(socket, 'getaddrinfo', resolve)
 
 
+@pytest.fixture(autouse=True)
+def scripted_page_transport(monkeypatch):
+    """Extraction cases provide their scripted response at the page boundary."""
+    from jarvis.tools.builtin import web_search
+    monkeypatch.setattr(web_search.public_http, 'get', lambda *args, **kwargs: web_search.requests.get(*args, **kwargs))
+
+
 class TestWebSearchTool:
     """Test web search tool functionality."""
 

@@ -23,6 +23,10 @@ An OpenAI-compatible user has opted out of the local Ollama stack, so `should_sh
 
 ## Layout and overflow
 
+The wizard owns a transparent background pixmap. Showing setup does not depend
+on artwork from an optional system application, including macOS Keyboard Setup
+Assistant.
+
 The wizard uses a shared dark visual theme in `themes.py`, with neutral cards,
 amber selections and primary actions, and a four-stage header: Voice,
 Intelligence, Capabilities, Ready. The standard window is 960 × 780, bounded

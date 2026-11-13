@@ -2,6 +2,7 @@
 import json
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from jarvis.memory import conversation
@@ -9,6 +10,20 @@ from jarvis.memory.db import Database
 from jarvis.utils.vector_store import PythonVectorStore
 
 pytestmark = pytest.mark.unit
+
+
+def test_python_vector_store_returns_nearest_vectors_in_order():
+    store = PythonVectorStore(':memory:')
+    store.vectors = {
+        1: np.array([1., 0.], dtype='float32'),
+        2: np.array([0., 1.], dtype='float32'),
+        3: np.array([.8, .6], dtype='float32'),
+    }
+
+    results = store.search([1., 0.], top_k=2)
+    assert [summary_id for summary_id, _distance in results] == [1, 3]
+    assert results[0][1] == pytest.approx(0.0)
+    assert results[1][1] == pytest.approx(0.2)
 
 
 @pytest.fixture(params=['python', 'default'])
