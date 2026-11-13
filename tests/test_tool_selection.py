@@ -308,6 +308,20 @@ class TestEmbeddingStrategy:
         )
 
     @pytest.mark.unit
+    def test_orthogonal_embeddings_keep_available_tools(self):
+        """A flat zero-similarity catalogue retains every available tool."""
+        from itertools import chain, repeat
+
+        backend = MagicMock()
+        backend.embed.side_effect = chain([[1.0, 0.0]], repeat([0.0, 1.0]))
+        builtin = _builtin()
+        selected = select_tools(
+            "something obscure", builtin, {}, strategy=ToolSelectionStrategy.EMBEDDING,
+            embedding_backend=backend, embed_model="nomic-embed-text",
+        )
+        assert set(selected) == set(builtin)
+
+    @pytest.mark.unit
     def test_relative_threshold_filters_low_similarity(self):
         """Relative threshold keeps only tools near the top score, not everything."""
         import math
