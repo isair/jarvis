@@ -173,7 +173,7 @@ def split_compound_query(text: str, language: Optional[str] = None) -> list[str]
     return [left, right]
 
 
-COVERAGE_INPUT_CHAR_LIMIT = 24_000
+COVERAGE_INPUT_BYTE_LIMIT = 6_000
 
 _COVERAGE_PROMPT = (
     'Check whether actual tool results cover the whole user request. '
@@ -196,7 +196,7 @@ def resolve_uncovered_request(cfg, query: str, results: list, tools: list) -> Op
     """Propose one permitted call for an unresolved outcome, without executing it."""
     try:
         packet = json.dumps({'request': query, 'results': results, 'tools': tools}, ensure_ascii=False)
-        if len(packet) > COVERAGE_INPUT_CHAR_LIMIT:
+        if len(packet.encode('utf-8')) > COVERAGE_INPUT_BYTE_LIMIT:
             debug_log('compound coverage: evidence exceeds the review budget', 'planning')
             return None
         response = get_llm_backend(cfg).direct(

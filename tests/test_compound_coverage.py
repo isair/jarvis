@@ -1,5 +1,6 @@
 """Coverage proposals retain tool authority and normal dispatch protections."""
 import json
+import socket
 from threading import Event
 from unittest.mock import Mock, patch
 
@@ -66,13 +67,22 @@ def test_coverage_failure_preserves_the_reply_loop(mock_config):
 
 
 @pytest.mark.usefixtures('no_network')
-@pytest.mark.parametrize('unusable', ['oversized', 'unserialisable'])
+@pytest.mark.parametrize('unusable', ['oversized', 'oversized_unicode', 'unserialisable'])
 def test_unusable_evidence_stays_offline(mock_config, unusable):
-    evidence = [{'result': (
-        'x' * (compound_query.COVERAGE_INPUT_CHAR_LIMIT + 1)
-        if unusable == 'oversized' else {'not JSON'}
-    )}]
-    assert compound_query.resolve_uncovered_request(mock_config, 'A request.', evidence, SCHEMAS) is None
+    if unusable == 'oversized':
+        value = 'x' * (compound_query.COVERAGE_INPUT_BYTE_LIMIT + 1)
+    elif unusable == 'oversized_unicode':
+        value = '🌱' * (compound_query.COVERAGE_INPUT_BYTE_LIMIT // len('🌱'.encode('utf-8')) + 1)
+    else:
+        value = {'not JSON'}
+    with socket.socket() as owned_boundary:
+        owned_boundary.bind(('127.0.0.1', 0))
+        mock_config.llm_base_url = f'http://127.0.0.1:{owned_boundary.getsockname()[1]}'
+        mock_config.ollama_base_url = mock_config.llm_base_url
+        assert compound_query.resolve_uncovered_request(
+            mock_config, 'A request.', [{'result': value}], SCHEMAS,
+        ) is None
+
 
 
 @pytest.fixture
