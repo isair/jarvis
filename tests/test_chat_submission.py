@@ -279,9 +279,18 @@ class TestSubmitTextQueryContract:
         finally:
             daemon._global_stop_requested = False
 
-    def test_empty_or_whitespace_does_not_run_engine(self, monkeypatch):
+    @pytest.mark.parametrize("text", ["", "   "])
+    def test_empty_or_whitespace_does_not_run_engine(self, monkeypatch, text):
         """Empty / whitespace input is dropped before the worker spawns; no
         callbacks fire and the engine is never called."""
+        from types import SimpleNamespace
+
+        def unexpected_worker(*args, **kwargs):
+            pytest.fail("Blank input must not start a worker")
+
+        monkeypatch.setattr(daemon, "threading", SimpleNamespace(**{
+            **vars(threading), "Thread": unexpected_worker,
+        }))
         called = []
         monkeypatch.setattr(
             "jarvis.reply.engine.run_reply_engine",
@@ -290,7 +299,7 @@ class TestSubmitTextQueryContract:
         _install_dialogue_memory(cfg=object(), db=object())
         events = []
         daemon.submit_text_query(
-            "   ", on_start=lambda q: events.append(("start", q)),
+            text, on_start=lambda q: events.append(("start", q)),
             on_complete=lambda r: events.append(("complete", r)),
         )
         assert events == []
