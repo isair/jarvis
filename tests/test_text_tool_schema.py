@@ -53,3 +53,17 @@ def test_text_tool_help_does_not_expose_unselected_tools(monkeypatch):
     assert selected.description in text
     assert other.name not in text
     assert other.description not in text
+
+
+@pytest.mark.parametrize('separator', ['\u0085', '\u2028', '\u2029'])
+def test_schema_unicode_line_boundaries_remain_one_catalogue_record(monkeypatch, separator):
+    schema = {'type': 'object', 'properties': {'message': {
+        'type': 'string', 'description': 'first' + separator + 'second',
+    }}}
+    tool = registry.ToolSpec(name='ownedTool', description='Owned tool', inputSchema=schema)
+    monkeypatch.setattr(registry, 'BUILTIN_TOOLS', {tool.name: tool})
+    text = registry.generate_tools_description([tool.name])
+    rendered = [line.removeprefix('Input schema: ') for line in text.splitlines()
+                if line.startswith('Input schema: ')]
+    assert len(rendered) == 1
+    assert json.loads(rendered[0]) == schema

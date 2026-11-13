@@ -10,7 +10,8 @@ a compact JSON object. It retains parameter descriptions, enum and constant
 values, required fields, nested structures, conditional constraints and additional
 property rules. Empty argument contracts remain explicit. JSON encoding preserves
 Unicode and escapes embedded newlines and quotes without creating extra catalogue
-lines. Rendering does not mutate the tool's schema.
+lines. Unicode newline separators use JSON escapes so each schema remains one
+catalogue record. Rendering does not mutate the tool's schema.
 
 Tools without a supplied input schema use the registry's empty object contract in
 both representations. Text generation reuses native definition selection and

@@ -255,7 +255,9 @@ def generate_tools_description(allowed_tools: Optional[List[str]] = None, mcp_to
     for definition in generate_tools_json_schema(allowed_tools, mcp_tools):
         function = definition['function']
         lines.append(f"\n{function['name']}: {function['description']}")
-        schema = json.dumps(function['parameters'], ensure_ascii=False, separators=(',', ':'))
+        schema = json.dumps(function['parameters'], ensure_ascii=False, separators=(',', ':')).translate({
+            0x85: r'\u0085', 0x2028: r'\u2028', 0x2029: r'\u2029',
+        })
         lines.append(f"Input schema: {schema}")
 
     return "\n".join(lines)
