@@ -75,6 +75,14 @@ reproduction, effort, regression risk and dependencies. Meaningful test
 consolidation and removal of unnecessary code are worthwhile outcomes; fewer
 tests alone is not evidence of improvement.
 
+Apply the **Product vision and scope** gate in `AGENTS.md` before selecting
+implementation or repair work. Record a brief product-fit rationale alongside
+the retained item's disposition: user benefit, fit with the shared voice/chat
+experience, simplest existing alternative and material complexity cost. Reassess
+optional or overlapping proposals before spending effort making them mergeable;
+technical repairability alone does not make a feature worth adding. Keep genuine
+core defects actionable while scope decisions are considered.
+
 For each independent change:
 
 1. Establish the reproduction and read related `*.spec.md` files. Use TDD for
@@ -110,6 +118,9 @@ artifacts; the loop's draft-only boundary overrides offers to post them.
 
 Merge only within existing user authorisation, after all of these are true:
 
+- The final changeset passes `AGENTS.md`'s product-fit gate. Its user benefit
+  justifies the added complexity; unresolved product-scope questions block
+  feature merges even when technical checks pass.
 - The final exact head SHA has no unresolved review findings and is qualified
   by appropriate tests, manual checks and relevant live evals.
 - The PR is ready, targets `develop`, and its current head matches the reviewed

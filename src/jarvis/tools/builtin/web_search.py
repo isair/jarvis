@@ -1,8 +1,6 @@
 """Web search tool implementation using DuckDuckGo."""
 
-import ipaddress
 import re
-import socket
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse
 
@@ -13,6 +11,8 @@ from ..base import Tool, ToolContext
 from ..types import ToolExecutionResult
 from ..http_response import discard_redirect_body
 from ..search_http import download_search_html
+from .. import public_http
+from ..public_http import _is_public_url
 
 
 # Per-fetch deadline — tight enough that a worst-case 3-way cascade fits the
@@ -31,52 +31,6 @@ _MAX_REDIRECTS = 3
 # Max bytes we'll pull from a single page before giving up. Caps prompt-
 # injection surface and protects against hostile servers streaming forever.
 _MAX_FETCH_BYTES = 512 * 1024
-
-
-def _is_public_url(url: str) -> bool:
-    """Reject non-http(s) schemes and URLs pointing to private/loopback IPs.
-
-    Defence against SSRF: search results (or a redirect chain from one) could
-    point at 127.0.0.1, 169.254.169.254 (cloud metadata), 10.x/192.168.x, or
-    file:///etc/passwd. We resolve the hostname and check every A/AAAA record
-    against ipaddress.is_private / is_loopback / is_link_local / is_reserved
-    before issuing the request.
-    """
-    try:
-        parsed = urlparse(url)
-    except Exception:
-        return False
-    if parsed.scheme not in ("http", "https"):
-        return False
-    host = parsed.hostname
-    if not host:
-        return False
-    # Literal IP in the URL — check directly, don't resolve.
-    try:
-        ip = ipaddress.ip_address(host)
-        return not (ip.is_private or ip.is_loopback or ip.is_link_local
-                    or ip.is_reserved or ip.is_multicast or ip.is_unspecified)
-    except ValueError:
-        pass
-    # Hostname — resolve all addresses and reject if any is non-public. This
-    # is stricter than checking only the first A record: a hostile DNS could
-    # return [1.1.1.1, 127.0.0.1] and some clients would try both.
-    try:
-        infos = socket.getaddrinfo(host, None)
-    except Exception as e:
-        debug_log(f"DNS lookup failed for {host}: {e}", "web")
-        return False
-    for info in infos:
-        try:
-            addr = info[4][0]
-            ip = ipaddress.ip_address(addr)
-            if (ip.is_private or ip.is_loopback or ip.is_link_local
-                    or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
-                debug_log(f"Rejecting {url}: resolves to non-public {addr}", "web")
-                return False
-        except Exception:
-            return False
-    return True
 
 
 def _fetch_page_content(url: str, max_chars: int = 1500,
@@ -99,7 +53,7 @@ def _fetch_page_content(url: str, max_chars: int = 1500,
         # allowlist. Limit to _MAX_REDIRECTS to cap latency.
         current_url = url
         for _ in range(_MAX_REDIRECTS + 1):
-            response = requests.get(
+            response = public_http.get(
                 current_url, headers=headers, timeout=timeout,
                 allow_redirects=False, stream=True,
                 hooks={"response": discard_redirect_body},

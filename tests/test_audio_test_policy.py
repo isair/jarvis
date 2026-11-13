@@ -58,6 +58,27 @@ _CASES = {
         def test_eval_audio():
             sounddevice.play()
     ''',
+    'qt_caught': """
+        @pytest.mark.parametrize('backend,operation', [
+            ('PyQt6.QtMultimedia', name) for name in
+            ('QSoundEffect', 'QMediaPlayer', 'QAudioSink', 'QAudioSource',
+             'QAudioOutput', 'QAudioInput')
+        ] + [('PyQt6.QtWidgets', 'QApplication.beep')])
+        def test_caught_qt_audio(backend, operation):
+            target = importlib.import_module(backend)
+            for part in operation.split('.'):
+                target = getattr(target, part)
+            try:
+                target()
+            except AssertionError:
+                pass
+    """,
+    'qt_fake': """
+        def test_owned_qt_feedback(monkeypatch):
+            import PyQt6.QtMultimedia as media
+            monkeypatch.setattr(media, 'QMediaPlayer', lambda: Path(os.environ['FAKE_MARKER']).write_text('owned feedback'))
+            media.QMediaPlayer()
+    """,
     'fake': '''
         def test_owned_feedback(monkeypatch):
             monkeypatch.setattr(sounddevice, 'play', lambda: Path(os.environ['FAKE_MARKER']).write_text('owned feedback'))
@@ -97,10 +118,11 @@ def test_audio_policy_at_native_boundary(tmp_path, mode):
     driver = '''
 import importlib.util, os, sys, types
 from pathlib import Path
-import pytest, sounddevice
 marker = Path(os.environ['NATIVE_MARKER'])
 def native(*args, **kwargs):
     marker.write_text('synthetic native boundary reached')
+sounddevice = types.ModuleType('sounddevice')
+sys.modules['sounddevice'] = sounddevice
 for operation in ('play', 'rec', 'playrec', 'InputStream', 'OutputStream', 'RawInputStream', 'RawOutputStream', 'Stream', 'RawStream'):
     setattr(sounddevice, operation, native)
 winsound = types.ModuleType('winsound')
@@ -118,6 +140,20 @@ mixer.music = music
 pygame.mixer = mixer
 for name, module in (('pygame', pygame), ('pygame.mixer', mixer), ('pygame.mixer.music', music)):
     sys.modules[name] = module
+qt = types.ModuleType('PyQt6')
+qt.__path__ = []
+multimedia = types.ModuleType('PyQt6.QtMultimedia')
+for operation in ('QSoundEffect', 'QMediaPlayer', 'QAudioSink', 'QAudioSource', 'QAudioOutput', 'QAudioInput'):
+    setattr(multimedia, operation, native)
+widgets = types.ModuleType('PyQt6.QtWidgets')
+class QApplication:
+    beep = staticmethod(native)
+widgets.QApplication = QApplication
+qt.QtMultimedia = multimedia
+qt.QtWidgets = widgets
+for name, module in (('PyQt6', qt), ('PyQt6.QtMultimedia', multimedia), ('PyQt6.QtWidgets', widgets)):
+    sys.modules[name] = module
+import pytest
 name = 'owned_repo_policy'
 arguments = ['-q', '-c', sys.argv[2], sys.argv[3]]
 if os.environ['PROBE_MODE'] != 'eval_only':
@@ -128,7 +164,7 @@ if os.environ['PROBE_MODE'] != 'eval_only':
     arguments.extend(['-p', name])
 raise SystemExit(pytest.main(arguments))
 '''
-    env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1', QT_QPA_PLATFORM='offscreen',
+    env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1', PYTEST_DISABLE_PLUGIN_AUTOLOAD='1', QT_QPA_PLATFORM='offscreen',
                TMPDIR=str(runtime), TEMP=str(runtime), TMP=str(runtime),
                JARVIS_CONFIG_PATH=str(config), XDG_CONFIG_HOME=str(tmp_path / 'xdg'),
                NATIVE_MARKER=str(native_marker), FAKE_MARKER=str(fake_marker),
@@ -138,9 +174,9 @@ raise SystemExit(pytest.main(arguments))
         cwd=tmp_path, env=env, capture_output=True, text=True, timeout=30,
     )
     output = result.stdout + result.stderr
-    assert result.returncode == (0 if mode == 'fake' else 1), output
+    assert result.returncode == (0 if mode in ('fake', 'qt_fake') else 1), output
     assert not native_marker.exists(), output
-    if mode == 'fake':
+    if mode in ('fake', 'qt_fake'):
         assert fake_marker.read_text() == 'owned feedback'
     else:
         assert 'Physical audio access' in output

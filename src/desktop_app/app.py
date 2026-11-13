@@ -64,6 +64,7 @@ except ImportError:
     QWebEngineView = None
 
 from jarvis.debug import debug_log
+from jarvis.utils.console import configure_utf8_streams
 from jarvis.llm.model_names import missing_ollama_models
 from jarvis.config import get_config_path, _default_db_path, get_model_recommendations, Settings
 from desktop_app.diary_dialog import DiaryUpdateDialog
@@ -122,6 +123,16 @@ def _should_emit_as_log(line: str) -> bool:
 
     from jarvis.tasks import TASK_EVENT_PREFIX
     return not line.startswith((CHAT_IPC_PREFIX, VOICE_STATUS_IPC_PREFIX, TASK_EVENT_PREFIX))
+
+
+def _background_tasks_enabled() -> bool:
+    """Read the shared task opt-in; unavailable settings do not enable work."""
+    try:
+        from jarvis.config import load_settings
+        return load_settings().background_tasks_enabled
+    except Exception as exc:
+        debug_log(f"task feature settings unavailable ({type(exc).__name__})", "desktop")
+        return False
 
 
 def _collect_runtime_status_snapshot(
@@ -1805,13 +1816,6 @@ class JarvisSystemTray:
         self.log_signals.new_log.connect(self.log_viewer.append_log)
         self.log_signals.voice_status.connect(self._on_voice_pause_status)
 
-        from desktop_app.task_centre import TaskCentreWindow
-        self.task_centre = TaskCentreWindow(
-            submit_callback=self.submit_task,
-            cancel_callback=self.cancel_task,
-        )
-        self.log_signals.task_event.connect(self.task_centre.process_log_line)
-
         # Create memory viewer window (hidden by default)
         self.memory_viewer = MemoryViewerWindow()
 
@@ -1861,6 +1865,7 @@ class JarvisSystemTray:
 
         # Create context menu
         self.create_menu()
+        self.log_signals.task_event.connect(self._process_task_event)
         self.face_window.set_tray_menu(self.menu)
 
         # Set up status checking timer
@@ -1933,9 +1938,11 @@ class JarvisSystemTray:
         self.menu.addAction(self.logs_action)
 
         # Task centre action
+        self.task_centre = None
         self.tasks_action = QAction("🧭 Task Centre")
         self.tasks_action.triggered.connect(self.show_task_centre)
         self.menu.addAction(self.tasks_action)
+        self._refresh_task_interface()
 
         # Memory viewer action
         self.memory_action = QAction("🧠 Memory Viewer")
@@ -2117,6 +2124,9 @@ class JarvisSystemTray:
         dialog = SettingsWindow()
         result = dialog.exec()
 
+        if result == QDialog.DialogCode.Accepted:
+            self._refresh_task_interface()
+
         # If settings were saved and daemon is running, offer to restart
         if result == QDialog.DialogCode.Accepted and self.is_listening:
             reply = QMessageBox.question(
@@ -2253,14 +2263,37 @@ class JarvisSystemTray:
         self.log_viewer.raise_()
         self.log_viewer.activateWindow()
 
+    def _refresh_task_interface(self) -> bool:
+        """Keep the task window and menu behind the shared configuration switch."""
+        enabled = _background_tasks_enabled()
+        self.tasks_action.setVisible(enabled)
+        if enabled and self.task_centre is None:
+            from desktop_app.task_centre import TaskCentreWindow
+            self.task_centre = TaskCentreWindow(
+                submit_callback=self.submit_task, cancel_callback=self.cancel_task,
+            )
+        elif not enabled and self.task_centre is not None:
+            self.task_centre.close()
+            self.task_centre.deleteLater()
+            self.task_centre = None
+        return enabled
+
+    def _process_task_event(self, line: str) -> None:
+        if self.task_centre is not None:
+            self.task_centre.process_log_line(line)
+
     def show_task_centre(self) -> None:
-        """Show the interactive task centre."""
+        """Show the interactive task centre when background work is enabled."""
+        if not self._refresh_task_interface():
+            return
         self.task_centre.show()
         self.task_centre.raise_()
         self.task_centre.activateWindow()
 
     def submit_task(self, prompt: str, *, request_id: str):
         """Submit a prompt to the in-process or subprocess daemon."""
+        if not _background_tasks_enabled():
+            raise RuntimeError("Background tasks are disabled")
         if self.is_bundled:
             from jarvis.daemon import submit_task
             return submit_task(prompt)
@@ -2275,6 +2308,8 @@ class JarvisSystemTray:
 
     def cancel_task(self, task_id: str):
         """Cancel a prompt in the in-process or subprocess daemon."""
+        if not _background_tasks_enabled():
+            return False
         if self.is_bundled:
             from jarvis.daemon import cancel_task
             return cancel_task(task_id)
@@ -3245,30 +3280,7 @@ def _smoke_test_main() -> int:
     import multiprocessing
     multiprocessing.freeze_support()
 
-    # Ensure stdout/stderr use UTF-8.  PyInstaller GUI-subsystem executables
-    # (console=False) can attach an ANSI-code-page stdout (Windows) or even
-    # None when there is no console at all; the daemon prints emoji
-    # (✅, ✓, 🧠…), so a non-UTF-8 stream raises UnicodeEncodeError (or
-    # AttributeError when stdout is None) and the smoke test exits 1 before
-    # ever reaching the daemon.  Wrap in UTF-8 when a binary buffer is
-    # available and fall back to a sink so prints can never crash the test.
-    # Only wrap the real console streams: pytest swaps in its own capture
-    # objects that must not be re-wrapped (wrapping them detaches and
-    # closes their buffers, corrupting output capture for the process).
-    try:
-        import io
-        for _stream_name in ("stdout", "stderr"):
-            _stream = getattr(sys, _stream_name)
-            _real = getattr(sys, "__" + _stream_name, None)
-            if _stream is None:
-                setattr(sys, _stream_name, io.StringIO())
-            elif (getattr(sys, "frozen", False) or sys.platform == "win32") \
-                    and (getattr(sys, "frozen", False) or _stream is _real) \
-                    and hasattr(_stream, "buffer") and hasattr(_stream.buffer, "write"):
-                setattr(sys, _stream_name, io.TextIOWrapper(
-                    _stream.buffer, encoding="utf-8", errors="replace"))
-    except Exception:
-        pass
+    configure_utf8_streams(sys)
 
     # The smoke test never renders UI, so force Qt's offscreen platform on
     # Linux regardless of whether xvfb supplies a $DISPLAY.  This keeps the
@@ -3372,22 +3384,9 @@ def main() -> int:
     if "--smoke-test" in set(sys.argv[1:]):
         return _smoke_test_main()
 
-    # Fix Windows console encoding for Unicode/emoji characters
-    # Only for non-frozen apps - frozen apps redirect stdout to crash log
-    # Only wrap the real console streams (sys.__stdout__/sys.__stderr__):
-    # test harnesses replace sys.stdout with capture objects whose buffers
-    # must not be detached.
+    # Source consoles share the same Unicode setup as the daemon and smoke gate.
     if sys.platform == 'win32' and not getattr(sys, 'frozen', False):
-        try:
-            import io
-            if (sys.stdout is sys.__stdout__ and hasattr(sys.stdout, 'buffer')
-                    and hasattr(sys.stdout.buffer, 'write')):
-                sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-            if (sys.stderr is sys.__stderr__ and hasattr(sys.stderr, 'buffer')
-                    and hasattr(sys.stderr.buffer, 'write')):
-                sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
-        except Exception:
-            pass
+        configure_utf8_streams(sys)
 
     # Required for PyInstaller: must be called before any multiprocessing
     # Without this, bundled apps can spawn infinite copies of themselves

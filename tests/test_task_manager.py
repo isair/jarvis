@@ -329,3 +329,50 @@ def test_invalid_capacity_or_history_limits_are_rejected(option, limit):
     finally:
         if manager is not None:
             manager.shutdown()
+
+
+@pytest.mark.parametrize('disposition', ['complete', 'cancel', 'shutdown'])
+def test_task_waiting_for_conversation_remains_queued(monkeypatch, disposition):
+    from contextlib import contextmanager
+    from jarvis import daemon
+
+    waiting = Event()
+    conversation_lock = daemon.query_lock
+    events = []
+    executed = []
+
+    @contextmanager
+    def observed_conversation_lock():
+        waiting.set()
+        with conversation_lock():
+            yield
+
+    monkeypatch.setattr(daemon, 'query_lock', observed_conversation_lock)
+    monkeypatch.setattr('jarvis.tasks.run_reply_engine',
+                        lambda *args, **kwargs: executed.append(args[3]) or 'Done')
+    manager = TaskManager(object(), SimpleNamespace(), object(), event_callback=events.append)
+    try:
+        with conversation_lock():
+            task_id = manager.submit('Work after the current conversation')
+            assert waiting.wait(2)
+            waiting_task = manager.get(task_id).as_dict()
+            waiting_events = [event['status'] for event in events]
+            if disposition == 'cancel':
+                assert manager.cancel(task_id)
+            elif disposition == 'shutdown':
+                manager.shutdown(wait=False)
+        manager.wait_for_idle(timeout=2)
+        assert waiting_task['status'] == 'queued'
+        assert waiting_task['started_at'] is None
+        assert waiting_events == ['queued']
+        if disposition == 'complete':
+            assert executed == ['Work after the current conversation']
+            assert manager.get(task_id).result == 'Done'
+            assert [event['status'] for event in events] == ['queued', 'running', 'completed']
+        else:
+            assert executed == []
+            assert manager.get(task_id).status is TaskStatus.CANCELLED
+            assert manager.get(task_id).started_at is None
+            assert [event['status'] for event in events] == ['queued', 'cancelled']
+    finally:
+        manager.shutdown()

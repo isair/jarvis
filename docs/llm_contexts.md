@@ -4,14 +4,23 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 
 **Configuration source.** Runtime settings and desktop configuration share [one file selection](../src/jarvis/config.spec.md). An explicit `JARVIS_CONFIG_PATH` applies to settings and wizard writes as well as runtime loading. Model tiers, prompts, deadlines and context gates resolve from that selected configuration.
 
-**Cooperative task cancellation.** A caller-owned cancellation event gates
+**Background task admission.** `background_tasks_enabled` defaults to false.
+Disabled daemon runs do not allocate a task manager or replay task history, and
+submissions cannot enter the reply engine. Enabling the feature preserves the
+configured models and prompts; the switch does not add a model context.
+
+**Cooperative task cancellation.** Task requests wait for the shared conversation
+before entering the reply engine. Cancellation or shutdown during that wait
+prevents entry, including preparation and model calls. A caller-owned cancellation event gates
 preparation as well as the reply loop. After MCP discovery, routing, planning,
 profile loading, memory extraction, diary/graph retrieval and memory digest,
 cancellation stops later model/resource work. Returned router and extractor
 results are checked before conversation-cache publication. Cache misses recheck
 cancellation before starting routing/extraction inference. In-flight calls
 finish under their existing deadlines; no new timeout, model or prompt is
-introduced. Voice and text chat do not supply this task event.
+introduced. Tool dispatch forwards the event into cooperative tool contexts, including
+bounded document refresh and ranking. Voice and text chat do not supply this
+task event.
 
 **Shutdown admission and ownership.** Text submissions recheck shutdown after
 acquiring the shared query lock. Already admitted requests retain their
@@ -48,7 +57,7 @@ caller-owned delivery. Models, prompts and token budgets use their configured va
 requests do not supply this event.
 
 - **File**: [src/jarvis/reply/engine.py](src/jarvis/reply/engine.py) — `reply()` and the loop at ~lines 1370-1650; native tool-call path in `chat_with_messages()` (~1424, 1455).
-- **Trigger**: every user message. Runs up to `agentic_max_turns` (default 8) iterations per reply.
+- **Trigger**: every user message. Runs within `agentic_max_turns` (default 8) reply slots. Native tool batches execute serially, with one slot per request and matching identifiers on every request/outcome. A batch exceeding the remaining slots receives explicit failed outcomes without execution. The allow-list is fixed for each batch; discovery exposes tools for subsequent model turns. Cancellation and stop prevent later queued actions; a valid stop still dismisses an oversized batch.
 - **Model / gating**: `cfg.llm_chat_model` via `get_llm_backend(cfg)`. Ollama defaults to E4B chat; setup budgets chat and fast together after embedding and Whisper overhead from the shared desktop model catalogue, preserving explicit saved choices. Larger chat recommendations retain room for E2B fast. Not optional. No size branching on the loop itself — size branching affects the digests around it.
 - **Inputs**:
   - Redacted user query. Shared structural scrubbing masks URI user information credentials while retaining the endpoint host, port and path.
@@ -67,6 +76,7 @@ requests do not supply this event.
   - Weather tool description/schema (`weather.py`) require an explicitly named place in `location`, ahead of detected or remembered user location. Without a named place, empty arguments let the tool resolve location before clarification; date/time phrases are excluded from place arguments.
   - Weather results supply the service-local observation timestamp/timezone and computed weekdays beside each ISO daily date, so the reply model receives calendar labels with the recorded readings.
   - Web search result titles and destinations come from structural result anchors, preserving short multilingual titles and excluding navigation. Redirect destinations are decoded once; fetched content retains the untrusted-data fence. The single DDG HTML request uses a matched local Chrome TLS/HTTP profile with a 512 KiB decoded-byte cap and the remaining chain deadline (maximum 10 seconds); overflow is discarded before parsing. No browser profile, cookies or JavaScript is imported.
+  - Search-result page extraction validates public destinations at each redirect. Direct connections dial validated numeric addresses while retaining HTTP Host and TLS identity. Configured proxies retain control of onward DNS and routing; Requests origin/proxy authentication and certificate settings are preserved. Supplied-URL fetching retains local/intranet access and Requests proxy/authentication behaviour.
   - Tool results from prior turns (raw or digested, see #5). `fetchWebPage` streams decoded content through a local HTML target parser, skipping scripts and styles without constructing a DOM or a whole-response Python buffer; native token buffers remain bounded by decoded input. A 32 MiB decoded-download cap and between-chunk deadline bound reading; the text excerpt and whole reply are bounded separately. Available content carries an explicit partial-page label when a limit is reached, and no readable content yields a failure.
 - **Empty-response recovery**: a valid blank assistant message without a tool call or thinking receives `_EMPTY_REPLY_RECOVERY_HINT` and one corrective model turn per reply, inside `agentic_max_turns`. Unavailable/malformed provider envelopes and a second blank output do not gain further attempts. Existing model resolution, deadlines, tool permissions and limits apply.
 - **Repeated tools**: distinct arguments can invoke the same tool within the configured turn budget. Recent exact name/argument signatures suppress repeated execution for success and error-only outcomes; prior-turn results do not impose a name-based cap. The independent `toolSearchTool` limit remains.
@@ -141,7 +151,7 @@ requests do not supply this event.
 - **Model / gating**: `cfg.llm_chat_model` via `get_llm_backend(cfg)`. Gated by `tool_result_digest_enabled` — auto-on for SMALL via `detect_model_size(cfg.llm_chat_model)`.
 - **Inputs**: original user query, separate redacted transcript reference, tool name, raw tool result (e.g. webSearch payload inside UNTRUSTED WEB EXTRACT fence).
 - **System prompt**: `_TOOL_DIGEST_SYSTEM_PROMPT`. Teaches attributed fact extraction, `NONE` sentinel, no inference.
-- **Output**: ≤600 chars per batch (`_TOOL_DIGEST_MAX_CHARS`) replacing the raw payload in the messages stream. Falls back to raw on `NONE`. Successful structured resource references are bounded and rendered outside this digest, preserving exact record identity independently of summary prose. Internal reference metadata survives conversation tool carryover and prose truncation; reference strings are scrubbed before storage.
+- **Output**: ≤600 chars per batch (`_TOOL_DIGEST_MAX_CHARS`) replacing the raw payload in the messages stream. Falls back to raw on `NONE`. Successful structured resource references are bounded and rendered outside this digest, preserving exact record identity independently of summary prose. Successful result metadata is rendered independently of the digest; document retrieval carries coverage, incomplete reasons and exact source path/line citations through this channel. Its raw excerpts are JSON data paragraphs with escaped angle brackets inside complete untrusted-document delimiters, preserving each envelope through paragraph batching. Internal reference metadata survives conversation tool carryover and prose truncation; reference strings are scrubbed before storage.
 - **Limits**: `llm_digest_timeout_sec` (8s, shared). `max_tokens: 1024` (`_TOOL_DIGEST_TOKEN_BUDGET`), including backend reasoning and the attributed note. Returned notes retain the 600-character cap.
 
 ## 6. Max-Turn Loop Digest
@@ -173,6 +183,26 @@ requests do not supply this event.
 - **Model**: reuses the tool router (#7) — no separate LLM call here.
 - **Inputs**: self-contained query from the model plus the same redacted speech snapshot as the initial router.
 - **Output**: newline-separated tool names + one-liners, merged into the allow-list for the next turn.
+
+## Local document embedding component
+
+- **File**: `jarvis.memory.document_index.DocumentIndex`, consumed by
+  `jarvis.tools.builtin.document_search.DocumentSearchTool`.
+- **Gating**: explicit document-search opt-in and configured folders, rechecked against the granting folder and its current target before each source read and new source embedding. Disabled
+  search does not scan or embed. An empty index skips the query embedding.
+- **Model**: canonical `get_embedding_backend(cfg)` and resolved
+  `cfg.embedding_model`, with no chat-model fallback or prompt-based extraction.
+- **Inputs**: authorised `.txt`/`.md` chunks, up to 40 lines and 2,000 characters;
+  the search query is limited to 2,000 characters.
+- **Limits**: `IndexLimits` bounds per-pass input, traversal, chunks and elapsed
+  time, plus file/cache sizes and vector dimensions. Each embedding call uses
+  the smaller of `llm_embedding_timeout_sec` and the remaining five-second pass
+  deadline. Cooperative cancellation is checked before inference and publication.
+- **Flow**: authorised source bytes → configured embedding endpoint → isolated
+  SQLite text/vector transaction. Query vector → document-only cosine ranking →
+  at most ten cited, untrusted excerpts. Coverage records incomplete refreshes
+  and ranking deadlines. The embedding endpoint is user-configured and can run
+  locally; document indexing does not start an additional model process.
 
 ## 9. Conversation Summariser
 

@@ -546,6 +546,10 @@ class SetupWizard(QWizard):
         super().__init__(parent)
         self.setWindowTitle("🚀 Jarvis Setup Wizard")
         self.setWizardStyle(QWizard.WizardStyle.ModernStyle)
+        # Supply artwork so Qt does not discover images from system applications.
+        background = QPixmap(1, 1)
+        background.fill(Qt.GlobalColor.transparent)
+        self.setPixmap(QWizard.WizardPixmap.BackgroundPixmap, background)
         available = self.screen().availableGeometry()
         self.setMinimumSize(min(700, available.width() - 40),
                             min(500, available.height() - 80))
@@ -3822,7 +3826,7 @@ class MCPPage(ScrollableWizardPage):
         """Check if Node.js (npx) is available on the system."""
         try:
             from jarvis.tools.external.mcp_client import _resolve_command
-            _resolve_command("npx")
+            _resolve_command("npx", os.environ.get("PATH", ""))
             return True
         except (FileNotFoundError, Exception):
             return False

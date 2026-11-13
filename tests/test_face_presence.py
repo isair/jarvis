@@ -235,10 +235,10 @@ def test_long_face_menu_keeps_final_action_reachable_on_screen(face, face_tray, 
     last_action = menu.actions()[-1]
     menu.setActiveAction(None)
     for action in menu.actions():
-        if action.isEnabled() and not action.isSeparator():
+        if action.isVisible() and action.isEnabled() and not action.isSeparator():
             QTest.keyClick(menu, Qt.Key.Key_Down)
     qapp.processEvents()
     assert menu.activeAction() is last_action
-    assert len({menu.actionGeometry(action).left() for action in menu.actions()}) == 1
+    assert len({menu.actionGeometry(action).left() for action in menu.actions() if action.isVisible()}) == 1
     assert menu.rect().contains(menu.actionGeometry(last_action))
     menu.close()

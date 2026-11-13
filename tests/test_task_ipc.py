@@ -11,6 +11,7 @@ pytestmark = pytest.mark.unit
 
 def test_task_stdin_command_submits_and_cancels_through_same_handler(monkeypatch):
     calls = []
+    monkeypatch.setattr(daemon, '_global_cfg', SimpleNamespace(background_tasks_enabled=True))
     monkeypatch.setattr(
         daemon,
         "_global_task_manager",

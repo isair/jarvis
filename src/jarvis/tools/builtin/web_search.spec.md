@@ -57,6 +57,17 @@ through `_is_public_url` before any request fires. Rejected:
   DNS could return `[1.1.1.1, 127.0.0.1]` — we reject on the first private
   hit, not the first public hit.
 
+Search page connections use `tools/public_http.py`. Direct connections validate
+all DNS addresses as public unicast addresses and dial a validated numeric
+address. The original hostname remains in HTTP Host, TLS SNI and certificate
+verification. A hostname change cannot alter the validated socket destination.
+Configured proxies and
+`NO_PROXY` remain supported, with the proxy owning onward DNS and routing; local
+URL validation cannot guarantee the proxy's destination. Requests authentication,
+proxy credentials and configured certificate trust are preserved. Supplied-URL
+fetching is a separate path that retains local/intranet access and Requests
+environment behaviour.
+
 Redirects are walked manually (`allow_redirects=False`) up to
 `_MAX_REDIRECTS` (3). Each hop is re-validated. Responses are stream-read
 with a `_MAX_FETCH_BYTES` (512 KB) cap so a hostile server can't exhaust
