@@ -25,17 +25,21 @@ def test_non_string_paths_cannot_select_stringified_files(private_files, path, o
     assert 'original private fixture' not in result.reply_text
     assert 'string' in result.reply_text.casefold()
 
-@pytest.mark.parametrize('operation', ['list', 'read', 'write', 'append', 'delete'])
-@pytest.mark.parametrize('relative', [False, True])
-def test_string_paths_keep_file_operations(private_files, operation, relative):
+@pytest.mark.parametrize('operation, outcome_holds', [
+    pytest.param('list', lambda result, target: target.name in result.reply_text, id='list'),
+    pytest.param('read', lambda result, target: result.reply_text == 'original', id='read'),
+    pytest.param('write', lambda result, target: target.read_text() == 'changed', id='write'),
+    pytest.param('append', lambda result, target: target.read_text() == 'originalchanged', id='append'),
+    pytest.param('delete', lambda result, target: not target.exists(), id='delete'),
+])
+@pytest.mark.parametrize('filename, to_path', [
+    pytest.param('notes.txt', str, id='absolute'),
+    pytest.param('123', lambda target: target.name, id='relative'),
+])
+def test_string_paths_keep_file_operations(private_files, operation, outcome_holds, filename, to_path):
     tool, context, home = private_files
-    target = home / ('123' if relative else 'notes.txt')
+    target = home / filename
     target.write_text('original')
-    path = target.name if relative else str(target)
-    result = tool.run({'operation': operation, 'path': path, 'content': 'changed'}, context)
+    result = tool.run({'operation': operation, 'path': to_path(target), 'content': 'changed'}, context)
     assert result.success, result.reply_text
-    if operation == 'read': assert result.reply_text == 'original'
-    elif operation == 'write': assert target.read_text() == 'changed'
-    elif operation == 'append': assert target.read_text() == 'originalchanged'
-    elif operation == 'delete': assert not target.exists()
-    else: assert target.name in result.reply_text
+    assert outcome_holds(result, target)

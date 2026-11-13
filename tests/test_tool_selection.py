@@ -292,24 +292,34 @@ class TestEmbeddingStrategy:
 
     @pytest.mark.unit
     def test_returns_minimum_tools(self):
-        """Should return at least _MIN_SELECTED tools even if similarity is low."""
-        call_count = [0]
-        def _embed(text, model, timeout_sec=10.0):
-            call_count[0] += 1
-            if call_count[0] == 1:  # query
-                return [1.0, 0.0, 0.0, 0.0]
-            return [0.0, 0.0, 0.0, 1.0]
-        backend = MagicMock()
-        backend.embed.side_effect = _embed
+        """The minimum includes relevant tools independently of mandatory stop."""
+        from jarvis.tools.selection import _MIN_SELECTED
 
+        builtin = _builtin()
+        backend = _embedding_backend({"weather": [1.0, 0.0, 0.0, 0.0]})
         result = select_tools(
-            "something obscure",
-            _builtin(), {},
-            strategy=ToolSelectionStrategy.EMBEDDING,
-            embedding_backend=backend,
-            embed_model="nomic-embed-text",
+            "weather", builtin, {}, strategy=ToolSelectionStrategy.EMBEDDING,
+            embedding_backend=backend, embed_model="nomic-embed-text",
         )
-        assert len(result) >= 3
+        assert result[0] == "getWeather"
+        assert "stop" in result
+        assert len(set(result) - _ALWAYS_INCLUDED) == min(
+            _MIN_SELECTED, len(set(builtin) - _ALWAYS_INCLUDED),
+        )
+
+    @pytest.mark.unit
+    def test_orthogonal_embeddings_keep_available_tools(self):
+        """A flat zero-similarity catalogue retains every available tool."""
+        from itertools import chain, repeat
+
+        backend = MagicMock()
+        backend.embed.side_effect = chain([[1.0, 0.0]], repeat([0.0, 1.0]))
+        builtin = _builtin()
+        selected = select_tools(
+            "something obscure", builtin, {}, strategy=ToolSelectionStrategy.EMBEDDING,
+            embedding_backend=backend, embed_model="nomic-embed-text",
+        )
+        assert set(selected) == set(builtin)
 
     @pytest.mark.unit
     def test_relative_threshold_filters_low_similarity(self):
