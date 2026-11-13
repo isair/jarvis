@@ -42,6 +42,7 @@ def test_voice_dispatch_declares_only_actual_spoken_delivery(monkeypatch, mock_c
     generated, spoken = [], []
     speaker = None if speaker_enabled is None else SimpleNamespace(
         enabled=speaker_enabled, speak=lambda text, **kwargs: spoken.append(text),
+        set_playback_callbacks=lambda *callbacks: None,
     )
     voice = module.VoiceListener(None, mock_config, speaker, None)
     voice._start_thinking_tune = lambda: None

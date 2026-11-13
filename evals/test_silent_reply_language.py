@@ -32,12 +32,29 @@ def test_reply_language_follows_actual_delivery(monkeypatch, backend, delivery, 
         assert reply, '💬 A language request needs a reply'
         assert_not_fallback_reply(reply, 'reply delivery language')
         record_property('reply', reply)
+        record_property('query', query)
         assert spoken == ([reply] if delivery == 'spoken' else [])
         expected = 'en' if delivery == 'spoken' else language
         assert judge_pass_fail(
             f'The reply must be in language {expected}. Natural phrasing and proper names are valid. '
             'A reply predominantly in another language fails. Only judge the reply language.',
-            f'Request: {query}\nReply: {reply}',
+            f'Reply: {reply}',
         ) == 'PASS'
     finally:
         db.close()
+
+
+@pytest.mark.parametrize('expected,reply', [
+    ('en', 'I can help you find information.'),
+    ('tr', 'Size bilgi bulmada yardımcı olabilirim.'),
+    ('de', 'Ich kann Ihnen helfen, Informationen zu finden.'),
+    ('es', 'Puedo ayudarte a buscar información.'),
+])
+@pytest.mark.parametrize('correct', [True, False])
+def test_language_judge_accepts_matching_and_rejects_other_languages(expected, reply, correct):
+    actual = expected if correct else {'en': 'tr', 'tr': 'de', 'de': 'es', 'es': 'en'}[expected]
+    assert judge_pass_fail(
+        f'The reply must be in language {actual}. Natural phrasing and proper names are valid. '
+        'A reply predominantly in another language fails. Only judge the reply language.',
+        f'Reply: {reply}',
+    ) == ('PASS' if correct else 'FAIL')
