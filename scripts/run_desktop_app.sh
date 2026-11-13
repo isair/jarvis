@@ -22,7 +22,8 @@ if [ "$VOICE_DEBUG" = "1" ]; then
 fi
 echo ""
 
-# Find a suitable Python (3.10+)
+# Find a suitable Python (3.11+)
+PYTHON_VERSION_CHECK='import sys; raise SystemExit(sys.version_info < (3, 11))'
 # Check both PATH and common install locations (homebrew, deadsnakes, etc.)
 PYTHON=""
 SEARCH_PATHS=(
@@ -30,17 +31,19 @@ SEARCH_PATHS=(
     "/opt/homebrew/bin/"        # macOS Homebrew (Apple Silicon)
     "/usr/local/bin/"           # macOS Homebrew (Intel) / Linux manual installs
 )
-for candidate in python3.12 python3.11 python3.10; do
+for candidate in python3.12 python3.11 python3; do
     for prefix in "${SEARCH_PATHS[@]}"; do
         if [ -x "${prefix}${candidate}" ] 2>/dev/null || command -v "${prefix}${candidate}" &>/dev/null; then
-            PYTHON="${prefix}${candidate}"
-            break 2
+            if "${prefix}${candidate}" -c "$PYTHON_VERSION_CHECK" >/dev/null 2>&1; then
+                PYTHON="${prefix}${candidate}"
+                break 2
+            fi
         fi
     done
 done
 if [ -z "$PYTHON" ]; then
-    # Fall back to python3 and hope it's new enough
-    PYTHON="python3"
+    echo "⚠️  Python 3.11+ is required. Install a supported Python before starting Jarvis."
+    exit 1
 fi
 
 # Set up / activate virtual environment
@@ -53,9 +56,8 @@ source .venv/bin/activate
 # Check Python version
 echo "📋 Checking Python version..."
 python --version
-PY_MINOR=$(python -c 'import sys; print(sys.version_info.minor)')
-if [ "$PY_MINOR" -lt 10 ]; then
-    echo "⚠️  Python 3.10+ is required. Found $(python --version)."
+if ! python -c "$PYTHON_VERSION_CHECK"; then
+    echo "⚠️  Python 3.11+ is required. Found $(python --version)."
     echo "   Recreating .venv with $PYTHON..."
     deactivate 2>/dev/null
     rm -rf .venv

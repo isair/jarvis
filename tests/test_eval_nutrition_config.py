@@ -15,10 +15,9 @@ def clear_eval_environment(monkeypatch):
 
 
 @pytest.mark.parametrize('provider', ['ollama', 'openai_compatible'])
-@pytest.mark.parametrize('answer', ['meal', 'NONE'])
+@pytest.mark.parametrize('answer', ['meal', 'NONE', '```text\nNONE\n```'])
 def test_nutrition_eval_uses_selected_transport_and_production_fence(monkeypatch, provider, answer):
     from evals.test_nutrition_extraction import call_nutrition_extraction
-    import requests
     import json
 
     cfg = MockConfig(llm_provider=provider, llm_base_url='http://127.0.0.1:1/v1',
@@ -36,7 +35,7 @@ def test_nutrition_eval_uses_selected_transport_and_production_fence(monkeypatch
         response.json.return_value = ({'message': message} if provider == 'ollama'
                                      else {'choices': [{'message': message}]})
         return response
-    monkeypatch.setattr(requests, 'post', post)
+    monkeypatch.setattr('jarvis.llm.http.post', post)
 
     result = call_nutrition_extraction(cfg, 'I had eggs')
     assert observed, 'Extraction did not reach the selected backend'
@@ -48,8 +47,8 @@ def test_nutrition_eval_uses_selected_transport_and_production_fence(monkeypatch
     assert url == expected_url
     assert kwargs['timeout'] == cfg.llm_chat_timeout_sec
     prompt = payload['messages'][-1]['content']
-    assert '<<<BEGIN UNTRUSTED USER TEXT>>>\nI had eggs' in prompt
-    assert '<<<END UNTRUSTED USER TEXT>>>' in prompt
+    fenced = prompt.split('<<<BEGIN UNTRUSTED USER TEXT>>>\n', 1)[1].split('\n<<<END UNTRUSTED USER TEXT>>>', 1)[0]
+    assert json.loads(fenced) == {'user_request': 'I had eggs', 'meal_description': 'I had eggs'}
     sampling = payload.get('options', payload)
     assert ('num_predict' if provider == 'ollama' else 'max_tokens') in sampling
     assert (result and {key: result[key] for key in expected}) == (expected if answer == 'meal' else None)
@@ -57,11 +56,22 @@ def test_nutrition_eval_uses_selected_transport_and_production_fence(monkeypatch
 
 def test_empty_inference_is_not_successful_non_food_rejection(monkeypatch):
     from evals.test_nutrition_extraction import call_nutrition_extraction
-    import requests
     response = MagicMock()
     response.__enter__.return_value = response
     response.json.return_value = {'message': {'content': ''}}
-    monkeypatch.setattr(requests, 'post', lambda *args, **kwargs: response)
+    monkeypatch.setattr('jarvis.llm.http.post', lambda *args, **kwargs: response)
     cfg = MockConfig(llm_provider='ollama', llm_chat_model='local-model')
     with pytest.raises(AssertionError, match='Empty'):
+        call_nutrition_extraction(cfg, 'I went for a walk')
+
+
+@pytest.mark.parametrize('answer', ['{invalid', 'null'])
+def test_invalid_inference_is_not_successful_non_food_rejection(monkeypatch, answer):
+    from evals.test_nutrition_extraction import call_nutrition_extraction
+    response = MagicMock()
+    response.__enter__.return_value = response
+    response.json.return_value = {'message': {'content': answer}}
+    monkeypatch.setattr('jarvis.llm.http.post', lambda *args, **kwargs: response)
+    cfg = MockConfig(llm_provider='ollama', llm_chat_model='local-model')
+    with pytest.raises(AssertionError, match='Invalid'):
         call_nutrition_extraction(cfg, 'I went for a walk')

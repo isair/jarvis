@@ -18,15 +18,10 @@ calling so the reply engine can fall back to text-based), and
 :func:`extract_text_from_response` (normalises content across known
 response shapes).
 
-``import requests`` is re-exported so tests that patch
-``jarvis.llm.requests.post`` to intercept HTTP traffic work without
-reaching into the per-backend modules.
 """
 
 from __future__ import annotations
 from typing import Any, Callable, Dict, List, Optional
-
-import requests  # noqa: F401  — re-exported for test patching, see module docstring
 
 from .backend import LLMBackend, ToolsNotSupportedError
 from .ollama import OllamaBackend, check_version, extract_text_from_response

@@ -1,6 +1,7 @@
 """Weather tool implementation using Open-Meteo API (free, no API key required)."""
 
 import requests
+from datetime import date
 from typing import Dict, Any, Optional
 from ...debug import debug_log
 from ...llm import get_llm_backend
@@ -128,8 +129,11 @@ class WeatherTool(Tool):
             "Call this for ANY mention of weather, climate, temperature, or "
             "conditions — whether a question, a statement, or a casual remark. "
             "Covers now, later today, tomorrow, this week. "
-            "Call with {} — user location is auto-detected. Do NOT ask the user "
-            "where they are or request a city; just call this tool with empty args."
+            "When the user names a place, pass that place in location; it takes "
+            "precedence over the user's detected or remembered location. "
+            "When no place is named, call with {} so the tool can resolve the "
+            "user's location. Do not ask for a city before calling the tool, "
+            "and do not put a date or time phrase in location."
         )
 
     @property
@@ -139,7 +143,7 @@ class WeatherTool(Tool):
             "properties": {
                 "location": {
                     "type": "string",
-                    "description": "OPTIONAL. City name or location (e.g., 'London', 'New York', 'Tokyo'). Only set this if the user explicitly named a place different from their own location. If omitted, the tool auto-uses the user's current detected location — never ask the user for this argument."
+                    "description": "OPTIONAL. City name or location (e.g., 'London', 'New York', 'Tokyo'). Set this when the user explicitly names a place, preserving its name and geographic qualifiers. The named place takes precedence over the user's own location. Omit it when no place is named so the tool can resolve the user's location. Date and time phrases are not places."
                 }
             },
             "required": []
@@ -248,6 +252,7 @@ class WeatherTool(Tool):
                                 "I couldn't auto-detect your location. "
                                 "Please tell me which city to check the weather for."
                             ),
+                            missing_context="location",
                         )
 
             if location_str:
@@ -341,6 +346,12 @@ class WeatherTool(Tool):
                 f"Conditions: {weather_desc}",
             ]
 
+            observation_time = current.get("time")
+            if observation_time:
+                zone = weather_data.get("timezone")
+                zone_suffix = f" ({zone})" if zone else ""
+                lines.append(f"Local observation time: {observation_time}{zone_suffix}")
+
             if temp_c is not None:
                 lines.append(f"Temperature: {temp_c}°C ({temp_f}°F)")
 
@@ -398,7 +409,13 @@ class WeatherTool(Tool):
                 for i, date_str in enumerate(daily_dates):
                     if i < len(daily_max) and i < len(daily_min) and i < len(daily_codes):
                         desc = WMO_CODES.get(daily_codes[i], "")
-                        lines.append(f"  {date_str}: {daily_min[i]}–{daily_max[i]}°C, {desc}")
+                        try:
+                            weekday = date.fromisoformat(date_str).strftime("%A")
+                            calendar_label = f"{date_str} ({weekday})"
+                        except (TypeError, ValueError):
+                            calendar_label = str(date_str)
+                            debug_log("weather forecast row has no valid calendar date", "tools")
+                        lines.append(f"  {calendar_label}: {daily_min[i]}–{daily_max[i]}°C, {desc}")
 
             reply_text = "\n".join(lines)
 

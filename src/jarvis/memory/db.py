@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS meals (
   micros_json   TEXT,
   confidence    REAL
 );
+CREATE INDEX IF NOT EXISTS idx_meals_ts_utc ON meals(ts_utc);
 
 -- Conversation summaries for diary/memory system
 CREATE TABLE IF NOT EXISTS conversation_summaries (
@@ -42,6 +43,18 @@ CREATE TABLE IF NOT EXISTS conversation_summaries (
   topics     TEXT,           -- Comma-separated list of main topics discussed
   source_app TEXT NOT NULL,  -- Source app that generated the conversation
   UNIQUE(date_utc, source_app)
+);
+
+-- Local task-centre state. Only redacted prompt/result/error text is stored.
+CREATE TABLE IF NOT EXISTS task_records (
+  id            TEXT PRIMARY KEY,
+  prompt        TEXT NOT NULL,
+  status        TEXT NOT NULL,
+  result        TEXT,
+  error         TEXT,
+  created_at    REAL NOT NULL,
+  started_at    REAL,
+  completed_at  REAL
 );
 
 CREATE VIRTUAL TABLE IF NOT EXISTS summaries_fts USING fts5(
@@ -111,36 +124,36 @@ class Database:
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self.db_path = db_path
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
-        self.conn.row_factory = sqlite3.Row
-        self._lock = threading.RLock()
-        self.is_vss_enabled = False
-        self._python_vector_store = None
-        
-        if sqlite_vss_path:
-            try:
-                self.conn.enable_load_extension(True)
-                self.conn.load_extension(sqlite_vss_path)
-                self.is_vss_enabled = True
-            except Exception:
-                self.is_vss_enabled = False
-        
-        # If sqlite-vss is not available, use best available vector store (FAISS or Python fallback)
-        if not self.is_vss_enabled:
-            from ..utils.vector_store import get_best_vector_store
-            self._python_vector_store = get_best_vector_store(db_path, dimension=768)
-            
-            # Log which vector store implementation is being used
-            import sys
-            store_type = type(self._python_vector_store).__name__
-            if store_type == "FAISSVectorStore":
-                debug_log("Using FAISS vector store for fast search", "jarvis")
-            else:
-                debug_log("Using Python fallback vector store", "jarvis")
-        
         try:
+            self.conn.row_factory = sqlite3.Row
+            self._lock = threading.RLock()
+            self.is_vss_enabled = False
+            self._python_vector_store = None
+        
+            if sqlite_vss_path:
+                try:
+                    self.conn.enable_load_extension(True)
+                    self.conn.load_extension(sqlite_vss_path)
+                    self.is_vss_enabled = True
+                except Exception:
+                    self.is_vss_enabled = False
+        
+            # If sqlite-vss is not available, use best available vector store (FAISS or Python fallback)
+            if not self.is_vss_enabled:
+                from ..utils.vector_store import get_best_vector_store
+                self._python_vector_store = get_best_vector_store(db_path, dimension=768)
+            
+                # Log which vector store implementation is being used
+                store_type = type(self._python_vector_store).__name__
+                if store_type == "FAISSVectorStore":
+                    debug_log("Using FAISS vector store for fast search", "jarvis")
+                else:
+                    debug_log("Using Python fallback vector store", "jarvis")
+        
             self._init_schema()
-        except Exception:
+        except BaseException:
             self.conn.close()
+            debug_log('Diary initialisation failed: connection released', 'memory')
             raise
 
     @property
@@ -154,10 +167,12 @@ class Database:
             cur.executescript(_SCHEMA_SQL)
             if self.is_vss_enabled:
                 cur.executescript(_VSS_SCHEMA_SQL)
+            migration = 'summary_fts_content_consistency'
+            if cur.execute('SELECT 1 FROM diary_index_migrations WHERE name=?', (migration,)).fetchone():
+                return
             try:
-                # Serialise the durable consistency check across database owners.
+                # Recheck under the writer lock when a rebuild is required.
                 cur.execute('BEGIN IMMEDIATE')
-                migration = 'summary_fts_content_consistency'
                 if not cur.execute('SELECT 1 FROM diary_index_migrations WHERE name=?', (migration,)).fetchone():
                     cur.execute("INSERT INTO summaries_fts(summaries_fts) VALUES('rebuild')")
                     cur.execute('INSERT INTO diary_index_migrations(name) VALUES (?)', (migration,))
@@ -167,7 +182,36 @@ class Database:
                 self.conn.rollback()
                 raise
 
-    
+    def upsert_task_record(self, task: dict) -> None:
+        with self._lock:
+            self.conn.execute(
+                """
+                INSERT OR REPLACE INTO task_records
+                (id, prompt, status, result, error, created_at, started_at, completed_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    task["id"], task["prompt"], task["status"], task.get("result"),
+                    task.get("error"), task["created_at"], task.get("started_at"),
+                    task.get("completed_at"),
+                ),
+            )
+            self.conn.commit()
+
+    def get_task_records(self) -> list[sqlite3.Row]:
+        with self._lock:
+            return self.conn.execute(
+                "SELECT * FROM task_records ORDER BY created_at ASC"
+            ).fetchall()
+
+    def prune_task_records(self, keep: int) -> None:
+        with self._lock:
+            self.conn.execute(
+                "DELETE FROM task_records WHERE id NOT IN "
+                "(SELECT id FROM task_records ORDER BY created_at DESC LIMIT ?)",
+                (keep,),
+            )
+            self.conn.commit()
 
     def search_hybrid(self, fts_query: str, query_vec_json: Optional[str], top_k: int = 8) -> list[sqlite3.Row]:
         with self._lock:
@@ -308,6 +352,22 @@ class Database:
             self.conn.commit()
             return cur.rowcount > 0
 
+    def delete_meal_by_description(self, description: str) -> bool:
+        """Delete only a single exact description match, atomically."""
+        with self._lock:
+            cur = self.conn.cursor()
+            try:
+                cur.execute(
+                    """DELETE FROM meals WHERE description = ?
+                    AND (SELECT COUNT(*) FROM meals WHERE description = ?) = 1""",
+                    (description, description),
+                )
+                self.conn.commit()
+                return cur.rowcount == 1
+            except Exception:
+                self.conn.rollback()
+                raise
+
     # --- Conversation Summaries API ---
     def upsert_conversation_summary(
         self,
@@ -360,6 +420,13 @@ class Database:
                 (date_utc, source_app),
             ).fetchone()
             return row
+
+    def get_conversation_summary_by_id(self, summary_id: int) -> Optional[sqlite3.Row]:
+        """Read a saved diary entry and its date by persistent row identity."""
+        with self._lock:
+            return self.conn.execute(
+                "SELECT * FROM conversation_summaries WHERE id = ?", (summary_id,),
+            ).fetchone()
 
     def get_recent_conversation_summaries(self, days: int = 7) -> list[sqlite3.Row]:
         """Get conversation summaries from the last N days."""

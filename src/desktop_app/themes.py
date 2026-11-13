@@ -447,6 +447,7 @@ JARVIS_THEME_STYLESHEET = """
     }
     
     QMenu {
+        menu-scrollable: 1;
         background-color: #161920;
         color: #f4f4f5;
         border: 1px solid #27272a;
@@ -464,6 +465,10 @@ JARVIS_THEME_STYLESHEET = """
         color: #fbbf24;
     }
     
+    QMenu::item:disabled {
+        color: #71717a;
+    }
+
     QMenu::separator {
         height: 1px;
         background-color: #27272a;

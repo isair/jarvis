@@ -1,5 +1,7 @@
 # Setup Wizard Specification
 
+[Configuration file selection](../jarvis/config.spec.md) is shared with the daemon. Desktop configuration reads, writes and directory navigation use the selected file.
+
 First-run wizard that sets up Whisper and a local model provider before Jarvis starts.
 
 ## Overview
@@ -20,6 +22,10 @@ An OpenAI-compatible user has opted out of the local Ollama stack, so `should_sh
 4. **Safe re-entry**: Running the wizard again never destroys existing config — it only fills in missing values.
 
 ## Layout and overflow
+
+The wizard owns a transparent background pixmap. Showing setup does not depend
+on artwork from an optional system application, including macOS Keyboard Setup
+Assistant.
 
 The wizard uses a shared dark visual theme in `themes.py`, with neutral cards,
 amber selections and primary actions, and a four-stage header: Voice,
@@ -88,9 +94,17 @@ Fields suffixed `?` are written only when non-empty (minimal-config invariant).
 
 **OllamaServerPage** — Start button auto-starts Ollama (macOS: `open -a Ollama`, Windows: hidden `ollama serve`, Linux: terminal `ollama serve`). Verify button re-checks `check_ollama_server()`.
 
-**ModelsPage** — Uses two `QComboBox` dropdowns for model selection (chat + fast) instead of checkable buttons, eliminating layout compression. A link checkbox (default unchecked) lets the user optionally lock both models to the same ID. The chat dropdown lists all `SUPPORTED_CHAT_MODELS`; the fast dropdown lists only the fast-suitable subset (`qwen3.5:0.8b`, `gemma4:e2b`). Defaults: chat = `DEFAULT_CHAT_MODEL`, fast = `gemma4:e2b`. On open, runs VRAM detection via `detect_total_vram_mb()` (DXGI on Windows, `nvidia-smi` elsewhere). The VRAM budget includes the chat model, fast model, the embedding model (`nomic-embed-text`, 1 GB), and the whisper model (read from config after WhisperSetupPage runs — ranges from 1 GB for tiny to 6 GB for large-v3-turbo). If VRAM is below the default model's 8 GB requirement (including overhead), a warning banner appears with a recommendation to switch to `qwen3.5:0.8b`, and the chat model auto-switches. Known zero or negative headroom selects the lowest-memory recommendation; unknown hardware keeps the default. The default chat selection retains its low-memory recommendation when the page opens, while other saved chat selections remain visible with budget warnings. When the user selects a smaller chat model than the current fast model, or the total (chat + fast + embed + whisper) exceeds the detected VRAM, the fast model uses the largest fast-suitable model that fits, counting shared chat/fast models once. If none fits, it selects the smallest fast model and displays CPU fallback guidance. Construction, page entry and chat changes use the same selection rules. Installs: selected chat model + embedding model (`nomic-embed-text`) + fast model (when it differs from chat). Progress bar and log output during `ollama pull`. User can skip if models are already present.
+**ModelsPage**: Chat and fast models use dropdowns with an optional link checkbox. Chat lists all `SUPPORTED_CHAT_MODELS`; fast lists `qwen3.5:0.8b`, `gemma4:e2b` and `gemma4:e4b`. The quality default is E4B chat with E2B fast. For a new configuration, known memory selects chat and fast together after embedding (1 GB) and the selected Whisper model's overhead. Larger chat models require room for E2B fast; E4B, E2B and the smallest model can share one residency across both tiers. Recommendations survive page entry, including larger models on high-memory hardware. Explicit saved chat selections remain visible with budget warnings. Unknown hardware retains the quality default; exhausted budgets select the smallest model and show CPU fallback guidance.
 
-**WhisperSetupPage** — Always shown first (it has no LLM dependencies and its model selection informs the later memory budget). Language mode toggle (multilingual vs English-only), then model size selection from hardcoded options via a slider. Apple Silicon: additional FFmpeg and MLX Whisper installation buttons. The model list follows the listener's effective backend: `large-v3-turbo` is offered when usable MLX is selected on Apple Silicon or when the installed faster-whisper supports it; it is hidden when MLX is unavailable/disabled and faster-whisper is too old. Installing MLX refreshes the list immediately. Exposes a `get_whisper_vram_mb()` static method used by both provider paths for memory estimates. `nextId` routes to Provider Choice.
+A fitting fast selection is retained. Otherwise, the largest fast-suitable model that fits is selected, counting a shared chat/fast model once. E4B can therefore serve both tiers when a separate E2B cannot fit. Explicit fast choices remain available, and changing chat rechecks the budget. The installer pulls chat, embedding and a distinct fast model only once each. Skipping installation is available when the models are present.
+
+Detection uses DXGI on Windows, NVIDIA detection on Linux and unified physical memory on Apple Silicon. The Apple Silicon budget reserves the larger of 4 GB or 25% for macOS and other applications before model and Whisper estimates are applied. Detection failure is unknown, not zero memory. These conservative estimates guide setup and do not guarantee model residency or runtime latency.
+
+**WhisperSetupPage** — Always shown first (it has no LLM dependencies and its model selection informs the later memory budget). Language mode toggle (multilingual vs English-only), then model size selection from the shared `whisper_models.py` catalogue via a slider. Apple Silicon: additional FFmpeg and MLX Whisper installation buttons. The model list follows the listener's effective backend and uses the core `whisper_capabilities.py` engine-version check: `large-v3-turbo` is offered when usable MLX is selected on Apple Silicon or when the installed faster-whisper supports it; it is hidden when MLX is unavailable/disabled and faster-whisper is too old. Installing MLX refreshes the list immediately. Every slider refresh displays exactly one current set of model names and memory labels. Removed labels are hidden immediately and retain their container parent until deferred deletion, including during language changes and repeated page entry. Both provider paths use the catalogue's `get_whisper_vram_mb()` function for memory estimates. Labels and estimates share the same model records as Settings; English-only variants derive from their base model records. `nextId` routes to Provider Choice.
+
+The shared catalogue's `offered` flag controls both wizard and Settings model
+choices. Non-Turbo `large-v3` is retained for saved-model memory estimates and
+is not offered in either selector.
 
 **DictationPage** — Enable/disable dictation, hotkey selection dropdown (4 presets), filler word removal toggle with delay warning. Reads current config values on open so re-running the wizard preserves user choices.
 
@@ -113,7 +127,7 @@ Fields suffixed `?` are written only when non-empty (minimal-config invariant).
 | `check_installed_models()` | `list[str]` | Models already pulled |
 | `check_ollama_status()` | `OllamaStatus` | Combined CLI + server + models |
 | `check_mlx_whisper_status()` | `MLXWhisperStatus` | Apple Silicon Whisper readiness |
-| `detect_total_vram_mb()` | `Optional[int]` | GPU VRAM in MB via DXGI (Windows) or `nvidia-smi` |
+| `detect_total_vram_mb()` | `Optional[int]` | Model memory budget in MB via DXGI, NVIDIA detection or reserved Apple Silicon unified memory |
 | `get_recommended_model_id(vram_mb)` | `str` | Best model ID for the given VRAM (low-VRAM models win below 8 GB) |
 
 ## Threading
@@ -142,3 +156,7 @@ The wizard is deliberately limited to prerequisites. These are configured via th
 - Dictation hotkey
 - Full MCP catalogue and custom MCP servers (wizard only shows featured entries)
 - All advanced parameters
+
+## Local Provider Validation
+
+Model-list and first-run discovery integration checks use loopback HTTP servers owned by each test. Unreachable-server cases reserve a port without listening. The tests disable ambient proxies and credentials, reject connections outside their owned endpoints, wait for discovery workers and close the server threads.

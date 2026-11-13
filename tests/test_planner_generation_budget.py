@@ -23,7 +23,7 @@ def test_planner_wire_budget_leaves_room_for_structured_answer(monkeypatch,provi
         response.__enter__.return_value=response
         response.json.return_value=({'message':msg} if provider=='ollama' else {'choices':[{'message':msg}]})
         return response
-    monkeypatch.setattr('requests.post',post)
+    monkeypatch.setattr('jarvis.llm.http.post',post)
     cfg=SimpleNamespace(llm_provider=provider,llm_base_url='http://127.0.0.1:1/v1',
                         ollama_base_url='http://127.0.0.1:1',llm_api_key='',
                         llm_chat_model='local-reasoning-model',fast_model='',
@@ -35,5 +35,5 @@ def test_planner_wire_budget_leaves_room_for_structured_answer(monkeypatch,provi
         schema=[{'type':'function','function':{'name':'webSearch','description':'Search the web',
                  'parameters':{'type':'object','properties':{'query':{'type':'string'}}}}}]
         result=resolve_next_tool_call(cfg,"webSearch query='<director from prior result> filmography'",
-                  [('webSearch','Possessor director','Director: Brandon Cronenberg')],schema)
+                  [('webSearch','Possessor director','Director: Brandon Cronenberg')],schema, original_query="webSearch query='<director from prior result> filmography'")
         assert result==('webSearch',{'query':'Brandon Cronenberg filmography'}), 'Generation ended before tool arguments'

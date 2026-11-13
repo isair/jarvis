@@ -1,5 +1,15 @@
 # Diary retrieval
 
+`Database` owns its SQLite connection. Failed or interrupted initialisation,
+including local vector-index construction and schema setup, closes the handle
+and releases any pending transaction before propagating the original failure.
+Committed diary records remain intact.
+
+Meal description deletion uses one parameterised SQL statement. It deletes a
+record only when exactly one stored description matches literally, including
+case. Duplicate descriptions preserve all records and require a meal ID.
+Description deletion commits on success and rolls back a failed write.
+
 `Database.search_hybrid` searches conversation summaries with FTS5 and optional
 vector candidates. Both Python/FAISS and sqlite-vss use the same fusion routine.
 
@@ -27,9 +37,18 @@ preserving the committed summary and its references.
 
 Opening a diary rebuilds its full-text index from live summaries once, tracked
 in `diary_index_migrations`. The rebuild and its marker commit together under a
-SQLite writer transaction shared across database owners. A failed rebuild rolls
+SQLite writer transaction shared across database owners. Completed migrations
+are checked before requesting a writer lock, so an initialised diary can open
+and read committed summaries while another owner saves. A required rebuild
+rechecks its marker under the writer lock. Missing schema and migrations still
+require write access. A failed rebuild rolls
 back without a marker, allowing a later open to retry. Diary text and vector
 rows are unchanged by the rebuild; orphaned vectors are not reassociated.
+
+Meal time-range lookups use an index on `meals.ts_utc`, created idempotently
+on opening fresh or existing diaries. Summary date lookups use the existing
+unique index on `(date_utc, source_app)`, including date-only ranges and ordering.
+Opening a diary preserves stored records and their IDs.
 
 `upsert_summary_embedding` writes the sqlite-vss vector and its summary mapping
 in one transaction under the database lock. A failed write rolls back the index

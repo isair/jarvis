@@ -7,6 +7,8 @@ when heard audio is an echo of TTS output vs genuine user speech.
 
 import time
 import pytest
+
+pytestmark = pytest.mark.unit
 from jarvis.listening.echo_detection import EchoDetector
 
 
@@ -822,32 +824,64 @@ class TestRightmostEchoBoundarySalvage:
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize('query,current,spoken,expected', [
-    ('grasp what you mean by that statement', 'What the fuck?',
-     'I cannot grasp what you mean by that statement; please explain.', True),
-    ('grasp what you mean by that statement',
-     'Please explain: grasp what you mean by that statement.',
-     'I cannot grasp what you mean by that statement; please explain.', False),
-    ('can you elaborate further', 'Could you explain?',
-     'I cannot grasp what you mean by that statement.', False),
-    ('what the fuck', 'being described. What the fuck?',
-     'Some rather complex hierarchical dynamic is being described.', False),
-    ('bu cümleyi anlamıyorum', 'Ne oluyor?',
-     'Üzgünüm, bu cümleyi anlamıyorum.', True),
-    ('three separate words', 'three separate wordsworth',
-     'three separate wordsworth', False),
+@pytest.mark.parametrize('during_tts', [True, False])
+@pytest.mark.parametrize('echo_prefix', [True, False])
+@pytest.mark.parametrize('spoken,suffix', [
+    ('الطقس مشمس اليوم', 'أخبرني كيف يمكنني إعداد وجبة صحية'),
+    ('сегодня погода солнечная', 'расскажи мне как приготовить вкусный завтрак'),
+    ('ο καιρός καλός', 'πες μου πώς γίνεται αυτό σήμερα'),
 ])
-def test_prior_echo_query_uses_whole_current_and_spoken_words(query, current, spoken, expected):
+def test_unicode_echo_cleanup_retains_actual_user_speech(spoken, suffix, echo_prefix, during_tts):
     detector = EchoDetector()
-    assert detector.query_is_prior_echo(query, current, spoken) is expected
+    detector.track_tts_start(spoken)
+    heard = spoken + ' ' + suffix if echo_prefix else suffix
+    if during_tts:
+        result = detector.cleanup_leading_echo_during_tts(
+            heard, tts_rate=200, utterance_start_time=detector._tts_start_time + 0.1,
+        )
+    else:
+        result = detector.cleanup_leading_echo(heard)
+    assert result == suffix
 
 
 @pytest.mark.unit
 @pytest.mark.parametrize('minimum', [2, 4])
-def test_prior_echo_query_obeys_shared_minimum(minimum):
+@pytest.mark.parametrize('qualifies', [True, False])
+def test_during_tts_echo_cleanup_obeys_shared_minimum(minimum, qualifies):
     detector = EchoDetector()
     detector.min_salvage_words = minimum
-    phrase = ' '.join(f'word{i}' for i in range(minimum))
-    shorter = ' '.join(phrase.split()[:-1])
-    assert detector.query_is_prior_echo(phrase, 'new speech', phrase)
-    assert not detector.query_is_prior_echo(shorter, 'new speech', phrase)
+    spoken = 'the weather outside is clear now today'
+    detector.track_tts_start(spoken)
+    overlap = minimum if qualifies else minimum - 1
+    prefix = ' '.join(spoken.split()[-overlap:])
+    user_speech = 'please explain quantum gravity for beginners'
+    heard = prefix + ' ' + user_speech
+    result = detector.cleanup_leading_echo_during_tts(
+        heard, tts_rate=200, utterance_start_time=detector._tts_start_time + 0.1,
+    )
+    assert result == (user_speech if qualifies else heard)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize('user_speech', [
+    'who made it?', 'please explain the main design decisions',
+    'can you tell me who built this project?',
+])
+def test_fuzzy_during_tts_cleanup_preserves_complete_follow_up(user_speech):
+    detector = EchoDetector()
+    detector.track_tts_start('Jarvis explores projects through practical experiments and clear examples.')
+    heard = 'laws projects through practical experiments and clear examples. ' + user_speech
+    assert detector.cleanup_leading_echo_during_tts(
+        heard, tts_rate=200, utterance_start_time=detector._tts_start_time + 0.1,
+    ) == user_speech
+
+
+@pytest.mark.unit
+def test_fuzzy_echo_cleanup_handles_expanded_spoken_units():
+    detector = EchoDetector()
+    detector.track_tts_start('It is 9°C outside')
+    user_speech = 'who made it?'
+    heard = 'it is 9 degrees celsius outside ' + user_speech
+    assert detector.cleanup_leading_echo_during_tts(
+        heard, tts_rate=200, utterance_start_time=detector._tts_start_time + 0.1,
+    ) == user_speech

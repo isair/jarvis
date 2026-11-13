@@ -10,6 +10,7 @@ import os
 import time
 import signal
 import threading
+import json
 import contextlib
 
 # Fix OpenBLAS threading crash in bundled apps (must be before numpy imports)
@@ -17,26 +18,14 @@ os.environ.setdefault('OPENBLAS_NUM_THREADS', '1')
 os.environ.setdefault('MKL_NUM_THREADS', '1')
 os.environ.setdefault('OMP_NUM_THREADS', '1')
 
-# Fix Windows console encoding for Unicode/emoji characters
-# Skip in bundled mode (frozen) - encoding is handled by desktop_app.py
+from .utils.console import configure_utf8_streams
+
+
+# Bundled output is prepared by the desktop entry point.
 if sys.platform == 'win32' and not getattr(sys, 'frozen', False):
-    try:
-        import io
-        # Only wrap the real console streams. Test harnesses (pytest) and
-        # embedding code replace sys.stdout/sys.stderr with their own capture
-        # objects; wrapping those detaches and closes their buffers, which
-        # corrupts output capture for the rest of the process.
-        if (sys.stdout is sys.__stdout__ and hasattr(sys.stdout, 'buffer')
-                and hasattr(sys.stdout.buffer, 'write')):
-            sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-        if (sys.stderr is sys.__stderr__ and hasattr(sys.stderr, 'buffer')
-                and hasattr(sys.stderr.buffer, 'write')):
-            sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
-    except Exception:
-        pass
+    configure_utf8_streams(sys)
 
 from typing import Optional
-from faster_whisper import WhisperModel
 
 from .config import load_settings
 from .memory.db import Database
@@ -66,10 +55,12 @@ _global_stop_requested: bool = False
 _warm_profile_graph_listener = None  # registered callback, kept for shutdown unregister
 _global_tts_engine = None  # TTS engine reference for face animation polling
 _global_dictation_engine = None  # Dictation engine reference for history UI
+_global_task_manager = None
 # Config + DB booted by main(). Shared by the voice listener and the text-chat
 # submission path so voice and text are one conversation against one store.
 _global_cfg = None
 _global_db = None
+_global_voice_listener = None
 
 # Shutdown timeout for diary update (shorter than normal to allow reasonable quit time)
 # Desktop app's stop_daemon() should wait at least this long + buffer
@@ -112,82 +103,40 @@ CHAT_CANCEL_IPC_PREFIX = "__CHAT_CANCEL__"
 CHAT_NEW_SESSION_IPC_PREFIX = "__CHAT_NEW_SESSION__"
 CHAT_REWIND_IPC_PREFIX = "__CHAT_REWIND__:"
 CHAT_RESTORE_IPC_PREFIX = "__CHAT_RESTORE__:"
-
-# Rejection feedback carries no transcript or confidence payload.
-VOICE_IPC_PREFIX = "__VOICE__:"
-_voice_feedback_pending = threading.Event()
-_voice_feedback_callback = None
-_voice_feedback_stop = threading.Event()
-_voice_feedback_thread = None
+VOICE_PAUSE_IPC_PREFIX = "__VOICE_PAUSE__:"
+VOICE_STATUS_IPC_PREFIX = "__VOICE_STATUS__:"
 
 
-def set_voice_feedback_callback(callback=None) -> None:
-    """Register a non-blocking rejection notification consumer."""
-    global _voice_feedback_callback
-    _voice_feedback_callback = callback
-    _voice_feedback_pending.clear()
+def set_voice_listening_paused(paused: bool) -> Optional[bool]:
+    """Apply a user capture pause, returning None when no live voice path exists."""
+    if not isinstance(paused, bool):
+        raise ValueError("Voice pause requires a Boolean")
+    voice = _global_voice_listener
+    if voice is None or _global_stop_requested or not voice.is_alive() or voice._should_stop:
+        return None
+    voice.set_capture_paused('user', paused)
+    return voice.is_capture_paused('user')
 
 
-def _queue_low_confidence(_event) -> None:
-    """Coalesce listener notifications without retaining rejected speech."""
-    if not _global_stop_requested:
-        _voice_feedback_pending.set()
-
-
-def _dispatch_voice_feedback() -> None:
-    """Deliver pending feedback without diary or database work."""
-    if not _voice_feedback_pending.is_set():
-        return
-    _voice_feedback_pending.clear()
-    if _global_stop_requested:
-        return
-    callback = _voice_feedback_callback
-    if callback is not None:
-        try:
-            callback()
-        except Exception as exc:
-            debug_log(f"voice feedback callback failed ({type(exc).__name__})", "voice")
-    elif os.environ.get("JARVIS_STDIN_IPC") == "1":
-        _emit_ipc_event(VOICE_IPC_PREFIX, "low_confidence", None, "voice")
-
-
-def _start_voice_feedback_worker() -> None:
-    """Keep rejection delivery independent of synchronous diary processing."""
-    global _voice_feedback_thread, _voice_feedback_stop
-    if _voice_feedback_thread is not None and _voice_feedback_thread.is_alive():
-        return
-    _voice_feedback_stop = threading.Event()
-    stop = _voice_feedback_stop
-
-    def run():
-        while not stop.is_set():
-            _voice_feedback_pending.wait()
-            if not stop.is_set():
-                _dispatch_voice_feedback()
-
-    _voice_feedback_thread = threading.Thread(
-        target=run, name="jarvis-voice-feedback", daemon=True,
-    )
+def handle_voice_pause_stdin_line(line: str) -> bool:
+    """Apply a validated capture request and acknowledge its applied state."""
+    if not line.startswith(VOICE_PAUSE_IPC_PREFIX):
+        return False
+    import json
     try:
-        _voice_feedback_thread.start()
-        debug_log("voice feedback worker started", "voice")
-    except (RuntimeError, OSError) as exc:
-        _voice_feedback_thread = None
-        stop.set()
-        debug_log(f"voice feedback unavailable ({type(exc).__name__})", "voice")
-
-
-def _stop_voice_feedback_worker() -> None:
-    """Wake and stop notification delivery with a bounded shutdown wait."""
-    _voice_feedback_stop.set()
-    _voice_feedback_pending.set()
-    thread = _voice_feedback_thread
-    if thread is not None and thread is not threading.current_thread():
-        thread.join(timeout=1.0)
-        if thread.is_alive():
-            debug_log("voice feedback consumer still finishing after stop", "voice")
-    _voice_feedback_pending.clear()
-
+        payload = json.loads(line[len(VOICE_PAUSE_IPC_PREFIX):])
+        if not isinstance(payload, dict) or not isinstance(payload.get('paused'), bool):
+            raise ValueError("Invalid voice pause state")
+        request_id = payload.get('request_id')
+        if not isinstance(request_id, str) or not request_id or len(request_id) > 128:
+            raise ValueError("Invalid voice pause identity")
+        paused = set_voice_listening_paused(payload['paused'])
+        _emit_ipc_event(VOICE_STATUS_IPC_PREFIX, 'status', {
+            'request_id': request_id, 'available': paused is not None, 'paused': paused,
+        }, 'voice_control')
+    except Exception as exc:
+        debug_log(f"voice pause request rejected ({type(exc).__name__})", 'voice')
+    return True
 
 def request_stop() -> None:
     """Request the daemon to stop gracefully."""
@@ -483,6 +432,12 @@ def submit_text_query(
         debug_log("chat query rejected: another query is running", "chat")
         return
 
+    if is_stop_requested():
+        _chat_query_lock.release()
+        _notify_chat("complete", None, callbacks=callbacks, use_ipc=use_ipc)
+        debug_log("chat query rejected during shutdown admission", "chat")
+        return
+
     # Per-query cancellation flag. The Stop button sets this so the worker
     # drops the reply instead of displaying it.
     global _chat_cancel_event
@@ -497,8 +452,9 @@ def submit_text_query(
             # Done inside the worker's try/except so a redaction failure fails
             # open (complete(None)) and the shared lock is released in finally
             # rather than leaking and blocking every future submission.
-            from .utils.redact import redact
+            from .utils.redact import redact, scrub_secrets
             display_query = redact(text)
+            print(f'⌨️ Typed: "{display_query}"', flush=True)
             _notify_chat("start", display_query, callbacks=callbacks, use_ipc=use_ipc)
             from .reply.engine import run_reply_engine
             reply = run_reply_engine(
@@ -513,6 +469,11 @@ def submit_text_query(
             if cancel_event.is_set():
                 debug_log("chat query cancelled, dropping reply", "chat")
                 reply = None
+            if reply:
+                logged_reply = "\n".join(
+                    "  " + line for line in scrub_secrets(reply).splitlines()
+                )
+                print(f"\n🤖 Jarvis\n{logged_reply}\n", flush=True)
             _notify_chat("complete", reply, callbacks=callbacks, use_ipc=use_ipc)
         except Exception as exc:
             debug_log(f"chat query worker error: {exc}", "chat")
@@ -646,15 +607,15 @@ def wait_for_chat_worker(timeout_sec: float = 5.0) -> bool:
     writes to dialogue memory.
 
     Returns True when the worker finished (or none was running), False on
-    timeout — in which case the caller proceeds anyway rather than
-    hanging the quit, which is the lesser of the two failures.
+    timeout. A timeout does not release ownership of the query's resources;
+    final cleanup must still acquire the shared query lock.
     """
     acquired = _chat_query_lock.acquire(timeout=timeout_sec)
     if acquired:
         _chat_query_lock.release()
         return True
     debug_log(
-        f"chat worker still running after {timeout_sec}s, shutting down anyway",
+        f"chat worker still running after {timeout_sec}s; retaining resources until it drains",
         "chat",
     )
     return False
@@ -673,6 +634,72 @@ def get_tts_engine():
 def get_dictation_engine():
     """Get the global dictation engine (used by desktop app for history window)."""
     return _global_dictation_engine
+
+
+def _create_task_service(db, cfg, dialogue_memory):
+    """Allocate task resources only when background work is enabled."""
+    if not cfg.background_tasks_enabled:
+        debug_log("background task service disabled", "tasks")
+        return None
+    from .tasks import TaskManager
+    return TaskManager(db=db, cfg=cfg, dialogue_memory=dialogue_memory,
+                       event_callback=_emit_task_event)
+
+
+def submit_task(prompt: str) -> str:
+    """Submit a prompt from an interactive desktop client."""
+    if _global_cfg is None or not _global_cfg.background_tasks_enabled:
+        raise RuntimeError("Background tasks are disabled")
+    if _global_task_manager is None:
+        raise RuntimeError("Task service is not ready")
+    return _global_task_manager.submit(prompt)
+
+
+def cancel_task(task_id: str) -> bool:
+    """Cancel a queued task, or mark a running task as cancelled."""
+    if (_global_cfg is None or not _global_cfg.background_tasks_enabled
+            or _global_task_manager is None):
+        return False
+    return _global_task_manager.cancel(task_id)
+
+
+def handle_task_stdin_line(line: str) -> bool:
+    """Handle a local task command and acknowledge correlated submissions."""
+    if not line.startswith("TASK:"):
+        return False
+    request_id = None
+    try:
+        command = json.loads(line[5:])
+        if not isinstance(command, dict):
+            raise ValueError("Task command must be an object")
+        request_id = command.get("request_id")
+        if not isinstance(request_id, str) or not 0 < len(request_id) <= 128:
+            request_id = None
+        action = command.get("action")
+        if action == "submit":
+            if request_id is None or not isinstance(command.get("prompt"), str):
+                raise ValueError("Task submission needs a request identity and text")
+            task_id = submit_task(command["prompt"])
+            _emit_task_event({"type": "submission", "request_id": request_id,
+                              "accepted": True, "task_id": task_id})
+        elif action == "cancel":
+            if not isinstance(command.get("id"), str):
+                raise ValueError("Task cancellation needs an identity")
+            cancel_task(command["id"])
+        else:
+            raise ValueError("Unknown task command")
+    except Exception as exc:
+        debug_log(f"invalid task command ({type(exc).__name__})", "tasks")
+        if request_id is not None:
+            from .utils.redact import redact
+            _emit_task_event({"type": "submission", "request_id": request_id,
+                              "accepted": False, "error": redact(str(exc))})
+    return True
+
+
+def _emit_task_event(event: dict) -> None:
+    from .tasks import TASK_EVENT_PREFIX
+    print(f"{TASK_EVENT_PREFIX}{json.dumps(event, ensure_ascii=False)}", flush=True)
 
 
 def _install_signal_handlers() -> None:
@@ -829,19 +856,51 @@ def _check_and_update_diary(
 def main(smoke_test: bool = False) -> None:
     """Main daemon entry point.
 
+    The per-user OS lock covers initialisation, the event loop and cleanup.
+    Contenders return before any runtime globals or stop flags are changed.
+
     Args:
         smoke_test: If True, initialise all components, print a success
             marker, and return without entering the main event loop.
             Used by CI smoke tests to verify the build is not broken.
     """
-    global _global_dialogue_memory, _global_stop_requested, _global_tts_engine, _global_dictation_engine
-    global _warm_profile_graph_listener
+    global _global_voice_listener
+    from .daemon_lock import acquire_daemon_lock, lock_holder_pid, release_daemon_lock
 
-    # Reset stop flag at start (in case of restart)
+    lock = acquire_daemon_lock()
+    if lock is None:
+        pid = lock_holder_pid()
+        print(
+            f"⚠️ Another Jarvis daemon is already running{f' (pid {pid})' if pid else ''}. "
+            "Stop it before starting Jarvis again.",
+            flush=True,
+        )
+        debug_log("daemon start refused: another daemon holds the lock", "jarvis")
+        if smoke_test:
+            raise RuntimeError("Another Jarvis daemon is already running; smoke initialisation was not performed")
+        return
+    try:
+        _run_daemon(smoke_test)
+    finally:
+        _global_voice_listener = None
+        release_daemon_lock(lock)
+
+
+def _run_daemon(smoke_test: bool = False) -> None:
+    """Initialise and run the daemon while holding its single-instance lock."""
+    global _global_dialogue_memory, _global_stop_requested, _global_tts_engine, _global_dictation_engine
+    global _global_task_manager
+    global _warm_profile_graph_listener
+    global _global_voice_listener
+
+    # The lock prevents contenders from resetting a stopping runtime.
     _global_stop_requested = False
-    _voice_feedback_pending.clear()
 
     _install_signal_handlers()
+
+    from . import get_version
+    version, release_channel = get_version()
+    print(f"📦 Jarvis {version} ({release_channel})", flush=True)
 
     cfg = load_settings()
     db = Database(cfg.db_path, cfg.sqlite_vss_path)
@@ -950,18 +1009,16 @@ def main(smoke_test: bool = False) -> None:
             "memory",
         )
 
-    # Knowledge graph: wipe + re-seed if the on-disk shape predates the
-    # User/Directives/World taxonomy. Non-destructive to the diary —
-    # users can re-import via the memory viewer.
+    # Bootstrap missing graph branches and preserve all saved content.
     try:
         from .memory.graph import GraphMemoryStore
-        _graph_store_boot = GraphMemoryStore(cfg.db_path)
-        if _graph_store_boot.migrate_legacy_shape():
-            print("🧹 Wiped legacy knowledge graph; re-seeded User / Directives / World branches", flush=True)
-            print("   📥 Open the memory viewer and use 'Import from Diary' to repopulate.", flush=True)
-        _graph_store_boot.close()
+        with contextlib.closing(GraphMemoryStore(cfg.db_path)) as graph_store:
+            if graph_store.has_unclassified_root_content():
+                debug_log("knowledge graph contains unclassified root content; preserving saved memory", "memory")
+                print("🧠 Saved memory includes unclassified notes. All saved knowledge is preserved.", flush=True)
+                print("   📂 Review root-level notes in the Memory Viewer.", flush=True)
     except Exception as e:
-        debug_log(f"graph legacy-shape migration failed (non-fatal): {e}", "memory")
+        debug_log(f"graph startup inspection failed (non-fatal): {e}", "memory")
 
     # Check location detection status
     if cfg.location_enabled and not is_location_available():
@@ -1010,14 +1067,18 @@ def main(smoke_test: bool = False) -> None:
     _global_tts_engine = tts  # Expose for face widget speaking animation
     _start_tts_engine(tts)
 
+    _global_task_manager = _create_task_service(db, cfg, _global_dialogue_memory)
+    if _global_task_manager is not None:
+        print("📋 Task service ready", flush=True)
+
     # Initialize voice listening (only if dependencies available)
     print("🎤 Preparing speech recognition in the background...", flush=True)
     voice_thread: Optional[threading.Thread] = None
     voice_thread = VoiceListener(
         db, cfg, tts, _global_dialogue_memory,
-        on_low_confidence=_queue_low_confidence,
     )
     voice_thread.start()
+    _global_voice_listener = voice_thread
 
     # Initialize dictation engine (hold-to-dictate)
     dictation = None
@@ -1026,9 +1087,9 @@ def main(smoke_test: bool = False) -> None:
             from .dictation.dictation_engine import DictationEngine as _DE  # noqa: F811
 
             def _on_dictation_start():
-                voice_thread._dictation_active = True
+                voice_thread.set_capture_paused('dictation', True)
                 try:
-                    from desktop_app.face_widget import JarvisState, get_jarvis_state
+                    from jarvis.activity import JarvisState, get_jarvis_state
                     get_jarvis_state().set_state(JarvisState.DICTATING)
                 except Exception:
                     pass
@@ -1036,16 +1097,16 @@ def main(smoke_test: bool = False) -> None:
 
             def _on_dictation_processing_start():
                 try:
-                    from desktop_app.face_widget import JarvisState, get_jarvis_state
+                    from jarvis.activity import JarvisState, get_jarvis_state
                     get_jarvis_state().set_state(JarvisState.DICTATION_PROCESSING)
                 except Exception:
                     pass
                 debug_log("dictation processing started — transcribing captured audio", "dictation")
 
             def _on_dictation_end():
-                voice_thread._dictation_active = False
+                voice_thread.set_capture_paused('dictation', False)
                 try:
-                    from desktop_app.face_widget import JarvisState, get_jarvis_state
+                    from jarvis.activity import JarvisState, get_jarvis_state
                     get_jarvis_state().set_state(JarvisState.IDLE)
                 except Exception:
                     pass
@@ -1081,6 +1142,7 @@ def main(smoke_test: bool = False) -> None:
         print("🎙️ Dictation disabled", flush=True)
 
     if smoke_test:
+        request_stop()
         print("SMOKE_TEST_INIT_OK", flush=True)
         debug_log("smoke test: all components initialised successfully", "jarvis")
 
@@ -1099,19 +1161,24 @@ def main(smoke_test: bool = False) -> None:
             except Exception:
                 pass
 
-        if tts is not None:
+        if _global_task_manager is not None:
+            _global_task_manager.shutdown(wait=True)
+            _global_task_manager = None
+
+        with query_lock():
+            if tts is not None:
+                try:
+                    tts.stop()
+                except Exception:
+                    pass
+
             try:
-                tts.stop()
+                from .tools.external.mcp_runtime import shutdown_runtime
+                shutdown_runtime()
             except Exception:
                 pass
 
-        try:
-            from .tools.external.mcp_runtime import shutdown_runtime
-            shutdown_runtime()
-        except Exception:
-            pass
-
-        db.close()
+            db.close()
 
         if _warm_profile_graph_listener is not None:
             try:
@@ -1127,8 +1194,6 @@ def main(smoke_test: bool = False) -> None:
         _global_dictation_engine = None
 
         return
-
-    _start_voice_feedback_worker()
 
     # Periodic diary update checking
     last_diary_check = time.time()
@@ -1157,8 +1222,12 @@ def main(smoke_test: bool = False) -> None:
                     debug_log("SHUTDOWN command received, requesting stop", "jarvis")
                     request_stop()
                     break
+                if handle_task_stdin_line(stripped):
+                    continue
                 # Chat query-in (subprocess mode). Returns False for any other
                 # line, which we silently ignore.
+                if handle_voice_pause_stdin_line(stripped):
+                    continue
                 if handle_chat_cancel_stdin_line(stripped):
                     continue
                 if handle_chat_new_session_stdin_line(stripped):
@@ -1209,7 +1278,7 @@ def main(smoke_test: bool = False) -> None:
     except KeyboardInterrupt:
         debug_log("daemon received KeyboardInterrupt", "jarvis")
     finally:
-        _stop_voice_feedback_worker()
+        request_stop()
         print("🔄 Daemon shutting down - saving memory...", flush=True)
         debug_log("daemon finally block starting - performing cleanup", "jarvis")
 
@@ -1228,45 +1297,46 @@ def main(smoke_test: bool = False) -> None:
                 pass
             debug_log("voice thread stopped", "jarvis")
 
-        # A chat worker that started just before the stop request is still
-        # inside run_reply_engine, holding the database connection the
-        # diary pass below is about to use and the one db.close() will
-        # shut. Wait for it, bounded: quitting a moment late beats a
-        # closed-handle raise or a diary pass racing its writes.
+        if _global_task_manager is not None:
+            _global_task_manager.shutdown(wait=True)
+            _global_task_manager = None
+
+        # The grace-period warning does not retire a live query's resources.
+        # Final cleanup acquires their shared owner lock before saving or closing.
         wait_for_chat_worker(timeout_sec=5.0)
 
-        # Final diary update before shutdown
-        debug_log("performing final diary update (force=True)...", "jarvis")
-        print("📝 Updating diary before shutdown...", flush=True)
+        with query_lock():
+            # Final diary update before shutdown
+            debug_log("performing final diary update (force=True)...", "jarvis")
+            print("📝 Updating diary before shutdown...", flush=True)
 
-        # Check dialogue memory status
-        if _global_dialogue_memory is None:
-            print("⚠️ Dialogue memory is None - nothing to save", flush=True)
-        else:
-            # Display-only count; actual save uses the atomic snapshot path.
-            pending = _global_dialogue_memory.get_pending_chunks()
-            print(f"💬 Found {len(pending)} pending conversation chunks", flush=True)
+            # Check dialogue memory status
+            if _global_dialogue_memory is None:
+                print("⚠️ Dialogue memory is None - nothing to save", flush=True)
+            else:
+                # Display-only count; actual save uses the atomic snapshot path.
+                pending = _global_dialogue_memory.get_pending_chunks()
+                print(f"💬 Found {len(pending)} pending conversation chunks", flush=True)
 
-        # Use callbacks if they were set by desktop app (for live UI updates in bundled mode)
-        # Use IPC (stdout events) if callbacks not set (subprocess mode)
-        use_callbacks = any(_diary_update_callbacks.values())
-        use_ipc = not use_callbacks  # Subprocess mode - emit events to stdout
-        _check_and_update_diary(db, cfg, verbose=True, force=True, timeout_sec=SHUTDOWN_DIARY_TIMEOUT_SEC, use_callbacks=use_callbacks, use_ipc=use_ipc)
-        print("✅ Diary update complete", flush=True)
-        debug_log("diary update complete", "jarvis")
+            # Use callbacks if they were set by desktop app (for live UI updates in bundled mode)
+            # Use IPC (stdout events) if callbacks not set (subprocess mode)
+            use_callbacks = any(_diary_update_callbacks.values())
+            use_ipc = not use_callbacks  # Subprocess mode - emit events to stdout
+            _check_and_update_diary(db, cfg, verbose=True, force=True, timeout_sec=SHUTDOWN_DIARY_TIMEOUT_SEC, use_callbacks=use_callbacks, use_ipc=use_ipc)
+            print("✅ Diary update complete", flush=True)
+            debug_log("diary update complete", "jarvis")
 
-        if tts is not None:
-            tts.stop()
+            if tts is not None:
+                tts.stop()
 
-        # Tear down persistent MCP sessions so subprocess-launched
-        # children (e.g. chrome-devtools-mcp's Chrome) close cleanly.
-        try:
-            from .tools.external.mcp_runtime import shutdown_runtime
-            shutdown_runtime()
-        except Exception as _e:
-            debug_log(f"MCP runtime shutdown error: {_e}", "jarvis")
+            # Tear down persistent MCP sessions after task workers have stopped.
+            try:
+                from .tools.external.mcp_runtime import shutdown_runtime
+                shutdown_runtime()
+            except Exception as _e:
+                debug_log(f"MCP runtime shutdown error: {_e}", "jarvis")
 
-        db.close()
+            db.close()
 
         # Drop the warm-profile graph listener so the module registry does
         # not retain a closure pointing at this run's DialogueMemory after

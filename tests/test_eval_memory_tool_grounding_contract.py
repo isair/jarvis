@@ -1,13 +1,14 @@
+from contextlib import nullcontext
 """Memory-to-tool evals use selected inference and require every answer."""
 import importlib
 from pathlib import Path
 import runpy
 import sys
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
-import requests
 
 pytestmark = pytest.mark.unit
 CASES = [
@@ -21,11 +22,26 @@ def load_case(monkeypatch, case):
     module, cls, method, _, forecast = case
     path = Path(__file__).resolve().parents[1] / 'evals' / f'test_{module}_supplies_missing_tool_arg.py'
     monkeypatch.syspath_prepend(str(path.parent))
-    monkeypatch.setattr(requests, 'get', lambda *args, **kwargs: SimpleNamespace(status_code=404))
+    monkeypatch.setattr('jarvis.llm.http.get', lambda *args, **kwargs: nullcontext(SimpleNamespace(status_code=404)))
     with monkeypatch.context() as scope:
         scope.setitem(sys.modules, 'conftest', importlib.import_module('evals.conftest'))
         namespace = runpy.run_path(str(path))
-    return getattr(namespace[cls](), method), namespace[forecast]
+    original = getattr(namespace[cls](), method)
+
+    def run(db, dialogue):
+        if module == 'followup':
+            return original(db, dialogue, planner_enabled=False)
+        if module != 'graph':
+            return original(db, dialogue)
+        from jarvis.memory.graph import GraphMemoryStore
+        with TemporaryDirectory() as directory:
+            store = GraphMemoryStore(str(Path(directory) / 'graph.db'))
+            try:
+                return original(dialogue, store)
+            finally:
+                store.close()
+
+    return run, namespace[forecast]
 
 
 def tool_turn(engine, cfg, text, city, result):
@@ -56,7 +72,7 @@ def test_memory_tool_eval_reaches_selected_transport_and_tiers(monkeypatch, case
                                      'choices': [{'message': {'content': note}}]}
         return response
 
-    monkeypatch.setattr(requests, 'post', post)
+    monkeypatch.setattr('jarvis.llm.http.post', post)
 
     def reply(*, cfg, text, **kwargs):
         backend = get_llm_backend(cfg)
@@ -78,7 +94,7 @@ def test_followup_eval_rejects_a_missing_first_answer(monkeypatch, missing):
     answers = iter([missing, forecast])
     monkeypatch.setattr(engine, 'run_reply_engine', lambda *, cfg, text, **kwargs:
                         tool_turn(engine, cfg, text, 'London', next(answers)))
-    monkeypatch.setattr(requests, 'post', lambda *args, **kwargs: pytest.fail('🧠 Guard checks must not contact a model'))
+    monkeypatch.setattr('jarvis.llm.http.post', lambda *args, **kwargs: pytest.fail('🧠 Guard checks must not contact a model'))
     with pytest.raises(AssertionError):
         run(MagicMock(), MagicMock())
 
@@ -90,7 +106,7 @@ def test_memory_tool_eval_rejects_a_city_without_weather_facts(monkeypatch, case
     run, forecast = load_case(monkeypatch, case)
     monkeypatch.setattr(engine, 'run_reply_engine', lambda *, cfg, text, **kwargs:
                         tool_turn(engine, cfg, text, case[3], f'The requested city is {case[3]}.'))
-    monkeypatch.setattr(requests, 'post', lambda *args, **kwargs: pytest.fail('🧠 Guard checks must not contact a model'))
+    monkeypatch.setattr('jarvis.llm.http.post', lambda *args, **kwargs: pytest.fail('🧠 Guard checks must not contact a model'))
     with pytest.raises(AssertionError):
         run(MagicMock(), MagicMock())
 
@@ -117,7 +133,7 @@ def test_weather_fixture_rejects_an_unrelated_location(monkeypatch, case):
     assert all(result.reply_text != forecast for result in results)
 
 
-def test_followup_eval_accepts_clarifying_without_a_failed_tool_call(monkeypatch):
+def test_followup_eval_rejects_setup_without_a_failed_tool_call(monkeypatch):
     from jarvis.reply import engine
 
     run, forecast = load_case(monkeypatch, CASES[2])
@@ -130,8 +146,9 @@ def test_followup_eval_accepts_clarifying_without_a_failed_tool_call(monkeypatch
         return result
 
     monkeypatch.setattr(engine, 'run_reply_engine', reply)
-    monkeypatch.setattr(requests, 'post', lambda *args, **kwargs: pytest.fail('🧠 Guard checks must not contact a model'))
-    run(MagicMock(), MagicMock())
+    monkeypatch.setattr('jarvis.llm.http.post', lambda *args, **kwargs: pytest.fail('🧠 Guard checks must not contact a model'))
+    with pytest.raises(AssertionError, match='first lookup must actually run'):
+        run(MagicMock(), MagicMock())
 
 
 @pytest.mark.parametrize('case', CASES)
@@ -143,6 +160,6 @@ def test_memory_tool_eval_rejects_an_unrelated_matching_number(monkeypatch, case
     value = re.search(r'(\d+)°C', forecast).group(1)
     monkeypatch.setattr(engine, 'run_reply_engine', lambda *, cfg, text, **kwargs:
                         tool_turn(engine, cfg, text, case[3], f'There are {value} reminders for {case[3]}.'))
-    monkeypatch.setattr(requests, 'post', lambda *args, **kwargs: pytest.fail('🧠 Guard checks must not contact a model'))
+    monkeypatch.setattr('jarvis.llm.http.post', lambda *args, **kwargs: pytest.fail('🧠 Guard checks must not contact a model'))
     with pytest.raises(AssertionError):
         run(MagicMock(), MagicMock())

@@ -6,7 +6,9 @@ Detailed settings, dictation, integrations and troubleshooting. Start with the d
 
 ## Configuration
 
-Most users won't need to change anything. Open **⚙️ Settings** from the tray menu to configure Jarvis through a graphical interface: no JSON editing required. Settings are saved to `~/.config/jarvis/config.json`.
+Most users won't need to change anything. Open **⚙️ Settings** from the tray menu to configure Jarvis through a graphical interface: no JSON editing required. Settings are saved to `~/.config/jarvis/config.json` by default. `XDG_CONFIG_HOME` changes the configuration directory; `JARVIS_CONFIG_PATH` selects a specific file for both the desktop and daemon.
+
+[Example configuration](../examples/config.json) lists the canonical defaults. Copy only the settings you want to override; the Setup Wizard adapts model choices to your hardware.
 
 <details>
 <summary><strong>LLM Provider (Ollama or OpenAI-compatible)</strong></summary>
@@ -28,6 +30,8 @@ Tested local servers (all run on your own machine):
 | LocalAI | `http://localhost:8080/v1` | Feature support depends on the backend model. |
 | vLLM | `http://localhost:8000/v1` | Tool calling depends on the model. |
 | oMLX (Apple Silicon) | varies | No embeddings endpoint, so memory uses keyword search unless you route embeddings to Ollama (below). |
+
+For experimental Bonsai 2 chat with separate fast and embedding models, see the [local serving guide](BONSAI.md).
 
 For reference, the underlying config keys are:
 
@@ -401,7 +405,7 @@ Get API key at [composio.dev](https://composio.dev)
 
 **Jarvis doesn't hear me** - Check microphone permissions and the selected input in Settings. Say "Jarvis" anywhere in your sentence.
 
-**Linux says Listening but nothing is transcribed** - Open Logs and check for capture warnings. Missing callbacks mean the recording stream is not delivering blocks; silent samples mean blocks arrive but contain no usable signal. Check input mute and the recording source in PipeWire/PulseAudio (`pavucontrol` or `wpctl status`), and choose a microphone rather than an output monitor. Try the system default or the `pipewire` input where available. Enable `voice_debug` in Settings for periodic callback counts, signal peak, speech-frame counts and capture rate. These diagnostics do not save microphone audio. Native 44.1/48 kHz inputs are resampled for speech detection and transcription.
+**Linux says Listening but nothing is transcribed** - Open Logs and check for capture warnings. Missing callbacks mean the recording stream is not delivering blocks; silent samples mean blocks arrive but contain no usable signal. Check input mute and the recording source in PipeWire/PulseAudio (`pavucontrol` or `wpctl status`), and choose a microphone rather than an output monitor. Try the system default or the `pipewire` input where available. Set `JARVIS_VOICE_DEBUG=1` for periodic callback counts, signal peak, speech-frame counts and capture rate. These diagnostics do not save microphone audio. Native 44.1/48 kHz inputs are resampled for speech detection and transcription.
 
 **Not sure what is running** - Open the tray menu and click **🩺 Runtime Status**. It shows whether Jarvis is listening, whether Low Power Mode is active, whether Ollama is needed/running, which models are configured, and how many MCP servers are enabled.
 

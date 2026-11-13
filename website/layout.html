@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>$title</title>
+  <meta name="description" content="$description">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#080b10">
+  <link rel="canonical" href="$canonical">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Jarvis">
+  <meta property="og:title" content="$title">
+  <meta property="og:description" content="$description">
+  <meta property="og:url" content="$canonical">
+  <meta property="og:image" content="$social_image">
+  <meta property="og:image:alt" content="Jarvis's amber face, drawn from connected light beams">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="$title">
+  <meta name="twitter:description" content="$description">
+  <meta name="twitter:image" content="$social_image">
+  <link rel="stylesheet" href="${assets}style.css">
+  <link rel="icon" type="image/png" href="${assets}face.png">
+  <script type="application/ld+json">$schema</script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="site-header wrap">
+    <a class="brand" href="$home" aria-label="Jarvis home"><span class="brand-light" aria-hidden="true"></span> JARVIS</a>
+    <nav aria-label="Main navigation">
+      <a href="$getting_started">Get started</a>
+      <a href="$privacy">Privacy &amp; questions</a>
+      <a class="nav-source" href="$repository">GitHub ↗</a>
+    </nav>
+  </header>
+  <main id="main" tabindex="-1">$body</main>
+  <footer class="site-footer wrap">
+    <div><a class="brand" href="$home">JARVIS</a><p>Your intelligence. Your hardware.</p></div>
+    <div class="footer-links"><a href="$getting_started">Download &amp; setup</a><a href="$privacy">Privacy &amp; licence</a><a href="$repository">Source &amp; community</a></div>
+    <p class="fine">By <a href="$author_url">$author_name</a>. Free for non-commercial use. <a href="$license">Read the licence.</a></p>
+  </footer>
+</body>
+</html>

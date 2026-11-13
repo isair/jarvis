@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 """Multi-turn evaluations use selected inference and require actual answers."""
 import importlib
 from pathlib import Path
@@ -7,7 +8,6 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
-import requests
 
 from evals import helpers
 
@@ -24,7 +24,7 @@ ENTRIES = [
 
 @pytest.fixture
 def cases(monkeypatch):
-    monkeypatch.setattr(requests, 'get', lambda *args, **kwargs: SimpleNamespace(status_code=404))
+    monkeypatch.setattr('jarvis.llm.http.get', lambda *args, **kwargs: nullcontext(SimpleNamespace(status_code=404)))
     path = Path(__file__).resolve().parents[1] / 'evals' / 'test_multi_turn_context.py'
     if not path.exists():
         path = Path.cwd() / 'evals' / 'test_multi_turn_context.py'
@@ -44,7 +44,7 @@ def synthetic_turn(engine, cfg, text, answer):
     lower = text.lower()
     name = 'getWeather' if 'weather' in lower or 'umbrella' in lower else 'webSearch'
     query = 'Harry Styles songs' if 'famous songs' in lower else text
-    engine.run_tool_with_retries(db=None, cfg=cfg, tool_name=name, tool_args={'query': query})
+    engine.run_tool_with_retries(db=None, cfg=cfg, tool_name=name, tool_args={'search_query': query})
     return answer
 
 
@@ -66,7 +66,7 @@ def test_selected_multi_turn_backend_receives_each_turn(monkeypatch, cases, entr
         response.json.return_value = {'message': {'content': cases['MOCK_WEATHER_RESPONSE']},
                                      'choices': [{'message': {'content': cases['MOCK_WEATHER_RESPONSE']}}]}
         return response
-    monkeypatch.setattr(requests, 'post', post)
+    monkeypatch.setattr('jarvis.llm.http.post', post)
     def reply(*, cfg, text, **kwargs):
         answer = get_llm_backend(cfg).direct(cfg.llm_chat_model, 'Synthetic wire probe.', text)
         return synthetic_turn(engine, cfg, text, answer)
@@ -120,10 +120,31 @@ def test_default_model_is_bound_to_the_canonical_field(monkeypatch, cases):
         response.__enter__.return_value = response
         response.json.return_value = {'message': {'content': cases['MOCK_WEATHER_RESPONSE']}}
         return response
-    monkeypatch.setattr(requests, 'post', post)
+    monkeypatch.setattr('jarvis.llm.http.post', post)
     def reply(*, cfg, text, **kwargs):
         answer = get_llm_backend(cfg).direct(cfg.llm_chat_model, 'Synthetic wire probe.', text)
         return synthetic_turn(engine, cfg, text, answer)
     monkeypatch.setattr(engine, 'run_reply_engine', reply)
     invoke(cases, ENTRIES[0], helpers.MockConfig())
     assert observed and set(observed) == {expected_model}
+
+
+@pytest.mark.parametrize('bad_arguments', [
+    {'search_query': 'his famous songs'},
+    {'search_query': 'Harry songs'},
+    {'search_query': 'Styles songs'},
+    {'search_query': 'his songs', 'note': 'Harry Styles'},
+    {'search_query': []},
+    {'query': 'Harry Styles songs'},
+])
+def test_pronoun_eval_requires_the_entity_in_the_search_query(monkeypatch, cases, bad_arguments):
+    from jarvis.reply import engine
+
+    def reply(*, cfg, text, **kwargs):
+        args = bad_arguments if 'famous songs' in text.lower() else {'search_query': text}
+        engine.run_tool_with_retries(db=None, cfg=cfg, tool_name='webSearch', tool_args=args)
+        return cases['MOCK_HARRY_STYLES_SONGS_SEARCH']
+
+    monkeypatch.setattr(engine, 'run_reply_engine', reply)
+    with pytest.raises(AssertionError):
+        invoke(cases, ENTRIES[3], helpers.MockConfig())

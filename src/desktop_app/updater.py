@@ -20,12 +20,13 @@ from pathlib import Path
 from typing import Optional
 
 import requests
-from PyQt6.QtCore import QObject, QThread, pyqtSignal
+from PyQt6.QtCore import QObject, pyqtSignal
 
 from jarvis import get_version
 from jarvis.debug import debug_log
 
 from .paths import get_log_dir
+from .qt_worker import KeepAliveWorker
 
 GITHUB_REPO = "isair/jarvis"
 # Absolute path to macOS's ditto tool. Exposed as a module attribute so
@@ -375,7 +376,7 @@ class DownloadSignals(QObject):
     error = pyqtSignal(str)  # error message
 
 
-class DownloadWorker(QThread):
+class DownloadWorker(KeepAliveWorker):
     """Background worker for downloading updates."""
 
     def __init__(self, url: str, dest_path: Path, signals: DownloadSignals):
@@ -386,25 +387,29 @@ class DownloadWorker(QThread):
         self._cancelled = False
 
     def run(self):
+        if self._cancelled:
+            return
         try:
-            response = requests.get(self.url, stream=True, timeout=30)
-            response.raise_for_status()
+            with requests.get(self.url, stream=True, timeout=30) as response:
+                response.raise_for_status()
 
-            total_size = int(response.headers.get("content-length", 0))
-            downloaded = 0
+                total_size = int(response.headers.get("content-length", 0))
+                downloaded = 0
 
-            with open(self.dest_path, "wb") as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    if self._cancelled:
-                        return
-                    f.write(chunk)
-                    downloaded += len(chunk)
-                    self.signals.progress.emit(downloaded, total_size)
+                with open(self.dest_path, "wb") as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if self._cancelled:
+                            return
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        self.signals.progress.emit(downloaded, total_size)
 
-            self.signals.completed.emit(str(self.dest_path))
+            if not self._cancelled:
+                self.signals.completed.emit(str(self.dest_path))
 
         except Exception as e:
-            self.signals.error.emit(str(e))
+            if not self._cancelled:
+                self.signals.error.emit(str(e))
 
     def cancel(self):
         self._cancelled = True
@@ -621,12 +626,12 @@ def install_update_linux(download_path: Path) -> bool:
 
     try:
         with tarfile.open(download_path, "r:gz") as tf:
-            tf.extractall(temp_dir)
+            tf.extractall(temp_dir, filter="data")
 
         new_app_dir = temp_dir / "Jarvis"
 
-        if not new_app_dir.exists():
-            raise FileNotFoundError("Jarvis directory not found in download")
+        if not new_app_dir.is_dir() or new_app_dir.is_symlink():
+            raise ValueError("Jarvis directory not found or invalid in download")
 
         # Escape paths using single quotes to prevent shell injection
         escaped_app_dir = _escape_shell_path(app_dir)
@@ -662,6 +667,7 @@ rm -rf {escaped_temp}
 
     except Exception as e:
         debug_log(f"Linux update failed: {e}", "updater")
+        shutil.rmtree(temp_dir, ignore_errors=True)
         return False
 
 

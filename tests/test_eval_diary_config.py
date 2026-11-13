@@ -10,7 +10,6 @@ pytestmark = pytest.mark.unit
 
 @pytest.mark.parametrize('provider', ['ollama', 'openai_compatible'])
 def test_diary_hygiene_eval_reaches_selected_model_and_transport(monkeypatch, provider):
-    import requests
     from evals import helpers
     base = 'http://127.0.0.1:1'
     model = 'selected-diary-model'
@@ -27,7 +26,7 @@ def test_diary_hygiene_eval_reaches_selected_model_and_transport(monkeypatch, pr
         response.json.return_value = ({'message': message} if provider == 'ollama'
                                      else {'choices': [{'message': message}]})
         return response
-    monkeypatch.setattr(requests, 'post', post)
+    monkeypatch.setattr('jarvis.llm.http.post', post)
     assert DiaryCases()._summarise(['User: I prefer Celsius.']) == (summary, topics)
     assert observed
     url, kwargs = observed[0]
@@ -38,12 +37,11 @@ def test_diary_hygiene_eval_reaches_selected_model_and_transport(monkeypatch, pr
 
 @pytest.mark.parametrize('answer', ['', 'SUMMARY: A summary without topics'])
 def test_empty_or_incomplete_diary_inference_cannot_pass_hygiene(monkeypatch, answer):
-    import requests
     monkeypatch.setenv('EVAL_JUDGE_PROVIDER', 'ollama')
     monkeypatch.setenv('EVAL_JUDGE_MODEL', 'selected-diary-model')
     response = MagicMock()
     response.__enter__.return_value = response
     response.json.return_value = {'message': {'content': answer}}
-    monkeypatch.setattr(requests, 'post', lambda *args, **kwargs: response)
+    monkeypatch.setattr('jarvis.llm.http.post', lambda *args, **kwargs: response)
     with pytest.raises(AssertionError, match='Empty or incomplete'):
         DiaryCases()._summarise(['User: I prefer Celsius.'])

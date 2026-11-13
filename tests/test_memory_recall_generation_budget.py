@@ -3,7 +3,6 @@ import json
 from unittest.mock import MagicMock
 
 import pytest
-import requests
 
 from evals.helpers import voice_config
 from jarvis.reply.enrichment import extract_search_params_for_memory
@@ -33,7 +32,7 @@ def test_recall_extraction_returns_complete_parameters_after_reasoning(monkeypat
                                      'choices': [{'message': {'content': reply}}]}
         return response
 
-    monkeypatch.setattr(requests, 'post', post)
+    monkeypatch.setattr('jarvis.llm.http.post', post)
     result = extract_search_params_for_memory(
         'What did I eat yesterday?', cfg, cfg.fast_model, thinking=thinking,
     )

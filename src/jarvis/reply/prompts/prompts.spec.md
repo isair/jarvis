@@ -1,5 +1,9 @@
 ## Prompts Module Spec
 
+### Runtime execution feedback
+
+The reply loop uses execution-status feedback when a selected continuation of a failed task lacks a successful current result. It requests a real tool call with arguments grounded in the current request and dialogue, or an explicit question/blocker envelope. A rejected draft is absent from subsequent prompt context. Feedback occupies one existing loop turn, preserves the current tool protocol and limits, and does not enable planning or add a model context.
+
 This module provides model-size-aware prompt generation for the reply engine.
 
 ### Problem Statement
@@ -73,7 +77,7 @@ Sections (both sizes — small repeats twice):
 - **GREETING HANDLING** — greetings / social phrases in any language must not trigger tools.
 - **USER INSTRUCTIONS** — behavioural instructions (units, brevity, language, tone) are acknowledged directly.
 - **UNKNOWN NAMED ENTITIES** — any information request about a specific named entity calls webSearch in the SAME turn, silently; the enumeration of request phrasings ("tell me about X", "have you heard of X", etc. — in any language) is framed as a semantic category, not as blacklisted English tokens.
-- **ARGUMENTS THE TOOL CAN AUTO-DERIVE** — if a tool's description says it has a default for an argument (e.g. getWeather → user's location), call the tool without asking the user for that argument.
+- **ARGUMENTS THE TOOL CAN AUTO-DERIVE** — if a tool's description says it has a default for an argument (e.g. getWeather → user's location), call the tool without asking the user for that argument. A default supplies input, not a tool result; data is obtained by executing the tool. The shared `_AUTO_DERIVED_ARGUMENT_GUIDANCE` supplies the same default-input contract to both model sizes. Prefer leaving defaulted optional inputs to the tool when the user has not requested a specific value; supplied values must be grounded in the request or known context. Resolved references count as supplied values. Defaults fill missing values only; explicitly supplied arguments take precedence over profile and current-context defaults. Weather calls preserve named geographic destinations and obtain actual readings for the requested or known default place.
 - **SELF-CONTAINED TOOL ARGUMENTS** — free-form text arguments passed to any tool (search queries, lookup strings, etc.) must be a self-contained restatement of intent with pronouns and ellipsis resolved from conversation history. Tools don't see prior turns. This applies to every tool, including MCP tools we don't own — the rule lives in the system prompt rather than each tool's schema so it generalises.
 
 **Design Rationale:**
@@ -113,3 +117,11 @@ All prompts are language-agnostic:
 2. **Eval tests** (`evals/test_greeting_no_tools.py`):
    - Greetings in multiple languages don't trigger tools
    - Tool-requiring queries still trigger tools
+
+## Remembered personal defaults
+
+The unified persona prompt (`src/jarvis/system_prompt.py`) distinguishes an
+unknown live location from unavailable personal memory. Tool-requested context
+resolution can supply a remembered default; replies explicitly qualify its use
+rather than treating it as detected current state. Unresolved personal inputs
+permit clarification after tool/context resolution has failed.

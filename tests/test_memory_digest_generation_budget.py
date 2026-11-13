@@ -2,7 +2,6 @@
 from unittest.mock import MagicMock
 
 import pytest
-import requests
 
 from evals.helpers import voice_config
 from jarvis.reply.enrichment import _DIGEST_MIN_CHARS, digest_memory_for_query
@@ -32,7 +31,7 @@ def test_memory_digest_retains_relevant_note_after_reasoning(monkeypatch, provid
                                      'choices': [{'message': {'content': content}}]}
         return response
 
-    monkeypatch.setattr(requests, 'post', post)
+    monkeypatch.setattr('jarvis.llm.http.post', post)
     result = digest_memory_for_query(
         'Recommend dinner for me.', [entry], [], cfg, cfg.llm_chat_model, thinking=thinking,
     )

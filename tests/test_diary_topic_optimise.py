@@ -18,6 +18,8 @@ from jarvis.memory.db import Database
 import jarvis.memory.conversation as cmod
 from jarvis.memory.conversation import optimise_diary_topics
 
+pytestmark = pytest.mark.unit
+
 
 def _cfg(*, embedding_model: str = "") -> SimpleNamespace:
     return SimpleNamespace(
@@ -33,15 +35,6 @@ def _cfg(*, embedding_model: str = "") -> SimpleNamespace:
         ollama_chat_model="llama3",
         ollama_embed_model=embedding_model,
     )
-
-
-# ── Fixtures ──────────────────────────────────────────────────────────────
-
-
-@pytest.fixture()
-def db(tmp_path) -> Database:
-    instance = Database(tmp_path / "jarvis.db")
-    yield instance
 
 
 def _seed(db: Database, rows: list[tuple[str, str, str | None]]) -> None:

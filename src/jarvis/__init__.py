@@ -20,6 +20,12 @@ and natural language processing capabilities.
 import os as _os
 import sys as _sys
 
+if _sys.version_info < (3, 11):
+    raise SystemExit(
+        "⚠️ Python 3.11 or later is required to run Jarvis. "
+        "Install a supported Python and recreate your source environment."
+    )
+
 if getattr(_sys, 'frozen', False) and _sys.platform == 'win32':
     _meipass = getattr(_sys, '_MEIPASS', None)
     if _meipass:

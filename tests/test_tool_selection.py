@@ -1,8 +1,10 @@
 """Tests for tool selection strategies."""
 
+import json
 import pytest
 from unittest.mock import MagicMock
 
+from jarvis.tools.registry import ToolSpec
 from jarvis.tools.selection import (
     select_tools,
     ToolSelectionStrategy,
@@ -34,6 +36,10 @@ def _embedding_backend(text_to_vec=None, fail=False):
     return backend
 
 
+def _selection(*names):
+    return json.dumps({'requested_operation': 'Perform the requested action', 'tools': list(names)})
+
+
 def _llm_backend(direct_fn=None, return_value=None, raises=None):
     """Build a MagicMock chat backend whose ``direct`` returns or raises."""
     backend = MagicMock()
@@ -50,45 +56,23 @@ def _llm_backend(direct_fn=None, return_value=None, raises=None):
 # Helpers
 # ---------------------------------------------------------------------------
 
-class FakeTool:
-    """Minimal tool stand-in for testing."""
-    def __init__(self, name: str, description: str):
-        self._name = name
-        self._description = description
-
-    @property
-    def name(self):
-        return self._name
-
-    @property
-    def description(self):
-        return self._description
-
-
-class FakeToolSpec:
-    """Minimal ToolSpec stand-in for testing."""
-    def __init__(self, name: str, description: str):
-        self.name = name
-        self.description = description
-
-
 def _builtin():
     """Return a small set of fake builtin tools."""
     return {
-        "webSearch": FakeTool("webSearch", "Search the web using DuckDuckGo for current information, news, or general queries."),
-        "getWeather": FakeTool("getWeather", "Get current weather conditions."),
-        "logMeal": FakeTool("logMeal", "Log a single meal when the user mentions eating or drinking something."),
-        "fetchMeals": FakeTool("fetchMeals", "Retrieve meals from the database for a given time range."),
-        "screenshot": FakeTool("screenshot", "Capture a selected screen region and OCR the text."),
-        "localFiles": FakeTool("localFiles", "Safely read, write, list, append, or delete files within your home directory."),
-        "stop": FakeTool("stop", "End the current conversation."),
+        "webSearch": ToolSpec("webSearch", "Search the web using DuckDuckGo for current information, news, or general queries."),
+        "getWeather": ToolSpec("getWeather", "Get current weather conditions."),
+        "logMeal": ToolSpec("logMeal", "Log a single meal when the user mentions eating or drinking something."),
+        "fetchMeals": ToolSpec("fetchMeals", "Retrieve meals from the database for a given time range."),
+        "screenshot": ToolSpec("screenshot", "Capture a selected screen region and OCR the text."),
+        "localFiles": ToolSpec("localFiles", "Safely read, write, list, append, or delete files within your home directory."),
+        "stop": ToolSpec("stop", "End the current conversation."),
     }
 
 
 def _mcp():
     """Return a small set of fake MCP tools."""
     return {
-        "homeassistant__turn_on": FakeToolSpec("homeassistant__turn_on", "Turn on a smart home device."),
+        "homeassistant__turn_on": ToolSpec("homeassistant__turn_on", "Turn on a smart home device."),
     }
 
 
@@ -225,6 +209,29 @@ class TestKeywordStrategy:
 class TestEmbeddingStrategy:
 
     @pytest.mark.unit
+    def test_reuses_tool_embeddings_for_unchanged_catalogue(self):
+        """Only the query is re-embedded when the tool catalogue is stable."""
+        backend = _embedding_backend({"weather": [1.0, 0.0, 0.0, 0.0]})
+        builtin = _builtin()
+
+        select_tools(
+            "what's the weather",
+            builtin, {},
+            strategy=ToolSelectionStrategy.EMBEDDING,
+            embedding_backend=backend,
+            embed_model="nomic-embed-text",
+        )
+        backend.embed.side_effect = lambda text, *args, **kwargs: (
+            None if ': ' in text else [1.0, 0.0, 0.0, 0.0])
+        result = select_tools(
+            "weather tomorrow", builtin, {},
+            strategy=ToolSelectionStrategy.EMBEDDING,
+            embedding_backend=backend, embed_model="nomic-embed-text",
+        )
+        assert result[0] == "getWeather"
+        assert len(result) < len(builtin)
+
+    @pytest.mark.unit
     def test_selects_similar_tools(self):
         """Weather query should rank getWeather highest."""
         backend = _embedding_backend({
@@ -285,23 +292,20 @@ class TestEmbeddingStrategy:
 
     @pytest.mark.unit
     def test_returns_minimum_tools(self):
-        """Should return at least _MIN_SELECTED tools even if similarity is low."""
-        from itertools import chain, repeat
+        """The minimum includes relevant tools independently of mandatory stop."""
+        from jarvis.tools.selection import _MIN_SELECTED
 
-        query_vec = [1.0, 0.0, 0.0, 0.0]
-        tool_vec = [0.0, 0.0, 0.0, 1.0]
-        backend = MagicMock()
-        # First embed call is the query; every later call is a tool summary
-        backend.embed.side_effect = chain([query_vec], repeat(tool_vec))
-
+        builtin = _builtin()
+        backend = _embedding_backend({"weather": [1.0, 0.0, 0.0, 0.0]})
         result = select_tools(
-            "something obscure",
-            _builtin(), {},
-            strategy=ToolSelectionStrategy.EMBEDDING,
-            embedding_backend=backend,
-            embed_model="nomic-embed-text",
+            "weather", builtin, {}, strategy=ToolSelectionStrategy.EMBEDDING,
+            embedding_backend=backend, embed_model="nomic-embed-text",
         )
-        assert len(result) >= 3
+        assert result[0] == "getWeather"
+        assert "stop" in result
+        assert len(set(result) - _ALWAYS_INCLUDED) == min(
+            _MIN_SELECTED, len(set(builtin) - _ALWAYS_INCLUDED),
+        )
 
     @pytest.mark.unit
     def test_relative_threshold_filters_low_similarity(self):
@@ -362,8 +366,8 @@ class TestEmbeddingStrategy:
 class TestLLMStrategy:
 
     @pytest.mark.unit
-    def test_parses_comma_separated_response(self):
-        backend = _llm_backend(return_value="webSearch, getWeather")
+    def test_parses_structured_selection(self):
+        backend = _llm_backend(return_value=_selection('webSearch', 'getWeather'))
         result = select_tools(
             "what's the weather",
             _builtin(), {},
@@ -376,8 +380,8 @@ class TestLLMStrategy:
         assert "stop" in result
 
     @pytest.mark.unit
-    def test_none_response_returns_only_mandatory(self):
-        backend = _llm_backend(return_value="none")
+    def test_empty_selection_returns_only_mandatory(self):
+        backend = _llm_backend(return_value=_selection())
         result = select_tools(
             "hello",
             _builtin(), {},
@@ -447,7 +451,7 @@ class TestLLMStrategy:
         result = select_tools(
             "navigate to youtube.com",
             _builtin(),
-            {"chrome-devtools__navigate_page": FakeToolSpec(
+            {"chrome-devtools__navigate_page": ToolSpec(
                 "chrome-devtools__navigate_page",
                 "Navigate the browser to a given URL.",
             )},
@@ -463,7 +467,7 @@ class TestLLMStrategy:
 
     @pytest.mark.unit
     def test_ignores_hallucinated_tool_names(self):
-        backend = _llm_backend(return_value="webSearch, nonExistentTool, getWeather")
+        backend = _llm_backend(return_value=_selection('webSearch', 'nonExistentTool', 'getWeather'))
         result = select_tools(
             "search and weather",
             _builtin(), {},
@@ -475,31 +479,13 @@ class TestLLMStrategy:
         assert "getWeather" in result
 
     @pytest.mark.unit
-    def test_parses_markdown_and_backtick_wrapped_names(self):
-        """Chatty routers wrap names in backticks, bullets, or JSON brackets.
-        The parser must strip that formatting before matching — a literal
-        `webSearch` should resolve to the tool called webSearch, not be
-        silently dropped as an unknown token."""
-        backend = _llm_backend(return_value="- `webSearch`, * `getWeather`, [logMeal]")
-        result = select_tools(
-            "chatty router",
-            _builtin(), {},
-            strategy=ToolSelectionStrategy.LLM,
-            llm_backend=backend,
-            llm_model="test",
-        )
-        assert "webSearch" in result
-        assert "getWeather" in result
-        assert "logMeal" in result
-
-    @pytest.mark.unit
     def test_caps_chatty_router_output_at_max(self):
         """A router that echoes the whole catalogue must still produce a
         compact selection — the hard cap guarantees downstream prompt size."""
         from jarvis.tools.selection import _LLM_MAX_SELECTED
 
         backend = _llm_backend(
-            return_value="webSearch, getWeather, logMeal, fetchMeals, screenshot, localFiles, homeassistant__turn_on"
+            return_value=_selection('webSearch', 'getWeather', 'logMeal', 'fetchMeals', 'screenshot', 'localFiles', 'homeassistant__turn_on')
         )
         result = select_tools(
             "arbitrary query",
@@ -527,7 +513,7 @@ class TestLLMStrategy:
         def _direct(model, sys, user, timeout_sec=8.0, **kwargs):
             captured["sys"] = sys
             captured["user"] = user
-            return "getWeather"
+            return _selection('getWeather')
 
         backend = _llm_backend(direct_fn=_direct)
 
@@ -561,7 +547,7 @@ class TestLLMStrategy:
 
         def _direct(model, sys, user, timeout_sec=8.0, **kwargs):
             captured["user"] = user
-            return "getWeather"
+            return _selection('getWeather')
 
         backend = _llm_backend(direct_fn=_direct)
 
@@ -588,7 +574,7 @@ class TestLLMStrategy:
 
         def _direct(model, sys, user, timeout_sec=8.0, **kwargs):
             captured["user"] = user
-            return "getWeather"
+            return _selection('getWeather')
 
         backend = _llm_backend(direct_fn=_direct)
 
@@ -619,12 +605,11 @@ class TestLLMStrategy:
 @pytest.mark.unit
 @pytest.mark.parametrize('provider', ['ollama', 'openai_compatible'])
 def test_reasoning_router_has_room_for_answer_before_fallback(monkeypatch, provider):
-    import requests
     from types import SimpleNamespace
     from jarvis.llm import get_llm_backend
     tools = _builtin()
     reasoning_tokens = len(('Consider each catalogue entry carefully. ' * len(tools) * 4).split())
-    answer = 'getWeather'
+    answer = _selection('getWeather')
     def post(endpoint, **kwargs):
         payload = kwargs['json']
         budget = payload.get('max_tokens', payload.get('options', {}).get('num_predict', 0))
@@ -636,7 +621,7 @@ def test_reasoning_router_has_room_for_answer_before_fallback(monkeypatch, provi
             'choices': [{'message': {'content': content}}],
         }
         return response
-    monkeypatch.setattr(requests, 'post', post)
+    monkeypatch.setattr('jarvis.llm.http.post', post)
     cfg = SimpleNamespace(llm_provider=provider, llm_base_url='http://127.0.0.1:11439/v1',
                           ollama_base_url='http://127.0.0.1:11439')
     selected = select_tools(
@@ -644,4 +629,154 @@ def test_reasoning_router_has_room_for_answer_before_fallback(monkeypatch, provi
         strategy=ToolSelectionStrategy.LLM, llm_backend=get_llm_backend(cfg),
         llm_model='synthetic-reasoning-router',
     )
-    assert selected == [answer, 'stop']
+    assert selected == ['getWeather', 'stop']
+
+
+class TestEmbeddingCacheLifetime:
+    @pytest.mark.unit
+    def test_routing_survives_catalogue_embedding_outage_between_replies(self, monkeypatch):
+        """A fresh factory lookup can route with the last complete catalogue."""
+        from types import SimpleNamespace
+        from jarvis.llm import get_embedding_backend
+        from jarvis.llm.ollama import OllamaBackend
+
+        available = True
+
+        def embed(self, text, model, timeout_sec=10.0):
+            if ': ' in text and not available:
+                return None
+            return [1.0, 0.0] if 'weather' in text else [0.0, 1.0]
+
+        monkeypatch.setattr(OllamaBackend, 'embed', embed)
+        cfg = SimpleNamespace(ollama_base_url='http://routing-lifetime.invalid')
+        expected = select_tools(
+            'weather today', _builtin(), {}, strategy=ToolSelectionStrategy.EMBEDDING,
+            embedding_backend=get_embedding_backend(cfg), embed_model='test',
+        )
+        available = False
+        actual = select_tools(
+            'weather tomorrow', _builtin(), {}, strategy=ToolSelectionStrategy.EMBEDDING,
+            embedding_backend=get_embedding_backend(cfg), embed_model='test',
+        )
+        assert actual == expected
+        assert len(actual) < len(_builtin())
+
+    @pytest.mark.unit
+    def test_superseded_catalogue_is_not_retained(self):
+        backend = _embedding_backend({'weather': [1.0, 0.0, 0.0, 0.0]})
+        tools = _builtin()
+        first = select_tools('weather', tools, {}, strategy=ToolSelectionStrategy.EMBEDDING,
+                             embedding_backend=backend, embed_model='test')
+        changed = _builtin()
+        changed['getWeather'] = ToolSpec('getWeather', 'An updated weather description')
+        select_tools('weather', changed, {}, strategy=ToolSelectionStrategy.EMBEDDING,
+                     embedding_backend=backend, embed_model='test')
+        backend.embed.side_effect = lambda text, *args, **kwargs: (
+            None if ': ' in text else [1.0, 0.0, 0.0, 0.0])
+        assert select_tools('weather', tools, {}, strategy=ToolSelectionStrategy.EMBEDDING,
+                            embedding_backend=backend, embed_model='test') == list(tools)
+        assert len(first) < len(tools)
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize('change', ['model', 'description', 'name', 'addition', 'removal'])
+    def test_catalogue_or_model_changes_retry_embeddings(self, change):
+        backend = _embedding_backend({'weather': [1.0, 0.0, 0.0, 0.0]})
+        tools = _builtin()
+        select_tools('weather', tools, {}, strategy=ToolSelectionStrategy.EMBEDDING,
+                     embedding_backend=backend, embed_model='first')
+        model = 'first'
+        if change == 'model':
+            model = 'second'
+        elif change == 'description':
+            tools['getWeather'] = ToolSpec('getWeather', 'A different description')
+        elif change == 'name':
+            tools['forecast'] = tools.pop('getWeather')
+        elif change == 'addition':
+            tools.update(_mcp())
+        else:
+            tools.pop('getWeather')
+        backend.embed.side_effect = lambda text, *args, **kwargs: (
+            None if ': ' in text else [1.0, 0.0, 0.0, 0.0])
+        assert select_tools('weather', tools, {}, strategy=ToolSelectionStrategy.EMBEDDING,
+                            embedding_backend=backend, embed_model=model) == list(tools)
+
+    @pytest.mark.unit
+    def test_partial_catalogue_retries_on_next_request(self):
+        backend = _embedding_backend({'weather': [1.0, 0.0, 0.0, 0.0]})
+        original = backend.embed.side_effect
+        backend.embed.side_effect = lambda text, *a, **kw: (
+            None if text.startswith('get weather:') else original(text, *a, **kw))
+        tools = _builtin()
+        first = select_tools('weather', tools, {}, strategy=ToolSelectionStrategy.EMBEDDING,
+                             embedding_backend=backend, embed_model='test')
+        backend.embed.side_effect = original
+        recovered = select_tools('weather', tools, {}, strategy=ToolSelectionStrategy.EMBEDDING,
+                                 embedding_backend=backend, embed_model='test')
+        assert 'getWeather' not in first
+        assert recovered[0] == 'getWeather'
+
+    @pytest.mark.unit
+    def test_provider_settings_release_previous_backend(self):
+        import weakref
+        from types import SimpleNamespace
+        from jarvis.llm import get_embedding_backend
+        cfg = SimpleNamespace(embedding_provider='openai_compatible',
+                              embedding_base_url='http://owned.invalid/one', embedding_api_key='one')
+        backend = get_embedding_backend(cfg)
+        previous = weakref.ref(backend)
+        del backend
+        cfg.embedding_base_url = 'http://owned.invalid/two'
+        assert get_embedding_backend(cfg).base_url.endswith('/two')
+        assert previous() is None
+
+    @pytest.mark.unit
+    def test_query_dimension_change_rebuilds_catalogue(self):
+        backend = _embedding_backend({'weather': [1.0, 0.0, 0.0, 0.0]})
+        tools = _builtin()
+        select_tools('weather', tools, {}, strategy=ToolSelectionStrategy.EMBEDDING,
+                     embedding_backend=backend, embed_model='test')
+        backend.embed.side_effect = lambda text, *a, **kw: (
+            [1.0, 0.0] if 'weather' in text else [0.0, 1.0])
+        assert select_tools('weather', tools, {}, strategy=ToolSelectionStrategy.EMBEDDING,
+                            embedding_backend=backend, embed_model='test')[0] == 'getWeather'
+
+    @pytest.mark.unit
+    def test_oversized_catalogue_routes_without_retaining_vectors(self):
+        from jarvis.tools.selection import _TOOL_EMBEDDING_CACHE_MAX_BYTES
+        backend = _embedding_backend({'weather': [1.0, 0.0, 0.0, 0.0]})
+        tools = _builtin()
+        tools['getWeather'] = ToolSpec('getWeather', 'weather ' + 'x' * _TOOL_EMBEDDING_CACHE_MAX_BYTES)
+        first = select_tools('weather', tools, {}, strategy=ToolSelectionStrategy.EMBEDDING,
+                             embedding_backend=backend, embed_model='test')
+        backend.embed.side_effect = lambda text, *a, **kw: (
+            None if ': ' in text else [1.0, 0.0, 0.0, 0.0])
+        assert first[0] == 'getWeather'
+        assert select_tools('weather', tools, {}, strategy=ToolSelectionStrategy.EMBEDDING,
+                            embedding_backend=backend, embed_model='test') == list(tools)
+
+    @pytest.mark.unit
+    def test_warm_catalogue_does_not_hide_query_failure(self):
+        backend = _embedding_backend({'weather': [1.0, 0.0, 0.0, 0.0]})
+        tools = _builtin()
+        select_tools('weather', tools, {}, strategy=ToolSelectionStrategy.EMBEDDING,
+                     embedding_backend=backend, embed_model='test')
+        backend.embed.side_effect = None
+        backend.embed.return_value = None
+        assert select_tools('weather', tools, {}, strategy=ToolSelectionStrategy.EMBEDDING,
+                            embedding_backend=backend, embed_model='test') == list(tools)
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize('invalid', [[float('nan'), 0.0, 0.0, 0.0], [1.0, 0.0]])
+    def test_invalid_tool_vectors_retry_on_next_request(self, invalid):
+        backend = _embedding_backend({'weather': [1.0, 0.0, 0.0, 0.0]})
+        original = backend.embed.side_effect
+        backend.embed.side_effect = lambda text, *a, **kw: (
+            invalid if text.startswith('get weather:') else original(text, *a, **kw))
+        tools = _builtin()
+        first = select_tools('weather', tools, {}, strategy=ToolSelectionStrategy.EMBEDDING,
+                             embedding_backend=backend, embed_model='test')
+        backend.embed.side_effect = original
+        recovered = select_tools('weather', tools, {}, strategy=ToolSelectionStrategy.EMBEDDING,
+                                 embedding_backend=backend, embed_model='test')
+        assert first[0] != 'getWeather'
+        assert recovered[0] == 'getWeather'

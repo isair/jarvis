@@ -28,10 +28,20 @@ def resolve_input_device(sounddevice, voice_device, devices=None):
 
     if devices is None:
         devices = sounddevice.query_devices()
+    requested = selected.casefold()
+    partial_match = None
     for index, device in enumerate(devices):
-        name = str(device.get('name') or '')
-        if (device.get('max_input_channels') or 0) > 0 and selected.lower() in name.lower():
+        if (device.get('max_input_channels') or 0) <= 0:
+            continue
+        name = str(device.get('name') or '').casefold()
+        if requested == name:
+            debug_log(f'Resolved microphone name to input index {index} (exact match)', 'audio')
             return {'device': index}
+        if partial_match is None and requested in name:
+            partial_match = index
+    if partial_match is not None:
+        debug_log(f'Resolved microphone name to input index {partial_match} (partial match)', 'audio')
+        return {'device': partial_match}
     raise ValueError('Selected microphone not found. Choose an available input in Settings.')
 
 

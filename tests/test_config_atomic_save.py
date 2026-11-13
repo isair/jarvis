@@ -10,14 +10,25 @@ either the old contents or the new contents, never a partial write.
 
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor
+from unittest.mock import MagicMock
 
 import pytest
 
+import jarvis.config as config_module
 from jarvis.config import _save_json
+
+pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("no_network")]
+
+
+@pytest.fixture(autouse=True)
+def config_os(monkeypatch):
+    """Confine atomic-save simulations to the config module."""
+    monkeypatch.setattr(config_module, "os", MagicMock(wraps=os))
 
 
 def test_save_json_writes_new_contents_via_replace(tmp_path, monkeypatch):
-    """The temp file holds the old contents at the moment of the atomic swap."""
+    """The destination retains its original contents until the atomic swap."""
     cfg_path = tmp_path / "config.json"
     original = {"llm_api_key": "original-secret"}
     cfg_path.write_text(json.dumps(original))
@@ -31,7 +42,7 @@ def test_save_json_writes_new_contents_via_replace(tmp_path, monkeypatch):
         replace_calls.append((src, dst))
         return real_replace(src, dst)
 
-    monkeypatch.setattr(os, "replace", spy_replace)
+    monkeypatch.setattr(config_module.os, "replace", spy_replace)
 
     ok = _save_json(cfg_path, {"llm_api_key": "new-secret"})
 
@@ -51,27 +62,13 @@ def test_save_json_leaves_original_intact_on_failure_between_write_and_rename(
     def failing_replace(src, dst):
         raise OSError("simulated crash between write and rename")
 
-    monkeypatch.setattr(os, "replace", failing_replace)
+    monkeypatch.setattr(config_module.os, "replace", failing_replace)
 
     ok = _save_json(cfg_path, {"llm_api_key": "corrupted-write"})
 
     assert ok is False
     assert json.loads(cfg_path.read_text()) == original
-
-
-def test_save_json_leaves_no_leftover_temp_file_on_failure(tmp_path, monkeypatch):
-    cfg_path = tmp_path / "config.json"
-    cfg_path.write_text(json.dumps({"llm_api_key": "original-secret"}))
-
-    def failing_replace(src, dst):
-        raise OSError("simulated crash between write and rename")
-
-    monkeypatch.setattr(os, "replace", failing_replace)
-
-    _save_json(cfg_path, {"llm_api_key": "corrupted-write"})
-
-    leftover = [p for p in tmp_path.iterdir() if p != cfg_path]
-    assert leftover == []
+    assert list(tmp_path.iterdir()) == [cfg_path]
 
 
 def test_save_json_no_leftover_temp_files_on_success(tmp_path):
@@ -103,3 +100,22 @@ def test_save_json_creates_missing_parent_directory(tmp_path):
     assert json.loads(cfg_path.read_text()) == {"llm_api_key": "first-save"}
     leftover = [p for p in cfg_path.parent.iterdir() if p != cfg_path]
     assert leftover == []
+
+
+@pytest.mark.parametrize("scenario", [
+    test_save_json_writes_new_contents_via_replace,
+    test_save_json_leaves_original_intact_on_failure_between_write_and_rename,
+])
+def test_config_simulation_preserves_unrelated_atomic_writes(tmp_path, monkeypatch, scenario):
+    """Another worker can replace its own file during a simulated config save."""
+    owned = tmp_path / "config-test"
+    owned.mkdir()
+    scenario(owned, monkeypatch)
+    source = tmp_path / "unrelated-source"
+    destination = tmp_path / "unrelated-destination"
+    source.write_text("complete unrelated contents")
+    destination.write_text("old unrelated contents")
+    with ThreadPoolExecutor(max_workers=1) as worker:
+        worker.submit(os.replace, source, destination).result(timeout=3)
+    assert destination.read_text() == "complete unrelated contents"
+    assert not source.exists()

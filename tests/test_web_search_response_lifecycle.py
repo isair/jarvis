@@ -67,6 +67,7 @@ def search_page_server(monkeypatch):
         return response
 
     monkeypatch.setattr(requests, 'get', retain_response)
+    monkeypatch.setattr(web_search.public_http, 'get', retain_response)
     yield state, base
     for response in state.responses:
         response.close()

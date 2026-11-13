@@ -4,6 +4,8 @@ import time
 import threading
 import pytest
 
+pytestmark = pytest.mark.unit
+
 from jarvis.listening.transcript_buffer import TranscriptBuffer, TranscriptSegment
 
 

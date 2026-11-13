@@ -1,10 +1,11 @@
 """Piper downloads recover transport failures without publishing partial files."""
+import time
 from unittest.mock import Mock
-
+from concurrent.futures import ThreadPoolExecutor
 import pytest
 import requests
 
-import src.jarvis.output.tts as tts
+import jarvis.output.tts as tts
 
 pytestmark = pytest.mark.unit
 
@@ -31,14 +32,32 @@ def response(body=b'complete'):
 
 
 @pytest.fixture
-def download(monkeypatch, tmp_path):
+def retry_waits(monkeypatch):
+    waits = []
+    retry_clock = Mock(wraps=time)
+    retry_clock.sleep.side_effect = waits.append
+    monkeypatch.setattr(tts, 'time', retry_clock)
+    return waits
+
+
+@pytest.fixture
+def download(monkeypatch, tmp_path, retry_waits, request):
+    if request.node.get_closest_marker("integration") is None:
+        request.getfixturevalue("no_network")
     monkeypatch.setattr(tts, '_get_piper_models_dir', lambda: tmp_path)
-    monkeypatch.setattr(tts.time, 'sleep', lambda seconds: None)
     return lambda: tts._download_piper_voice('en_GB-alan-medium')
 
 
+def check_independent_wait(waits):
+    before = list(waits)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        pool.submit(time.sleep, 0.001).result(timeout=5)
+    assert waits == before, "An unrelated worker entered Piper retry waits"
+
+
+@pytest.mark.parametrize("background_wait", [False, True])
 @pytest.mark.parametrize('failure', [requests.ConnectionError('reset'), requests.Timeout('timed out')])
-def test_connection_failure_recovers_without_publishing_partial_model(monkeypatch, tmp_path, download, failure):
+def test_connection_failure_recovers_without_publishing_partial_model(monkeypatch, tmp_path, download, failure, retry_waits, background_wait):
     replies = iter([failure, response(b'voice'), response(b'{}')])
 
     def get(*args, **kwargs):
@@ -52,6 +71,9 @@ def test_connection_failure_recovers_without_publishing_partial_model(monkeypatc
     assert download() == str(tmp_path / 'en_GB-alan-medium.onnx')
     assert (tmp_path / 'en_GB-alan-medium.onnx').read_bytes() == b'voice'
     assert (tmp_path / 'en_GB-alan-medium.onnx.json').read_bytes() == b'{}'
+
+    if background_wait:
+        check_independent_wait(retry_waits)
 
 
 def test_mid_stream_reset_restarts_file_and_closes_failed_response(monkeypatch, tmp_path, download):
@@ -85,12 +107,16 @@ def test_persistent_transport_failure_is_bounded_and_cleans_partial_files(monkey
     assert not list(tmp_path.iterdir())
 
 
-def test_certificate_failure_is_not_retried(monkeypatch, download):
+@pytest.mark.parametrize("background_wait", [False, True])
+def test_certificate_failure_is_not_retried(monkeypatch, download, retry_waits, background_wait):
     def certificate_error(*args, **kwargs):
         raise requests.exceptions.SSLError('untrusted certificate')
     monkeypatch.setattr(requests, 'get', certificate_error)
     monkeypatch.setattr(tts.time, 'sleep', lambda seconds: pytest.fail('certificate failures must not back off'))
     assert download() is None
+
+    if background_wait:
+        check_independent_wait(retry_waits)
 
 
 def test_completed_model_is_retained_when_configuration_download_fails(monkeypatch, tmp_path, download):
@@ -147,14 +173,34 @@ def test_real_http_disconnect_recovers_complete_voice_files(monkeypatch, tmp_pat
 
 def test_locked_partial_file_reports_failure_without_crashing(monkeypatch, tmp_path, download):
     from pathlib import Path
-    partial = tmp_path / 'en_GB-alan-medium.tmp'
-    partial.write_bytes(b'partial')
+
     unlink = Path.unlink
     def locked(path, *args, **kwargs):
-        if path == partial:
+        if path.parent == tmp_path and path.suffix == '.tmp':
             raise PermissionError('file is locked')
         return unlink(path, *args, **kwargs)
+
+    failed = response()
+    def interrupted(**kwargs):
+        yield b'partial'
+        raise requests.ConnectionError('reset')
+    failed.iter_content = interrupted
     monkeypatch.setattr(Path, 'unlink', locked)
-    monkeypatch.setattr(requests, 'get', Mock(side_effect=requests.ConnectionError('reset')))
+    monkeypatch.setattr(requests, 'get', lambda *args, **kwargs: failed)
     assert download() is None
+    assert failed.closed
     assert not (tmp_path / 'en_GB-alan-medium.onnx').exists()
+    assert [path.read_bytes() for path in tmp_path.iterdir()] == [b'partial']
+
+
+def test_cancelled_download_closes_response_and_removes_unpublished_file(monkeypatch, tmp_path, download):
+    failed = response()
+    def interrupted(**kwargs):
+        yield b'partial'
+        raise KeyboardInterrupt('cancelled download')
+    failed.iter_content = interrupted
+    monkeypatch.setattr(requests, 'get', lambda *args, **kwargs: failed)
+    with pytest.raises(KeyboardInterrupt):
+        download()
+    assert failed.closed
+    assert not list(tmp_path.iterdir())

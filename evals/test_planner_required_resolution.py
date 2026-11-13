@@ -28,7 +28,7 @@ def test_required_resolver_arguments_preserve_discovered_values(tool_name, item,
         step += " scope='local'"
     resolved = resolve_next_tool_call(
         cfg, step, [('selectDocument', '{}', result)], schema, timeout_sec=60.0,
-    )
+     original_query=step)
     assert resolved is not None, '🗺️ A complete grounded call must remain resolvable'
     name, arguments = resolved
     assert name == tool_name, f'🛠️ Resolver changed the selected tool: {resolved}'

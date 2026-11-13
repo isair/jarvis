@@ -4,6 +4,7 @@ import re
 import time
 import threading
 from collections import OrderedDict
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Iterator, Optional, List, Tuple, Union, Callable
@@ -750,23 +751,10 @@ class DialogueMemory:
         # tool-related messages. Excluded from `get_pending_chunks` so raw tool
         # payloads never reach the diary summariser.
         self._tool_turns: List[Tuple[float, List[dict]]] = []
-        # Conversation-scoped scratch cache: per-key (timestamp, value)
-        # entries that survive for the lifetime of the active conversation.
-        # The reply engine wipes this on new-conversation entry (when
-        # ``has_recent_messages`` was False at turn start), and individual
-        # entries can be invalidated on demand (e.g. ``invalidate_warm_profile``
-        # on graph mutations). The timestamp is retained so callers may
-        # inspect entry age, but reads are NOT bounded by RECENT_WINDOW_SEC
-        # any more — long active conversations would otherwise see warm
-        # profile / router caches expire while the session is still going.
-        # LRU-bounded so per-query keys (router cache, enrichment extractor
-        # cache) cannot grow without limit during long active sessions.
-        # Reads bump recency; writes evict the least-recently-used entry
-        # once the cap is reached. ``WARM_PROFILE_CACHE_KEY`` is a single
-        # query-agnostic entry so the cap easily covers it; explicit
-        # invalidation hooks (``clear_hot_cache``, ``invalidate_warm_profile``,
-        # new-conversation reset) still apply unchanged.
-        self._hot_cache: "OrderedDict[str, Tuple[float, object]]" = OrderedDict()
+        # Conversation-scoped values use bounded LRU storage. Reads and
+        # writes promote entries; the engine clears them on stop or a new
+        # conversation. Graph mutations invalidate the warm-profile entry.
+        self._hot_cache: OrderedDict[str, object] = OrderedDict()
         # Hard ceiling on stored tool turns. With the default
         # ``tool_carryover_max_turns=2`` re-injected per reply, 16 lets a
         # session accumulate roughly 8x the visible budget before the
@@ -945,6 +933,8 @@ class DialogueMemory:
                 # API responses, scraped pages). Scrub before persisting
                 # so re-injection on the next turn can't leak them.
                 mm["content"] = scrub_secrets(c)
+            if "resource_references" in mm:
+                mm["resource_references"] = _scrub_args(mm["resource_references"])
             # Native tool-call arguments can also carry sensitive query
             # text (e.g. webSearch(query="my email is alice@example.com")).
             # Scrub each argument value so re-injection of the assistant
@@ -991,8 +981,9 @@ class DialogueMemory:
     # typically the redacted query for query-dependent values, or a
     # constant for query-agnostic values.
 
-    # Cache key for the warm-profile block. Centralised so the engine
-    # and the graph-mutation invalidator agree on it.
+    # The warm-profile cache stores its graph signature with the block.
+    # The engine checks the database path/revision before reuse; mutation
+    # listeners can also invalidate this reserved key promptly.
     WARM_PROFILE_CACHE_KEY = "warm_profile_block"
 
     # LRU cap for the conversation-scoped scratch cache. The engine writes
@@ -1012,22 +1003,20 @@ class DialogueMemory:
         conversation reset in the engine.
         """
         with self._lock:
-            entry = self._hot_cache.get(key)
-            if not entry:
+            if key not in self._hot_cache:
                 return None
             self._hot_cache.move_to_end(key)
-            _ts, value = entry
-            return value
+            return self._hot_cache[key]
 
     def hot_cache_put(self, key: str, value: object) -> None:
-        """Store value under key with current timestamp.
+        """Store value and mark its key as most recently used.
 
         Evicts the least-recently-used entry once ``HOT_CACHE_MAX_ENTRIES``
         is exceeded so per-query keys (router/enrichment caches) cannot
         grow without bound during long sessions.
         """
         with self._lock:
-            self._hot_cache[key] = (time.time(), value)
+            self._hot_cache[key] = value
             self._hot_cache.move_to_end(key)
             while len(self._hot_cache) > self.HOT_CACHE_MAX_ENTRIES:
                 self._hot_cache.popitem(last=False)
@@ -1117,14 +1106,7 @@ class DialogueMemory:
                 return self._last_profile
             return None
 
-    # Compatibility and diary functionality
-    def add_interaction(self, user_text: str, assistant_text: str) -> None:
-        """Compatibility method - use add_message() instead."""
-        if user_text.strip():
-            self.add_message("user", user_text.strip())
-        if assistant_text.strip():
-            self.add_message("assistant", assistant_text.strip())
-
+    # Diary functionality
     def get_pending_chunks(self) -> List[str]:
         """Get unsaved messages as formatted chunks for diary update.
 
@@ -1231,21 +1213,6 @@ class DialogueMemory:
             if ts >= cutoff or ts > self._last_saved_timestamp
         ]
 
-    def clear_pending_updates(self) -> None:
-        """Mark all current messages as saved. Thread-safe.
-
-        DEPRECATED: Use mark_saved_up_to() instead for proper timestamp tracking.
-        Kept for backward compatibility.
-        """
-        with self._lock:
-            self._diary_progress = None
-            if self._messages:
-                # Mark all current messages as saved
-                max_ts = max(ts for ts, _, _ in self._messages)
-                self._last_saved_timestamp = max_ts
-            self._cleanup_old_messages()
-
-
 def generate_conversation_summary(
     recent_chunks: List[str],
     previous_summary: Optional[str],
@@ -1276,7 +1243,13 @@ Create a summary that:
 1. Captures the key topics discussed and important information shared
 2. Is concise but informative (max 200 words)
 3. Focuses on facts, decisions, and context that would be useful for future conversations
-4. Includes any personal information, preferences, or important events mentioned
+4. Preserves explicit USER FACTS separately from the task or question that contains them. A user may state their identity, residence, preferences, constraints, plans or circumstances as a reason for asking something. Retain the declaration as a standalone factual sentence, then summarise the request/result separately. Do not reduce the declaration to a task parameter or topic.
+   - First identify what the user explicitly asserted about themselves; preserve that subject, relationship and status. Prioritise these facts over incidental assistant wording within the word budget.
+   - Example: "I am vegetarian, suggest dinner" means "The user is vegetarian. They requested dinner suggestions", not merely "The user requested vegetarian dinner suggestions".
+   - A requested option or destination alone does NOT establish a personal fact. "Suggest a vegetarian dinner" does not establish that the user is vegetarian. Asking for weather in a city does not establish that they live there.
+   - Preserve who a statement is about. Facts about relatives, quoted speakers or hypothetical people must not become facts about the user.
+   - Preserve temporal status: residence is distinct from a current visit or future plan. A current visit must not become a home. Keep current and former facts in separate sentences when recording a correction, clearly marking which is former and which is current.
+   - Apply this to declarations embedded anywhere in a request, in every language, and retain those relationships when combining with an earlier summary.
 5. Maintains a neutral, factual tone
 6. CRITICAL — never narrate the assistant's own failures, deflections, hesitations, or limitations. The diary records what the user shared and what was established as true. The assistant's own missteps are conversational noise. If preserved, they are retrieved by future sessions as "history" and prime the model to repeat the same failure.
 
@@ -1320,7 +1293,7 @@ Create a summary that:
    - Never paraphrase an attributed claim into an unattributed assertion. "The assistant said Possessor is a 2006 film by Brandon Cronenberg" is fine (attribution preserved). "Possessor is a 2006 film by Brandon Cronenberg" is NOT (attribution stripped — now reads as established fact).
    - If the user later corrects the assistant, record both: the initial claim AND the correction. That's how the final state becomes recoverable — never delete earlier claims when a correction comes in.
    - Weather, time, location, calculator results, and other clearly tool-grounded data can be recorded as fact without attribution caveats — the tool output is the authority.
-   - User-stated facts about themselves (preferences, biography, plans, decisions) are always safe to record verbatim as user facts.
+   - Explicit real-user declarations about themselves (preferences, biography, plans, decisions) are safe to record as user facts. First-person statements supplied as task text are not real-user declarations; preserve the enclosing translation, explanation, editing or role-play request instead.
 
    Example — attributed assistant claim (preserves information, flags provenance):
      GOOD: "The user asked about the movie Possessor; the assistant said it is a 2006 science fiction film directed by Brandon Cronenberg."
@@ -1342,6 +1315,16 @@ Create a summary that:
      GOOD: "The user asked about the movie Possessor; the assistant said it is a 2020 science-fiction horror film directed by Brandon Cronenberg. Separately, the user asked about the name Jarvis; the assistant said the MCU character Jarvis is an AI created by Tony Stark and later embodied by Vision."
 
    This rule applies in any language.
+
+9. CRITICAL speech-act rule: first identify what the user is doing with supplied text. A sentence submitted for translation, explanation, editing, quotation or role-play belongs to that task. Its first-person speaker is not established as the actual user. Summarise the TASK with the supplied sentence attributed to it; do not also create a standalone declaration from its contents. This rule takes precedence over personal-fact preservation.
+   - Input: User: Translate this sentence: I live in X.
+     GOOD: "The user requested translation of the sentence 'I live in X'."
+     BAD: "The user lives in X. They requested translation of 'I live in X'."
+   - Input: User: Explain the phrase 'I am vegetarian'.
+     GOOD: "The user requested an explanation of the phrase 'I am vegetarian'."
+     BAD: "The user is vegetarian. They requested an explanation."
+   - A real declaration outside supplied task text remains a user fact: "I am vegetarian, suggest dinner" means the user is vegetarian and requested dinner suggestions.
+   Apply the speech-act distinction to every relationship and every language.
 
 Also extract 3-5 main topics as comma-separated keywords."""
 
@@ -1896,76 +1879,72 @@ def update_diary_from_dialogue_memory(
                 dialogue_memory.mark_saved_up_to(snapshot_timestamp)
             debug_log(f"marked messages saved up to timestamp {snapshot_timestamp}", "memory")
 
-            # Graph memory (v2): extract facts and store in the node graph.
-            # Non-blocking — if this fails, the diary update still succeeded.
-            # Uses a dedicated timeout (30s) rather than the diary chat timeout,
-            # so graph updates don't inflate the diary flush wall time.
+            # Graph failure preserves the completed diary save.
             try:
                 from .graph import GraphMemoryStore
                 from .graph_ops import update_graph_from_dialogue
 
-                graph_store = GraphMemoryStore(db.db_path)
-                # Retrieve the summary we just stored to use for extraction
-                today = datetime.now(timezone.utc).date().isoformat()
-                existing = db.get_conversation_summary(today, source_app)
-                summary_text = existing['summary'] if existing else None
+                with closing(GraphMemoryStore(db.db_path)) as graph_store:
+                    saved = db.get_conversation_summary_by_id(summary_id)
+                    summary_text = saved['summary'] if saved else None
+                    if saved is None:
+                        debug_log("graph memory skipped: saved diary row unavailable", "memory")
 
-                if summary_text:
-                    # Use a shorter timeout for graph operations — extraction (30s),
-                    # placement (15s/fact), and split (45s) each have their own budgets
-                    # inside update_graph_from_dialogue.
-                    graph_timeout = min(timeout_sec, 30.0)
-                    result = update_graph_from_dialogue(
-                        store=graph_store,
-                        summary=summary_text,
-                        cfg=cfg,
-                        chat_model=cfg.llm_chat_model,
-                        timeout_sec=graph_timeout,
-                        thinking=thinking,
-                        date_utc=today,
-                        picker_model=graph_picker_model,
-                    )
-                    stored = result.stored
-                    skipped = result.skipped
-                    # Print whenever extraction produced anything — including
-                    # all-duplicate flushes. Without the skipped count this
-                    # line went silent after #282's dedupe (cumulative diary
-                    # re-extracts the same facts on every flush), making it
-                    # look like the memory pipeline had stopped working.
-                    if stored or skipped:
-                        dup_suffix = (
-                            f"{skipped} duplicate{'' if skipped == 1 else 's'} skipped"
+                    if summary_text:
+                        debug_log(
+                            f"graph memory source: diary {summary_id}, date {saved['date_utc']}", "memory",
                         )
-                        if stored:
-                            fact_count = (
-                                f"{len(stored)} new fact"
-                                f"{'' if len(stored) == 1 else 's'}"
+                        # Use a shorter timeout for graph operations — extraction (30s),
+                        # placement (15s/fact), and split (45s) each have their own budgets
+                        # inside update_graph_from_dialogue.
+                        graph_timeout = min(timeout_sec, 30.0)
+                        result = update_graph_from_dialogue(
+                            store=graph_store,
+                            summary=summary_text,
+                            cfg=cfg,
+                            chat_model=cfg.llm_chat_model,
+                            timeout_sec=graph_timeout,
+                            thinking=thinking,
+                            date_utc=saved['date_utc'],
+                            picker_model=graph_picker_model,
+                        )
+                        stored = result.stored
+                        skipped = result.skipped
+                        # Report both new facts and duplicate-only graph passes.
+                        if stored or skipped:
+                            dup_suffix = (
+                                f"{skipped} duplicate{'' if skipped == 1 else 's'} skipped"
                             )
-                            tail = f" ({dup_suffix})" if skipped else ""
-                            print(
-                                f"  🧠 Knowledge graph: learned {fact_count}{tail}",
-                                flush=True,
-                            )
-                            # Show each new fact with the node it landed in so
-                            # the user can eyeball extraction/placement. Cap
-                            # preview length per fact.
-                            for fact, node_name in stored[:6]:
-                                preview = fact.replace("\n", " ").strip()
-                                if len(preview) > 90:
-                                    preview = preview[:90].rstrip() + "…"
-                                print(f"     · {preview} → {node_name}", flush=True)
-                            if len(stored) > 6:
-                                print(f"     · …and {len(stored) - 6} more", flush=True)
-                        else:
-                            print(
-                                f"  🧠 Knowledge graph: nothing new ({dup_suffix})",
-                                flush=True,
-                            )
-                    debug_log(
-                        f"graph memory: stored {len(stored)} facts, "
-                        f"{skipped} duplicates skipped",
-                        "memory",
-                    )
+                            if stored:
+                                fact_count = (
+                                    f"{len(stored)} new fact"
+                                    f"{'' if len(stored) == 1 else 's'}"
+                                )
+                                tail = f" ({dup_suffix})" if skipped else ""
+                                print(
+                                    f"  🧠 Knowledge graph: learned {fact_count}{tail}",
+                                    flush=True,
+                                )
+                                # Show each new fact with the node it landed in so
+                                # the user can eyeball extraction/placement. Cap
+                                # preview length per fact.
+                                for fact, node_name in stored[:6]:
+                                    preview = fact.replace("\n", " ").strip()
+                                    if len(preview) > 90:
+                                        preview = preview[:90].rstrip() + "…"
+                                    print(f"     · {preview} → {node_name}", flush=True)
+                                if len(stored) > 6:
+                                    print(f"     · …and {len(stored) - 6} more", flush=True)
+                            else:
+                                print(
+                                    f"  🧠 Knowledge graph: nothing new ({dup_suffix})",
+                                    flush=True,
+                                )
+                        debug_log(
+                            f"graph memory: stored {len(stored)} facts, "
+                            f"{skipped} duplicates skipped",
+                            "memory",
+                        )
             except Exception as e:
                 debug_log(f"graph memory update failed (non-fatal): {e}", "memory")
 

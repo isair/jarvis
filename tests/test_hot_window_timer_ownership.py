@@ -32,9 +32,9 @@ class ManualTimer:
 
 @pytest.fixture
 def window(monkeypatch, tmp_path):
-    from desktop_app import face_widget
-    monkeypatch.setattr(face_widget, "_get_jarvis_state_file", lambda: str(tmp_path / "face_state"))
-    monkeypatch.setattr(face_widget, "_jarvis_state_instance", None)
+    from jarvis import activity
+    monkeypatch.setattr(activity, "_get_jarvis_state_file", lambda: str(tmp_path / "face_state"))
+    monkeypatch.setattr(activity, "_jarvis_state_instance", None)
     timers = []
 
     def timer(delay, callback):
@@ -135,7 +135,7 @@ def test_current_activation_preserves_collection(window):
     manager, timers = window
     manager.schedule_hot_window_activation()
     activation = timers[-1]
-    manager.start_collection('follow-up question')
+    manager.start_collection('follow-up question', language=None)
     activation.deliver_started_callback()
     assert manager.is_collecting()
     assert manager.get_pending_query() == 'follow-up question'

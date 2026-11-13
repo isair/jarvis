@@ -8,7 +8,7 @@ Run: .venv/bin/python -m pytest evals/test_tool_selection.py -v
 """
 
 import pytest
-import re
+import json
 
 from evals.tool_routing import requires_judge_llm, route_tools
 from jarvis.llm import get_embedding_backend
@@ -130,7 +130,7 @@ class TestToolSelectionFilteringLLM:
         total_builtin = len(BUILTIN_TOOLS)
 
         for tool in must_include:
-            assert re.search(r"(?<!\w)" + re.escape(tool) + r"(?!\w)", model_reply), (
+            assert tool in json.loads(model_reply)['tools'], (
                 f"The router response did not select '{tool}': {model_reply}"
             )
             assert tool in selected, (

@@ -43,8 +43,9 @@ class TestFallbackChainRescuesBotChallenge:
     """DDG bot-challenge + Wikipedia fallback = honest rescue, not confabulation."""
 
     @patch("jarvis.tools.builtin.web_search._wikipedia_summary")
+    @patch("jarvis.tools.builtin.web_search.download_search_html")
     @patch("jarvis.tools.builtin.web_search.requests.get")
-    def test_wikipedia_rescues_when_ddg_blocks(self, mock_get, mock_wiki):
+    def test_wikipedia_rescues_when_ddg_blocks(self, mock_get, mock_html, mock_wiki):
         # DDG instant API empty, /lite/ returns the bot-challenge structural markers.
         instant = Mock(status_code=200)
         instant.json.return_value = {}
@@ -54,7 +55,8 @@ class TestFallbackChainRescuesBotChallenge:
             b'<html><body><div class="anomaly-modal"></div>'
             b'<form action="//duckduckgo.com/anomaly.js"></form></body></html>'
         )
-        mock_get.side_effect = [instant, challenge]
+        mock_get.return_value = instant
+        mock_html.return_value = (challenge.status_code, challenge.content)
         mock_wiki.return_value = (
             "Possessor",
             "https://en.wikipedia.org/wiki/Possessor",
@@ -76,15 +78,17 @@ class TestFallbackChainRescuesBotChallenge:
         assert "en.wikipedia.org" in result.reply_text
 
     @patch("jarvis.tools.builtin.web_search._wikipedia_summary")
+    @patch("jarvis.tools.builtin.web_search.download_search_html")
     @patch("jarvis.tools.builtin.web_search.requests.get")
-    def test_honest_block_when_all_providers_fail(self, mock_get, mock_wiki):
+    def test_honest_block_when_all_providers_fail(self, mock_get, mock_html, mock_wiki):
         """No Brave key, Wikipedia miss → honest-block envelope, no confabulation."""
         instant = Mock(status_code=200)
         instant.json.return_value = {}
         instant.raise_for_status = Mock()
         challenge = Mock(status_code=400)
         challenge.content = b'<div class="anomaly-modal"></div>'
-        mock_get.side_effect = [instant, challenge]
+        mock_get.return_value = instant
+        mock_html.return_value = (challenge.status_code, challenge.content)
         mock_wiki.return_value = None
 
         result = WebSearchTool().run({"search_query": "obscure thing"}, _make_ctx())

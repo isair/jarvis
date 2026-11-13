@@ -28,7 +28,7 @@ def test_resolved_write_preserves_the_complete_literal(monkeypatch, tmp_path, co
     else:
         quoted = "'" + content + "'"
     step = f"localFiles operation='write' path='note.txt' content={quoted}"
-    resolved = resolve_next_tool_call(cfg, step, [], schema, timeout_sec=60.0)
+    resolved = resolve_next_tool_call(cfg, step, [], schema, timeout_sec=60.0, original_query=step)
     assert resolved is not None and resolved[0] == tool.name, f'📝 Complete content needs a resolved write: {step}'
     result = tool.run(resolved[1], ToolContext(None, cfg, '', '', '', 0, lambda message: None))
     assert result.success, f'📝 Private write failed: {result.reply_text}'

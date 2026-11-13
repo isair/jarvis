@@ -15,7 +15,8 @@ pytestmark = pytest.mark.unit
 
 @pytest.mark.parametrize('encoding', ['gzip', 'deflate'])
 @pytest.mark.parametrize('chunked', [False, True])
-def test_compressed_page_rejection_bounds_decoder_allocations(mock_config, encoding, chunked):
+def test_compressed_page_rejection_bounds_decoder_allocations(monkeypatch, mock_config, encoding, chunked):
+    monkeypatch.setattr(fetch_web_page, "_MAX_FETCH_BYTES", 256*1024)
     limit = fetch_web_page._MAX_FETCH_BYTES
     expanded = b' ' * (10 * limit)
     body = gzip.compress(expanded) if encoding == 'gzip' else zlib.compress(expanded)

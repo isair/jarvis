@@ -1,0 +1,34 @@
+{
+  "name": "Jarvis",
+  "base_url": "https://barissencan.com/jarvis/",
+  "repository": "https://github.com/isair/jarvis",
+  "summary": "Jarvis is a local AI assistant for macOS, Windows and Linux. Talk naturally, chat by text, remember past conversations and dictate into other apps, with models and memory on hardware you control.",
+  "pages": [
+    {
+      "route": "",
+      "template": "home.html",
+      "title": "Jarvis: a private local AI assistant for your desktop",
+      "description": "Meet Jarvis, a private local AI assistant with voice and text chat, personal memory, dictation and MCP tools for macOS, Windows and Linux.",
+      "key": "home"
+    },
+    {
+      "route": "getting-started/",
+      "template": "getting-started.html",
+      "title": "Get started with Jarvis: download and local model setup",
+      "description": "Download Jarvis for macOS, Windows or Linux, choose local speech and chat models, and start talking or typing. No subscription is required.",
+      "key": "getting_started"
+    },
+    {
+      "route": "privacy/",
+      "template": "privacy.html",
+      "title": "Jarvis privacy, offline use and licensing questions",
+      "description": "Understand where Jarvis stores memory, which features work offline, when tools use the network, and what its non-commercial licence permits.",
+      "key": "privacy"
+    }
+  ],
+  "author": {
+    "name": "Baris Sencan",
+    "url": "https://github.com/isair"
+  },
+  "source_branch": "main"
+}

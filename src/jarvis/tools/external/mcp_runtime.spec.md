@@ -15,6 +15,9 @@ resident for the daemon's lifetime.
 - One process-wide singleton `_PersistentMCPRuntime` accessible via
   `get_runtime()`. Created lazily on first use; recreated after
   `shutdown_runtime()`.
+- The worker registry lock covers bookkeeping only. Per-server lifecycle
+  locks serialise startup, replacement and retirement for that server;
+  another server's readiness does not wait for those operations.
 - A single background thread runs an `asyncio` event loop
   (`JarvisMCPRuntime`). All MCP I/O happens on this loop.
 - Per server, a `_ServerWorker` task lives on that loop. The task
@@ -22,26 +25,39 @@ resident for the daemon's lifetime.
   `(kind, payload, future)` tuples from an `asyncio.Queue`.
 - Callers (registry → `MCPClient.list_tools` / `invoke_tool`) submit
   requests via `runtime.invoke(...)` / `runtime.list_tools(...)`. Each
-  call hops the request onto the loop with `call_soon_threadsafe(put_nowait, ...)`
-  and blocks on a `concurrent.futures.Future` for the result.
+  call hops request admission onto the loop with `call_soon_threadsafe(...)`
+  and blocks on a `concurrent.futures.Future` for the result. Admission checks
+  worker liveness before enqueuing, so a retired session triggers retry without
+  waiting for the request timeout. A closed loop surfaces as a session error.
 
 ## Lifecycle
 
 | Event | Effect |
 |-------|--------|
 | First `get_runtime()` call | Spawns the background thread + loop. |
-| First call referencing a server | Creates a `_ServerWorker`, awaits `_ready` (the worker signals readiness once `session.initialize()` returns). |
+| First call referencing a server | Registers a `_ServerWorker` before setup and awaits `_ready` (signalled once `session.initialize()` returns). Shutdown owns pending setup. |
 | Server config equality holds | Subsequent calls reuse the cached worker. |
 | Server config changes | Old worker is shut down; a fresh worker replaces it. |
 | Worker raises `_WorkerDeadError` | Runtime drops it and retries the call once with a new worker. Second failure surfaces as `MCPServerSessionError` to the public layer. |
 | `idle_timeout_sec` set on a server config | Worker self-terminates after that long without activity. Next call spawns a new worker. |
-| Daemon shutdown calls `shutdown_runtime()` | Each worker is asked to exit (sentinel `None`); any wedged task is cancelled. The loop is stopped, the thread is joined with a 5s timeout. |
+| Daemon shutdown calls `shutdown_runtime()` | Each worker is asked to exit (sentinel `None`) and its asynchronous session cleanup is awaited. Wedged work is cancelled after a short grace period, with a bounded cleanup wait. The loop drains remaining cancellation cleanup before closing; the thread is joined with a 5s timeout. |
 
 ## Invariants
+
+- Each stdio connection closes its owned log on construction failure, failed
+  or cancelled entry, and session exit. The original outcome propagates.
 
 - One in-flight `call_tool` per server at any time. Tool calls to the
   same server are serialised by the queue. Different servers run in
   parallel because each has its own worker.
+- Failed or timed-out startup joins asynchronous cleanup before retirement.
+  A worker whose setup or session still holds resources remains registered;
+  replacement fails as a session error until that instance has drained.
+- A stale failure retires only its own worker identity, preserving a newer
+  persistent session and its state.
+- Shutdown closes admission before collecting workers, including pending
+  startup. A stopped worker cannot schedule late setup. Concurrent stop
+  callers join the same teardown and retain the bounded cleanup policy.
 - A worker is never reused after `alive` flips to `False`. The
   finally-block in `_run` drains pending requests, resolving each
   outstanding future with `_WorkerDeadError` so callers do not hang.
@@ -63,6 +79,16 @@ resident for the daemon's lifetime.
 - `get_runtime()` / `shutdown_runtime()` — module-level helpers used
   by the daemon's startup and shutdown paths.
 
+## Error reporting
+
+Registry discovery and tool execution report leaf causes from nested exception
+groups rather than task-group wrapper messages. Empty messages use exception
+type names. Diagnostics include up to three causes, each bounded to 400
+characters, so a large server failure cannot flood the activity log. A failed
+server does not remove tools discovered from healthy servers. Global client
+construction failures use the same diagnostic policy. Shutdown signals such as
+KeyboardInterrupt, SystemExit and cancellation propagate through discovery.
+
 ## Configuration
 
 Each server entry in `config.mcps` is a dict consumed by
@@ -73,11 +99,23 @@ Each server entry in `config.mcps` is a dict consumed by
 | `idle_timeout_sec` | float \| null | null | If set, the worker self-terminates after that many seconds with an empty queue. Stateful servers (browser automation) must leave this unset. |
 | `timeout_sec` | float \| null | 120 (`_DEFAULT_INVOKE_TIMEOUT_SEC`) | Bounds a single `call_tool` round trip and `list_tools` discovery. Servers whose tools legitimately run long (e.g. delegating a task to an external CLI agent) should raise this; a bare `concurrent.futures.TimeoutError` propagates on expiry. Non-finite or non-positive values fall back to the default. |
 
+### Server environment and executable lookup
+
+Command lookup first uses the server's configured `env.PATH`, or the inherited
+PATH when there is no override. Existing GUI/login-shell fallback discovery
+remains available. The child receives the inherited environment with explicit
+server values taking precedence. The resolved command's directory is prepended
+only when absent from that effective PATH, preserving custom dependency paths.
+An empty configured PATH adds only that directory, without an implicit current
+directory entry. Preparing one server does not alter the parent environment or
+another server's choices.
+
 ## Test contract
 
 Behavioural tests live in `tests/test_mcp_client.py`. The contract
 verified there:
 
+- Shutdown finishes asynchronous session and connection cleanup before returning when cleanup completes within its deadline. An interrupted in-flight caller is released.
 - A second `invoke_tool` does not open a new stdio connection.
 - `list_tools` followed by `invoke_tool` shares one stdio connection.
 - A `_WorkerDeadError` from a worker triggers exactly one retry, which

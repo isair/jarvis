@@ -1,14 +1,18 @@
 """Slow speech decoding gives useful guidance without changing user settings."""
+import time
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 import numpy as np
 import pytest
+from jarvis.listening import listener as listener_module
 from jarvis.listening.listener import VoiceListener, _TranscriptionJob
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("no_network")]
 
 
-def run_speech(monkeypatch, durations, model='medium', audio_seconds=2, transcript='hello'):
+def run_speech(monkeypatch, durations, model='medium', audio_seconds=2, transcript='hello', background_wait=False):
     cfg = SimpleNamespace(sample_rate=16000, vad_enabled=False, echo_tolerance=0.3,
                           echo_energy_threshold=2, hot_window_seconds=3,
                           tune_enabled=False, whisper_model=model)
@@ -16,7 +20,9 @@ def run_speech(monkeypatch, durations, model='medium', audio_seconds=2, transcri
     listener._whisper_model_name = model
     listener._transcribe_audio = lambda audio: (transcript, 'en', ())
     clock = iter(t for index, elapsed in enumerate(durations) for t in (index*20, index*20+elapsed))
-    monkeypatch.setattr('jarvis.listening.listener.time.monotonic', lambda: next(clock))
+    decode_clock = MagicMock(wraps=time)
+    decode_clock.monotonic.side_effect = lambda: next(clock)
+    monkeypatch.setattr(listener_module, 'time', decode_clock)
     for _ in durations:
         listener._transcription_jobs_q.put(_TranscriptionJob(
             np.zeros(int(audio_seconds*16000)), 1, 3, 0.1, 0, False, 0))
@@ -27,11 +33,20 @@ def run_speech(monkeypatch, durations, model='medium', audio_seconds=2, transcri
         results.append(listener._transcription_results_q.get().text)
     assert results == [transcript]*len(durations)
     assert cfg.whisper_model == model
+    if background_wait:
+        def sample():
+            before = time.monotonic()
+            Event().wait(0.001)
+            return before, time.monotonic()
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            before, after = pool.submit(sample).result(timeout=5)
+        assert after > before, "The decode clock stopped an unrelated worker"
 
 
+@pytest.mark.parametrize("background_wait", [False, True])
 @pytest.mark.parametrize('model,recommended', [('medium','small'),('small.en','base.en')])
-def test_sustained_slow_decode_recommends_smaller_model_once(monkeypatch,capsys,model,recommended):
-    run_speech(monkeypatch,[5,5,5,5,5,5],model)
+def test_sustained_slow_decode_recommends_smaller_model_once(monkeypatch,capsys,model,recommended,background_wait):
+    run_speech(monkeypatch,[5,5,5,5,5,5],model,background_wait=background_wait)
     output=capsys.readouterr().out
     assert output.count('speech recognition is slower than real time') == 1
     assert f"'{recommended}'" in output

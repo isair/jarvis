@@ -7,8 +7,9 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from src.jarvis.memory.conversation import DialogueMemory
-from src.jarvis.reply.engine import run_reply_engine
+from jarvis.memory.conversation import DialogueMemory
+from jarvis.reply.engine import run_reply_engine
+from jarvis.tools.types import ToolExecutionResult
 
 
 def _mock_cfg():
@@ -41,19 +42,16 @@ def _mock_cfg():
 
 
 @pytest.mark.unit
-@patch("src.jarvis.reply.engine.plan_query", return_value=[])
-@patch("src.jarvis.reply.engine.extract_search_params_for_memory", return_value={})
-@patch("src.jarvis.reply.engine.run_tool_with_retries")
-@patch("src.jarvis.reply.engine.extract_text_from_response")
-@patch("src.jarvis.reply.engine.chat_with_messages")
+@patch("jarvis.reply.engine.plan_query", return_value=[])
+@patch("jarvis.reply.engine.extract_search_params_for_memory", return_value={})
+@patch("jarvis.reply.engine.run_tool_with_retries")
+@patch("jarvis.reply.engine.extract_text_from_response")
+@patch("jarvis.reply.engine.chat_with_messages")
 def test_tool_carryover_makes_prior_result_visible_to_next_turn(
     mock_chat, mock_extract, mock_tool, _mock_extract, _mock_plan
 ):
     # Turn 1: model emits webSearch call, then final text.
-    mock_tool.return_value = Mock(
-        reply_text="Justin Bieber is a Canadian singer.",
-        error_message=None,
-    )
+    mock_tool.return_value = ToolExecutionResult(True, "Justin Bieber is a Canadian singer.")
     mock_chat.side_effect = [
         # Turn 1a: tool call
         {"message": {"content": "", "tool_calls": [{
@@ -109,22 +107,22 @@ def test_tool_carryover_makes_prior_result_visible_to_next_turn(
 
 
 @pytest.mark.unit
-@patch("src.jarvis.reply.engine.plan_query", return_value=[])
-@patch("src.jarvis.reply.engine.extract_search_params_for_memory", return_value={})
-@patch("src.jarvis.reply.engine.run_tool_with_retries")
-@patch("src.jarvis.reply.engine.extract_text_from_response")
-@patch("src.jarvis.reply.engine.chat_with_messages")
+@patch("jarvis.reply.engine.plan_query", return_value=[])
+@patch("jarvis.reply.engine.extract_search_params_for_memory", return_value={})
+@patch("jarvis.reply.engine.run_tool_with_retries")
+@patch("jarvis.reply.engine.extract_text_from_response")
+@patch("jarvis.reply.engine.chat_with_messages")
 def test_stop_signal_clears_tool_carryover(
     mock_chat, mock_extract, mock_tool, _mock_extract, _mock_plan
 ):
     """Turn 1 runs a tool; turn 2 receives the stop signal. After turn 2,
     carryover must be empty so the next wake-word turn starts fresh.
     """
-    from src.jarvis.tools.builtin.stop import STOP_SIGNAL
+    from jarvis.tools.builtin.stop import STOP_SIGNAL
 
     mock_tool.side_effect = [
-        Mock(reply_text="Justin Bieber is a Canadian singer.", error_message=None),
-        Mock(reply_text=STOP_SIGNAL, error_message=None),
+        ToolExecutionResult(True, "Justin Bieber is a Canadian singer."),
+        ToolExecutionResult(True, STOP_SIGNAL),
     ]
     mock_chat.side_effect = [
         # Turn 1a: tool call
@@ -159,11 +157,11 @@ def test_stop_signal_clears_tool_carryover(
 
 
 @pytest.mark.unit
-@patch("src.jarvis.reply.engine.plan_query", return_value=[])
-@patch("src.jarvis.reply.engine.extract_search_params_for_memory", return_value={})
-@patch("src.jarvis.reply.engine.run_tool_with_retries")
-@patch("src.jarvis.reply.engine.extract_text_from_response")
-@patch("src.jarvis.reply.engine.chat_with_messages")
+@patch("jarvis.reply.engine.plan_query", return_value=[])
+@patch("jarvis.reply.engine.extract_search_params_for_memory", return_value={})
+@patch("jarvis.reply.engine.run_tool_with_retries")
+@patch("jarvis.reply.engine.extract_text_from_response")
+@patch("jarvis.reply.engine.chat_with_messages")
 def test_tool_carryover_text_tool_mode(
     mock_chat, mock_extract, mock_tool, _mock_extract, _mock_plan
 ):
@@ -174,9 +172,7 @@ def test_tool_carryover_text_tool_mode(
     cfg.ollama_chat_model = "gemma4:e2b"  # triggers SMALL/text-tool path
     cfg.llm_chat_model = "gemma4:e2b"  # triggers SMALL/text-tool path
 
-    mock_tool.return_value = Mock(
-        reply_text="Paris is the capital of France.", error_message=None,
-    )
+    mock_tool.return_value = ToolExecutionResult(True, "Paris is the capital of France.")
     fence_call = (
         "```tool_call\n"
         '{"name": "webSearch", "arguments": {"query": "paris"}}\n'

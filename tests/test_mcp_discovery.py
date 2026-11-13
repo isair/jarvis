@@ -1,14 +1,7 @@
-"""
-Tests for MCP tool discovery and integration.
-
-This test suite ensures that:
-1. MCP tools are properly discovered from configured servers
-2. Tool naming follows the server__toolname convention
-3. Tools are properly integrated into the reply engine
-4. The new OpenAI-standard tool calling format works correctly
-"""
+"""MCP discovery preserves external names and isolates server failures."""
 
 import pytest
+import jarvis.tools.registry as registry
 from jarvis.tools.registry import discover_mcp_tools, generate_tools_description, generate_tools_json_schema, run_tool_with_retries, ToolExecutionResult
 
 
@@ -22,139 +15,78 @@ class DummyDB:
     pass
 
 
+@pytest.fixture
+def discover_servers(monkeypatch):
+    def discover(replies):
+        class FakeClient:
+            def __init__(self, config):
+                self.config = config
+
+            def list_tools(self, server_name):
+                reply = replies[server_name]
+                if isinstance(reply, BaseException):
+                    raise reply
+                return reply
+
+        monkeypatch.setattr(registry, 'MCPClient', FakeClient)
+        return discover_mcp_tools({name: {'command': 'fake'} for name in replies})
+    return discover
+
+
 @pytest.mark.unit
 def test_discover_mcp_tools_empty_config():
-    """Test that empty MCP config returns empty tools dict."""
-    result, errors = discover_mcp_tools({})
-    assert result == {}
+    assert discover_mcp_tools({}) == ({}, {})
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize('names', [
+    ('tool1',),
+    ('read', 'write', 'list'),
+    ('tool_with_underscores', 'tool-with-dashes', 'simpletool'),
+])
+def test_discover_mcp_tools_with_fake_server(discover_servers, names):
+    server = 'test-server'
+    replies = [{'name': name, 'description': f'Description of {name}',
+                'inputSchema': {'type': 'object', 'properties': {}}} for name in names]
+    tools, errors = discover_servers({server: replies})
     assert errors == {}
+    assert set(tools) == {f'{server}__{name}' for name in names}
+    for reply in replies:
+        canonical = f"{server}__{reply['name']}"
+        tool = tools[canonical]
+        assert tool.name == canonical
+        assert tool.description == reply['description']
+        assert tool.inputSchema == reply['inputSchema']
 
 
 @pytest.mark.unit
-def test_discover_mcp_tools_with_fake_server(monkeypatch):
-    """Test discovery of tools from a fake MCP server."""
-    # Mock the MCPClient
-    class FakeClient:
-        def __init__(self, config):
-            self.config = config
-
-        def list_tools(self, server_name):
-            if server_name == "test-server":
-                return [
-                    {"name": "read", "description": "Read a file"},
-                    {"name": "write", "description": "Write to a file"},
-                    {"name": "list", "description": "List directory contents"},
-                ]
-            return []
-
-    import jarvis.tools.registry as registry_mod
-    monkeypatch.setattr(registry_mod, "MCPClient", FakeClient)
-
-    mcps_config = {
-        "test-server": {
-            "command": "fake-cmd",
-            "args": ["--test"]
-        }
-    }
-
-    result, errors = discover_mcp_tools(mcps_config)
-
-    # Should create tools with server__toolname format
-    expected_tools = {
-        "test-server__read",
-        "test-server__write",
-        "test-server__list"
-    }
-
-    assert set(result.keys()) == expected_tools
-
-    # Check tool spec properties
-    read_tool = result["test-server__read"]
-    assert read_tool.name == "test-server__read"
-    assert "Read a file" in read_tool.description
-
-
-@pytest.mark.unit
-def test_discover_mcp_tools_handles_server_errors(monkeypatch):
-    """Test that discovery continues even if one server fails."""
-    class FakeClient:
-        def __init__(self, config):
-            self.config = config
-
-        def list_tools(self, server_name):
-            if server_name == "good-server":
-                return [{"name": "tool1", "description": "Good tool"}]
-            elif server_name == "bad-server":
-                raise Exception("Server failed")
-            return []
-
-    import jarvis.tools.registry as registry_mod
-    monkeypatch.setattr(registry_mod, "MCPClient", FakeClient)
-
-    mcps_config = {
-        "good-server": {"command": "good"},
-        "bad-server": {"command": "bad"}
-    }
-
-    result, errors = discover_mcp_tools(mcps_config)
-
-    # Should still get tools from the good server
-    assert "good-server__tool1" in result
-    assert len(result) == 1
-
-    # Should report the error for the bad server
-    assert "bad-server" in errors
-    assert "Server failed" in errors["bad-server"]
-
-
-@pytest.mark.unit
-def test_discover_mcp_tools_returns_empty_errors_on_success(monkeypatch):
-    """Test that successful discovery returns empty errors dict."""
-    class FakeClient:
-        def __init__(self, config):
-            self.config = config
-
-        def list_tools(self, server_name):
-            return [{"name": "tool1", "description": "A tool"}]
-
-    import jarvis.tools.registry as registry_mod
-    monkeypatch.setattr(registry_mod, "MCPClient", FakeClient)
-
-    mcps_config = {"server": {"command": "cmd"}}
-    result, errors = discover_mcp_tools(mcps_config)
-
-    assert len(result) == 1
-    assert errors == {}
+def test_discover_mcp_tools_handles_server_errors(discover_servers):
+    error = RuntimeError('Server failed')
+    tools, errors = discover_servers({
+        'good-server': [{'name': 'working_tool', 'description': 'Good tool'}],
+        'bad-server': error,
+        'empty-server': [],
+    })
+    assert set(tools) == {'good-server__working_tool'}
+    assert errors == {'bad-server': str(error)}
 
 
 @pytest.mark.unit
 def test_generate_tools_description_includes_mcp_tools():
-    """Test that MCP tools are included in the tools description."""
-    from jarvis.tools.registry import ToolSpec
-
-    mcp_tools = {
-            "server__read": ToolSpec(
-                name="server__read",
-                description="Read a file from the server",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "File path to read"
-                        }
-                    },
-                    "required": ["path"]
-                }
-            )
-        }
-
-    allowed_tools = ["server__read", "screenshot"]
-    description = generate_tools_description(allowed_tools, mcp_tools)
-
-    assert "server__read" in description
-    assert "Read a file from the server" in description
-    assert "screenshot" in description  # Should still include builtin tools
+    tools = [
+        registry.ToolSpec(name='server__read', description='Read a file from the server',
+                          inputSchema={'type': 'object', 'properties': {
+                              'path': {'type': 'string', 'description': 'File path to read'}},
+                              'required': ['path']}),
+        registry.ToolSpec(name='other-server__write', description='Write to the second server',
+                          inputSchema={'type': 'object', 'properties': {}}),
+    ]
+    description = generate_tools_description([tool.name for tool in tools] + ['screenshot'],
+                                            {tool.name: tool for tool in tools})
+    for tool in tools:
+        assert tool.name in description
+        assert tool.description in description
+    assert 'screenshot' in description
 
 
 @pytest.mark.unit

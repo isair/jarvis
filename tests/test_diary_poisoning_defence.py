@@ -134,10 +134,7 @@ class TestSummariserForbidsDeflectionNarration:
         )
 
     def test_prompt_forbids_welding_unrelated_topics(self):
-        """Unrelated topics must not be welded into one clause, as in the
-        Possessor/Jarvis summary where a dangling appositive attached one
-        topic's facts to the other.
-        """
+        """Unrelated topics retain separate facts without ambiguous appositives."""
         lowered = self._capture_system_prompt().lower()
 
         assert any(phrase in lowered for phrase in (

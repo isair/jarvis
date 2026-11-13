@@ -1,6 +1,8 @@
 """Downloads cannot take down the listener or admit incomplete model files."""
 import os
 import time
+from threading import Thread
+from unittest.mock import MagicMock
 from pathlib import Path
 
 import pytest
@@ -182,21 +184,38 @@ def test_local_directory_is_available_with_no_worker(tmp_path, monkeypatch):
     assert model_download.prepare_faster_whisper_model(str(model)) == str(model)
 
 
+@pytest.fixture
+def retry_listener(monkeypatch, no_network):
+    listener, module = listener_for_loading(monkeypatch)
+    clock = MagicMock(wraps=time)
+    clock.sleep.return_value = None
+    monkeypatch.setattr(module, 'time', clock)
+    return listener, module, clock.sleep
+
+
 @pytest.mark.parametrize('category', ['rate_limit', 'incomplete_download'])
-def test_retryable_preparation_recovers_before_listener_can_decode(tmp_path, monkeypatch, category):
+@pytest.mark.parametrize('background_wait', [False, True])
+def test_retryable_preparation_recovers_before_listener_can_decode(tmp_path, monkeypatch, retry_listener, category, background_wait):
     import numpy as np
     from types import SimpleNamespace
-    listener, module = listener_for_loading(monkeypatch)
+    listener, module, pause = retry_listener
     ready = str(complete_model(tmp_path / 'ready'))
     detail = 'remote quota exhausted' if category == 'rate_limit' else 'required files missing'
     results = iter([model_download.ModelDownloadError(category, detail), ready])
+    observed = []
     def prepare(name):
         result = next(results)
         if isinstance(result, Exception):
             raise result
+        if background_wait:
+            before = list(pause.call_args_list)
+            worker = Thread(target=lambda: time.sleep(0.001))
+            worker.start()
+            worker.join(timeout=5)
+            assert not worker.is_alive()
+            observed.append((before, list(pause.call_args_list)))
         return result
     monkeypatch.setattr(model_download, 'prepare_faster_whisper_model', prepare)
-    monkeypatch.setattr(module.time, 'sleep', lambda seconds: None)
     def load(path, **options):
         assert path == ready
         assert options['local_files_only']
@@ -207,6 +226,9 @@ def test_retryable_preparation_recovers_before_listener_can_decode(tmp_path, mon
     monkeypatch.setattr(module, 'WhisperModel', load)
     listener.run()
     assert listener._transcribe_audio(np.zeros(16000)) == ('speech after retry', 'en', ())
+    if background_wait:
+        assert observed
+        assert all(after == before for before, after in observed), 'An unrelated wait entered listener retry backoff'
 
 
 def test_partial_cache_fallback_remains_retryable(tmp_path, monkeypatch):
@@ -233,6 +255,34 @@ def test_partial_cache_fallback_remains_retryable(tmp_path, monkeypatch):
     connection = Result()
     model_download._download_worker(connection, 'small')
     assert connection.value[0:2] == ('error', 'incomplete_download')
+
+
+@pytest.mark.parametrize('cached', [True, False])
+@pytest.mark.parametrize('failure', ['rate_limit', 'network'])
+def test_download_failure_uses_complete_cache_or_preserves_cause(tmp_path, monkeypatch, cached, failure):
+    import requests
+    import huggingface_hub
+    from huggingface_hub.utils import HfHubHTTPError, LocalEntryNotFoundError
+
+    ready = complete_model(tmp_path / 'cached')
+    response = requests.Response()
+    response.status_code = 429
+    error = (HfHubHTTPError('remote request rejected', response=response)
+             if failure == 'rate_limit' else requests.ConnectionError('offline'))
+
+    def snapshot(repo_id, **kwargs):
+        if not kwargs.get('local_files_only'):
+            raise error
+        if cached:
+            return str(ready)
+        raise LocalEntryNotFoundError('no cached model')
+
+    monkeypatch.setattr(huggingface_hub, 'snapshot_download', snapshot)
+    connection = MagicMock()
+    model_download._download_worker(connection, 'small')
+    outcome = connection.send.call_args.args[0]
+    assert outcome == (('ready', str(ready), '') if cached else
+                       ('error', failure, 'HTTP 429' if failure == 'rate_limit' else 'ConnectionError'))
 
 
 def test_hub_metadata_fallback_to_partial_cache_remains_retryable(tmp_path, monkeypatch):
@@ -264,9 +314,10 @@ def test_hub_metadata_fallback_to_partial_cache_remains_retryable(tmp_path, monk
     assert connection.value[0:2] == ('error', 'incomplete_download')
 
 
-@pytest.mark.parametrize('category', ['worker_exit', 'timeout', 'download'])
-def test_retry_stops_when_preparation_becomes_non_retryable(monkeypatch, capsys, category):
-    listener, module = listener_for_loading(monkeypatch)
+@pytest.mark.parametrize('category', ['worker_exit', 'timeout', 'download', 'disk_space', 'cache_access',
+                                     'certificate', 'network'])
+def test_retry_stops_when_preparation_becomes_non_retryable(monkeypatch, capsys, retry_listener, category):
+    listener, module, _pause = retry_listener
     outcomes = iter([model_download.ModelDownloadError('incomplete_download', 'partial cache'),
                      model_download.ModelDownloadError(category, 'terminal preparation failure')])
     def prepare(name):
@@ -275,7 +326,6 @@ def test_retry_stops_when_preparation_becomes_non_retryable(monkeypatch, capsys,
         except StopIteration:
             pytest.fail('Terminal preparation failures must stop further download attempts')
     monkeypatch.setattr(model_download, 'prepare_faster_whisper_model', prepare)
-    monkeypatch.setattr(module.time, 'sleep', lambda seconds: None)
     def forbidden_load(*args, **kwargs):
         pytest.fail('A failed preparation cannot reach the model constructor')
     monkeypatch.setattr(module, 'WhisperModel', forbidden_load)
@@ -286,6 +336,7 @@ def test_retry_stops_when_preparation_becomes_non_retryable(monkeypatch, capsys,
 
 
 def test_cache_recovery_stops_after_download_child_failure(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr("huggingface_hub.constants.HF_HUB_CACHE", str(tmp_path))
     listener, module = listener_for_loading(monkeypatch)
     snapshot = complete_model(tmp_path / 'models--Test--whisper' / 'snapshots' / 'revision')
     outcomes = iter([str(snapshot), model_download.ModelDownloadError('worker_exit', 'child aborted')])
@@ -304,3 +355,22 @@ def test_cache_recovery_stops_after_download_child_failure(tmp_path, monkeypatch
     listener.run()
     assert 'child aborted' in capsys.readouterr().out
     assert not snapshot.exists()
+
+
+@pytest.mark.parametrize('category', ['timeout', 'worker_exit'])
+def test_terminal_download_failure_explains_retained_cache_and_recovery(monkeypatch, capsys, category):
+    def no_cache(*args, **kwargs):
+        raise FileNotFoundError('fixture has no cached model')
+    monkeypatch.setattr('faster_whisper.utils.download_model', no_cache)
+    def fail_worker(*args):
+        raise model_download.ModelDownloadError(category, 'fixture failure')
+    monkeypatch.setattr(model_download, '_run_download_worker', fail_worker)
+    with pytest.raises(model_download.ModelDownloadError) as failure:
+        model_download.prepare_faster_whisper_model('small')
+    assert failure.value.category == category
+    output = capsys.readouterr().out.lower()
+    assert 'cached files' in output
+    assert 'restart jarvis' in output
+    assert 'resume' in output
+    if category == 'timeout':
+        assert 'smaller' in output and 'settings' in output

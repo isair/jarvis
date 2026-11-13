@@ -22,11 +22,15 @@ from urllib.parse import urlsplit
 
 import requests
 
+from desktop_app.whisper_models import get_whisper_vram_mb, wizard_model_options
+from jarvis.llm.model_names import missing_ollama_models
+from jarvis.listening import whisper_capabilities
 from jarvis.debug import debug_log
-from jarvis.config import SUPPORTED_CHAT_MODELS, DEFAULT_CHAT_MODEL
+from jarvis.config import SUPPORTED_CHAT_MODELS, DEFAULT_CHAT_MODEL, DEFAULT_FAST_MODEL, SUPPORTED_FAST_MODEL_IDS, DEFAULT_EMBEDDING_MODEL
 from jarvis.utils.vram import (
     detect_total_vram_mb,
     get_recommended_model_id,
+    get_recommended_model_pair,
     required_vram_mb,
 )
 
@@ -92,7 +96,7 @@ def check_mlx_whisper_status() -> MLXWhisperStatus:
 
 
 # Import config early (no PyQt6 dependency) - needed for detection functions
-from jarvis.config import load_settings, get_default_config, default_config_path
+from jarvis.config import load_settings, get_default_config, get_config_path
 
 
 class SetupStatus(Enum):
@@ -213,18 +217,16 @@ def get_required_models() -> List[str]:
         # real-time passes, but is only an Ollama pull when the chat
         # provider is Ollama (config load resolves it per provider).
         if llm_provider != "openai_compatible":
-            fast_model = getattr(cfg, "fast_model", "gemma4:e2b")
+            fast_model = getattr(cfg, "fast_model", DEFAULT_FAST_MODEL)
             if fast_model and fast_model not in models:
                 models.append(fast_model)
 
         return models
     except Exception:
         # Default models if config can't be loaded
-        # Note: DEFAULT_CHAT_MODEL is gemma4:e2b which is also the intent judge model,
-        # so the default list is effectively just 2 unique models
-        defaults = [DEFAULT_CHAT_MODEL, "nomic-embed-text"]
-        if "gemma4:e2b" not in defaults:
-            defaults.append("gemma4:e2b")
+        defaults = [DEFAULT_CHAT_MODEL, DEFAULT_EMBEDDING_MODEL]
+        if DEFAULT_FAST_MODEL not in defaults:
+            defaults.append(DEFAULT_FAST_MODEL)
         return defaults
 
 
@@ -305,17 +307,9 @@ def check_ollama_status() -> OllamaStatus:
         required = get_required_models()
         installed = check_installed_models(cli_path)
 
-        # Normalize model names (remove :latest suffix for comparison)
-        def normalize_model(name: str) -> str:
-            return name[:-len(":latest")] if name.endswith(":latest") else name
-
-        installed_normalized = {normalize_model(m) for m in installed}
-
         status.installed_models = installed
-        status.missing_models = [
-            m for m in required
-            if normalize_model(m) not in installed_normalized and m not in installed
-        ]
+        status.missing_models = missing_ollama_models(required, installed)
+
     else:
         status.missing_models = get_required_models()
 
@@ -552,6 +546,10 @@ class SetupWizard(QWizard):
         super().__init__(parent)
         self.setWindowTitle("🚀 Jarvis Setup Wizard")
         self.setWizardStyle(QWizard.WizardStyle.ModernStyle)
+        # Supply artwork so Qt does not discover images from system applications.
+        background = QPixmap(1, 1)
+        background.fill(Qt.GlobalColor.transparent)
+        self.setPixmap(QWizard.WizardPixmap.BackgroundPixmap, background)
         available = self.screen().availableGeometry()
         self.setMinimumSize(min(700, available.width() - 40),
                             min(500, available.height() - 80))
@@ -1001,8 +999,8 @@ class ProviderChoicePage(ScrollableWizardPage):
 
     def _preselect_from_config(self):
         try:
-            from jarvis.config import default_config_path, _load_json
-            config = _load_json(default_config_path()) or {}
+            from jarvis.config import get_config_path, _load_json
+            config = _load_json(get_config_path()) or {}
             provider = str(config.get("llm_provider", "ollama") or "ollama")
         except Exception:
             provider = "ollama"
@@ -1024,8 +1022,8 @@ class ProviderChoicePage(ScrollableWizardPage):
         authoritative again — no stale base URL / key / model is left
         pointing at a former remote server."""
         try:
-            from jarvis.config import default_config_path, _load_json, _save_json
-            config_path = default_config_path()
+            from jarvis.config import get_config_path, _load_json, _save_json
+            config_path = get_config_path()
             config = _load_json(config_path) or {}
 
             if self._selected == "openai_compatible":
@@ -1373,7 +1371,7 @@ class OpenAICompatiblePage(ScrollableWizardPage):
     @staticmethod
     def _known_memory_mb(model_id: str) -> Optional[int]:
         """Known local model estimates; unknown server ids stay editable."""
-        if model_id == "nomic-embed-text":
+        if model_id == DEFAULT_EMBEDDING_MODEL:
             return 1024
         return required_vram_mb(model_id)
 
@@ -1384,10 +1382,10 @@ class OpenAICompatiblePage(ScrollableWizardPage):
         except Exception:
             settings = None
         whisper_id = getattr(settings, "whisper_model", "small") or "small"
-        self._whisper_memory_mb = WhisperSetupPage.get_whisper_vram_mb(whisper_id)
+        self._whisper_memory_mb = get_whisper_vram_mb(whisper_id)
         self._ollama_embed_model_id = (
-            getattr(settings, "ollama_embed_model", "nomic-embed-text")
-            or "nomic-embed-text"
+            getattr(settings, "ollama_embed_model", DEFAULT_EMBEDDING_MODEL)
+            or DEFAULT_EMBEDDING_MODEL
         )
         self._ollama_embed_base_url = (
             getattr(settings, "ollama_base_url", "http://localhost:11434")
@@ -1674,8 +1672,8 @@ class OpenAICompatiblePage(ScrollableWizardPage):
         user's values. With no saved URL, default to the common LM Studio
         address and kick off auto-discovery of running local servers."""
         try:
-            from jarvis.config import default_config_path, _load_json
-            config = _load_json(default_config_path()) or {}
+            from jarvis.config import get_config_path, _load_json
+            config = _load_json(get_config_path()) or {}
         except Exception:
             config = {}
         saved_url = str(config.get("llm_base_url", "") or "")
@@ -1746,8 +1744,8 @@ class OpenAICompatiblePage(ScrollableWizardPage):
         if not self._is_ready(base_url, chat_model):
             return False
         try:
-            from jarvis.config import default_config_path, _load_json, _save_json
-            config_path = default_config_path()
+            from jarvis.config import get_config_path, _load_json, _save_json
+            config_path = get_config_path()
             config = _load_json(config_path) or {}
 
             config["llm_provider"] = "openai_compatible"
@@ -2138,36 +2136,33 @@ class ModelsPage(ScrollableWizardPage):
 
     MODEL_OPTIONS = SUPPORTED_CHAT_MODELS
     _ALL_MODELS = MODEL_OPTIONS
-    _FAST_MODEL_IDS = ["qwen3.5:0.8b", "gemma4:e2b"]
+    _FAST_MODEL_IDS = SUPPORTED_FAST_MODEL_IDS
 
     # VRAM overhead for always-running companion models (MB).
     # nomic-embed-text: ~1 GB for ~1.5K dim semantic search.
-    # Whisper small: ~2 GB (the wizard balance default).
     _EMBED_VRAM_MB = 1024
-    _WHISPER_VRAM_MB = 2048
 
     def _whisper_vram_mb(self) -> int:
         """VRAM in MB for the currently-configured whisper model.
 
-        Reads the saved whisper model from config (set by WhisperSetupPage
-        which now runs before this page).  Falls back to ``_WHISPER_VRAM_MB``
-        (2048 MB = whisper small) when unavailable.
+        Reads the saved Whisper model from config and falls back to the
+        catalogue's small-model estimate when settings are unavailable.
         """
         try:
             cfg = load_settings()
             model_id = getattr(cfg, "whisper_model", None)
             if model_id:
-                return WhisperSetupPage.get_whisper_vram_mb(model_id)
+                return get_whisper_vram_mb(model_id)
         except Exception:
             pass
-        return self._WHISPER_VRAM_MB
+        return get_whisper_vram_mb("small")
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setTitle("")
         self._linked = False
         self._chat_model = DEFAULT_CHAT_MODEL
-        self._fast_model = "gemma4:e2b"
+        self._fast_model = DEFAULT_FAST_MODEL
         self._detected_vram_mb = None
 
         layout = QVBoxLayout()
@@ -2323,10 +2318,11 @@ class ModelsPage(ScrollableWizardPage):
             # leaves room for embeddings + whisper alongside the chat model.
             overhead = self._EMBED_VRAM_MB + self._whisper_vram_mb()
             usable_mb = self._detected_vram_mb - overhead
-            rec = get_recommended_model_id(max(usable_mb, 0))
+            rec, fast = get_recommended_model_pair(max(usable_mb, 0))
             debug_log(f"Chat model memory recommendation: {rec} (available {usable_mb} MB)", "setup")
             if rec in self._ALL_MODELS:
                 self._chat_model = rec
+                self._fast_model = fast
                 self._constrain_fast_model()
                 self._sync_combo_states()
         self._refresh_vram_display()
@@ -2430,12 +2426,12 @@ class ModelsPage(ScrollableWizardPage):
             dg = self._detected_vram_mb / 1024
             self._vram_label.setText(
                 f"Total VRAM Required: {tg:.1f} GB    "
-                f"Your GPU: {dg:.1f} GB"
+                f"Available budget: {dg:.1f} GB"
             )
             if total > self._detected_vram_mb:
                 sg = (total - self._detected_vram_mb) / 1024
                 self._vram_detail.setText(
-                    f"Your GPU has {dg:.1f} GB VRAM but the selected "
+                    f"The available model budget is {dg:.1f} GB but the selected "
                     f"models need {tg:.1f} GB ({sg:.1f} GB over). "
                     "Switch to smaller models or use CPU fallback."
                 )
@@ -2451,7 +2447,7 @@ class ModelsPage(ScrollableWizardPage):
 
     def _update_models_display(self):
         wiz = self.wizard()
-        em = "nomic-embed-text"
+        em = DEFAULT_EMBEDDING_MODEL
         try:
             em = load_settings().ollama_embed_model
         except Exception:
@@ -2464,11 +2460,8 @@ class ModelsPage(ScrollableWizardPage):
         installed = []
         if isinstance(wiz, SetupWizard) and wiz.ollama_status:
             installed = wiz.ollama_status.installed_models
-        def norm(n):
-            return n[:-(len(":latest"))] if n.endswith(":latest") else n
-        inorm = {norm(m) for m in installed}
-        self._missing_models = [m for m in req if norm(m) not in inorm and m not in installed]
-        rinst = [m for m in req if norm(m) in inorm or m in installed]
+        self._missing_models = missing_ollama_models(req, installed)
+        rinst = [m for m in req if m not in self._missing_models]
         if self._missing_models:
             self.models_label.setText(
                 f"Missing: {', '.join('X ' + m for m in self._missing_models)}"
@@ -2487,7 +2480,7 @@ class ModelsPage(ScrollableWizardPage):
     def _save_model_to_config(self):
         try:
             from jarvis.config import _load_json, _save_json
-            cp = default_config_path()
+            cp = get_config_path()
             cp.parent.mkdir(parents=True, exist_ok=True)
             cfg = _load_json(cp) or {}
             cfg["ollama_chat_model"] = self._chat_model
@@ -2498,20 +2491,23 @@ class ModelsPage(ScrollableWizardPage):
 
     def initializePage(self):
         cc = DEFAULT_CHAT_MODEL
-        fc = "gemma4:e2b"
+        fc = DEFAULT_FAST_MODEL
         try:
             c = load_settings()
             cc = c.ollama_chat_model
-            fc = getattr(c, "fast_model", "gemma4:e2b")
+            fc = getattr(c, "fast_model", DEFAULT_FAST_MODEL)
         except Exception:
             pass
         self._chat_model = cc if cc in self._ALL_MODELS else DEFAULT_CHAT_MODEL
-        self._fast_model = fc if fc in self._ALL_MODELS else "gemma4:e2b"
-        if self._detected_vram_mb is not None and cc == DEFAULT_CHAT_MODEL:
+        self._fast_model = fc if fc in self._ALL_MODELS else DEFAULT_FAST_MODEL
+        from jarvis.config import _load_json, get_config_path
+        saved = _load_json(get_config_path())
+        if self._detected_vram_mb is not None and cc == DEFAULT_CHAT_MODEL and "ollama_chat_model" not in saved:
             usable_mb = self._detected_vram_mb - self._EMBED_VRAM_MB - self._whisper_vram_mb()
-            if usable_mb < (required_vram_mb(DEFAULT_CHAT_MODEL) or 0):
-                self._chat_model = get_recommended_model_id(max(usable_mb, 0))
-                debug_log(f"Default chat memory recommendation: {self._chat_model}", "setup")
+            self._chat_model, recommended_fast = get_recommended_model_pair(max(usable_mb, 0))
+            if "fast_model" not in saved:
+                self._fast_model = recommended_fast
+            debug_log(f"Default chat memory recommendation: {self._chat_model}", "setup")
         self._constrain_fast_model()
         # Default to unlinked — separate fast model is the recommended layout
         # even when both happen to be the same model ID.
@@ -2598,16 +2594,6 @@ class ModelsPage(ScrollableWizardPage):
         return super().nextId()
 
 
-def _is_faster_whisper_turbo_supported() -> bool:
-    """Check if the installed faster-whisper supports the large-v3-turbo model."""
-    try:
-        import faster_whisper
-        from packaging.version import Version
-        return Version(faster_whisper.__version__) >= Version("1.1.0")
-    except Exception:
-        return False
-
-
 def _get_effective_whisper_backend(
     apple_silicon: bool,
     backend_preference: Optional[str] = None,
@@ -2640,45 +2626,6 @@ def _get_effective_whisper_backend(
 
 class WhisperSetupPage(ScrollableWizardPage):
     """Page for setting up Whisper speech recognition (all platforms)."""
-
-    # Multilingual models - support ~99 languages
-    # File sizes from HuggingFace (Systran/faster-whisper-*), VRAM from OpenAI
-    # (id, name, file_size, vram_required, description)
-    WHISPER_MODEL_OPTIONS = [
-        ("tiny", "Tiny", "~75MB", "~1GB VRAM", "Fastest, lower accuracy"),
-        ("base", "Base", "~140MB", "~1GB VRAM", "Fast, decent accuracy"),
-        ("small", "Small", "~465MB", "~2GB VRAM", "Good balance of speed and accuracy"),
-        ("medium", "Medium", "~1.5GB", "~5GB VRAM", "Best balance (Recommended)"),
-        ("large-v3-turbo", "Large V3 Turbo", "~1.5GB", "~6GB VRAM", "Best accuracy, needs more VRAM"),
-    ]
-
-    # English-only models - optimised for English, slightly better accuracy
-    # Note: large/turbo models don't have .en variants
-    WHISPER_MODEL_OPTIONS_EN = [
-        ("tiny.en", "Tiny", "~75MB", "~1GB VRAM", "Fastest, English optimised"),
-        ("base.en", "Base", "~140MB", "~1GB VRAM", "Fast, English optimised"),
-        ("small.en", "Small", "~465MB", "~2GB VRAM", "Good balance of speed and accuracy"),
-        ("medium.en", "Medium", "~1.5GB", "~5GB VRAM", "Best balance (Recommended)"),
-    ]
-
-    # VRAM in MB per whisper model ID (used by ModelsPage for total VRAM budget).
-    _WHISPER_VRAM_MAP: dict[str, int] = {
-        "tiny": 1024,
-        "base": 1024,
-        "small": 2048,
-        "medium": 5120,
-        "large-v3-turbo": 6144,
-    }
-
-    @staticmethod
-    def get_whisper_vram_mb(model_id: str) -> int:
-        """Return VRAM in MB for a given whisper model ID.
-
-        Strips the ``.en`` suffix for lookup so ``small.en`` maps to the same
-        VRAM as ``small``.  Returns 2048 (small default) for unknown IDs.
-        """
-        base = model_id.replace(".en", "")
-        return WhisperSetupPage._WHISPER_VRAM_MAP.get(base, 2048)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -2948,9 +2895,9 @@ class WhisperSetupPage(ScrollableWizardPage):
         load it.  MLX supports turbo on Apple Silicon; faster-whisper needs a
         version that includes the model.
         """
-        options = self.WHISPER_MODEL_OPTIONS_EN if self._is_english_only else self.WHISPER_MODEL_OPTIONS
+        options = wizard_model_options(self._is_english_only)
         backend = _get_effective_whisper_backend(self._is_apple_silicon)
-        if backend != "mlx" and not _is_faster_whisper_turbo_supported():
+        if backend != "mlx" and not whisper_capabilities.is_faster_whisper_turbo_supported():
             options = [opt for opt in options if opt[0] != "large-v3-turbo"]
         return options
 
@@ -2983,19 +2930,15 @@ class WhisperSetupPage(ScrollableWizardPage):
         options = self._get_current_model_options()
         n = len(options)
 
-        # Clear existing labels.  The labels are already properly parented
-        # to their container widget, and takeAt() removes the layout's
-        # reference — scheduling deleteLater() is enough.  Do NOT call
-        # setParent(None) here: on macOS that promotes each QLabel to a
-        # top-level widget mid-transition, which triggers a native
-        # NSWindow creation and can SIGABRT inside QWizard.exec().  On
-        # Windows the same reparent creates a native HWND and fast-fails
-        # (0xc0000409) inside Qt6Core.dll — see dictation_history.py
-        # where the same mistake crashed the history window.
+        # Hide removed labels immediately: deferred deletion can wait until
+        # the wizard's nested event loop returns. Keep their container parent
+        # until deletion; setParent(None) creates native top-level windows
+        # during page transitions and can crash on macOS and Windows.
         while self._labels_layout.count():
             item = self._labels_layout.takeAt(0)
             widget = item.widget()
             if widget is not None:
+                widget.hide()
                 widget.deleteLater()
             # Spacers are automatically cleaned up when the item goes out of scope.
 
@@ -3003,6 +2946,7 @@ class WhisperSetupPage(ScrollableWizardPage):
             item = self._size_layout.takeAt(0)
             widget = item.widget()
             if widget is not None:
+                widget.hide()
                 widget.deleteLater()
 
         # Add labels aligned with slider tick positions
@@ -3123,7 +3067,7 @@ class WhisperSetupPage(ScrollableWizardPage):
         """Save the selected whisper model to config file."""
         try:
             from jarvis.config import _load_json, _save_json
-            config_path = default_config_path()
+            config_path = get_config_path()
             config_path.parent.mkdir(parents=True, exist_ok=True)
 
             config = _load_json(config_path) or {}
@@ -3567,7 +3511,7 @@ class LocationPage(ScrollableWizardPage):
         try:
             from jarvis.config import _load_json, _save_json
 
-            config_path = default_config_path()
+            config_path = get_config_path()
             config_path.parent.mkdir(parents=True, exist_ok=True)
 
             config = _load_json(config_path) or {}
@@ -3726,8 +3670,8 @@ class DictationPage(ScrollableWizardPage):
     def _load_current_filler_removal(self) -> bool:
         """Load the current filler removal setting from config, defaulting to False."""
         try:
-            from jarvis.config import default_config_path, _load_json
-            config = _load_json(default_config_path())
+            from jarvis.config import get_config_path, _load_json
+            config = _load_json(get_config_path())
             if config and "dictation_filler_removal" in config:
                 return bool(config["dictation_filler_removal"])
             return False
@@ -3737,8 +3681,8 @@ class DictationPage(ScrollableWizardPage):
     def _load_current_hotkey(self) -> str:
         """Load the current hotkey from config, or platform default."""
         try:
-            from jarvis.config import default_config_path, _load_json, _default_dictation_hotkey
-            config = _load_json(default_config_path())
+            from jarvis.config import get_config_path, _load_json, _default_dictation_hotkey
+            config = _load_json(get_config_path())
             if config and "dictation_hotkey" in config:
                 return config["dictation_hotkey"]
             return _default_dictation_hotkey()
@@ -3750,8 +3694,8 @@ class DictationPage(ScrollableWizardPage):
     def validatePage(self) -> bool:
         """Save dictation settings to config before leaving page."""
         try:
-            from jarvis.config import default_config_path, _load_json, _save_json
-            config_path = default_config_path()
+            from jarvis.config import get_config_path, _load_json, _save_json
+            config_path = get_config_path()
             config = _load_json(config_path) or {}
 
             enabled = self._enabled_check.isChecked()
@@ -3882,7 +3826,7 @@ class MCPPage(ScrollableWizardPage):
         """Check if Node.js (npx) is available on the system."""
         try:
             from jarvis.tools.external.mcp_client import _resolve_command
-            _resolve_command("npx")
+            _resolve_command("npx", os.environ.get("PATH", ""))
             return True
         except (FileNotFoundError, Exception):
             return False
@@ -3891,8 +3835,8 @@ class MCPPage(ScrollableWizardPage):
     def _is_already_configured(name: str) -> bool:
         """Check if an MCP server is already in the user's config."""
         try:
-            from jarvis.config import default_config_path, _load_json
-            config = _load_json(default_config_path())
+            from jarvis.config import get_config_path, _load_json
+            config = _load_json(get_config_path())
             return name in (config.get("mcps") or {})
         except Exception:
             return False
@@ -3900,8 +3844,8 @@ class MCPPage(ScrollableWizardPage):
     def validatePage(self) -> bool:
         """Save selected MCPs to config before leaving page."""
         try:
-            from jarvis.config import default_config_path, _load_json, _save_json
-            config_path = default_config_path()
+            from jarvis.config import get_config_path, _load_json, _save_json
+            config_path = get_config_path()
             config = _load_json(config_path) or {}
 
             mcps = config.get("mcps", {})
@@ -4046,8 +3990,8 @@ class SearchProvidersPage(ScrollableWizardPage):
     @staticmethod
     def _load_current_brave_key() -> str:
         try:
-            from jarvis.config import default_config_path, _load_json
-            config = _load_json(default_config_path())
+            from jarvis.config import get_config_path, _load_json
+            config = _load_json(get_config_path())
             return str(config.get("brave_search_api_key", "") or "")
         except Exception:
             return ""
@@ -4055,8 +3999,8 @@ class SearchProvidersPage(ScrollableWizardPage):
     @staticmethod
     def _load_current_wikipedia_enabled() -> bool:
         try:
-            from jarvis.config import default_config_path, _load_json
-            config = _load_json(default_config_path())
+            from jarvis.config import get_config_path, _load_json
+            config = _load_json(get_config_path())
             # Default True to match config.py's default.
             val = config.get("wikipedia_fallback_enabled", True)
             return bool(val)
@@ -4068,8 +4012,8 @@ class SearchProvidersPage(ScrollableWizardPage):
         values to keep config.json minimal (consistent with the settings
         window's "only non-default values written" invariant)."""
         try:
-            from jarvis.config import default_config_path, _load_json, _save_json
-            config_path = default_config_path()
+            from jarvis.config import get_config_path, _load_json, _save_json
+            config_path = get_config_path()
             config = _load_json(config_path) or {}
 
             brave_key = (self._brave_input.text() or "").strip()

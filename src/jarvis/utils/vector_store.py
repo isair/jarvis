@@ -4,6 +4,7 @@ Falls back to this when sqlite-vss is not available.
 """
 
 import json
+import heapq
 import numpy as np
 from typing import List, Tuple, Optional, Dict, Any
 import sqlite3
@@ -107,9 +108,10 @@ class PythonVectorStore:
                 distance = 1.0 - similarity
                 similarities.append((summary_id, distance))
             
-            # Sort by distance (ascending) and return top k
-            similarities.sort(key=lambda x: x[1])
-            return similarities[:top_k]
+            # Select only the requested nearest neighbours instead of fully
+            # sorting every stored vector. This keeps the fallback practical
+            # as the diary grows while preserving ascending distance order.
+            return heapq.nsmallest(top_k, similarities, key=lambda x: x[1])
     
     def delete_vector(self, summary_id: int) -> None:
         """Remove a vector from the store."""

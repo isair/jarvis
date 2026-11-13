@@ -35,7 +35,7 @@ def test_planned_file_listing_preserves_recursion_choice(monkeypatch, tmp_path, 
     schema = [{'type': 'function', 'function': {
         'name': tool.name, 'description': tool.description, 'parameters': tool.inputSchema,
     }}]
-    resolved = resolve_next_tool_call(cfg, steps[0], [], schema, timeout_sec=60.0)
+    resolved = resolve_next_tool_call(cfg, steps[0], [], schema, timeout_sec=60.0, original_query=steps[0])
     assert resolved is not None and resolved[0] == tool.name, f'📂 Listing must remain executable: {plan}'
     context = ToolContext(None, cfg, '', query, query, 0, lambda message: None)
     result = tool.run(resolved[1], context)

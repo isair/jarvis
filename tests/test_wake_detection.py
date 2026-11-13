@@ -1,12 +1,11 @@
 """
-Tests for wake word detection and query extraction.
+Tests for wake word and stop command detection.
 """
 
 import pytest
 
 from jarvis.listening.wake_detection import (
     is_wake_word_detected,
-    extract_query_after_wake,
     is_stop_command,
 )
 
@@ -34,37 +33,6 @@ class TestWakeWordDetection:
     def test_fuzzy_below_threshold(self):
         """Completely different word doesn't fuzzy-match."""
         assert is_wake_word_detected("hey banana", "jarvis", [], fuzzy_ratio=0.78) is False
-
-
-@pytest.mark.unit
-class TestExtractQueryAfterWake:
-    """Tests for extract_query_after_wake."""
-
-    def test_extracts_query(self):
-        result = extract_query_after_wake("jarvis what time is it", "jarvis", [])
-        assert result == "what time is it"
-
-    def test_extracts_query_with_alias(self):
-        result = extract_query_after_wake("hey computer what time is it", "jarvis", ["hey computer"])
-        assert result == "what time is it"
-
-    def test_wake_word_only_returns_empty(self):
-        """When only the wake word is said, return empty string (no hardcoded fallback)."""
-        result = extract_query_after_wake("jarvis", "jarvis", [])
-        assert result == ""
-
-    def test_wake_word_with_punctuation_only_returns_empty(self):
-        """Wake word followed by just punctuation returns empty string."""
-        result = extract_query_after_wake("jarvis,", "jarvis", [])
-        assert result == ""
-
-    def test_empty_text(self):
-        result = extract_query_after_wake("", "jarvis", [])
-        assert result == ""
-
-    def test_strips_leading_punctuation(self):
-        result = extract_query_after_wake("jarvis, tell me a joke", "jarvis", [])
-        assert result == "tell me a joke"
 
 
 @pytest.mark.unit

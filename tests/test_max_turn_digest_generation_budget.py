@@ -2,7 +2,6 @@
 from unittest.mock import MagicMock
 
 import pytest
-import requests
 
 from evals.helpers import voice_config
 from jarvis.reply.enrichment import digest_loop_for_max_turns
@@ -33,6 +32,6 @@ def test_max_turn_digest_returns_complete_caveated_reply(monkeypatch, provider, 
                                      'choices': [{'message': {'content': content}}]}
         return response
 
-    monkeypatch.setattr(requests, 'post', post)
+    monkeypatch.setattr('jarvis.llm.http.post', post)
     messages = [{'role': 'tool', 'name': 'getWeather', 'content': 'London: 12 degrees with rain.'}]
     assert digest_loop_for_max_turns('Check London weather and tomorrow.', messages, cfg) == reply

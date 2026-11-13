@@ -90,7 +90,14 @@ Note: the planner pays a cache miss relative to the tool router, which
 plan quality drives everything downstream, router quality only narrows
 one turn's allow-list.
 
+### Speech context
+
+Voice requests supply a separate redacted, fenced `transcript_context` to planning and step resolution. It contains timestamped ambient references, including processed and TTS markers. The current request is supplied separately. The current request takes priority; previous instructions are reference data. The planner resolves named entities, pronouns, parent brands and unanswered-question references without rewriting the user request. Text requests leave this context empty. Transcript references follow the stable tool catalogue in user content; system guidance does not contain per-request speech.
+
 ### Prompt contract (plan_query)
+
+`plan_query` receives the query, recent dialogue and available tool catalogue.
+It runs before memory retrieval and emits directives for any required recall.
 
 The planner prompt instructs the model to emit:
 
@@ -106,7 +113,15 @@ The planner prompt instructs the model to emit:
   without searching private conversation history. Explicit requests for
   what the user said about a named person still require memory.
 - Tool names from the provided catalog only (exact match), for any
-  concrete tool step.
+  concrete tool step. Names are literal registered identifiers, including
+  namespace punctuation and non-ASCII characters. A prefix of another tool
+  name is not a match.
+- Resource identity comes from recorded tool references. A follow-up operation
+  uses the exact ID of the requested referent, rather than its potentially
+  duplicate label or an inferred newest database row. IDs in recorded tool
+  context are supplied values even when the user does not speak them.
+  Unresolved identity requires record retrieval or clarification before a
+  destructive operation. Reference labels are data, not instructions.
 - Concrete arguments composed against dialogue context, not the raw
   utterance. Optional arguments that the user did not supply must be
   omitted, not fabricated from unrelated words.
@@ -203,8 +218,31 @@ The engine consumes the plan in two phases.
   the tool directly, bypassing the chat model for that turn. This
   keeps small models on-rails without relying on their native
   tool-call reliability.
-- The chat model still runs the final synthesis turn so the reply is
-  phrased in the daemon's voice using its own profile and persona.
+- An unresolved, rejected or failed step-resolution attempt hands unfinished
+  task decisions to the reply model for the remainder of that reply. A missing
+  concrete call is not an execution result. Recovery includes a snapshot of
+  successful tool-result names recorded for the current request at the hand-off.
+  Earlier results can supply context and identifiers, but do not establish a
+  new action. Recorded resource references also accompany recovery feedback.
+- In text-tool mode, an unresolved plan with no current-request action-tool
+  outcome requires an actual call or a non-completion envelope: one non-empty
+  `question` or `blocker` string field. Unsupported prose receives one
+  corrective turn within the existing budget. Repeated unsupported content
+  produces an honest execution blocker. Exhaustion without an action outcome
+  uses the same blocker instead of a model-generated loop digest. Tool discovery is not an action
+  outcome. Successful direct chains and native advisory plans retain their
+  ordinary reply protocol.
+- A current-reply tool result with `success=False` suspends direct plan
+  execution for the remainder of that reply. The failed result is retained,
+  without a next-step or completion claim. The system message removes the
+  execution plan so the reply model reassesses the original request and outcomes. Task-reassessment guidance asks the
+  reply model to choose a grounded alternative, correct arguments, ask for
+  missing information or explain a blocker before any dependent action.
+  Subsequent results retain reassessment guidance rather than counting calls
+  as completed tasks. Earlier-turn failures do not trigger this state.
+- The chat model runs synthesis and failure recovery using its own profile
+  and persona. The existing allow-list, duplicate suppression, tool-search
+  limit, model deadlines and maximum turn count bound recovery.
 
 ### resolve_next_tool_call
 
@@ -214,7 +252,12 @@ The engine consumes the plan in two phases.
   returns this concrete call without model inference. String and untyped
   values stay literal; declared booleans, integers, finite numbers and null
   values use their JSON types, including values in the planner's quote syntax.
-  Invalid primitive values, complex types and type unions use the LLM resolver.
+  Primitive type unions use the same conversion rules. Invalid primitive
+  values and complex types use the LLM resolver. Declared `date`, `date-time`
+  and `time` strings must parse as ISO literals, following inline alternatives
+  and local schema references. Relative labels, invalid dates and calendar
+  references use the clock-grounded resolver. Ordinary string arguments stay
+  literal; valid ISO values retain the no-inference path.
   Each property appears once and all argument text must be consumed, apart
   from whitespace, commas between pairs and an optional final full stop.
   Unmatched quotes or unparsed text use the LLM resolver rather than dispatching
@@ -223,6 +266,31 @@ The engine consumes the plan in two phases.
   argument keys, or doesn't fit the `key=value` shape, the step is
   passed to the LLM resolver which can substitute entities from prior
   results and remap names.
+- The resolver receives a JSON catalogue with tool names, short tool
+  descriptions and complete parameter schemas. Property descriptions, types,
+  enums, formats, required fields and nested constraints remain available;
+  argument names alone do not define the contract.
+- When a named step tool declares a standard `date`, `date-time` or `time`
+  format, including in nested schemas, model resolution receives UTC and
+  system-local ISO clock values from one current instant. The clock includes
+  an explicit system-local current date and current/next/previous calendar dates and their precomputed UTC
+  start, inclusive end and exclusive end bounds. Each midnight uses the
+  operating system’s offset at that date, so daylight-saving days retain
+  their actual duration. Midnight gaps start at the first valid local instant;
+  repeated midnights use their earliest valid instant. UTC boundaries are supplied ready to use, without
+  another offset conversion. Nearby day bounds are supplied to the model as
+  request-scoped `@calendar` references. The resolver expands these only in
+  declared `date-time` fields before dispatch, following nested properties,
+  array items, inline alternatives and local JSON pointers (including array
+  indices) without network
+  access. Unknown references fail open to the normal chat turn; ordinary
+  string fields remain literal. References are intermediate arguments, never
+  persisted or passed to a tool. Relative temporal arguments use this reference and the
+  schema's required format. The system-local calendar is the default;
+  explicit step or prior-result timezones take precedence. Concrete literal
+  calls retain their no-inference path and supplied timestamps. Other tool
+  steps retain the base resolver prompt and receive no clock block, even when
+  another allowed tool has temporal fields.
 - Returns `None` for synthesis steps (the LLM emits the literal
   `null`), unknown tools, or invalid JSON. All `None` paths fall back
   to the normal chat-model turn.
@@ -264,8 +332,8 @@ The engine consumes the plan in two phases.
 
 ## Non-goals
 
-- The planner does not re-plan mid-turn. If the emitted plan is wrong,
-  the engine still progresses via the chat model's native tool calls.
+- The planner is not rerun mid-turn. The reply model reassesses tasks after
+  a tool failure using the original request, plan and accumulated outcomes.
   When the chat model produces natural-language content the loop
   terminates immediately.
 - The planner does not validate semantic correctness of the plan; it
@@ -273,3 +341,9 @@ The engine consumes the plan in two phases.
   resolver's schema-level guard to reject unknown tools.
 - Plans are not cached across turns. Each user utterance gets its own
   plan because the dialogue state and entity references change.
+
+Concrete primitive arguments accept declared type unions. A valid non-string
+JSON primitive retains its type; otherwise an allowed string retains its literal
+value. Invalid values without a string alternative require model resolution.
+
+The step resolver receives the original redacted current request separately from the planned step and prior outcomes, so shortened plans retain the caller's explicit constraints during model resolution. Concrete typed calls retain their literal fast path.

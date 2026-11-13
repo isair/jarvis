@@ -17,6 +17,8 @@ import json
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("no_network")
+
 try:
     import flask  # noqa: F401
 
@@ -29,15 +31,16 @@ except ImportError:
 @pytest.mark.skipif(not _HAS_FLASK, reason="Flask not available")
 class TestDiaryScrubEndpoint:
     @pytest.fixture(autouse=True)
-    def setup_app(self, tmp_path, monkeypatch):
-        # Import via the same module paths the endpoint itself uses
-        # (no ``src.`` prefix). With both repo-root and ``src/`` on
-        # ``sys.path`` (see ``tests/conftest.py``), ``src.jarvis.x`` and
-        # ``jarvis.x`` resolve to distinct module instances and a
-        # monkeypatch on one does not land on the other.
+    def setup_app(self, tmp_path, monkeypatch, mock_config):
+        # Patch the runtime modules used by the endpoint.
         from desktop_app import memory_viewer
         import jarvis.memory.conversation as cmod
         from jarvis.memory.db import Database
+        import jarvis.config as config
+
+        monkeypatch.setattr(config, "load_settings", lambda: mock_config)
+        # Rewrite and event privacy are independent of optional embeddings.
+        monkeypatch.setattr(cmod, "_embed_text", lambda *args, **kwargs: None)
 
         db_path = str(tmp_path / "test.db")
         # Seed before the endpoint opens its own connection — the
@@ -82,11 +85,14 @@ class TestDiaryScrubEndpoint:
 
         monkeypatch.setattr(cmod, "_direct_llm", fake_rewrite)
 
-        memory_viewer.app.config["TESTING"] = True
+        monkeypatch.setitem(memory_viewer.app.config, "TESTING", True)
         self.client = memory_viewer.app.test_client()
         self.db_path = db_path
         self.seed_db = seed_db
-        yield
+        try:
+            yield
+        finally:
+            seed_db.close()
 
     def _stream(self) -> list[dict]:
         resp = self.client.post("/api/diary/scrub-deflections")

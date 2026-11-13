@@ -5,6 +5,7 @@ through long-term memory enrichment. Model failures remain visible.
 """
 
 from unittest.mock import patch
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -21,7 +22,7 @@ from helpers import (
 
 _DIARY_MANCHESTER = [
     (
-        "2026-04-26",
+        (datetime.now(timezone.utc) - timedelta(days=1)).date().isoformat(),
         "The user mentioned they live in Manchester and prefer celsius "
         "for weather queries.",
     ),
@@ -49,6 +50,7 @@ def _make_runner(capture: ToolCallCapture):
                         "I couldn't auto-detect your location. Please "
                         "tell me which city to check the weather for."
                     ),
+                    missing_context="location",
                 )
             if "manchester" not in location.casefold():
                 return ToolExecutionResult(

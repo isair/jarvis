@@ -1,8 +1,7 @@
 """Provider-agnostic LLM backend interface.
 
-Every supported local LLM runtime (Ollama today; OpenAI-compatible
-servers like LM Studio / oMLX, and Anthropic-compatible servers in
-later PRs) implements this ABC. Callers obtain an instance via
+Ollama and OpenAI-compatible local servers implement this ABC.
+Production callers obtain an instance via
 ``jarvis.llm.get_llm_backend(settings)`` and never construct backends
 directly so the chosen runtime can swap based on user config.
 
@@ -62,6 +61,18 @@ def strip_nonstandard_message_fields(
     return cleaned
 
 
+def response_is_incomplete(data: Dict[str, Any]) -> bool:
+    """Recognise explicit generation limits and unfinished server responses."""
+    if data.get("done") is False or data.get("done_reason") == "length":
+        return True
+    choices = data.get("choices")
+    return bool(
+        isinstance(choices, list) and choices
+        and isinstance(choices[0], dict)
+        and choices[0].get("finish_reason") == "length"
+    )
+
+
 class ToolsNotSupportedError(Exception):
     """Raised when a backend rejects the ``tools`` parameter.
 
@@ -79,7 +90,7 @@ class LLMBackend(ABC):
 
     Implementations are responsible for translating the calls below
     into their native HTTP shape (Ollama ``/api/chat``, OpenAI
-    ``/chat/completions``, Anthropic ``/v1/messages``, etc.) and for
+    ``/chat/completions``) and for
     normalising responses into the formats described per-method.
     """
 
