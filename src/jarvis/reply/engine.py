@@ -53,7 +53,7 @@ from .enrichment import (
 )
 from .prompt_dump import dump_reply_turn, is_enabled as _prompt_dump_enabled, new_session_id
 from .prompts import ModelSize, detect_model_size, get_system_prompts
-from .compound_query import split_compound_query
+from .compound_query import split_compound_query, resolve_uncovered_request
 from .planner import (
     plan_query,
     format_plan_block,
@@ -288,8 +288,9 @@ def _text_tool_call_guidance(allowed_names: list[str]) -> str:
         "the result before reporting completion. "
         "Use further tools only for outcomes that remain unresolved; do not "
         "repeat completed actions or treat a failed action as completed. "
-        "For independent information requests, obtain the missing evidence "
-        "before answering. Do not stop with an offer to continue while an "
+        "For dependent information requests, use facts discovered in earlier "
+        "results as inputs to further tool calls. Obtain every missing requested "
+        "fact before answering. Do not stop with an offer to continue while an "
         "available tool can obtain the missing evidence."
     )
 
@@ -411,7 +412,7 @@ def _extract_text_tool_call(content_field: str, known_names: set):
     Supported shapes:
       1. `tool_calls: [{"id": ..., "function": {"name": ..., "arguments": ...}}]`
       2. ```` ```tool_call\n{"name": ..., "arguments": {...}}\n``` ```` (markdown fence)
-      3. `<toolName>: <key>: <value>` (simplified colon form — only matches when
+      3. `<toolName>: <JSON object>` or `<toolName>: <key>: <value>` (colon form — only matches when
           the extracted name is in ``known_names``, to avoid hijacking prose)
       4. `<toolName>(<json or bare string>)`
 
@@ -544,6 +545,12 @@ def _extract_text_tool_call(content_field: str, known_names: set):
     if m and m.group(1) in known_names:
         name = m.group(1)
         rest = m.group(2).strip()
+        if rest.startswith(("{", "[")):
+            try:
+                decoded, _ = json.JSONDecoder().raw_decode(rest)
+            except (ValueError, TypeError):
+                decoded = None
+            return name, decoded if isinstance(decoded, dict) else None, f"call_{uuid.uuid4().hex[:8]}"
         args: dict = {}
         for pair in re.split(r"[\n,]", rest):
             pair = pair.strip()
@@ -2114,6 +2121,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     max_turns = cfg.agentic_max_turns
     turn = 0
     empty_response_retry_used = False
+    compound_coverage_checks = 0
+    coverage_evidence: list[dict] = []
 
     # Per-reply session id used to group prompt dumps on disk when
     # JARVIS_DUMP_PROMPTS=1 is set. Generated unconditionally so the
@@ -2437,6 +2446,20 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         # Extract tool call if present
         tool_requests, text_tool_request, retained_calls = _extract_structured_tool_calls(llm_resp)
 
+        if (use_text_tools and _compound_sub_questions and not action_plan
+                and not tool_requests and content and compound_coverage_checks < 2):
+            compound_coverage_checks += 1
+            proposed = resolve_uncovered_request(cfg, redacted, coverage_evidence, tools_json_schema or [])
+            if cancel_event is not None and cancel_event.is_set():
+                return None
+            if proposed:
+                content = ''
+                llm_resp = {'message': {'tool_calls': [{
+                    'id': f'coverage_{uuid.uuid4().hex[:8]}',
+                    'type': 'function', 'function': proposed,
+                }]}}
+                tool_requests, text_tool_request, retained_calls = _extract_structured_tool_calls(llm_resp)
+
         # Keep the assistant's content and the identity of its recognised request.
         assistant_msg = {"role": "assistant", "content": content}
 
@@ -2562,6 +2585,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 stable_args = json.dumps(tool_args or {}, sort_keys=True, ensure_ascii=False)
                 signature = (tool_name, stable_args)
             except Exception:
+                stable_args = None
                 signature = (tool_name, "__unserializable_args__")
 
             if signature in recent_tool_outcomes:
@@ -2591,6 +2615,12 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 transcript_context=transcript_context,
                 cancel_event=cancel_event,
             )
+
+            coverage_evidence.append({
+                'name': tool_name, 'arguments': json.loads(stable_args) if stable_args is not None else tool_args,
+                'success': bool(result.success),
+                'result': result.reply_text or result.error_message or '',
+            })
 
             # Handle stop tool - end conversation without response
             if result.reply_text == STOP_SIGNAL:
@@ -2742,18 +2772,18 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                         )
                     elif _compound_sub_questions:
                         remainder_hint = (
-                            "\n\n[Review these advisory request parts against all "
-                            "results so far: "
+                            "\n\n[Original request parts: "
                             + json.dumps(_compound_sub_questions, ensure_ascii=False)
-                            + ". One result may cover multiple parts, and constraints "
-                            "may already be satisfied. Use another tool only for "
-                            "an unresolved outcome. Check every part: which actual "
-                            "result supports it? If a requested fact or action still "
-                            "lacks supporting results and an available tool can resolve "
-                            "it, your next message MUST use tool_calls with that tool. "
-                            "Do not repeat completed actions or assume failed actions "
-                            "succeeded. Reply in prose only when the results cover the "
-                            "request or available tools cannot resolve what remains.]"
+                            + ". Complete every part using evidence from all results. "
+                            "For a requested fact missing from these results, your next "
+                            "message must call an available tool to obtain it. Use names "
+                            "or other facts discovered here as inputs to that call. "
+                            "A result omitting a fact is not evidence that the tool "
+                            "cannot find it. For actions, report completion only after "
+                            "a successful tool result confirms it. A constraint already "
+                            "satisfied by the results needs no action. Do not repeat "
+                            "completed actions. When every part is supported, answer "
+                            "the original request using those results.]"
                         )
                     else:
                         remainder_hint = (

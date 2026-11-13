@@ -256,3 +256,25 @@ def test_simplified_calls_preserve_exact_registered_names(tool_name, call_format
 ])
 def test_simplified_calls_reject_unregistered_names_and_prose(content):
     assert _extract(content, "tool+name__run") == (None, None, None)
+
+
+@pytest.mark.parametrize('arguments', [
+    {'name': 'tea'},
+    {'name': 'tea, soup', 'options': {'keep': ['coffee', 'water']}},
+])
+@pytest.mark.parametrize('tail', ['', '\nThe requested action is complete.'])
+def test_colon_json_call_preserves_argument_fields(arguments, tail):
+    import json
+    from jarvis.reply import engine
+    content = 'ownedTool: ' + json.dumps(arguments) + tail
+    name, parsed, identity = engine._extract_text_tool_call(content, {'ownedTool'})
+    assert name == 'ownedTool' and identity
+    assert parsed == arguments
+
+
+@pytest.mark.parametrize('arguments', ['{"name":', '["tea"]'])
+def test_invalid_colon_json_cannot_execute_as_a_query(arguments):
+    from jarvis.reply import engine
+    name, parsed, identity = engine._extract_text_tool_call('ownedTool: ' + arguments, {'ownedTool'})
+    assert name == 'ownedTool' and identity
+    assert parsed is None

@@ -128,4 +128,4 @@ permit clarification after tool/context resolution has failed.
 
 ### Small-model result completeness
 
-Tool guidance compares requested outcomes with actual results. Missing requested evidence triggers an available tool rather than an offer to continue. One result can cover several parts, and constraints can already be satisfied. Completed actions are not repeated and failed actions are not treated as successful.
+Tool guidance compares requested outcomes with actual results. Missing requested evidence triggers an available tool rather than an offer to continue. One result can cover several parts, and constraints can already be satisfied. Dependent lookups use discovered facts as inputs to further calls. A result omitting a requested fact does not establish that the tool cannot find it. Action claims require a successful confirming tool result. Completed actions are not repeated and failed actions are not treated as successful.

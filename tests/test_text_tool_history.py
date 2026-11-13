@@ -18,6 +18,8 @@ def _response(content, **fields):
 def _text_call(arguments, shape, call_id="source-call", tool="getWeather"):
     if shape == "fence":
         return "```tool_call\n" + json.dumps({"name": tool, "arguments": arguments}) + "\n```"
+    if shape == "colon":
+        return tool + ": " + json.dumps(arguments)
     if shape == "function":
         return tool + "(" + json.dumps(arguments) + ")"
     return "tool_calls: " + json.dumps([{
@@ -85,7 +87,7 @@ def _run(mock_config, db, dialogue_memory, responses, *, followup=False, success
 
 
 @pytest.mark.parametrize("model", ["gemma4:e2b", "gpt-oss:20b"])
-@pytest.mark.parametrize("shape", ["literal", "fence", "function"])
+@pytest.mark.parametrize("shape", ["literal", "fence", "function", "colon"])
 def test_textual_request_and_result_survive_the_next_reply(mock_config, db, dialogue_memory, model, shape):
     mock_config.llm_chat_model = model
     arguments = {"location": "London"}
