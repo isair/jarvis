@@ -1354,8 +1354,9 @@ class VoiceListener(threading.Thread):
         warning = None
         if now - self._last_audio_callback >= 5:
             warning = 'No microphone callbacks in the last 5 seconds'
-        elif (self._input_levels.samples and self._input_levels.mono_peak <= 1e-7
-              and now - self._audio_started >= 10):
+        elif not self._input_levels.samples:
+            warning = 'Microphone callbacks are arriving, but no samples were processed'
+        elif self._input_levels.mono_peak <= 1e-7 and now - self._audio_started >= 10:
             warning = ('Input channels have signal but mono is silent'
                        if self._input_levels.max_channel_peak > 1e-7
                        else 'Microphone is delivering silent samples')

@@ -49,8 +49,8 @@ and sample counts are retained. Normal logs show the first health window and
 subsequent signal-state transitions; voice debug includes each window. At most
 eight channel values are displayed alongside the actual channel count and the
 maximum peak across all channels. No waveform or audio recording is stored.
-Callbacks without processed samples report unavailable levels rather than silent
-audio. Channel activity with a silent mono downmix has a distinct warning; it
+Callbacks without processed samples report unavailable levels and a distinct
+processing warning rather than silent audio or recovery. Channel activity with a silent mono downmix has a distinct warning; it
 does not assert a driver or phase-cancellation cause. Health windows reset on
 reporting and capture pauses, with fresh statistics after resume.
 

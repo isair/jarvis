@@ -950,3 +950,21 @@ def test_audio_callback_keeps_signal_diagnostics_off_the_realtime_path(capsys):
     obj._on_audio(source, len(source), None, None)
     assert capsys.readouterr().out == ''
     np.testing.assert_array_equal(obj._audio_q.get_nowait().audio, original)
+
+
+def test_silent_input_does_not_report_recovery_until_samples_are_processed(capsys):
+    obj = listener()
+    obj._audio_frames(np.zeros((960, 1), dtype=np.float32))
+    obj._last_audio_callback = 11
+    obj._check_audio_health(now=12)
+    assert 'silent samples' in capsys.readouterr().out
+    obj._last_audio_callback = 17
+    obj._check_audio_health(now=18)
+    waiting = capsys.readouterr().out
+    assert 'no samples were processed' in waiting
+    assert 'unavailable' in waiting
+    assert 'arriving again' not in waiting
+    obj._audio_frames(np.full((960, 1), .2, dtype=np.float32))
+    obj._last_audio_callback = 23
+    obj._check_audio_health(now=24)
+    assert 'arriving again' in capsys.readouterr().out
