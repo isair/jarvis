@@ -14,7 +14,9 @@ from ..tools.types import ToolExecutionResult
 from ..memory.conversation import DialogueMemory, is_tool_message
 
 from ..utils.redact import redact
-from ..system_prompt import build_system_prompt
+from ..system_prompt import (
+    build_system_prompt, ENGLISH_SPEECH_REPLY_GUIDANCE, SILENT_REPLY_GUIDANCE,
+)
 from ..tools.registry import run_tool_with_retries, generate_tools_description, generate_tools_json_schema, BUILTIN_TOOLS
 from ..tools.builtin.stop import STOP_SIGNAL
 from ..debug import debug_log
@@ -45,6 +47,7 @@ def chat_with_messages(cfg, messages, *, timeout_sec=30.0, extra_options=None,
         tools=tools,
         thinking=thinking,
     )
+from .delivery import render_english_speech
 from .enrichment import (
     extract_search_params_for_memory,
     digest_memory_for_query,
@@ -994,7 +997,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     language: Optional[str] = None,
                     quiet: bool = False,
                     speech_context: Optional["SpeechContext"] = None,
-                    *, cancel_event=None) -> Optional[str]:
+                    *, cancel_event=None, spoken_output: bool = False) -> Optional[str]:
     """
     Main entry point for reply generation.
 
@@ -1010,6 +1013,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             right Wikipedia host). None when invoked outside the voice
             path — tools then fall back to their own default.
         speech_context: Immutable voice reference data scoped to this reply.
+        spoken_output: Whether the caller will speak the returned reply itself.
+            Direct engine-owned speech is also detected from its enabled TTS
+            instance. Silent callers keep the default False.
         quiet: When True, the engine does not print the reply to stdout.
             The text-chat worker owns logging of scrubbed delivered replies
             after its cancellation check. Voice replies print here.
@@ -1717,6 +1723,15 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     # steps are preserved unchanged.
     action_plan = strip_memory_directives(action_plan)
 
+    _spoken_delivery = bool(spoken_output or (tts is not None and tts.enabled))
+    if _spoken_delivery and getattr(cfg, "tts_engine", "piper") in ("piper", "chatterbox"):
+        _delivery_guidance = ENGLISH_SPEECH_REPLY_GUIDANCE
+    elif not _spoken_delivery:
+        _delivery_guidance = SILENT_REPLY_GUIDANCE
+    else:
+        _delivery_guidance = ""
+    debug_log(f"reply delivery: {'spoken' if _spoken_delivery else 'silent'}", "planning")
+
     _assistant_name = str(getattr(cfg, "wake_word", "jarvis") or "jarvis").strip().capitalize()
     _persona_prompt = build_system_prompt(_assistant_name)
     _plan_in_recovery = False
@@ -1729,15 +1744,6 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         guidance = [_persona_prompt.strip()]
         # Add model-size-appropriate prompt components
         guidance.extend(prompts.to_list())
-
-        # Both current TTS engines (Piper, Chatterbox) only support English.
-        # Responding in another language would produce garbled audio.
-        # Remove this constraint when a multilingual TTS engine is added.
-        tts_engine = getattr(cfg, 'tts_engine', 'piper')
-        if tts_engine in ('piper', 'chatterbox'):
-            guidance.append(
-                "Always respond in English regardless of the language the user speaks in."
-            )
 
         if transcript_context:
             guidance.append(transcript_context)
@@ -2010,7 +2016,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         return _context_cache
 
     def _update_system_message_with_context(messages_list):
-        """Update the first system message with fresh time/location context.
+        """Update the first system message with delivery and time/location context.
 
         Note: Adding a separate system message AFTER the user message
         breaks native tool calling in models like Llama 3.2. Instead, we
@@ -2027,6 +2033,10 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         guidance is per-reply dynamic, so the stable head is unaffected.
         """
         context_str = _get_context_string()
+        context_parts = [_delivery_guidance] if _delivery_guidance else []
+        if context_str:
+            context_parts.append(f"[Context: {context_str}]")
+        context_block = "\n\n".join(context_parts)
 
         # Find and update the first system message (skip tool guidance messages)
         for msg in messages_list:
@@ -2035,7 +2045,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 if msg.get("_is_context_injected"):
                     break
                 content = msg.get("content", "")
-                if content and context_str:
+                if content and context_block:
                     # In text-tools mode the tool-call syntax guidance is the
                     # final instruction block; small models weight the last
                     # system tokens most, and the context line is data, not
@@ -2045,13 +2055,13 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     head, marker, tail = content.partition("\nExact tool-call syntax")
                     if marker:
                         new_content = (
-                            f"{head.rstrip()}\n\n[Context: {context_str}]\n\n"
+                            f"{head.rstrip()}\n\n{context_block}\n\n"
                             f"{marker}{tail}"
                         )
                     else:
-                        new_content = f"{content}\n\n[Context: {context_str}]"
-                elif context_str:
-                    new_content = f"[Context: {context_str}]"
+                        new_content = f"{content}\n\n{context_block}"
+                elif context_block:
+                    new_content = context_block
                 else:
                     new_content = content
                 msg["content"] = new_content
@@ -2115,6 +2125,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         tool_search_cap = 3
 
     reply: Optional[str] = None
+    malformed_fallback = False
     # The latest plausible natural-language candidate. Used by the max-turns
     # digest backstop when the loop exhausts without producing a reply.
     last_candidate_reply: Optional[str] = None
@@ -2957,6 +2968,12 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 debug_log(f"dialogue memory error: {e}", "memory")
 
         return reply
+
+    if (_delivery_guidance == ENGLISH_SPEECH_REPLY_GUIDANCE
+            and not malformed_fallback and reply != _UNEXECUTED_ACTION_REPLY):
+        rendered = render_english_speech(cfg, reply)
+        if not _is_malformed_model_output(rendered):
+            reply = rendered
 
     # Step 10: Output and memory update
     if cancel_event is not None and cancel_event.is_set():

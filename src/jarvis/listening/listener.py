@@ -1091,6 +1091,7 @@ class VoiceListener(threading.Thread):
                     reply = run_reply_engine(
                         self.db, self.cfg, None, query, self.dialogue_memory,
                         language=language, speech_context=speech_context,
+                        spoken_output=bool(self.tts and self.tts.enabled),
                     )
             except Exception as exc:
                 print(f"\n  ❌ Reply engine error: {exc}", flush=True)

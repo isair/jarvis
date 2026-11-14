@@ -303,7 +303,7 @@ While TTS is playing, echo rejection and stop commands are handled with fast tex
 - Transcripts during TTS are flagged with `is_during_tts=true`
 - Intent judge uses this context to identify echo
 
-**Request locale:** Query collection stores accepted text and the detected language of its latest accepted segment as one immutable value. Clearing collection returns that snapshot and resets both fields. Rejected recognition, TTS echo, interruption-only controls and rejected intent decisions cannot replace a pending request's locale. An accepted segment with unknown language records `None`, which lets tools use their normal locale fallback. Dispatch carries the snapshot's language explicitly through the shared query lock to the reply engine.
+**Request locale:** Query collection stores accepted text and the detected language of its latest accepted segment as one immutable value. Clearing collection returns that snapshot and resets both fields. Rejected recognition, TTS echo, interruption-only controls and rejected intent decisions cannot replace a pending request's locale. An accepted segment with unknown language records `None`, which lets tools use their normal locale fallback. Dispatch carries the snapshot's language explicitly through the shared query lock to the reply engine. It also declares `spoken_output` from the listener's enabled TTS instance. The listener owns playback callbacks; speech-language guidance follows this delivery declaration even though generation receives `tts=None`. Disabled or unavailable speech leaves the reply unconstrained by the speech backend's English policy.
 
 ## Rolling Transcript Buffer
 

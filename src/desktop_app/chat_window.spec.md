@@ -36,6 +36,7 @@ available. User and dictation capture pauses do not stop or restart text chat.
 - The worker thread runs
   `run_reply_engine(db, cfg, tts=None, text, _global_dialogue_memory, language=None, quiet=True)`.
 - `tts=None` — text chat never speaks. Audio output stays a voice-only concern.
+- `spoken_output=False` is the default: written replies follow the user's requested language without the configured speech backend's English restriction.
 - `language=None` — text input has no Whisper-detected language; tools fall
   back to their own defaults, same as a voice query with no language hint.
 - Redaction still applies (`run_reply_engine` calls `redact(text)` before
