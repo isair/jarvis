@@ -567,7 +567,8 @@ def test_missing_host_api_metadata_retains_the_input_choice(monkeypatch):
     assert 'Owned mic' in choices[1][1] and 'API unknown' in choices[1][1]
 
 
-def test_input_labels_remain_available_without_numpy(tmp_path):
+@pytest.mark.parametrize('console_encoding', ['utf-8', 'cp1252'])
+def test_input_labels_remain_available_without_numpy(tmp_path, monkeypatch, console_encoding):
     import os
     from pathlib import Path
     import shutil
@@ -575,10 +576,12 @@ def test_input_labels_remain_available_without_numpy(tmp_path):
     import sys
     repo = Path(__file__).resolve().parents[1]
     scenario = tmp_path / 'scenario.py'
+    monkeypatch.setenv('PYTHONIOENCODING', console_encoding)
     shutil.copyfile(repo / 'tests/fixtures/audio_input_diagnostics_probe.py', scenario)
-    env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1', PYTHONPATH=str(repo / 'src'))
+    env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1', PYTHONPATH=str(repo / 'src'),
+               PYTHONIOENCODING='utf-8')
     result = subprocess.run([sys.executable, str(repo / 'tests/fixtures/worker_probe.py'),
                              str(tmp_path), str(scenario)], env=env, capture_output=True,
-                            text=True, timeout=30)
+                            text=True, encoding='utf-8', timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr
     assert 'passed with owned audio fakes' in result.stdout

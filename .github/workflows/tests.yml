@@ -259,6 +259,7 @@ jobs:
               owned = Path(directory)
               scenario = owned / 'scenario.py'
               shutil.copyfile('tests/fixtures/audio_input_diagnostics_probe.py', scenario)
-              env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1', PYTHONPATH='src')
+              env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1', PYTHONPATH='src',
+                         PYTHONIOENCODING='utf-8')
               subprocess.run([sys.executable, 'tests/fixtures/worker_probe.py',
                               str(owned), str(scenario)], env=env, check=True, timeout=30)
