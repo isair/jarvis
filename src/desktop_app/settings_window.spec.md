@@ -46,6 +46,12 @@ FieldMeta (dataclass)
 | `device` | QComboBox | Dynamically populated from sounddevice |
 | `list` | QListWidget + Add/Edit/Remove buttons | Stores as JSON array in config |
 
+Enumerated input-device labels include the PortAudio host API, such as MME or
+Windows WASAPI, so same-named endpoints are distinguishable. Values remain the
+original numeric input indices; the System Default value remains empty.
+Unavailable host-API metadata is labelled `API unknown` without dropping the
+input. Device metadata does not require NumPy or open a capture stream.
+
 Choice and device dropdowns retain the configured value when it is absent from
 their option list, including local model references and unavailable microphones.
 They display that value as an additional selected option. Saving another field

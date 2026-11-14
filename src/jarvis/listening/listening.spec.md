@@ -36,6 +36,25 @@ Warnings are transition-based; capture pauses suspend health checks. With
 peak level and capture rate, without saving microphone audio. Linux warnings
 point users to PipeWire/PulseAudio recording-source routing.
 
+The startup log identifies the resolved input name, host API and index, followed
+by the accepted capture sample rate and channel count, including mono at the
+configured rate. Successful Windows probing reports stream startup, not measured
+speech or signal quality.
+
+Five-second health windows accumulate sample-weighted RMS and peak levels for
+input channels and the actual mono downmix. These reductions run on the audio
+processing worker, never the real-time callback, and do not alter captured
+samples, framing, VAD thresholds or device selection. Only per-channel aggregates
+and sample counts are retained. Normal logs show the first health window and
+subsequent signal-state transitions; voice debug includes each window. At most
+eight channel values are displayed alongside the actual channel count and the
+maximum peak across all channels. No waveform or audio recording is stored.
+Callbacks without processed samples report unavailable levels and a distinct
+processing warning rather than silent audio or recovery. Channel activity with a silent mono downmix has a distinct warning; it
+does not assert a driver or phase-cancellation cause. Health windows reset on
+reporting and capture pauses, including pauses shorter than a health-check
+interval, with fresh statistics and a new startup grace period after resume.
+
 Audio capture (`sounddevice`), array processing (`numpy`) and optional WebRTC VAD
 have independent import boundaries. An unavailable VAD uses the configured
 energy threshold without disabling working capture or array processing. Native

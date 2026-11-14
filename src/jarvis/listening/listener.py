@@ -25,6 +25,7 @@ from .model_download import ModelDownloadError
 from .state_manager import StateManager, ListeningState
 from ..utils.audio_lock import portaudio_lock
 from ..utils.audio_capture import mono_capture, open_input_stream, resolve_input_device
+from ..utils.audio_diagnostics import InputSignalLevels, input_device_label
 from .wake_detection import is_wake_word_detected, is_stop_command, is_stop_command_echo
 from .transcript_buffer import TranscriptBuffer
 from .intent_judge import (
@@ -1332,7 +1333,9 @@ class VoiceListener(threading.Thread):
         self._audio_started = now
         self._last_audio_callback = now
         self._last_health_check = now
-        self._audio_peak = 0.0
+        self._input_levels = InputSignalLevels()
+        self._input_health_generation = self._capture_generation
+        self._input_level_state = None
         self._audio_frames_seen = 0
         self._speech_frames_seen = 0
         self._audio_dropped = 0
@@ -1343,7 +1346,7 @@ class VoiceListener(threading.Thread):
     def _check_audio_health(self, now=None):
         """Report capture failures outside the real-time callback, without recording audio."""
         now = time.monotonic() if now is None else now
-        if self.capture_paused:
+        if self.capture_paused or self._input_health_generation != self._capture_generation:
             self._reset_audio_health(now)
             return
         if now - self._last_health_check < 5:
@@ -1352,14 +1355,23 @@ class VoiceListener(threading.Thread):
         warning = None
         if now - self._last_audio_callback >= 5:
             warning = 'No microphone callbacks in the last 5 seconds'
-        elif self._audio_peak <= 1e-7 and now - self._audio_started >= 10:
-            warning = 'Microphone is delivering silent samples'
+        elif not self._input_levels.samples:
+            warning = 'Microphone callbacks are arriving, but no samples were processed'
+        elif self._input_levels.mono_peak <= 1e-7 and now - self._audio_started >= 10:
+            warning = ('Input channels have signal but mono is silent'
+                       if self._input_levels.max_channel_peak > 1e-7
+                       else 'Microphone is delivering silent samples')
         if warning and warning != self._audio_health_warning:
             print(f"  ⚠️  {warning}. Check the selected input, mute and recording permissions.", flush=True)
             if sys.platform.startswith('linux'):
                 print("     🎤 Check PipeWire/PulseAudio recording-source routing (pavucontrol or wpctl status); avoid monitor/output sources.", flush=True)
         elif not warning and self._audio_health_warning:
             print("  ✅ Microphone audio is arriving again.", flush=True)
+        level_state = (warning, bool(self._input_levels.samples))
+        details = self._input_levels.describe()
+        if level_state != self._input_level_state:
+            print(f"  🎤 Input signal: callbacks_total={self._callback_count}, {details}", flush=True)
+        self._input_level_state = level_state
         self._audio_health_warning = warning
         if self._callback_status or self._audio_callback_error or self._audio_dropped:
             print(f"  ⚠️  Audio capture: {self._callback_status or self._audio_callback_error or 'queue full'}; {self._audio_dropped} blocks dropped.", flush=True)
@@ -1368,10 +1380,10 @@ class VoiceListener(threading.Thread):
         if self.cfg.voice_debug:
             debug_log(
                 f"Audio capture: callbacks={self._callback_count}, frames={self._audio_frames_seen}, "
-                f"speech_frames={self._speech_frames_seen}, peak={self._audio_peak:.6f}, "
+                f"speech_frames={self._speech_frames_seen}, {details}, "
                 f"rate={self._stream_samplerate} Hz", "voice",
             )
-        self._audio_peak = 0.0
+        self._input_levels = InputSignalLevels()
 
     def _start_transcription_worker(self) -> None:
         if self._should_stop or self._transcription_worker_thread is not None:
@@ -1522,9 +1534,10 @@ class VoiceListener(threading.Thread):
 
     def _audio_frames(self, buf):
         """Keep native-rate frame boundaries across arbitrary callback block sizes."""
+        if self._input_health_generation != self._capture_generation:
+            self._reset_audio_health()
         mono = mono_capture(buf)
-        if mono.size:
-            self._audio_peak = max(self._audio_peak, float(np.max(np.abs(mono))))
+        self._input_levels.observe(buf, mono)
         if self._pending_audio is not None:
             mono = np.concatenate((self._pending_audio, mono))
         count = len(mono) // self._frame_samples
@@ -1881,7 +1894,7 @@ class VoiceListener(threading.Thread):
                         print("", flush=True)
                     return
                 elif mic_ok.is_set():
-                    print("  ✅ Microphone permission OK", flush=True)
+                    print("  ✅ Microphone stream startup OK (signal levels checked after capture starts)", flush=True)
                 else:
                     print("  ⚠️  Microphone returned empty audio", flush=True)
             except Exception as e:
@@ -2207,9 +2220,9 @@ class VoiceListener(threading.Thread):
         # Log the resolved input used by both capture phases.
         try:
             dev = sd.query_devices(stream_kwargs["device"])
-            device_name = dev.get('name', 'Unknown')
+            device_name = input_device_label(sd, dev)
             debug_log(f"using input device: {device_name} (index {stream_kwargs['device']})", "voice")
-            print(f"  🎤 Using audio device: {device_name}", flush=True)
+            print(f"  🎤 Using audio device: {device_name} (index {stream_kwargs['device']})", flush=True)
         except Exception:
             pass
 
@@ -2220,6 +2233,7 @@ class VoiceListener(threading.Thread):
                 sd, self._samplerate, frame_ms, stream_kwargs, callback=self._on_audio,
             )
             self._frame_samples = max(1, int(self._stream_samplerate * frame_ms / 1000))
+            print(f"  🎤 Capture format: {self._stream_samplerate} Hz, {channels} input channel(s)", flush=True)
             if self._stream_samplerate != self._samplerate or channels != 1:
                 print(f"  🎤 Using {self._stream_samplerate} Hz, {channels} input channel(s); "
                       "converting to mono and resampling for speech recognition", flush=True)

@@ -884,3 +884,104 @@ def test_callback_interleaved_with_reset_does_not_relabel_old_audio_as_fresh(mon
     obj._consume_audio_frames(20)
 
     assert admitted == pytest.approx([.2])
+
+
+def test_signal_diagnostics_distinguish_active_channels_from_silent_mono(capsys):
+    obj = listener()
+    source = np.column_stack((np.full(960, .25), np.full(960, -.25))).astype(np.float32)
+    original = source.copy()
+    frames = obj._audio_frames(source)
+    obj._last_audio_callback = 11
+    obj._callback_count = 1
+    obj._check_audio_health(now=12)
+    output = capsys.readouterr().out
+    assert 'channels have signal' in output and 'mono is silent' in output
+    assert 'channel_rms=[0.250000, 0.250000]' in output
+    assert 'mono_rms=0.000000' in output
+    np.testing.assert_array_equal(source, original)
+    np.testing.assert_array_equal(np.concatenate(frames), original.mean(axis=1))
+
+
+def test_callbacks_without_processed_samples_do_not_claim_silent_audio(capsys):
+    obj = listener()
+    obj._on_audio(np.ones((960, 1), dtype=np.float32), 960, None, None)
+    obj._last_audio_callback = 11
+    obj._check_audio_health(now=12)
+    assert 'silent samples' not in capsys.readouterr().out
+
+
+def test_signal_statistics_weight_samples_and_reset_each_window(monkeypatch, capsys):
+    obj = listener()
+    obj.cfg.voice_debug = True
+    logs = []
+    monkeypatch.setattr(capture, 'debug_log', lambda message, *args: logs.append(message))
+    first = np.full((100, 1), .1, dtype=np.float32)
+    second = np.full((300, 1), .3, dtype=np.float32)
+    obj._audio_frames(first)
+    obj._audio_frames(second)
+    obj._last_audio_callback = 5
+    obj._check_audio_health(now=6)
+    expected = np.sqrt(np.mean(np.concatenate((first, second)).astype(np.float64) ** 2))
+    assert f'channel_rms=[{expected:.6f}]' in capsys.readouterr().out
+    obj._audio_frames(np.zeros((400, 1), dtype=np.float32))
+    obj._last_audio_callback = 11
+    obj._check_audio_health(now=12)
+    assert 'channel_rms=[0.000000]' in capsys.readouterr().out
+    assert any('channel_rms=[0.000000]' in message for message in logs)
+
+
+def test_healthy_signal_does_not_spam_normal_logs(capsys):
+    obj = listener()
+    for now in (6, 12):
+        obj._audio_frames(np.full((960, 1), .2, dtype=np.float32))
+        obj._last_audio_callback = now - 1
+        obj._check_audio_health(now=now)
+        output = capsys.readouterr().out
+        if now == 6:
+            assert 'Input signal:' in output
+        else:
+            assert output == ''
+
+
+def test_audio_callback_keeps_signal_diagnostics_off_the_realtime_path(capsys):
+    obj = listener()
+    source = np.arange(960, dtype=np.float32)[:, None] / 960
+    original = source.copy()
+    obj._on_audio(source, len(source), None, None)
+    assert capsys.readouterr().out == ''
+    np.testing.assert_array_equal(obj._audio_q.get_nowait().audio, original)
+
+
+def test_silent_input_does_not_report_recovery_until_samples_are_processed(capsys):
+    obj = listener()
+    obj._audio_frames(np.zeros((960, 1), dtype=np.float32))
+    obj._last_audio_callback = 11
+    obj._check_audio_health(now=12)
+    assert 'silent samples' in capsys.readouterr().out
+    obj._last_audio_callback = 17
+    obj._check_audio_health(now=18)
+    waiting = capsys.readouterr().out
+    assert 'no samples were processed' in waiting
+    assert 'unavailable' in waiting
+    assert 'arriving again' not in waiting
+    obj._audio_frames(np.full((960, 1), .2, dtype=np.float32))
+    obj._last_audio_callback = 23
+    obj._check_audio_health(now=24)
+    assert 'arriving again' in capsys.readouterr().out
+
+
+def test_brief_capture_pause_discards_pre_pause_signal_levels(monkeypatch, capsys):
+    obj = listener()
+    clock = [1.0]
+    monkeypatch.setattr(capture.time, 'monotonic', lambda: clock[0])
+    obj._audio_frames(np.full((960, 1), .4, dtype=np.float32))
+    clock[0] = 2
+    obj.set_capture_paused('dictation', True)
+    clock[0] = 3
+    obj.set_capture_paused('dictation', False)
+    obj._audio_frames(np.zeros((960, 1), dtype=np.float32))
+    obj._last_audio_callback = 14
+    obj._check_audio_health(now=15)
+    output = capsys.readouterr().out
+    assert 'channel_rms=[0.000000]' in output
+    assert 'silent samples' in output
