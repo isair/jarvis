@@ -1334,6 +1334,7 @@ class VoiceListener(threading.Thread):
         self._last_audio_callback = now
         self._last_health_check = now
         self._input_levels = InputSignalLevels()
+        self._input_health_generation = self._capture_generation
         self._input_level_state = None
         self._audio_frames_seen = 0
         self._speech_frames_seen = 0
@@ -1345,7 +1346,7 @@ class VoiceListener(threading.Thread):
     def _check_audio_health(self, now=None):
         """Report capture failures outside the real-time callback, without recording audio."""
         now = time.monotonic() if now is None else now
-        if self.capture_paused:
+        if self.capture_paused or self._input_health_generation != self._capture_generation:
             self._reset_audio_health(now)
             return
         if now - self._last_health_check < 5:
@@ -1533,6 +1534,8 @@ class VoiceListener(threading.Thread):
 
     def _audio_frames(self, buf):
         """Keep native-rate frame boundaries across arbitrary callback block sizes."""
+        if self._input_health_generation != self._capture_generation:
+            self._reset_audio_health()
         mono = mono_capture(buf)
         self._input_levels.observe(buf, mono)
         if self._pending_audio is not None:

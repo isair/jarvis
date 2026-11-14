@@ -52,7 +52,8 @@ maximum peak across all channels. No waveform or audio recording is stored.
 Callbacks without processed samples report unavailable levels and a distinct
 processing warning rather than silent audio or recovery. Channel activity with a silent mono downmix has a distinct warning; it
 does not assert a driver or phase-cancellation cause. Health windows reset on
-reporting and capture pauses, with fresh statistics after resume.
+reporting and capture pauses, including pauses shorter than a health-check
+interval, with fresh statistics and a new startup grace period after resume.
 
 Audio capture (`sounddevice`), array processing (`numpy`) and optional WebRTC VAD
 have independent import boundaries. An unavailable VAD uses the configured

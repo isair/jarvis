@@ -968,3 +968,20 @@ def test_silent_input_does_not_report_recovery_until_samples_are_processed(capsy
     obj._last_audio_callback = 23
     obj._check_audio_health(now=24)
     assert 'arriving again' in capsys.readouterr().out
+
+
+def test_brief_capture_pause_discards_pre_pause_signal_levels(monkeypatch, capsys):
+    obj = listener()
+    clock = [1.0]
+    monkeypatch.setattr(capture.time, 'monotonic', lambda: clock[0])
+    obj._audio_frames(np.full((960, 1), .4, dtype=np.float32))
+    clock[0] = 2
+    obj.set_capture_paused('dictation', True)
+    clock[0] = 3
+    obj.set_capture_paused('dictation', False)
+    obj._audio_frames(np.zeros((960, 1), dtype=np.float32))
+    obj._last_audio_callback = 14
+    obj._check_audio_health(now=15)
+    output = capsys.readouterr().out
+    assert 'channel_rms=[0.000000]' in output
+    assert 'silent samples' in output
