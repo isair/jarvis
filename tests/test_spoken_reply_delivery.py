@@ -149,3 +149,16 @@ def test_canned_malformed_guard_reply_is_not_rewritten(monkeypatch, mock_config,
     result = engine.run_reply_engine(db, mock_config, speaker, 'Hello', DialogueMemory(), quiet=True)
     assert result == silent
     assert spoken == [silent]
+
+
+def test_expanded_literal_packet_stays_within_the_model_input_limit(monkeypatch, mock_config):
+    from jarvis.reply import delivery as module
+    import json
+    original = '"" ' * (module._MAX_RENDER_INPUT_BYTES // 8)
+    assert len(json.dumps({'text_to_translate': original}, ensure_ascii=False).encode('utf-8')) < module._MAX_RENDER_INPUT_BYTES
+    requests = []
+    monkeypatch.setattr(module, 'get_llm_backend', lambda cfg: SimpleNamespace(
+        direct=lambda *args, **kwargs: requests.append(args[2]),
+    ))
+    assert module.render_english_speech(mock_config, original) == original
+    assert requests == []

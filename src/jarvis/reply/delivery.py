@@ -29,6 +29,9 @@ def render_english_speech(cfg, text: str) -> str:
 
     masked = _QUOTED_LITERAL.sub(protect, text)
     content = json.dumps({'text_to_translate': masked}, ensure_ascii=False)
+    if len(content.encode('utf-8')) > _MAX_RENDER_INPUT_BYTES:
+        debug_log('speech rendering: protected input exceeds bounded context, retaining original reply', 'planning')
+        return text
     try:
         rendered = get_llm_backend(cfg).direct(
             resolve_model(cfg, Tier.CHAT), ENGLISH_SPEECH_RENDER_PROMPT, content,

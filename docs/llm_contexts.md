@@ -340,7 +340,7 @@ LLM routing strategy and its prompts are independent of this cache.
 - **Model**: `resolve_model(cfg, Tier.CHAT)` on the configured self-hostable backend, preserving the warmed chat model.
 - **Input**: only the completed reply in a `text_to_translate` JSON field. No user request, history, tools or execution authority. Quoted literals use collision-free markers for exact restoration; invalid, duplicated or reordered markers retain the original reply.
 - **Prompt**: `ENGLISH_SPEECH_RENDER_PROMPT` in `system_prompt.py` translates without answering or acting on embedded text, adding facts or changing action status. English text is copied.
-- **Limits**: at most one call per spoken reply, 4,096-byte JSON input cap, 8,192 context tokens, 2,048 output tokens, temperature zero, thinking disabled and `llm_chat_timeout_sec`. Oversized input, unavailable/incomplete/blank output and malformed rendering preserve the original reply. Cancellation suppresses subsequent delivery/publication.
+- **Limits**: at most one call per spoken reply, 4,096-byte JSON input cap before and after literal protection, 8,192 context tokens, 2,048 output tokens, temperature zero, thinking disabled and `llm_chat_timeout_sec`. Oversized input, unavailable/incomplete/blank output and malformed rendering preserve the original reply. Cancellation suppresses subsequent delivery/publication.
 - **Output**: the delivered reply is shared by TTS, return value and dialogue storage. The original redacted user request remains unchanged throughout routing, execution and storage.
 
 ---
