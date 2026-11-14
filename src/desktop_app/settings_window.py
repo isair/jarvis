@@ -29,6 +29,7 @@ from jarvis.config import (
     SUPPORTED_CHAT_MODELS,
 )
 from jarvis.debug import debug_log
+from jarvis.utils.audio_diagnostics import input_device_label
 from desktop_app.themes import apply_theme
 from desktop_app.mcp_catalogue import CATALOGUE, CATALOGUE_BY_NAME, MCPEntry
 from desktop_app.whisper_models import settings_model_choices
@@ -412,8 +413,7 @@ def get_input_devices() -> List[tuple[str, str]]:
             except Exception:
                 max_in = 0
             if max_in > 0:
-                name = dev.get("name", f"Device {idx}")
-                devices.append((str(idx), f"🎤 {name}"))
+                devices.append((str(idx), f"🎤 {input_device_label(sd, dev)}"))
     except Exception as e:
         debug_log(f"could not enumerate audio devices: {e}", "settings")
     return devices

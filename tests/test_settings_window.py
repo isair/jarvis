@@ -535,3 +535,50 @@ def test_settings_keep_one_active_speech_detector_control(settings_config_path, 
     voice = capture.VoiceListener(None, cfg, None, None)
     frame = np.full(320, cfg.voice_min_energy / 2, dtype=np.float32)
     assert voice._is_speech_frame(frame) is False
+
+
+def test_same_named_microphones_show_their_host_api_without_changing_values(monkeypatch):
+    from types import SimpleNamespace
+    import sys
+    name = 'Microphone Array (Example)'
+    audio = SimpleNamespace(
+        query_devices=lambda: [dict(name=name, max_input_channels=2, hostapi=0),
+                               dict(name=name, max_input_channels=2, hostapi=1)],
+        query_hostapis=lambda index: {'name': ['MME', 'Windows WASAPI'][index]},
+    )
+    monkeypatch.setitem(sys.modules, 'sounddevice', audio)
+    choices = get_input_devices()
+    assert [value for value, _ in choices] == ['', '0', '1']
+    assert name in choices[1][1] and 'MME' in choices[1][1]
+    assert name in choices[2][1] and 'Windows WASAPI' in choices[2][1]
+    assert choices[1][1] != choices[2][1]
+
+
+def test_missing_host_api_metadata_retains_the_input_choice(monkeypatch):
+    from types import SimpleNamespace
+    import sys
+    def unavailable(index):
+        raise RuntimeError('Owned host API metadata unavailable')
+    audio = SimpleNamespace(query_devices=lambda: [dict(name='Owned mic', max_input_channels=1, hostapi=0)],
+                            query_hostapis=unavailable)
+    monkeypatch.setitem(sys.modules, 'sounddevice', audio)
+    choices = get_input_devices()
+    assert choices[1][0] == '0'
+    assert 'Owned mic' in choices[1][1] and 'API unknown' in choices[1][1]
+
+
+def test_input_labels_remain_available_without_numpy(tmp_path):
+    import os
+    from pathlib import Path
+    import shutil
+    import subprocess
+    import sys
+    repo = Path(__file__).resolve().parents[1]
+    scenario = tmp_path / 'scenario.py'
+    shutil.copyfile(repo / 'tests/fixtures/audio_input_diagnostics_probe.py', scenario)
+    env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1', PYTHONPATH=str(repo / 'src'))
+    result = subprocess.run([sys.executable, str(repo / 'tests/fixtures/worker_probe.py'),
+                             str(tmp_path), str(scenario)], env=env, capture_output=True,
+                            text=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'passed with owned audio fakes' in result.stdout

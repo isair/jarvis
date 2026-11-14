@@ -179,6 +179,13 @@ Select the headset's microphone/input profile in Settings, not its playback devi
 </details>
 
 <details>
+<summary><strong>Listening, but speech is not recognised</strong></summary>
+
+Settings shows each microphone's audio API so you can distinguish same-named inputs. Check that the selected microphone works in your system's recorder. When reporting a problem, include the selected device, Capture format and Input signal lines from Logs after trying a spoken request. These show signal levels and counts without recording audio; enable voice debug for continuous diagnostics.
+
+</details>
+
+<details>
 <summary><strong>Linux says Listening, but never hears speech</strong></summary>
 
 Check Logs for missing-callback or silent-input warnings. Verify the recording source and mute state in PipeWire/PulseAudio, and select a microphone rather than an output monitor. Set `JARVIS_VOICE_DEBUG=1` for capture-level diagnostics. See the [troubleshooting guide](docs/CONFIGURATION.md#troubleshooting).

@@ -229,3 +229,36 @@ jobs:
           python-version: '3.11'
       - name: Verify native document capability boundaries
         run: python tests/fixtures/document_windows_probe.py
+
+  audio-input-diagnostics:
+    name: Audio input diagnostics (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Verify input metadata and signal levels with owned audio fakes
+        shell: python
+        run: |
+          from pathlib import Path
+          import os
+          import shutil
+          import subprocess
+          import sys
+          import tempfile
+          prefixes = ('numpy', 'pytest==', 'python-dotenv==')
+          dependencies = [line for line in Path('requirements.txt').read_text().splitlines()
+                          if line.startswith(prefixes)]
+          subprocess.run([sys.executable, '-m', 'pip', 'install', *dependencies], check=True)
+          with tempfile.TemporaryDirectory(prefix='jarvis-input-diagnostics-') as directory:
+              owned = Path(directory)
+              scenario = owned / 'scenario.py'
+              shutil.copyfile('tests/fixtures/audio_input_diagnostics_probe.py', scenario)
+              env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1', PYTHONPATH='src')
+              subprocess.run([sys.executable, 'tests/fixtures/worker_probe.py',
+                              str(owned), str(scenario)], env=env, check=True, timeout=30)
