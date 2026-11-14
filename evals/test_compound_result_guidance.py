@@ -47,14 +47,14 @@ class OwnedFilmLookup(Tool):
         return ToolExecutionResult(True, 'Brandon Cronenberg directed Antiviral (2012) and Infinity Pool (2023).')
 
 
-def _reply(monkeypatch, tool, query):
+def _reply(monkeypatch, tool, query, *, spoken_output):
     monkeypatch.setitem(registry.BUILTIN_TOOLS, tool.name, tool)
     monkeypatch.setattr(engine, 'select_tools', lambda *args, **kwargs: [tool.name, 'stop'])
     cfg = replace(isolated_voice_settings(), location_enabled=False, mcps={}, planner_enabled=False,
                   tool_result_digest_enabled=False, llm_chat_timeout_sec=60)
     db = Database(':memory:')
     try:
-        reply = engine.run_reply_engine(db, cfg, None, query, DialogueMemory(), language='en')
+        reply = engine.run_reply_engine(db, cfg, None, query, DialogueMemory(), language='en', spoken_output=spoken_output)
         assert reply
         assert_not_fallback_reply(reply, 'compound result coverage')
         return reply
@@ -62,9 +62,10 @@ def _reply(monkeypatch, tool, query):
         db.close()
 
 
-def test_preservation_constraint_needs_no_second_action(monkeypatch, record_property):
+@pytest.mark.parametrize('spoken_output', [False, True])
+def test_preservation_constraint_needs_no_second_action(monkeypatch, record_property, spoken_output):
     tool = OwnedReminderRemoval()
-    reply = _reply(monkeypatch, tool, 'Delete only the tea reminder and keep the soup reminder.')
+    reply = _reply(monkeypatch, tool, 'Delete only the tea reminder and keep the soup reminder.', spoken_output=spoken_output)
     record_property('reply', reply)
     record_property('tool_calls', json.dumps(tool.calls))
     assert len(tool.calls) == 1, 'A confirmed remaining reminder does not require another action'
@@ -73,9 +74,10 @@ def test_preservation_constraint_needs_no_second_action(monkeypatch, record_prop
     assert 'soup' in reply.lower()
 
 
-def test_dependent_information_requires_missing_evidence(monkeypatch, record_property):
+@pytest.mark.parametrize('spoken_output', [False, True])
+def test_dependent_information_requires_missing_evidence(monkeypatch, record_property, spoken_output):
     tool = OwnedFilmLookup()
-    reply = _reply(monkeypatch, tool, 'Who directed Possessor and what other films has that director made?')
+    reply = _reply(monkeypatch, tool, 'Who directed Possessor and what other films has that director made?', spoken_output=spoken_output)
     record_property('reply', reply)
     record_property('tool_calls', json.dumps(tool.calls))
     assert len(tool.calls) >= 2, 'The first result does not contain a filmography'

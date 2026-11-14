@@ -47,6 +47,7 @@ def chat_with_messages(cfg, messages, *, timeout_sec=30.0, extra_options=None,
         tools=tools,
         thinking=thinking,
     )
+from .delivery import render_english_speech
 from .enrichment import (
     extract_search_params_for_memory,
     digest_memory_for_query,
@@ -2124,6 +2125,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         tool_search_cap = 3
 
     reply: Optional[str] = None
+    malformed_fallback = False
     # The latest plausible natural-language candidate. Used by the max-turns
     # digest backstop when the loop exhausts without producing a reply.
     last_candidate_reply: Optional[str] = None
@@ -2966,6 +2968,12 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 debug_log(f"dialogue memory error: {e}", "memory")
 
         return reply
+
+    if (_delivery_guidance == ENGLISH_SPEECH_REPLY_GUIDANCE
+            and not malformed_fallback and reply != _UNEXECUTED_ACTION_REPLY):
+        rendered = render_english_speech(cfg, reply)
+        if not _is_malformed_model_output(rendered):
+            reply = rendered
 
     # Step 10: Output and memory update
     if cancel_event is not None and cancel_event.is_set():

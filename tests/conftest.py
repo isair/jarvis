@@ -116,9 +116,10 @@ def _isolate_user_config_path(tmp_path_factory, monkeypatch):
 
 @pytest.fixture
 def mock_config(monkeypatch):
-    """Provide offline configuration and stub the compound coverage dependency."""
+    """Provide offline configuration and isolate model-backed reply dependencies."""
     from jarvis.reply import engine
     monkeypatch.setattr(engine, 'resolve_uncovered_request', lambda *args, **kwargs: None)
+    monkeypatch.setattr(engine, 'render_english_speech', lambda cfg, text: text)
     return MockConfig()
 
 

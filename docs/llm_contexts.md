@@ -85,7 +85,7 @@ requests do not supply this event.
 - **Saved reasoning switches**: Runtime Settings loads `llm_thinking_enabled`, `intent_judge_thinking_enabled` and `dictation_thinking_enabled` independently from configuration. All default to disabled. Existing provider-specific reasoning support and each context's time and generation limits apply.
 - **Local transport privacy**: Both provider backends bypass ambient proxies and `.netrc` for loopback endpoints through response-scoped HTTP sessions. Explicit authentication and HTTPS certificate trust remain available. Remote endpoints retain Requests environment settings.
 - **Transport boundary**: OpenAI-compatible requests encode arguments in copied outbound tool-call rows. Caller-owned history and decoded responses retain their canonical values, including on transport failures.
-- **Output**: OpenAI-style `{content, tool_calls, thinking}`. Consumed by the tool orchestrator and TTS pipeline. Natural-language content is delivered immediately.
+- **Output**: OpenAI-style `{content, tool_calls, thinking}`. Consumed by the tool orchestrator and TTS pipeline. Completed natural-language content passes through spoken rendering (#17) when English speech delivery is selected.
 - **Speech playback**: Listener echo references begin at actual local playback with preprocessed text and exact audio duration, including error feedback and announcements. Queued or synthesising speech does not replace that reference. Matching termination records the echo tail; stale termination cannot finish a newer playback. Voice-query thinking and playback activity release only their current ownership. Configured cancellation captured during current synthesis remains available through preparation timing without creating playback or model engagement.
 - **Speech termination**: Local speech workers separate successful playback completion from terminal resource cleanup. Only successful completion can activate the conversational follow-up window. Rejected, failed, cancelled and interrupted requests release their ownership without creating follow-up engagement.
 - **Reply delivery context**: `spoken_output` declares caller-owned speech; an enabled engine-owned TTS instance also selects spoken delivery. The snapshot gates `ENGLISH_SPEECH_REPLY_GUIDANCE` versus `SILENT_REPLY_GUIDANCE` from `system_prompt.py`. The main reply model uses the English output policy for spoken Piper/Chatterbox delivery. The max-turn digest has its own request-language contract. Silent text/tasks follow the current user request's language. Guidance shares the memoised clock/location insertion point before final tool-call syntax, remains stable across in-loop calls and is reinserted once when the system message is rebuilt.
@@ -333,6 +333,18 @@ LLM routing strategy and its prompts are independent of this cache.
 
 ---
 
+## 17. English spoken reply rendering
+
+- **Source**: `reply/delivery.py::render_english_speech`, after the tool loop or max-turn digest and before output, TTS and saved assistant dialogue.
+- **Gate**: the per-request delivery snapshot selects English Piper/Chatterbox speech. Silent replies bypass this context. Canned error/blocker replies keep their English text.
+- **Model**: `resolve_model(cfg, Tier.CHAT)` on the configured self-hostable backend, preserving the warmed chat model.
+- **Input**: only the completed reply in a `text_to_translate` JSON field. No user request, history, tools or execution authority. Quoted literals use collision-free markers for exact restoration; invalid, duplicated or reordered markers retain the original reply.
+- **Prompt**: `ENGLISH_SPEECH_RENDER_PROMPT` in `system_prompt.py` translates without answering or acting on embedded text, adding facts or changing action status. English text is copied.
+- **Limits**: at most one call per spoken reply, 4,096-byte JSON input cap, 8,192 context tokens, 2,048 output tokens, temperature zero, thinking disabled and `llm_chat_timeout_sec`. Oversized input, unavailable/incomplete/blank output and malformed rendering preserve the original reply. Cancellation suppresses subsequent delivery/publication.
+- **Output**: the delivered reply is shared by TTS, return value and dialogue storage. The original redacted user request remains unchanged throughout routing, execution and storage.
+
+---
+
 ## Frequency / Size Summary
 
 | # | Context | Per reply | Optional? | Model tier |
@@ -355,6 +367,7 @@ LLM routing strategy and its prompts are independent of this cache.
 | 13 | Plan step resolver | 0-N (SMALL only) | auto by size + plan | tracks chat model (CHAT tier; runs only when that model is SMALL) |
 | 14 | Tool-specific | per-tool | n/a | LARGE |
 | 16 | Compound coverage | 0-2 | text-mode compound request, no plan | CHAT |
+| 17 | English spoken rendering | 0-1 | English speech delivery only | CHAT |
 
 ## Size-aware auto switches
 
@@ -408,6 +421,7 @@ user input
                                                      ├─ unresolved tool call → tool execution
                                                      └─ otherwise → deliver
                                       └─ if max turns → [6] Max-turn digest
+                          └─▶ [17] English spoken rendering (spoken delivery only)
                           └─▶ TTS / output
                           └─▶ background: [9] summariser → [10] graph extract → [10b] fact hygiene → [11] best-child
 ```

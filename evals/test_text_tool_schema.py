@@ -65,7 +65,8 @@ class OwnedEntryManager(Tool):
     ('Delete every reminder entry.', 'discard_entries', 'whole_collection', set()),
     ('Delete only the tea reminder and keep the soup reminder.', 'discard_entries', 'matching_labels', {'soup'}),
 ])
-def test_text_tool_call_preserves_declared_operation_and_scope(monkeypatch, query, operation, scope, remaining, record_property):
+@pytest.mark.parametrize('spoken_output', [False, True])
+def test_text_tool_call_preserves_declared_operation_and_scope(monkeypatch, query, operation, scope, remaining, record_property, spoken_output):
     tool = OwnedEntryManager()
     monkeypatch.setitem(registry.BUILTIN_TOOLS, tool.name, tool)
     monkeypatch.setattr(engine, 'select_tools', lambda *args, **kwargs: [tool.name, 'stop'])
@@ -73,7 +74,7 @@ def test_text_tool_call_preserves_declared_operation_and_scope(monkeypatch, quer
                   llm_chat_timeout_sec=60, planner_timeout_sec=15)
     db = Database(':memory:')
     try:
-        reply = engine.run_reply_engine(db, cfg, None, query, DialogueMemory(), language='en')
+        reply = engine.run_reply_engine(db, cfg, None, query, DialogueMemory(), language='en', spoken_output=spoken_output)
         record_property('reply', reply)
         record_property('tool_calls', json.dumps(tool.calls))
         assert reply
