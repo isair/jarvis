@@ -196,7 +196,7 @@ def test_future_alarm_speech_is_not_repeated_in_confirmation_context(encoded):
         requests = json.loads(visible[0]['content'].split(':', 1)[1])
         assert requests[0]['id'] == visible[1]['tool_call_id'] == 'owned'
         assert requests[0]['function']['arguments'] == {'action': 'set', 'minutes': 5}
-        assert bool(visible[0].get('tool_calls')) is not text_protocol
+        assert visible[0]['tool_calls'] == requests
     assert messages == before
 
 

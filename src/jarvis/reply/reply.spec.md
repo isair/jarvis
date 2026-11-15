@@ -511,6 +511,6 @@ does not infer the language from tool output or future expiry speech.
 
 Literal-marker instructions are included only when the translation packet contains protected quoted text.
 
-Model-facing request copies exclude schema properties marked `writeOnly`, including timer expiry speech, while preserving call IDs and matching results. Text-tool contexts contain text protocol requests without native `tool_calls` keys. Execution and recorded history retain the full arguments.
+Model-facing request copies exclude schema properties marked `writeOnly`, including timer expiry speech, while preserving call IDs and matching results. Planner-owned text requests use content protocol. Recognised model requests retain their existing structured identity metadata alongside text protocol content. Execution and recorded history retain the full arguments.
 
 The same projection applies to JSON-string native arguments and max-turn summary input.

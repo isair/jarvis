@@ -888,6 +888,7 @@ def test_planned_actions_are_reported_as_completed_calls_without_losing_repeated
     monkeypatch.setattr(engine, 'run_tool_with_retries', execute)
     def backend(*a, **kw):
         messages = kw.get('messages') or a[2]
+        assert not any(m.get('tool_calls') for m in messages), 'Planner-owned text requests retain the text protocol'
         calls = {c['id'] for m in messages
                  for c in (json.loads(m['content'].split(':', 1)[1])
                            if m.get('role') == 'assistant' and (m.get('content') or '').startswith('tool_calls:')
@@ -902,3 +903,10 @@ def test_planned_actions_are_reported_as_completed_calls_without_losing_repeated
     result = engine.run_reply_engine(db, mock_config, None, 'Start the requested tea timers.', dialogue_memory)
     assert result == 'The requested timers are running.'
     assert len(actions) == requested
+    recorded = dialogue_memory.get_recent_turns_with_tools()
+    saved_calls = [call for message in recorded for call in message.get('tool_calls', [])
+                   if call.get('function', {}).get('name') == 'timer']
+    assert len(saved_calls) == requested
+    assert all(call['function']['arguments'] == args for call in saved_calls)
+    saved_results = {message.get('tool_call_id') for message in recorded if message.get('tool_name') == 'timer'}
+    assert {call['id'] for call in saved_calls} == saved_results

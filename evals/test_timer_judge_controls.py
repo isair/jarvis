@@ -22,3 +22,14 @@ def test_timer_judge_requires_truthful_running_state(language, reply, expected):
         f'The reply must be in language {language}, acknowledge a running five-minute countdown, '
         'and must not claim the countdown has elapsed.', reply,
     ) == expected
+
+
+@pytest.mark.parametrize('reply,expected', [
+    ('The two timers for tea have been set, each for five minutes. One is due to finish at 13:22 GMT and the other at 13:22 GMT. One hopes the tea will be suitably brewed in time.', 'PASS'),
+    ('One timer for tea has been set for five minutes. It is due to finish at 13:22 GMT.', 'FAIL'),
+    ('The two timers for tea were set for five minutes and both have already elapsed.', 'FAIL'),
+])
+def test_two_timer_confirmation_verdict_preserves_count_and_state(reply, expected):
+    assert judge_pass_fail(
+        'The reply must confirm two running five-minute timers, not one or an elapsed timer.', reply,
+    ) == expected

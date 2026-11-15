@@ -205,10 +205,11 @@ def _model_messages(messages, *, text_protocol, mcp_tools=None):
         row = dict(message)
         if text_protocol or text_calls:
             row['content'] = 'tool_calls: ' + json.dumps(projected, ensure_ascii=False)
-        if text_protocol:
+        if text_protocol and message.get('_planner_text_request'):
             row.pop('tool_calls', None)
-        else:
+        elif not text_protocol or message.get('tool_calls'):
             row['tool_calls'] = projected
+        row.pop('_planner_text_request', None)
         visible.append(row)
     return visible
 
@@ -2358,11 +2359,14 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                                 _plan_hint = ""
                             planned_call = {"id": _plan_call_id, "type": "function",
                                             "function": {"name": _name, "arguments": _args}}
-                            messages.append({
+                            planned_message = {
                                 "role": "assistant",
                                 "content": "tool_calls: " + json.dumps([planned_call], ensure_ascii=False),
                                 "tool_calls": [planned_call],
-                            })
+                            }
+                            if use_text_tools:
+                                planned_message['_planner_text_request'] = True
+                            messages.append(planned_message)
                             debug_log("planner execution retained with its request/result identity", "planning")
                             messages.append({
                                 "role": "user",

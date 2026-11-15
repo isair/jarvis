@@ -579,7 +579,13 @@ def judge_pass_fail(criteria: str, evidence: str) -> Optional[str]:
         'units before comparing them. Proper names do not change the language of the surrounding '
         'prose. Satisfying one criterion cannot excuse contradicting another; any contradiction '
         'requires FAIL. Do not impose requirements absent from the criteria. Return only JSON '
-        'with exactly assessment (a non-empty string) followed by verdict (PASS or FAIL).\nCriteria:\n' + criteria,
+        'with exactly assessment (a non-empty string) followed by verdict (PASS or FAIL).\nCriteria:\n' + criteria
+        + '\nApply the required meanings, not keyword matching. Unless the criteria explicitly demand '
+        'a literal word, equivalent phrasing satisfies them. For countdowns, confirming that timers '
+        'have been set with future finish times confirms that they are running, even without the '
+        'word running. A future finish time is not a claim that a timer has already elapsed. '
+        'Still check the requested count and duration; one timer cannot satisfy two, and any '
+        'claim of elapsed countdowns contradicts a required running state.',
         evidence,
         response_schema=schema,
     )
