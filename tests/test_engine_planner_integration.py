@@ -880,7 +880,7 @@ def test_planned_actions_are_reported_as_completed_calls_without_losing_repeated
     monkeypatch.setattr(engine, 'select_tools', lambda *a, **k: ['timer', 'stop'])
     monkeypatch.setattr(engine, 'extract_search_params_for_memory', lambda *a, **k: {'keywords': []})
     monkeypatch.setattr(engine, 'plan_query', lambda *a, **k: ['timer set tea'] * requested + ['Reply to the user.'])
-    args = {'action': 'set', 'minutes': 5, 'label': 'tea', 'announcement': 'Tea is ready'}
+    args = {'action': 'set', 'minutes': 5, 'label': 'tea', 'expiry_announcement': 'Tea is ready'}
     monkeypatch.setattr(engine, '_resolve_plan_step', lambda **kw: ('timer', dict(args)))
     def execute(**kw):
         actions.append(dict(kw['tool_args']))
@@ -894,7 +894,7 @@ def test_planned_actions_are_reported_as_completed_calls_without_losing_repeated
         if len(calls & completed) >= requested:
             return _assistant_content('The requested timers are running.')
         return _assistant_content('tool_calls: '+json.dumps([{'id': 'retry', 'type': 'function',
-            'function': {'name': 'timer', 'arguments': {**args, 'announcement': 'Your tea is ready'}}}]))
+            'function': {'name': 'timer', 'arguments': {**args, 'expiry_announcement': 'Your tea is ready'}}}]))
     monkeypatch.setattr(engine, 'chat_with_messages', backend)
     result = engine.run_reply_engine(db, mock_config, None, 'Start the requested tea timers.', dialogue_memory)
     assert result == 'The requested timers are running.'

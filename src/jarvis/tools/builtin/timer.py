@@ -663,6 +663,10 @@ def stop_all_alarms() -> int:
 class TimerTool(Tool):
     """Tool to set / list / cancel countdown timers."""
 
+    def allows_repeated_action(self, args: Dict[str, Any]) -> bool:
+        action = args.get("action")
+        return isinstance(action, str) and action.strip().lower() == "set"
+
     @property
     def name(self) -> str:
         return "timer"
@@ -678,7 +682,7 @@ class TimerTool(Tool):
             "natural-language durations yourself before calling. Always pass "
             "the user's label (e.g. 'pasta', 'laundry') in the label field "
             "when they name one. For action='set', ALSO pass an "
-            "'announcement' string written in the SAME LANGUAGE the user is "
+            "'expiry_announcement' string written in the SAME LANGUAGE the user is "
             "currently speaking: this is what Jarvis will literally speak "
             "aloud when the timer elapses, so phrase it naturally (e.g. "
             "'Your pasta timer is up' / 'El temporizador de la pasta ha "
@@ -712,7 +716,7 @@ class TimerTool(Tool):
                     "type": "string",
                     "description": "Optional human label (e.g. 'pasta'). For action='set' it tags the new timer; for action='cancel' it cancels every running timer with that label (case-insensitive).",
                 },
-                "announcement": {
+                "expiry_announcement": {
                     "type": "string",
                     "description": "For action='set': the exact phrase Jarvis will speak when the timer elapses, written in the user's current language. Keep it short and natural (e.g. 'Your pasta timer is up'). Supply it together with the duration when setting a timer.",
                 },
@@ -798,7 +802,7 @@ class TimerTool(Tool):
             )
 
         label = args.get("label")
-        announcement = args.get("announcement")
+        announcement = args.get("expiry_announcement")
         if (context.language or context.redacted_text.strip()) and not _sanitise_announcement(announcement if isinstance(announcement, str) else None):
             debug_log("timer needs expiry text for the request language before admission", "tools")
             return ToolExecutionResult(

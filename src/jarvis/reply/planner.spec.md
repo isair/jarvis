@@ -351,3 +351,7 @@ The step resolver receives the original redacted current request separately from
 Direct execution retains an assistant request with its unique call ID and a
 matching result before the model continues. Each planned ordinal owns its
 action, so explicitly repeated steps with identical arguments remain distinct.
+
+Tool steps begin with an exact registered name and retain explicitly requested
+repeated actions as distinct ordinals. Under-specified prose plans retain the
+existing router fallback and never gain direct-execution authority.

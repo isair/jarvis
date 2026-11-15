@@ -36,7 +36,7 @@ The main reply model receives delivery guidance snapshotted per request. Silent 
 
 Completed replies for English spoken delivery pass through `delivery.render_english_speech` before output, TTS and dialogue storage. This is a translation-only call on the configured CHAT tier, with the shared `ENGLISH_SPEECH_RENDER_PROMPT`. It receives only the completed reply as JSON data, never the original request, tool catalogue or execution authority. Silent and speech-disabled replies bypass it. The original redacted request remains unchanged for routing, planning, tool arguments and saved dialogue. The max-turn digest retains its request-language generation contract; its completed text follows the same spoken delivery stage.
 
-Rendering uses temperature zero, thinking disabled, an 8,192-token context, a 2,048-token output cap and the configured chat timeout. JSON input above 4,096 UTF-8 bytes, before or after literal protection, bypasses rendering. Double-quoted, curly-double-quoted and guillemet-delimited literals are replaced by distinct markers and restored verbatim only when every marker returns exactly once and in order. Unavailable, incomplete, blank, malformed or invalid-literal output retains the original completed reply, rather than dropping facts or inventing completion. Canned error/blocker replies retain their English text. Cancellation after rendering suppresses output and conversation publication. This adds at most one model call to a spoken reply and none to silent replies.
+Rendering uses temperature zero, thinking disabled, an 8,192-token context, a 2,048-token output cap and the configured chat timeout. JSON input above 4,096 UTF-8 bytes, before or after literal protection, bypasses rendering. Double-quoted, curly-double-quoted and guillemet-delimited literals are replaced by distinct markers and restored verbatim only when every marker returns exactly once and in order. Unavailable, incomplete, blank, malformed or invalid-literal output retains the original completed reply, rather than dropping facts or inventing completion. Canned error/blocker replies retain their English text. Cancellation after rendering suppresses output and conversation publication. Spoken delivery adds at most one translation call. Tool-based written delivery uses the language-selection and translation contexts below; tool-free written replies avoid them.
 
 ### Steps and Branches (Agentic Messages Loop)
 1. Redact
@@ -491,9 +491,10 @@ finish under their existing deadlines; cancellation cannot undo completed action
 Voice and text chat do not supply a task cancellation event.
 
 Completed written replies after tool execution pass through
-`delivery.render_written_reply`. It uses the configured CHAT tier and the shared
-`WRITTEN_REPLY_RENDER_PROMPT` to translate the completed text into the language
-of the redacted current request (or the explicitly requested reply language).
+`delivery.render_written_reply`. It first uses the configured CHAT tier with `WRITTEN_LANGUAGE_PROMPT` to classify and select
+the language of the redacted request, honouring explicit language overrides.
+A second CHAT call uses the shared `REPLY_RENDER_PROMPT` with that language
+to translate only the completed text. Both calls share one chat deadline.
 The request is language-reference data, not execution authority. The original
 request, plan, arguments and tool execution are unchanged. Tool-free written
 replies avoid this stage. Both delivery renderers share one bounded literal-
@@ -501,3 +502,9 @@ preserving implementation: complete raw and protected JSON packets are capped
 at 4,096 UTF-8 bytes, with 8,192 context tokens, 2,048 output tokens and the
 configured chat deadline. Failure preserves the original truthful result.
 Cancellation after rendering suppresses output and dialogue publication.
+
+Written-language selection returns a bounded language name from the redacted
+request alone. Translation then receives only completed text and an explicit
+target language. Selection (64 output tokens) and translation share one chat
+deadline; cancellation between them prevents the second call. The renderer
+does not infer the language from tool output or future expiry speech.

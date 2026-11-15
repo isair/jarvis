@@ -155,3 +155,14 @@ def test_stop_dismisses_even_an_oversized_batch(mock_config, db, dialogue_memory
     assert calls == [("stop", {})]
     assert len(histories) == 1
     assert reply is None
+
+
+def test_distinct_matching_timer_actions_execute_in_one_batch_but_not_on_retry(mock_config, db, dialogue_memory):
+    args = {'action': 'set', 'minutes': 5, 'label': 'tea', 'expiry_announcement': 'Tea is ready'}
+    calls, histories, reply = _run(mock_config, db, dialogue_memory,
+        [_call('', 'one', name='timer', arguments=args), _call('', 'two', name='timer', arguments=args)],
+        allowed=['timer', 'stop'], followup=[_call('', 'retry', name='timer', arguments=args)])
+    assert len(calls) == 2
+    assert calls[0] == calls[1]
+    assert len(_paired_results(histories[1])) == 2
+    assert len(histories) == 3

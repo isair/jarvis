@@ -9,7 +9,7 @@ that owns all active countdowns and announces them when they elapse.
 
 - **`set`** — start a new countdown.
   - Inputs: integer `hours` / `minutes` / `seconds` (any combination,
-    summed), optional `label`, optional `announcement` (see below).
+    summed), optional `label`, optional `expiry_announcement` (see below).
   - Effects: registers a `threading.Timer` and returns the new timer's
     id, label, duration, and ETA. Multiple timers run concurrently.
 - **`list`** — return all active timers, sorted by ETA.
@@ -179,3 +179,9 @@ part of tool results or model inputs.
 Timer labels remove C0/C1 terminal controls while retaining ordinary Unicode
 text and joining characters. Stored labels, console output and cancellation
 matching use the same sanitisation.
+
+The public `expiry_announcement` input names text for the future expiry event,
+separately from the immediate confirmation. Matching creation requests with
+distinct call IDs in one model batch remain separate actions; repeated calls
+from later model turns retain retry protection. Read-only tools retain their
+existing same-batch coalescing.

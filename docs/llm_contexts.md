@@ -547,13 +547,22 @@ result before the next model turn. Distinct planned ordinals retain explicitly
 repeated actions, including identical argument objects.
 
 Completed written replies after current-request tool execution use
-`delivery.render_written_reply`, one translation-only CHAT-tier context through
-`WRITTEN_REPLY_RENDER_PROMPT`. Its JSON inputs are the completed reply and the
-original redacted request as a language reference, without tools or execution
-authority. It preserves facts and quoted literals. Tool-free written replies
+`delivery.render_written_reply`, two bounded CHAT-tier contexts sharing one chat deadline. `WRITTEN_LANGUAGE_PROMPT`
+classifies the redacted current request, respecting explicit language overrides
+and ignoring quoted material/proper names. It returns a bounded language name
+(64 output tokens). `REPLY_RENDER_PROMPT` then translates only the completed
+reply into that language, without receiving the request or execution authority. It preserves facts and quoted literals. Tool-free written replies
 avoid this call. Shared rendering caps each complete raw/protected JSON packet
 at 4,096 UTF-8 bytes, uses 8,192 context tokens and 2,048 output tokens, and
 honours `llm_chat_timeout_sec`. Unavailable or invalid rendering keeps the
 original reply. Output, dialogue and caller delivery share the rendered text;
 cancellation suppresses publication. English spoken output retains its separate
 English-language policy through the same implementation.
+
+The written-language selector receives only the redacted request JSON and
+returns a bounded language name. Translation receives completed text alone
+under the explicit-target `REPLY_RENDER_PROMPT`. Selection is capped at
+64 generated tokens, translation at 2,048, and both share one configured chat
+deadline. Cancellation between the contexts suppresses translation. The timer
+schema names its future speech `expiry_announcement`, separating it from the
+immediate completion reply.

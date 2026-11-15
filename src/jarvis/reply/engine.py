@@ -2532,6 +2532,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                       f"{max_turns - turn + 1} slots); only dismissal can execute", "planning")
         if tool_requests and not batch_over_budget:
             turn += len(tool_requests) - 1
+        outcomes_before_batch = dict(recent_tool_outcomes)
         for tool_name, tool_args, tool_call_id in tool_requests:
             if cancel_event is not None and cancel_event.is_set():
                 debug_log("reply cancelled between native tool requests", "planning")
@@ -2611,7 +2612,12 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 stable_args = None
                 signature = (tool_name, "__unserializable_args__")
 
-            if signature in recent_tool_outcomes:
+            spec = BUILTIN_TOOLS.get(tool_name)
+            distinct_batch_action = (
+                spec is not None and spec.allows_repeated_action(tool_args or {})
+                and signature not in outcomes_before_batch
+            )
+            if signature in recent_tool_outcomes and not distinct_batch_action:
                 debug_log(f"  ⚠️ Duplicate {tool_name} call - returning cached guidance", "planning")
                 feedback = (
                     f"[Tool: {tool_name}] You already called this tool with these arguments. Use the results from the previous tool call to answer the user."
@@ -2989,7 +2995,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     elif (_delivery_guidance == SILENT_REPLY_GUIDANCE
             and not malformed_fallback and reply != _UNEXECUTED_ACTION_REPLY
             and any(_is_executed_tool_result(m) for m in messages[user_msg_index + 1:])):
-        rendered = render_written_reply(cfg, redacted, reply)
+        rendered = render_written_reply(cfg, redacted, reply, cancel_event=cancel_event)
         if not _is_malformed_model_output(rendered):
             reply = rendered
 

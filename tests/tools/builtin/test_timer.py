@@ -193,7 +193,7 @@ class TestTimerSet:
                 "action": "set",
                 "seconds": 30,
                 "label": "makarna",
-                "announcement": "Makarna zamanlayıcısı doldu.",
+                "expiry_announcement": "Makarna zamanlayıcısı doldu.",
             },
             make_context(),
         )
@@ -654,7 +654,7 @@ def test_known_request_language_needs_expiry_text_before_start(fresh_manager, la
     result = TimerTool().run({'action': 'set', 'minutes': 5}, context)
     assert not result.success
     assert fresh_manager[0].list() == []
-    result = TimerTool().run({'action': 'set', 'minutes': 5, 'announcement': 'Owned expiry text'}, context)
+    result = TimerTool().run({'action': 'set', 'minutes': 5, 'expiry_announcement': 'Owned expiry text'}, context)
     assert result.success
     assert len(fresh_manager[0].list()) == 1
 

@@ -56,6 +56,13 @@ class Tool(ABC):
             prompts, redacted_text, retry allowance, and a user_print callable.
     """
 
+    def allows_repeated_action(self, args: Dict[str, Any]) -> bool:
+        """Whether distinct matching calls in one batch are separate actions.
+
+        Later model turns still use whole-request retry protection.
+        """
+        return False
+
     @property
     @abstractmethod
     def name(self) -> str:

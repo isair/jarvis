@@ -19,7 +19,7 @@ def test_written_tool_reply_translates_after_execution_and_shares_saved_text(mon
     monkeypatch.setattr(engine, 'redact', lambda text: query)
     monkeypatch.setattr(engine, 'select_tools', lambda **kw: ['timer', 'stop'])
     monkeypatch.setattr(engine, 'extract_search_params_for_memory', lambda **kw: {'keywords': []})
-    responses = iter([{'message': {'tool_calls': [{'id': 'owned', 'function': {'name': 'timer', 'arguments': {'action': 'set', 'minutes': 5, 'announcement': 'Çay hazır'}}}]}}, {'message': {'content': draft}}])
+    responses = iter([{'message': {'tool_calls': [{'id': 'owned', 'function': {'name': 'timer', 'arguments': {'action': 'set', 'minutes': 5, 'expiry_announcement': 'Çay hazır'}}}]}}, {'message': {'content': draft}}])
     monkeypatch.setattr(engine, 'chat_with_messages', lambda **kw: next(responses))
     executed = []
     def execute(**kw):
@@ -28,7 +28,11 @@ def test_written_tool_reply_translates_after_execution_and_shares_saved_text(mon
     monkeypatch.setattr(engine, 'run_tool_with_retries', execute)
     def render(model, system, content, **kw):
         packet = json.loads(content)
-        assert packet == {'text_to_translate': draft, 'current_request': query}
+        if 'current_request' in packet:
+            assert packet == {'current_request': query}
+            return 'Turkish'
+        assert packet == {'text_to_translate': draft}
+        assert 'Turkish' in system
         assert len(content.encode('utf-8')) <= delivery._MAX_RENDER_INPUT_BYTES
         assert 'PRIVATE ORIGINAL' not in content
         if cancel_during_render:
@@ -59,8 +63,41 @@ def test_written_rendering_keeps_literal_markers_distinct_from_request_data(monk
     def render(model, system, content, **kw):
         packet = json.loads(content)
         packets.append(packet)
-        return packet['text_to_translate']
+        return 'Turkish' if 'current_request' in packet else packet['text_to_translate']
     monkeypatch.setattr(delivery, 'get_llm_backend', lambda cfg: SimpleNamespace(direct=render))
     assert delivery.render_written_reply(mock_config, query, text) == text
     assert packets[0]['current_request'] == query
-    assert '"Tea"' not in packets[0]['text_to_translate']
+    assert '"Tea"' not in packets[1]['text_to_translate']
+
+
+@pytest.mark.parametrize('spoken,with_tool', [(False, False), (True, False), (True, True)])
+def test_ineligible_reply_does_not_enter_written_delivery(monkeypatch, mock_config, db, dialogue_memory, spoken, with_tool):
+    monkeypatch.setattr(engine, 'render_written_reply', delivery.render_written_reply)
+    monkeypatch.setattr(engine, 'render_english_speech', lambda cfg, text: text)
+    monkeypatch.setattr(delivery, 'get_llm_backend', lambda cfg: pytest.fail('Unexpected written rendering'))
+    mock_config.planner_enabled = False
+    monkeypatch.setattr(engine, 'select_tools', lambda **kw: ['timer', 'stop'] if with_tool else ['stop'])
+    monkeypatch.setattr(engine, 'extract_search_params_for_memory', lambda **kw: {'keywords': []})
+    messages = ([{'message': {'tool_calls': [{'id': 'owned', 'function': {'name': 'timer', 'arguments': {'action': 'list'}}}]}}] if with_tool else []) + [{'message': {'content': 'Hello.'}}]
+    responses = iter(messages)
+    monkeypatch.setattr(engine, 'chat_with_messages', lambda **kw: next(responses))
+    monkeypatch.setattr(engine, 'run_tool_with_retries', lambda **kw: ToolExecutionResult(True, 'No timers.'))
+    assert engine.run_reply_engine(db, mock_config, None, 'Hello.', dialogue_memory, quiet=True, spoken_output=spoken) == 'Hello.'
+
+
+@pytest.mark.parametrize('stop', ['cancel', 'deadline'])
+def test_written_delivery_stops_between_language_and_translation(monkeypatch, mock_config, stop):
+    from threading import Event
+    cancelled = Event()
+    clocks = iter([0.0, float(mock_config.llm_chat_timeout_sec) + 1])
+    monkeypatch.setattr(delivery, 'time', SimpleNamespace(monotonic=lambda: next(clocks)))
+    requests = []
+    def select(*a, **kw):
+        requests.append(kw)
+        if stop == 'cancel':
+            cancelled.set()
+        return 'Turkish'
+    monkeypatch.setattr(delivery, 'get_llm_backend', lambda cfg: SimpleNamespace(direct=select))
+    text = 'The timer is running.'
+    assert delivery.render_written_reply(mock_config, 'Çay için zamanlayıcı.', text, cancel_event=cancelled) == text
+    assert len(requests) == 1

@@ -16,3 +16,8 @@ catalogue record. Rendering does not mutate the tool's schema.
 Tools without a supplied input schema use the registry's empty object contract in
 both representations. Text generation reuses native definition selection and
 schema construction, so provider format does not define a different input contract.
+
+Built-in tools declare `allows_repeated_action(args)` for matching requests
+with distinct IDs in one model batch. Timer creation opts in; other built-ins
+retain coalescing. The engine snapshots outcomes before the batch, preserving
+whole-request retry protection across later model turns.
