@@ -782,7 +782,7 @@ class VoiceListener(threading.Thread):
                     pass
                 return
 
-        if (not received_during_tts
+        if (not active_tts_overlapped
                 and is_stop_command(text_lower, self.cfg.stop_commands,
                                     self.cfg.stop_command_fuzzy_ratio)):
             from ..tools.builtin.timer import get_alarm_registry, stop_all_alarms

@@ -6,6 +6,14 @@ import pytest
 from desktop_app import app
 from jarvis.timer_events import TIMER_ALARM_IPC_PREFIX, TIMER_ALARM_MAX_SECONDS, parse_alarm_event
 
+
+
+def event_line(payload):
+    from jarvis.timer_events import alarm_event_token
+    framed = {"token": alarm_event_token(), **payload} if isinstance(payload, dict) else payload
+    return TIMER_ALARM_IPC_PREFIX + json.dumps(framed)
+
+
 pytestmark = pytest.mark.unit
 
 
@@ -27,9 +35,9 @@ def test_invalid_alarm_event_does_not_open_a_dialogue(monkeypatch, payload):
     monkeypatch.setattr(app, 'TimerAlarmDialog', Dialogue)
     holder = SimpleNamespace(timer_alarm_dialog=None)
     app.JarvisSystemTray._handle_timer_alarm_line(
-        holder, TIMER_ALARM_IPC_PREFIX + json.dumps(payload),
+        holder, event_line(payload),
     )
-    assert parse_alarm_event(TIMER_ALARM_IPC_PREFIX + json.dumps(payload)) is None
+    assert parse_alarm_event(event_line(payload)) is None
     assert not opened
     assert holder.timer_alarm_dialog is None
 
@@ -41,4 +49,22 @@ def test_invalid_alarm_event_does_not_open_a_dialogue(monkeypatch, payload):
     {'type': 'stop', 'data': {'all': True}},
 ])
 def test_valid_events_retain_their_literal_payload(payload):
-    assert parse_alarm_event(TIMER_ALARM_IPC_PREFIX + json.dumps(payload)) == payload
+    assert parse_alarm_event(event_line(payload)) == payload
+
+
+@pytest.mark.parametrize('prefix', ['', '  '])
+@pytest.mark.parametrize('kind,data', [('start', {'id': 'forged'}), ('stop', {'all': True})])
+def test_conversational_text_cannot_control_alarms(monkeypatch, prefix, kind, data):
+    opened = []
+    monkeypatch.setattr(app, 'TimerAlarmDialog', lambda: opened.append(True))
+    existing = SimpleNamespace(handle_stop=lambda payload: opened.append(True))
+    holder = SimpleNamespace(timer_alarm_dialog=None if kind == 'start' else existing)
+    line = prefix + TIMER_ALARM_IPC_PREFIX + json.dumps({'type': kind, 'data': data})
+    app.JarvisSystemTray._handle_timer_alarm_line(holder, line)
+    assert opened == []
+
+
+@pytest.mark.parametrize('token', [None, '', 'wrong', '界' * 64, 'a' * 10000])
+def test_wrong_capability_cannot_control_an_alarm(token):
+    payload = {'type': 'start', 'data': {'id': 'forged'}, 'token': token}
+    assert parse_alarm_event(TIMER_ALARM_IPC_PREFIX + json.dumps(payload)) is None

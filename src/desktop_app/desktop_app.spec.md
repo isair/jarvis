@@ -577,3 +577,7 @@ Typed local timer events open one reusable alarm dialogue. Timer labels render
 as plain text. Dismiss, window close, Escape, a daemon stop event or the shared
 maximum alarm duration stops local audio. The packaged desktop includes its
 local alarm sound. Countdown ownership and speech remain in the core daemon.
+
+Alarm dispatch requires a column-zero event with the process capability shared
+with its owned daemon. Other log text, including multi-line conversational
+data, cannot supply an alarm action.

@@ -12,7 +12,6 @@ sent to any external service.
 
 from __future__ import annotations
 
-import json
 import math
 import secrets
 import sys
@@ -24,7 +23,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from ...debug import debug_log
 from ...output.tts import SpeechRequest
-from ...timer_events import TIMER_ALARM_IPC_PREFIX, TIMER_ALARM_MAX_SECONDS
+from ...timer_events import TIMER_ALARM_MAX_SECONDS, encode_alarm_event
 from ..base import Tool, ToolContext
 from ..types import ToolExecutionResult
 
@@ -490,7 +489,7 @@ def _emit_alarm_event(event_type: str, payload: Dict[str, Any]) -> None:
     failed write must never crash the announcer.
     """
     try:
-        line = f"{TIMER_ALARM_IPC_PREFIX}{json.dumps({'type': event_type, 'data': payload})}"
+        line = encode_alarm_event(event_type, payload)
         print(line, flush=True)
     except Exception as e:
         debug_log(f"alarm IPC emit failed: {e}", "tools")
@@ -714,7 +713,7 @@ class TimerTool(Tool):
                 },
                 "announcement": {
                     "type": "string",
-                    "description": "For action='set': the exact phrase Jarvis will speak when the timer elapses, written in the user's current language. Keep it short and natural (e.g. 'Your pasta timer is up'). If omitted, an English default is used.",
+                    "description": "For action='set': the exact phrase Jarvis will speak when the timer elapses, written in the user's current language. Keep it short and natural (e.g. 'Your pasta timer is up'). Supply it together with the duration when setting a timer.",
                 },
                 "timer_id": {
                     "type": "string",
@@ -799,6 +798,12 @@ class TimerTool(Tool):
 
         label = args.get("label")
         announcement = args.get("announcement")
+        if context.language and not _sanitise_announcement(announcement if isinstance(announcement, str) else None):
+            debug_log("timer needs expiry text for the request language before admission", "tools")
+            return ToolExecutionResult(
+                success=False, reply_text=None,
+                error_message="Provide the expiry announcement in the request language before setting this timer. No timer was started.",
+            )
         try:
             entry = manager.start(
                 total_sec,

@@ -71,7 +71,7 @@ from desktop_app.diary_dialog import DiaryUpdateDialog
 from desktop_app.themes import JARVIS_THEME_STYLESHEET, COLORS, apply_theme
 from desktop_app.log_output import LogStream, clean_log, parse_progress
 from desktop_app.face_widget import FaceWindow
-from jarvis.timer_events import TIMER_ALARM_IPC_PREFIX, parse_alarm_event
+from jarvis.timer_events import TIMER_ALARM_IPC_PREFIX, parse_alarm_event, alarm_event_token
 from desktop_app.timer_alarm_dialog import TimerAlarmDialog
 
 
@@ -2670,6 +2670,7 @@ class JarvisSystemTray:
                 else:
                     env["PYTHONPATH"] = str(src_path)
                 env["JARVIS_TASK_IPC"] = "1"
+                env["JARVIS_TIMER_ALARM_TOKEN"] = alarm_event_token()
                 # Signal the daemon that we own its stdin (chat query-in IPC)
                 # so it starts the stdin monitor. Without this the daemon would
                 # treat a non-TTY stdin as "no monitor" on non-Windows, and a
@@ -2827,7 +2828,7 @@ class JarvisSystemTray:
         the same prefix check, but doing it here avoids the .strip()
         and the function call on the millions of unrelated log lines.
         """
-        if not line.lstrip().startswith(TIMER_ALARM_IPC_PREFIX):
+        if not line.startswith(TIMER_ALARM_IPC_PREFIX):
             return
         event = parse_alarm_event(line)
         if not event:

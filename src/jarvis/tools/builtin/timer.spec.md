@@ -164,3 +164,14 @@ strings and fractions. Invalid components reject the whole request rather than
 scheduling only the remaining duration.
 
 Tool results carry factual countdown state and elapsed status alongside identities, durations and ETAs. Response instructions belong to the shared system prompt.
+
+When the request language is known, setting a timer requires non-empty expiry
+text in that language before admission. Missing text returns an error without
+starting a countdown. Calls without a language signal retain the English
+fallback. The shared prompt treats running timer state as completed creation,
+so optional metadata does not justify another countdown.
+
+Alarm events carry a per-process capability shared with the owned daemon. The
+desktop requires the matching capability and a column-zero event prefix;
+conversational log text cannot create or dismiss alarms. The capability is not
+part of tool results or model inputs.

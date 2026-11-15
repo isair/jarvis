@@ -318,8 +318,9 @@ def test_configured_voice_stop_dismisses_alarm_without_cancelling_future_timer(s
     ('stale-capture', 'dur', False),
     ('ambient', 'unrelated conversation', False),
 ])
+@pytest.mark.parametrize("capture_during_tts", [False, True])
 def test_configured_stop_reaches_bare_alarm_only_for_current_user_capture(
-        service, mock_config, monkeypatch, scenario, command, dismisses):
+        service, mock_config, monkeypatch, scenario, command, dismisses, capture_during_tts):
     import time
     from jarvis.listening.listener import VoiceListener
     manager, engine, _, _ = service
@@ -354,7 +355,7 @@ def test_configured_stop_reaches_bare_alarm_only_for_current_user_capture(
             engine.speak('Unrelated queued speech', completion_callback=lambda: unrelated_completed.append(True))
         listener._process_transcript(command, utterance_energy=1.0,
             utterance_start_time=captured_at, utterance_end_time=captured_at,
-            captured_during_tts=False, captured_tts_start_time=listener.echo_detector._tts_start_time,
+            captured_during_tts=capture_during_tts, captured_tts_start_time=listener.echo_detector._tts_start_time,
             generation=listener._capture_generation, language=None)
         assert registry.active_ids() == ([] if dismisses else [entry.id])
         if scenario == 'finished-speech':

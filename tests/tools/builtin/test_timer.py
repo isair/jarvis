@@ -47,9 +47,7 @@ def fresh_manager(monkeypatch):
 
 
 def make_context() -> ToolContext:
-    ctx = Mock(spec=ToolContext)
-    ctx.user_print = Mock()
-    return ctx
+    return ToolContext(None, None, "", "", "", 1, Mock())
 
 
 class TestFormatDuration:
@@ -647,3 +645,15 @@ class TestAlarmRegistry:
         time.sleep(0.2)
         assert calls == []
         reg.stop("abc123")
+
+
+@pytest.mark.parametrize('language', ['en', 'tr', 'de', 'es', 'ja', 'zz'])
+def test_known_request_language_needs_expiry_text_before_start(fresh_manager, language):
+    context = make_context()
+    context.language = language
+    result = TimerTool().run({'action': 'set', 'minutes': 5}, context)
+    assert not result.success
+    assert fresh_manager[0].list() == []
+    result = TimerTool().run({'action': 'set', 'minutes': 5, 'announcement': 'Owned expiry text'}, context)
+    assert result.success
+    assert len(fresh_manager[0].list()) == 1

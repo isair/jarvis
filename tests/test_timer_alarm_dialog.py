@@ -24,6 +24,14 @@ from jarvis.timer_events import TIMER_ALARM_IPC_PREFIX
 # ---------------------------------------------------------------------------
 
 
+
+
+def event_line(payload):
+    from jarvis.timer_events import alarm_event_token
+    framed = {"token": alarm_event_token(), **payload} if isinstance(payload, dict) else payload
+    return TIMER_ALARM_IPC_PREFIX + json.dumps(framed)
+
+
 class TestParseAlarmEvent:
     def test_returns_none_for_non_ipc_line(self):
         from jarvis.timer_events import parse_alarm_event
@@ -52,18 +60,18 @@ class TestParseAlarmEvent:
             "type": "start",
             "data": {"id": "abc", "label": "pasta", "duration_human": "10 minutes"},
         }
-        line = TIMER_ALARM_IPC_PREFIX + json.dumps(payload)
+        line = event_line(payload)
         assert parse_alarm_event(line) == payload
 
-    def test_strips_surrounding_whitespace(self):
+    def test_requires_column_zero_but_accepts_a_trailing_newline(self):
         # The daemon prints lines via `print(..., flush=True)` which
-        # already adds a trailing newline; a tolerant parser keeps the
-        # IPC robust to incidental whitespace.
+        # adds a trailing newline. Leading indentation belongs to log data.
         from jarvis.timer_events import parse_alarm_event
 
         payload = {"type": "stop", "data": {"id": "abc"}}
-        line = "  " + TIMER_ALARM_IPC_PREFIX + json.dumps(payload) + "\n"
-        assert parse_alarm_event(line) == payload
+        line = "  " + event_line(payload) + "\n"
+        assert parse_alarm_event(line) is None
+        assert parse_alarm_event(event_line(payload) + "\n") == payload
 
 
 # ---------------------------------------------------------------------------
@@ -278,7 +286,7 @@ class TestHandleTimerAlarmLineDispatch:
         assert result is None
 
     def test_start_event_creates_dialog_when_absent(self):
-        line = TIMER_ALARM_IPC_PREFIX + json.dumps({
+        line = event_line({
             "type": "start",
             "data": {"id": "a", "label": "pasta", "duration_human": "1 minute"},
         })
@@ -290,7 +298,7 @@ class TestHandleTimerAlarmLineDispatch:
 
     def test_start_event_reuses_existing_dialog(self):
         existing = MagicMock(name="existing")
-        line = TIMER_ALARM_IPC_PREFIX + json.dumps({
+        line = event_line({
             "type": "start",
             "data": {"id": "b"},
         })
@@ -300,7 +308,7 @@ class TestHandleTimerAlarmLineDispatch:
 
     def test_stop_event_routes_to_existing_dialog(self):
         existing = MagicMock(name="existing")
-        line = TIMER_ALARM_IPC_PREFIX + json.dumps({
+        line = event_line({
             "type": "stop",
             "data": {"id": "a"},
         })
@@ -310,7 +318,7 @@ class TestHandleTimerAlarmLineDispatch:
     def test_stop_event_with_no_dialog_is_a_no_op(self):
         # Receiving a stop before any start (e.g. daemon bounced) must
         # not crash and must not lazily create an empty dialogue.
-        line = TIMER_ALARM_IPC_PREFIX + json.dumps({
+        line = event_line({
             "type": "stop",
             "data": {"all": True},
         })
@@ -327,7 +335,7 @@ class TestHandleTimerAlarmLineDispatch:
 
     def test_unknown_event_type_is_ignored(self):
         existing = MagicMock(name="existing")
-        line = TIMER_ALARM_IPC_PREFIX + json.dumps({
+        line = event_line({
             "type": "ring-the-bells",
             "data": {},
         })

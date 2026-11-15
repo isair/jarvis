@@ -533,3 +533,9 @@ and ETAs without a digest call. The reply model selects duration, label and a
 localised expiry announcement through the canonical tool schema. Expiry submits
 that text to local shared speech without another LLM call or conversational
 follow-up. Cancellation retains ownership through speech termination.
+
+The shared system prompt asks for expiry text with countdown creation, treats
+running state as completed creation and distinguishes later expiry from the
+current confirmation. Known-language requests missing expiry text return a
+tool error before any timer is started. Alarm IPC capabilities stay outside
+LLM context and tool payloads.

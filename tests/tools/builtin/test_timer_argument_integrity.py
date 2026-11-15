@@ -17,7 +17,7 @@ def manager(monkeypatch):
 
 
 def invoke(args):
-    return timer.TimerTool().run(args, SimpleNamespace(user_print=lambda *args: None))
+    return timer.TimerTool().run(args, SimpleNamespace(user_print=lambda *args: None, language=None))
 
 
 @pytest.mark.parametrize('flag', ['false', 'true', 0, 1, [], {}, None])
