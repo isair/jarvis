@@ -313,9 +313,10 @@ class OpenAICompatibleBackend(LLMBackend):
             # to the payload root.
             for key, value in extra_options.items():
                 if key == 'response_schema':
-                    payload['response_format'] = {'type': 'json_schema', 'json_schema': {
-                        'name': 'jarvis_reply', 'strict': False, 'schema': value,
-                    }}
+                    if value is not None:
+                        payload['response_format'] = {'type': 'json_schema', 'json_schema': {
+                            'name': 'jarvis_reply', 'strict': False, 'schema': value,
+                        }}
                     continue
                 elif key in {"keep_alive", "num_ctx", "num_predict", "think"}:
                     continue

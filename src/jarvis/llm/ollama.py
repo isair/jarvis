@@ -281,7 +281,8 @@ class OllamaBackend(LLMBackend):
         if extra_options and isinstance(extra_options, dict):
             for key, value in extra_options.items():
                 if key == 'response_schema':
-                    payload['format'] = value
+                    if value is not None:
+                        payload['format'] = value
                 elif key in {"keep_alive", "format", "think"}:
                     payload[key] = value
                 elif key == "max_tokens":
