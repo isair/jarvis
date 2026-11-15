@@ -21,3 +21,9 @@ Built-in tools declare `allows_repeated_action(args)` for matching requests
 with distinct IDs in one model batch. Timer creation opts in; other built-ins
 retain coalescing. The engine snapshots outcomes before the batch, preserving
 whole-request retry protection across later model turns.
+
+`schema.missing_required_arguments` is the shared presence contract for planner
+fast paths, resolver results and engine dispatch. It includes root `required`
+fields and `dependentRequired` fields triggered by supplied arguments. Duration
+fields in the timer schema require `expiry_announcement`; list/cancel calls
+without duration fields do not. Incomplete calls cannot be directly executed.

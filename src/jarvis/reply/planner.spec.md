@@ -355,3 +355,8 @@ action, so explicitly repeated steps with identical arguments remain distinct.
 Tool steps begin with an exact registered name and retain explicitly requested
 repeated actions as distinct ordinals. Under-specified prose plans retain the
 existing router fallback and never gain direct-execution authority.
+
+Concrete and model-resolved calls satisfy declared field dependencies before
+dispatch. Missing dependent fields take the model resolver path rather than
+executing an incomplete call. Registered tool names remain explicit in plan
+output; unsupported prose retains router fallback.

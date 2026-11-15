@@ -730,6 +730,7 @@ class TimerTool(Tool):
                 },
             },
             "required": ["action"],
+            "dependentRequired": {name: ["expiry_announcement"] for name in ("hours", "minutes", "seconds")},
         }
 
     def run(self, args: Optional[Dict[str, Any]], context: ToolContext) -> ToolExecutionResult:

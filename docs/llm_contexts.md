@@ -566,3 +566,8 @@ under the explicit-target `REPLY_RENDER_PROMPT`. Selection is capped at
 deadline. Cancellation between the contexts suppresses translation. The timer
 schema names its future speech `expiry_announcement`, separating it from the
 immediate completion reply.
+
+Planner and dispatch share required-field/dependency checks. A concrete duration
+without its required expiry text reaches schema-aware CHAT resolution before
+execution. Planner output guidance keeps exact registered names and distinct
+action ordinals, while under-specified plans retain router fallback.

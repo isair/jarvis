@@ -109,3 +109,18 @@ def test_incomplete_plan_returns_to_chat_before_any_invalid_dispatch(monkeypatch
     )
     assert result == 'The catalogue includes a document guide.'
     assert dispatched and all(name == 'webSearch' and args.get('search_query') for name, args in dispatched)
+
+
+def test_dependent_required_fields_are_resolved_before_concrete_dispatch(monkeypatch):
+    from jarvis.tools.builtin.timer import TimerTool
+    tool = TimerTool()
+    catalogue = [{'type': 'function', 'function': {'name': tool.name, 'description': tool.description, 'parameters': tool.inputSchema}}]
+    complete = {'action': 'set', 'minutes': 5, 'expiry_announcement': 'Tea is ready'}
+    monkeypatch.setattr(planner, 'call_llm_direct', lambda **kw: json.dumps({'name': 'timer', 'arguments': complete}))
+    assert planner.resolve_next_tool_call(voice_config(), "timer action='set' minutes=5", [], catalogue, original_query='Start a five-minute timer.') == ('timer', complete)
+
+
+def test_dispatch_rejects_missing_duration_dependency_without_requiring_it_for_list():
+    from jarvis.reply import engine
+    assert engine._validate_tool_args_against_schema('timer', {'action': 'set', 'minutes': 5})
+    assert engine._validate_tool_args_against_schema('timer', {'action': 'list'}) is None

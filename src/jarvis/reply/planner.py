@@ -36,6 +36,7 @@ Contract:
 from __future__ import annotations
 
 import json
+from ..tools.schema import missing_required_arguments
 import math
 import re
 from datetime import datetime, timedelta, timezone
@@ -271,7 +272,9 @@ def _build_user_message(
     else:
         parts.append("DIALOGUE CONTEXT: (empty)")
     parts.append(f"USER QUERY: {query.strip()}")
-    parts.append("\nEmit the plan now, one step per line, no numbering.")
+    parts.append("\nEmit the executable plan now, one step per line, no numbering. "
+                 "Each external tool step MUST begin with its exact registered name from AVAILABLE TOOLS, "
+                 "not a prose verb or a paraphrase. Finish with Reply to the user.")
     return "\n\n".join(parts)
 
 
@@ -889,9 +892,9 @@ def _parse_plan_step_concrete(
     return name, args
 
 
-def _has_required_arguments(name: str, args: dict, required_props: dict[str, set[str]]) -> bool:
+def _has_required_arguments(name: str, args: dict, parameter_schemas: dict[str, dict]) -> bool:
     """Only complete argument objects can leave the resolver for dispatch."""
-    missing = required_props.get(name, set()) - args.keys()
+    missing = missing_required_arguments(parameter_schemas.get(name, {}), args)
     if missing:
         debug_log(
             f"planner.resolve_next_tool_call: missing required args {sorted(missing)!r} for {name!r}",
@@ -934,7 +937,6 @@ def resolve_next_tool_call(
     allowed_names: list[str] = []
     tool_catalogue: list[dict] = []
     allowed_props: dict[str, set[str]] = {}
-    required_props: dict[str, set[str]] = {}
     property_schemas: dict[str, dict] = {}
     for entry in tools_schema:
         fn = entry.get("function", {}) if isinstance(entry, dict) else {}
@@ -947,10 +949,6 @@ def resolve_next_tool_call(
         prop_keys = set(props) if isinstance(props, dict) else set()
         allowed_props[str(name)] = prop_keys
         property_schemas[str(name)] = props if isinstance(props, dict) else {}
-        required = params.get("required") if isinstance(params, dict) else None
-        required_props[str(name)] = {
-            key for key in required if isinstance(key, str)
-        } if isinstance(required, list) else set()
         desc = (fn.get("description") or "").strip().splitlines()
         first = desc[0] if desc else ""
         tool_catalogue.append({
@@ -962,7 +960,7 @@ def resolve_next_tool_call(
     fast = _parse_plan_step_concrete(
         next_step_text, allowed_names, parameter_schemas,
     )
-    if fast is not None and _has_required_arguments(fast[0], fast[1], required_props):
+    if fast is not None and _has_required_arguments(fast[0], fast[1], parameter_schemas):
         debug_log(
             f"planner.resolve_next_tool_call: fast-parsed "
             f"{fast[0]}({fast[1]!r}) without LLM",
@@ -1080,7 +1078,7 @@ def resolve_next_tool_call(
                 "planning",
             )
         args = filtered
-    if not _has_required_arguments(name, args, required_props):
+    if not _has_required_arguments(name, args, parameter_schemas):
         return None
     try:
         parameters = parameter_schemas[name]

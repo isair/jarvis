@@ -11,6 +11,7 @@ from hashlib import sha256
 from contextlib import closing
 
 from ..tools.types import ToolExecutionResult
+from ..tools.schema import missing_required_arguments
 from ..memory.conversation import DialogueMemory, is_tool_message
 
 from ..utils.redact import redact
@@ -204,14 +205,9 @@ def _validate_tool_args_against_schema(
             f"unknown argument key(s) {sorted(unknown)!r}; "
             f"expected one of {expected!r}"
         )
-    required = schema.get("required")
-    if isinstance(required, list):
-        missing = [
-            r for r in required
-            if isinstance(r, str) and r not in args
-        ]
-        if missing:
-            return f"missing required argument(s) {sorted(missing)!r}"
+    missing = missing_required_arguments(schema, args)
+    if missing:
+        return f"missing required argument(s) {missing!r}"
     return None
 
 
