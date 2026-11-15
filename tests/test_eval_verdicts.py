@@ -1,5 +1,6 @@
 """Recorded-answer checks share a strict structured verdict contract."""
 from unittest.mock import MagicMock, patch
+import json
 
 import pytest
 
@@ -29,6 +30,11 @@ def test_verdict_uses_constrained_output_without_changing_the_actor(monkeypatch,
         verdict = helpers.judge_pass_fail('Requires the actual reading.', 'Recorded reading: 12 C.')
     assert verdict == expected
     payload = payloads[0]
+    assert json.loads(payload['messages'][1]['content']) == {
+        'criteria': 'Requires the actual reading.',
+        'recorded_evidence': 'Recorded reading: 12 C.',
+    }
+    assert 'Requires the actual reading.' not in payload['messages'][0]['content']
     schema = (payload['format'] if provider == 'ollama'
               else payload['response_format']['json_schema']['schema'])
     assert schema['type'] == 'object'

@@ -577,3 +577,7 @@ The step resolver explicitly applies `dependentRequired` alongside root required
 Reply model contexts project write-only tool inputs out of completed assistant requests, retaining call IDs and matching results. Full arguments remain available to execution, retry identity and recorded history. Timer expiry speech is write-only.
 
 Write-only projection covers native object and JSON-string argument shapes and the max-turn digest input, as well as ordinary reply inference.
+
+### Recorded-evidence evaluation (development only)
+
+`evals.helpers.judge_pass_fail` uses a static examiner prompt and a JSON packet containing separate `criteria` and `recorded_evidence` fields. Criteria apply only to the original evidence, including its actual language; grading cannot translate or repair it. The verifier is `EVAL_VERIFIER_MODEL` when configured, otherwise `EVAL_JUDGE_MODEL`. It retains the configured local endpoint,120-second request deadline,4,096-token Ollama context, zero temperature and deterministic Ollama seed. Output requires a non-empty assessment followed by a strict PASS/FAIL verdict; malformed or duplicate fields remain unknown. This context has no application execution authority.
