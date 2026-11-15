@@ -1075,6 +1075,7 @@ class DialogueMemory:
                         ):
                             cut = cut + "\n" + _UNTRUSTED_FENCE_END
                         mm["content"] = cut
+                        mm["tool_content_truncated"] = True
                     truncated.append(mm)
                 timeline.append((ts, "group", truncated))
             timeline.sort(key=lambda t: t[0])

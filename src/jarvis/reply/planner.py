@@ -42,6 +42,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Sequence, Tuple
 
+from .prompts.tool_arguments import TOOL_ARGUMENT_GUIDANCE
 from ..debug import debug_log
 from ..llm import get_llm_backend, resolve_model, Tier, extract_text_from_response
 
@@ -493,7 +494,9 @@ def plan_query(
         else getattr(cfg, "planner_timeout_sec", 3.0)
     )
 
-    system_prompt = _PROMPT_TEMPLATE.format(max_steps=MAX_STEPS)
+    system_prompt = _PROMPT_TEMPLATE.format(max_steps=MAX_STEPS) + (
+        "\n\nFor names and argument values included in planned steps:\n" + TOOL_ARGUMENT_GUIDANCE
+    )
     user_content = _build_user_message(query, dialogue_context, tools, transcript_context)
 
     try:
@@ -614,7 +617,7 @@ _STEP_RESOLVER_SYSTEM = (
     "step is a synthesis / reply step (e.g. `Reply to the user ...`), "
     "return the JSON literal `null`.\n"
     "Output ONLY the JSON — no prose, no markdown fences, no comments."
-)
+) + "\n\n" + TOOL_ARGUMENT_GUIDANCE
 
 
 _TEMPORAL_RESOLUTION_GUIDANCE = (

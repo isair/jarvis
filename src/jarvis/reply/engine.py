@@ -60,6 +60,7 @@ from .enrichment import (
 from .prompt_dump import dump_reply_turn, is_enabled as _prompt_dump_enabled, new_session_id
 from .prompts import ModelSize, detect_model_size, get_system_prompts
 from .compound_query import split_compound_query, resolve_uncovered_request
+from .tool_identity import observed_tool_identities, render_identity_context
 from .planner import (
     plan_query,
     format_plan_block,
@@ -1212,6 +1213,13 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     if _resource_context:
         _dialogue_ctx = (_dialogue_ctx + "\n\n" + _resource_context).strip()
 
+    # Timer request compilation uses the dialogue/resource view without raw prior tool observations.
+    _prior_identities = observed_tool_identities(recent_messages)
+    _identity_context = render_identity_context(_prior_identities)
+    _planning_dialogue_ctx = '\n\n'.join(part for part in (_dialogue_ctx, _identity_context) if part)
+    _resolution_resource_context = '\n\n'.join(part for part in (_resource_context, _identity_context) if part)
+    debug_log(f'prior identity context: {len(_prior_identities)} matched tool observations', 'planning')
+
     # Step 2a: Tool routing FIRST.
     #
     # The router runs before the planner so the planner sees concrete,
@@ -1378,7 +1386,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             action_plan = plan_query(
                 cfg=cfg,
                 query=redacted,
-                dialogue_context=_dialogue_ctx,
+                dialogue_context=_planning_dialogue_ctx,
                 transcript_context=transcript_context,
                 tools=_planner_tool_catalog,
             )
@@ -2360,7 +2368,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                         prior_results=_prior,
                         tools_schema=tools_json_schema or [],
                         transcript_context=transcript_context,
-                        resource_context=_resource_context,
+                        resource_context=_resolution_resource_context,
                     )
                     if cancel_event is not None and cancel_event.is_set():
                         debug_log("reply cancelled after plan-step resolution", "planning")
@@ -2600,7 +2608,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         if (use_text_tools and _compound_sub_questions and not action_plan
                 and not tool_requests and content and compound_coverage_checks < 2):
             compound_coverage_checks += 1
-            proposed = resolve_uncovered_request(cfg, redacted, coverage_evidence, tools_json_schema or [])
+            proposed = resolve_uncovered_request(
+                cfg, redacted, coverage_evidence, tools_json_schema or [], prior_results=_prior_identities,
+            )
             if cancel_event is not None and cancel_event.is_set():
                 return None
             if proposed:

@@ -60,6 +60,33 @@ class OwnedEntryManager(Tool):
         return ToolExecutionResult(True, json.dumps({'remaining_entries': sorted(self.entries)}))
 
 
+def observed_entry_names(tool):
+    """Obtain namespace evidence from the owned backend before the current request."""
+    arguments = {'operation': 'enumerate_entries', 'scope': 'whole_collection'}
+    result = tool.run(arguments, None)
+    assert result.success
+    return {'name': tool.name, 'tool_call_id': 'observed-entry-list',
+            'result': result.reply_text, 'resource_references': list(result.resource_references)}
+
+
+def remember_observed_entry_names(tool, dialogue):
+    dialogue.add_message('user', 'List my current reminder entries.')
+    observed = observed_entry_names(tool)
+    dialogue.record_tool_turn([
+        {'role': 'assistant', 'content': '', 'tool_calls': [{
+            'id': observed['tool_call_id'], 'type': 'function', 'function': {
+                'name': tool.name,
+                'arguments': {'operation': 'enumerate_entries', 'scope': 'whole_collection'},
+            },
+        }]},
+        {'role': 'tool', 'tool_name': tool.name, 'tool_call_id': observed['tool_call_id'],
+         'tool_failed': False, 'content': observed['result']},
+    ])
+    dialogue.add_message('assistant', 'The current entries are listed in the tool result.')
+    # Calls measure this request; the prior read belongs to conversation setup.
+    tool.calls.clear()
+
+
 @pytest.mark.parametrize('query,operation,scope,remaining', [
     ('List all my reminder entries.', 'enumerate_entries', 'whole_collection', {'tea', 'soup'}),
     ('Delete every reminder entry.', 'discard_entries', 'whole_collection', set()),
@@ -74,7 +101,10 @@ def test_text_tool_call_preserves_declared_operation_and_scope(monkeypatch, quer
                   llm_chat_timeout_sec=60, planner_timeout_sec=15)
     db = Database(':memory:')
     try:
-        reply = engine.run_reply_engine(db, cfg, None, query, DialogueMemory(), language='en', spoken_output=spoken_output)
+        dialogue = DialogueMemory()
+        if scope == 'matching_labels':
+            remember_observed_entry_names(tool, dialogue)
+        reply = engine.run_reply_engine(db, cfg, None, query, dialogue, language='en', spoken_output=spoken_output)
         record_property('reply', reply)
         record_property('tool_calls', json.dumps(tool.calls))
         assert reply
@@ -115,5 +145,39 @@ def test_literal_multiword_labels_keep_their_complete_names(monkeypatch, record_
             'operation': 'discard_entries', 'scope': 'matching_labels', 'labels': ['tea reminder'],
         }
         assert tool.entries == {'soup reminder'}
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize('spoken_output', [False, True])
+@pytest.mark.parametrize('entries,target,remaining', [
+    ({'tea', 'soup'}, 'tea', {'soup'}),
+    ({'tea reminder', 'soup reminder'}, 'tea reminder', {'soup reminder'}),
+])
+def test_unknown_record_names_are_observed_before_one_mutation(
+        monkeypatch, spoken_output, record_property, entries, target, remaining):
+    tool = OwnedEntryManager()
+    tool.entries = set(entries)
+    monkeypatch.setitem(registry.BUILTIN_TOOLS, tool.name, tool)
+    monkeypatch.setattr(engine, 'select_tools', lambda *args, **kwargs: [tool.name, 'stop'])
+    cfg = replace(isolated_voice_settings(), location_enabled=False, mcps={}, planner_enabled=False,
+                  llm_chat_timeout_sec=60, planner_timeout_sec=15)
+    db = Database(':memory:')
+    try:
+        reply = engine.run_reply_engine(
+            db, cfg, None, 'Delete only the tea reminder and keep the soup reminder.',
+            DialogueMemory(), language='en', spoken_output=spoken_output,
+        )
+        record_property('reply', reply)
+        record_property('tool_calls', json.dumps(tool.calls))
+        assert reply
+        assert_not_fallback_reply(reply, 'unknown record identity')
+        assert len(tool.calls) == 2, 'Unknown identity requires one lookup followed by one mutation'
+        assert tool.calls[0]['operation'] == 'enumerate_entries'
+        assert tool.calls[0]['scope'] == 'whole_collection'
+        assert tool.calls[1]['operation'] == 'discard_entries'
+        assert tool.calls[1]['scope'] == 'matching_labels'
+        assert tool.calls[1]['labels'] == [target]
+        assert tool.entries == remaining
     finally:
         db.close()

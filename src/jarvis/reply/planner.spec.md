@@ -346,7 +346,7 @@ Concrete primitive arguments accept declared type unions. A valid non-string
 JSON primitive retains its type; otherwise an allowed string retains its literal
 value. Invalid values without a string alternative require model resolution.
 
-The step resolver receives the original redacted current request separately from the planned step and prior outcomes, so shortened plans retain the caller's explicit constraints during model resolution. Concrete typed calls retain their literal fast path.
+The step resolver receives the original redacted current request separately from the planned step and prior outcomes, so shortened plans retain the caller's explicit constraints during model resolution. Concrete typed calls retain their literal fast path. Planning applies the shared argument contract to concrete step values. The same contract guides model step resolution: exact known selectors are preserved, unknown existing-record identities require appropriate discovery before mutation, and query text resolves its subject from actual context. The guide is appended after planning-template formatting.
 
 Direct execution retains an assistant request with its unique call ID and a
 matching result before the model continues. Each planned ordinal owns its
@@ -366,3 +366,5 @@ Each next planned ordinal represents a distinct requested action, including matc
 Step resolution requests a nullable JSON tool-call object through the backend's structured-output option, constrained by exact registered names and their canonical input schemas. Root self-references and direct root `$defs` references use isolated definitions; unsupported reference scopes omit the format constraint while retaining ordinary validation. Recorded resource references are supplied separately from speech reference data so a follow-up can copy an actual ID. The same required-field and dependency checks apply after parsing.
 
 Step-resolver constrained output uses the tool-owned generation view of its canonical schema. Timer set calls include every additive component and purpose, preserving compound and fractional remainders. The deterministic fast path continues to validate the public optional-component contract.
+
+Planning and step resolution receive a separate bounded identity view of earlier successful tool observations. That view preserves source tool/call identifiers and recorded resources, excludes request arguments, and does not establish completion of any current step. Its full header and escaped JSON fit within 2,000 UTF-8 bytes using whole observations; omitted history remains unknown. Timer request compilation uses its existing dialogue/resource view.

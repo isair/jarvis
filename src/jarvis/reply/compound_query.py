@@ -18,6 +18,8 @@ from __future__ import annotations
 import re
 import json
 
+from .prompts.tool_arguments import TOOL_ARGUMENT_GUIDANCE
+from .tool_identity import pack_identity_evidence
 from ..debug import debug_log
 from ..llm import get_llm_backend, resolve_model, Tier
 from dataclasses import dataclass
@@ -188,17 +190,28 @@ _COVERAGE_PROMPT = (
     'Return only JSON: {"name":"available tool name","arguments":{...}} for one unresolved '
     'outcome, or {"complete":true} if results already cover all outcomes or no available tool '
     'can resolve the remainder. Use only declared tool names and argument fields. '
+    'prior_identity_evidence contains earlier successful observations, not execution of this request. '
+    'Use it only for identity in its source namespace or an explicit shared-resource mapping; never '
+    'treat an earlier action as completion of the new request or an old reading as fresh data. '
+    'Omitted identity history is unknown; obtain needed identity through available discovery. '
     'Do not invent argument values or repeat completed actions.'
-)
+) + "\n\n" + TOOL_ARGUMENT_GUIDANCE
 
 
-def resolve_uncovered_request(cfg, query: str, results: list, tools: list) -> Optional[dict]:
+def resolve_uncovered_request(cfg, query: str, results: list, tools: list, *, prior_results: list) -> Optional[dict]:
     """Propose one permitted call for an unresolved outcome, without executing it."""
     try:
-        packet = json.dumps({'request': query, 'results': results, 'tools': tools}, ensure_ascii=False)
-        if len(packet.encode('utf-8')) > COVERAGE_INPUT_BYTE_LIMIT:
+        packet = pack_identity_evidence(
+            {'request': query, 'results': results, 'tools': tools}, prior_results, COVERAGE_INPUT_BYTE_LIMIT,
+        )
+        if packet is None:
             debug_log('compound coverage: evidence exceeds the review budget', 'planning')
             return None
+        packed = json.loads(packet)
+        debug_log(
+            f'compound coverage: current results={len(results)}, prior identities={len(packed["prior_identity_evidence"])}, '
+            f'prior omitted={packed["prior_identity_evidence_omitted"]}', 'planning',
+        )
         response = get_llm_backend(cfg).direct(
             resolve_model(cfg, Tier.CHAT), _COVERAGE_PROMPT, packet,
             timeout_sec=min(20.0, cfg.llm_chat_timeout_sec), thinking=False,

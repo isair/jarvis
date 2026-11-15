@@ -37,7 +37,7 @@ def test_coverage_proposes_only_allowed_complete_arguments(mock_config, response
     backend.direct.return_value = response
     with patch.object(compound_query, 'get_llm_backend', return_value=backend):
         decision = compound_query.resolve_uncovered_request(
-            mock_config, 'Find a name and its other work.', [], SCHEMAS,
+            mock_config, 'Find a name and its other work.', [], SCHEMAS, prior_results=[],
         )
     assert decision == expected
 
@@ -51,7 +51,7 @@ def test_coverage_uses_actual_results_as_untrusted_evidence(mock_config):
     }]
     query = 'Find the entity and its other work.'
     with patch.object(compound_query, 'get_llm_backend', return_value=backend):
-        compound_query.resolve_uncovered_request(mock_config, query, evidence, SCHEMAS)
+        compound_query.resolve_uncovered_request(mock_config, query, evidence, SCHEMAS, prior_results=[])
     system, user = backend.direct.call_args.args[1:]
     packet = json.loads(user)
     assert packet['results'] == evidence
@@ -63,7 +63,7 @@ def test_coverage_failure_preserves_the_reply_loop(mock_config):
     backend = Mock()
     backend.direct.side_effect = RuntimeError('owned service unavailable')
     with patch.object(compound_query, 'get_llm_backend', return_value=backend):
-        assert compound_query.resolve_uncovered_request(mock_config, 'A request.', [], SCHEMAS) is None
+        assert compound_query.resolve_uncovered_request(mock_config, 'A request.', [], SCHEMAS, prior_results=[]) is None
 
 
 @pytest.mark.usefixtures('no_network')
@@ -80,7 +80,7 @@ def test_unusable_evidence_stays_offline(mock_config, unusable):
         mock_config.llm_base_url = f'http://127.0.0.1:{owned_boundary.getsockname()[1]}'
         mock_config.ollama_base_url = mock_config.llm_base_url
         assert compound_query.resolve_uncovered_request(
-            mock_config, 'A request.', [{'result': value}], SCHEMAS,
+            mock_config, 'A request.', [{'result': value}], SCHEMAS, prior_results=[],
         ) is None
 
 
@@ -178,3 +178,42 @@ def test_cancellation_after_coverage_prevents_dispatch(coverage_engine):
     assert reply is None
     assert tool.entries == {'tea', 'soup'}
     assert tool.operations == []
+
+
+@pytest.mark.parametrize('role', ['tool', 'user'])
+@pytest.mark.usefixtures('no_network')
+def test_prior_action_supplies_identity_but_does_not_complete_current_action(coverage_engine, role):
+    cfg, tool, db, memory = coverage_engine
+    previous = tool.run({'name': 'tea'}, None)
+    assert previous.success
+    tool.entries.add('tea')
+    tool.operations.clear()
+    memory.add_message('user', 'Remove the entry named tea.')
+    memory.record_tool_turn([
+        {'role': 'assistant', 'content': '', 'tool_calls': [{
+            'id': 'prior-removal', 'type': 'function',
+            'function': {'name': tool.name, 'arguments': {'name': 'tea'}},
+        }]},
+        {'role': role, 'tool_name': tool.name, 'tool_call_id': 'prior-removal',
+         'tool_failed': False, 'content': previous.reply_text},
+    ])
+    memory.add_message('assistant', 'The earlier request completed.')
+    backend = Mock()
+    backend.direct.side_effect = [
+        json.dumps({'name': tool.name, 'arguments': {'name': 'tea'}}), '{"complete":true}',
+    ]
+    answer = 'Tea is removed and soup remains.'
+    with patch.object(engine, 'chat_with_messages', return_value={'message': {'content': answer}}), \
+         patch.object(compound_query, 'get_llm_backend', return_value=backend):
+        reply = engine.run_reply_engine(
+            db, cfg, None, 'Remove only the entry named tea and keep the entry named soup.', memory, language='en',
+        )
+    assert reply == answer
+    assert tool.operations == [{'name': 'tea'}]
+    assert tool.entries == {'soup'}
+    packet = json.loads(backend.direct.call_args_list[0].args[2])
+    assert packet['results'] == []
+    assert packet['prior_identity_evidence'] == [{
+        'name': tool.name, 'tool_call_id': 'prior-removal', 'result': previous.reply_text,
+        'resource_references': [],
+    }]

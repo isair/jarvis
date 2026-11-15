@@ -9,6 +9,7 @@ import re
 from enum import Enum
 from typing import Optional
 
+from .tool_arguments import TOOL_ARGUMENT_GUIDANCE
 from .system import (
     PromptComponents,
     ASR_NOTE,
@@ -142,30 +143,6 @@ _AUTO_DERIVED_ARGUMENT_GUIDANCE = (
 )
 
 
-_SELF_CONTAINED_ARGUMENT_GUIDANCE = (
-    "SELF-CONTAINED TOOL ARGUMENTS:\n"
-    "Distinguish literal identifiers from search or question text. For name, label "
-    "and identifier inputs, pass the selected item's actual name, without adding "
-    "a description of its category or the requested action. Category words in "
-    "surrounding prose describe the item; they are part of its name only when "
-    "the supplied name includes them. Preserve explicitly supplied names exactly, "
-    "including spaces and qualifiers. This applies to each item in a list of names. "
-    "For example, when a bookmark tool selects by name, 'remove the Horizon "
-    "bookmark' selects the name Horizon; 'remove the bookmark named Horizon "
-    "bookmark' selects the full name Horizon bookmark. The tool's entity kind "
-    "and the user's naming phrase distinguish category prose from the name. "
-    "Selection must cover only the requested action targets. An instruction "
-    "to keep another item excludes it from the action targets. A whole-collection "
-    "operation cannot satisfy an action restricted to named items. "
-    "For free-form search queries, lookup strings and questions, pass a "
-    "self-contained restatement of the user's intent. Resolve pronouns, ellipsis "
-    "and implicit references from conversation history: the tool does not see "
-    "prior turns. If the previous turn was about Harry Styles and the user asks "
-    "what his most famous songs are, use a query such as \"Harry Styles most famous "
-    "songs\", with the named subject and requested information. Prefer compact "
-    "keywords over a conversational sentence, without losing the resolved intent. "
-    "Apply these contracts to every tool, including MCP tools."
-)
 
 
 # Large models also confabulate on named entities — e.g. qwen3.8:27b produces a
@@ -199,7 +176,7 @@ TOOL_CONSTRAINTS_LARGE = (
     "\"have you heard of X\", and equivalents in any language) is a search trigger, "
     "not a capability question about yourself.\n\n"
     + _AUTO_DERIVED_ARGUMENT_GUIDANCE
-    + _SELF_CONTAINED_ARGUMENT_GUIDANCE
+    + TOOL_ARGUMENT_GUIDANCE
 )
 
 
@@ -285,7 +262,7 @@ Only skip the lookup if you can state concrete facts about the exact entity (tit
 
 """
     + _AUTO_DERIVED_ARGUMENT_GUIDANCE
-    + _SELF_CONTAINED_ARGUMENT_GUIDANCE)
+    + TOOL_ARGUMENT_GUIDANCE)
 
 
 # Repeat the constraints twice for better instruction-following in small models
