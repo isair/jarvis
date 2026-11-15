@@ -27,3 +27,5 @@ fast paths, resolver results and engine dispatch. It includes root `required`
 fields and `dependentRequired` fields triggered by supplied arguments. Duration
 fields in the timer schema require `expiry_announcement`; list/cancel calls
 without duration fields do not. Incomplete calls cannot be directly executed.
+
+`retry_arguments(args)` identifies a repeated effect across model turns; its default retains every argument. Timer creation excludes only future expiry wording from this identity. Dispatch and recorded history retain the complete arguments. Schema `writeOnly` properties are omitted from model-facing completed requests, without changing execution or request/result identity.

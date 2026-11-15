@@ -663,6 +663,11 @@ def stop_all_alarms() -> int:
 class TimerTool(Tool):
     """Tool to set / list / cancel countdown timers."""
 
+    def retry_arguments(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        if self.allows_repeated_action(args):
+            return {key: value for key, value in args.items() if key != 'expiry_announcement'}
+        return args
+
     def allows_repeated_action(self, args: Dict[str, Any]) -> bool:
         action = args.get("action")
         return isinstance(action, str) and action.strip().lower() == "set"
@@ -718,6 +723,7 @@ class TimerTool(Tool):
                 },
                 "expiry_announcement": {
                     "type": "string",
+                    "writeOnly": True,
                     "description": "Required with a duration: the exact phrase spoken AFTER the countdown finishes, in the user's current language. Explicitly say that the timer has elapsed or finished, not merely that it is ringing or running. Keep it short and natural (e.g. 'Your pasta timer is up').",
                 },
                 "timer_id": {

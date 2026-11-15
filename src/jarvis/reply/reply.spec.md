@@ -503,10 +503,12 @@ at 4,096 UTF-8 bytes, with 8,192 context tokens, 2,048 output tokens and the
 configured chat deadline. Failure preserves the original truthful result.
 Cancellation after rendering suppresses output and dialogue publication.
 
-Written-language selection returns a bounded language name from the redacted
+Written-language selection returns a two- or three-letter ASCII ISO 639 language code from the redacted
 request alone. Translation then receives only completed text and an explicit
-target language. Selection (64 output tokens) and translation share one chat
+target language. Selection (8 output tokens) and translation share one chat
 deadline; cancellation between them prevents the second call. The renderer
 does not infer the language from tool output or future expiry speech.
 
 Literal-marker instructions are included only when the translation packet contains protected quoted text.
+
+Model-facing request copies exclude schema properties marked `writeOnly`, including timer expiry speech, while preserving call IDs and matching results. Text-tool contexts contain text protocol requests without native `tool_calls` keys. Execution and recorded history retain the full arguments.

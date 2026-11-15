@@ -166,3 +166,31 @@ def test_distinct_matching_timer_actions_execute_in_one_batch_but_not_on_retry(m
     assert calls[0] == calls[1]
     assert len(_paired_results(histories[1])) == 2
     assert len(histories) == 3
+
+
+def test_changed_expiry_wording_does_not_restart_a_completed_countdown(mock_config, db, dialogue_memory):
+    args = {'action': 'set', 'minutes': 5, 'label': 'tea', 'expiry_announcement': 'Tea is ready'}
+    retry = {**args, 'expiry_announcement': 'Your tea is ready'}
+    calls, histories, reply = _run(mock_config, db, dialogue_memory,
+        [_call('', 'one', name='timer', arguments=args)], allowed=['timer', 'stop'],
+        followup=[_call('', 'retry', name='timer', arguments=retry)])
+    assert calls == [('timer', args)]
+    assert len(histories) == 3
+
+
+def test_future_alarm_speech_is_not_repeated_in_confirmation_context():
+    import json
+    from jarvis.reply import engine
+    args = {'action': 'set', 'minutes': 5, 'expiry_announcement': 'The tea timer has elapsed'}
+    call = _call('', 'owned', name='timer', arguments=args)
+    messages = [{'role': 'assistant', 'content': 'tool_calls: '+json.dumps([call]), 'tool_calls': [call]},
+                {'role': 'tool', 'tool_call_id': 'owned', 'content': 'Countdown state: running'}]
+    before = deepcopy(messages)
+    for text_protocol in (False, True):
+        visible = engine._model_messages(messages, text_protocol=text_protocol)
+        assert 'The tea timer has elapsed' not in json.dumps(visible)
+        requests = json.loads(visible[0]['content'].split(':', 1)[1])
+        assert requests[0]['id'] == visible[1]['tool_call_id'] == 'owned'
+        assert requests[0]['function']['arguments'] == {'action': 'set', 'minutes': 5}
+        assert bool(visible[0].get('tool_calls')) is not text_protocol
+    assert messages == before

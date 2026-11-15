@@ -78,7 +78,7 @@ def render_written_reply(cfg, request: str, text: str, cancel_event=None) -> str
         language = get_llm_backend(cfg).direct(
             resolve_model(cfg, Tier.CHAT), WRITTEN_LANGUAGE_PROMPT, reference,
             timeout_sec=float(cfg.llm_chat_timeout_sec), thinking=False,
-            num_ctx=8192, temperature=0.0, max_tokens=64,
+            num_ctx=8192, temperature=0.0, max_tokens=8,
         )
     except Exception as exc:
         debug_log(f'written language unavailable: {type(exc).__name__}', 'planning')
@@ -88,8 +88,7 @@ def render_written_reply(cfg, request: str, text: str, cancel_event=None) -> str
     if not isinstance(language, str):
         return text
     language = language.strip()
-    if (not language or len(language.encode('utf-8')) > 80
-            or not all(c.isalpha() or c in " -" for c in language)):
+    if not re.fullmatch(r'[A-Za-z]{2,3}', language):
         debug_log('written language: invalid classification', 'planning')
         return text
     debug_log('written language selected for translation', 'planning')

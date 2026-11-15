@@ -569,9 +569,8 @@ def progress_nudge(steps: Sequence[str], tool_results_so_far: int) -> str:
             "When composing the tool arguments, substitute any entities that "
             "were unknown at plan time with the concrete values you discovered "
             "from prior tool results above (e.g. a director's name, a city, a "
-            "product name). Do NOT repeat arguments identical to a previous "
-            "call — the tool-call dedup guard will reject duplicates and your "
-            "progress will stall. Emit another tool_calls block now to execute "
+            "product name). Each separately requested action is a distinct step, "
+            "even when its arguments match an earlier step. Emit another tool_calls block to execute "
             "this step. Do NOT reply in text yet — the plan is not complete."
         )
     return (
@@ -596,8 +595,8 @@ _STEP_RESOLVER_SYSTEM = (
     "including explicit labels and language constraints that the shortened plan omits.\n"
     "Compose concrete arguments using entities discovered in the prior "
     "tool results — substitute any `<placeholder>` in the step text with "
-    "the actual value from the results. Do NOT re-issue arguments "
-    "identical to a prior call; those are already answered. If the next "
+    "the actual value from the results. The NEXT PLANNED STEP is a distinct "
+    "requested action, even when its arguments match a completed earlier step. If the next "
     "step is a synthesis / reply step (e.g. `Reply to the user ...`), "
     "return the JSON literal `null`.\n"
     "Output ONLY the JSON — no prose, no markdown fences, no comments."

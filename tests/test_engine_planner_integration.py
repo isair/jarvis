@@ -888,7 +888,10 @@ def test_planned_actions_are_reported_as_completed_calls_without_losing_repeated
     monkeypatch.setattr(engine, 'run_tool_with_retries', execute)
     def backend(*a, **kw):
         messages = kw.get('messages') or a[2]
-        calls = {c['id'] for m in messages for c in m.get('tool_calls', [])
+        calls = {c['id'] for m in messages
+                 for c in (json.loads(m['content'].split(':', 1)[1])
+                           if m.get('role') == 'assistant' and (m.get('content') or '').startswith('tool_calls:')
+                           else m.get('tool_calls', []))
                  if c.get('function', {}).get('name') == 'timer'}
         completed = {m.get('tool_call_id') for m in messages if m.get('tool_name') == 'timer'}
         if len(calls & completed) >= requested:

@@ -185,3 +185,5 @@ separately from the immediate confirmation. Matching creation requests with
 distinct call IDs in one model batch remain separate actions; repeated calls
 from later model turns retain retry protection. Read-only tools retain their
 existing same-batch coalescing.
+
+Expiry speech is a write-only creation argument. It remains owned by the countdown and is absent from model-facing confirmation requests. Changing only that wording on a later model retry does not start another countdown; distinct requested ordinals and identified calls in the original batch still create separate timers.

@@ -360,3 +360,5 @@ Concrete and model-resolved calls satisfy declared field dependencies before
 dispatch. Missing dependent fields take the model resolver path rather than
 executing an incomplete call. Registered tool names remain explicit in plan
 output; unsupported prose retains router fallback.
+
+Each next planned ordinal represents a distinct requested action, including matching arguments from an earlier ordinal. Prior results supply discovered entities, rather than suppressing explicitly repeated actions.

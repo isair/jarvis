@@ -171,6 +171,52 @@ def _get_tool_input_schema(
     return raw if isinstance(raw, dict) else None
 
 
+def _model_messages(messages, *, text_protocol, mcp_tools=None):
+    """Project completed requests into the active protocol without write-only inputs."""
+    visible = []
+    for message in messages:
+        if message.get('role') != 'assistant':
+            visible.append(message)
+            continue
+        content = message.get('content') or ''
+        calls = message.get('tool_calls')
+        text_calls = content.startswith('tool_calls:')
+        if not calls and text_calls:
+            try:
+                calls = json.loads(content.split(':', 1)[1])
+            except (ValueError, TypeError):
+                calls = None
+        if not isinstance(calls, list) or not calls:
+            visible.append(message)
+            continue
+        projected = []
+        for call in calls:
+            function = call.get('function') or {}
+            schema = _get_tool_input_schema(function.get('name'), mcp_tools) or {}
+            hidden = {key for key, prop in schema.get('properties', {}).items()
+                      if isinstance(prop, dict) and prop.get('writeOnly') is True}
+            args = function.get('arguments')
+            if hidden and isinstance(args, dict):
+                call = {**call, 'function': {**function, 'arguments': {
+                    key: value for key, value in args.items() if key not in hidden}}}
+            projected.append(call)
+        row = dict(message)
+        if text_protocol or text_calls:
+            row['content'] = 'tool_calls: ' + json.dumps(projected, ensure_ascii=False)
+        if text_protocol:
+            row.pop('tool_calls', None)
+        else:
+            row['tool_calls'] = projected
+        visible.append(row)
+    return visible
+
+
+def _tool_retry_signature(name, args):
+    spec = BUILTIN_TOOLS.get(name)
+    identity = spec.retry_arguments(args) if spec is not None else args
+    return name, json.dumps(identity, sort_keys=True, ensure_ascii=False)
+
+
 def _validate_tool_args_against_schema(
     tool_name: Optional[str],
     args: Optional[dict],
@@ -2232,14 +2278,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     if _resolved is not None:
                         _name, _args = _resolved
                         try:
-                            _cand_sig = (
-                                _name,
-                                json.dumps(
-                                    _args or {},
-                                    sort_keys=True,
-                                    ensure_ascii=False,
-                                ),
-                            )
+                            _cand_sig = _tool_retry_signature(_name, _args or {})
                         except Exception:
                             _cand_sig = (_name, "__unserializable__")
                         # Reject toolSearchTool here — its allow-list
@@ -2336,7 +2375,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                             })
                             _remember_tool_outcome(_cand_sig, bool(_plan_result.success))
                             invoked_tools_history.append(
-                                (_name, _cand_sig[1], _plan_text)
+                                (_name, json.dumps(_args, sort_keys=True, ensure_ascii=False), _plan_text)
                             )
                             _plan_exec_handled = True
                         else:
@@ -2380,7 +2419,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         try:
             llm_resp = chat_with_messages(
                 cfg=cfg,
-                messages=messages,
+                messages=_model_messages(messages, text_protocol=use_text_tools, mcp_tools=mcp_tools),
                 timeout_sec=float(getattr(cfg, 'llm_chat_timeout_sec', 45.0)),
                 extra_options=None,
                 tools=_dump_tools_schema,
@@ -2391,7 +2430,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 turn=turn,
                 query=text,
                 model=_chat_model,
-                messages=messages,
+                messages=_model_messages(messages, text_protocol=use_text_tools, mcp_tools=mcp_tools),
                 tools_schema=_dump_tools_schema,
                 use_text_tools=use_text_tools,
                 response=llm_resp,
@@ -2413,7 +2452,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             _update_system_message_with_context(messages)
             llm_resp = chat_with_messages(
                 cfg=cfg,
-                messages=messages,
+                messages=_model_messages(messages, text_protocol=True, mcp_tools=mcp_tools),
                 timeout_sec=float(getattr(cfg, 'llm_chat_timeout_sec', 45.0)),
                 extra_options=None,
                 tools=None,
@@ -2424,7 +2463,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 turn=turn,
                 query=text,
                 model=_chat_model,
-                messages=messages,
+                messages=_model_messages(messages, text_protocol=True, mcp_tools=mcp_tools),
                 tools_schema=None,
                 use_text_tools=True,
                 response=llm_resp,
@@ -2603,7 +2642,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             # Check exact signature for duplicate suppression
             try:
                 stable_args = json.dumps(tool_args or {}, sort_keys=True, ensure_ascii=False)
-                signature = (tool_name, stable_args)
+                signature = _tool_retry_signature(tool_name, tool_args or {})
             except Exception:
                 stable_args = None
                 signature = (tool_name, "__unserializable_args__")
