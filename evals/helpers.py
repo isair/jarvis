@@ -504,7 +504,7 @@ def call_judge_llm(system_prompt: str, user_prompt: str, timeout_sec: float = 12
                    *, response_schema: Optional[dict] = None) -> Optional[str]:
     """Call the judge LLM with a prompt.
 
-    ``EVAL_VERIFIER_MODEL`` selects an independent verifier; when unset or
+    ``EVAL_VERIFIER_MODEL`` selects a separate verifier inference role; when unset or
     blank, verification uses the model selected by ``EVAL_JUDGE_MODEL``.
     The actor model and transport remain unchanged.
 
@@ -581,6 +581,12 @@ def judge_pass_fail(criteria: str, evidence: str) -> Optional[str]:
         'Never translate, repair or rewrite evidence, and use no facts or clock outside these fields. '
         'First assess the facts actually stated: language, quantities, duration, action outcome '
         'and contradictions. Proper names do not select the language of the surrounding prose. '
+        'Keep before-action and after-action facts separate. A remaining or resulting set describes '
+        'the state after the action; its emptiness does not imply there were no items before it. '
+        'An empty remaining set is consistent with cancelling all previously running timers. '
+        'Use explicit before-state and action-result facts when supplied; an empty resulting set '
+        'alone does not prove that any cancellation happened. Still reject false completion claims '
+        'or claims contradicting items that remain. '
         'Then apply every criterion by meaning. Equivalent units and equivalent phrasing are valid; '
         'a literal token is required only when the criterion explicitly asks for that literal token. '
         'Scope/provenance instructions, such as treating a request as reference data, tell you how '
