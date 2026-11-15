@@ -46,3 +46,12 @@ def test_distinct_named_timers_with_the_same_duration_remain_separate(countdowns
     assert {entry.label.casefold() for entry in entries} == {'tea', 'soup'}
     assert all(entry.duration_sec == 300 for entry in entries)
     assert judge_pass_fail('The reply must confirm two running five-minute timers, one for tea and one for soup, without claiming expiry.', reply) == 'PASS'
+
+
+def test_distinct_durations_stay_with_their_named_purposes(countdowns):
+    reply = reply_to(countdowns, 'Start a five-minute tea timer and a ten-minute soup timer.', 'en')
+    entries = countdowns[0].list()
+    assert len(entries) == 2
+    assert {(entry.label.casefold(), entry.duration_sec) for entry in entries} == {('tea', 300), ('soup', 600)}
+    assert len({entry.id for entry in entries}) == 2
+    assert judge_pass_fail('The reply must confirm a running five-minute tea timer and a running ten-minute soup timer, without claiming expiry.', reply) == 'PASS'

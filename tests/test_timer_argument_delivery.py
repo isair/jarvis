@@ -104,12 +104,14 @@ def test_one_ordered_request_owns_successful_timer_admissions(monkeypatch, mock_
     mock_config.planner_enabled = False
     monkeypatch.setattr(engine, 'select_tools', lambda **kw: ['timer', 'stop'])
     monkeypatch.setattr(engine, 'extract_search_params_for_memory', lambda **kw: {})
-    def call(label, identity):
+    def call(label, identity, minutes=5):
         return {'message': {'tool_calls': [{'id': identity, 'function': {'name': 'timer', 'arguments': {
-            'action': 'set', 'minutes': 5, 'label': label, 'expiry_announcement': 'Timer has elapsed',
+            'action': 'set', 'minutes': minutes, 'label': label, 'expiry_announcement': 'Timer has elapsed',
         }}}]}}
-    replies = [call('tea', 'first'), call('tea' if labels[1] == 'soup' and not fail_first else 'soup', 'second')]
+    replies = [call('tea', 'first', -1 if fail_first else 5), call('tea' if labels[1] == 'soup' and not fail_first else 'soup', 'second')]
     if fail_first:
+        replies.append(call('tea', 'third'))
+    elif labels[1] == 'soup':
         replies.append(call('soup', 'third'))
     responses = iter(replies + [{'message': {'content': 'Recorded timers started.'}}])
     monkeypatch.setattr(engine, 'chat_with_messages', lambda **kw: next(responses))
@@ -130,7 +132,7 @@ def test_one_ordered_request_owns_successful_timer_admissions(monkeypatch, mock_
     monkeypatch.setattr(engine, 'run_tool_with_retries', execute)
     query = 'Start two five-minute timers, one for tea and one for soup.' if labels[1] == 'soup' else 'Start two five-minute timers for tea.'
     assert engine.run_reply_engine(db, mock_config, None, query, dialogue_memory, language='en')
-    assert [args['label'] for args in successful] == labels
+    assert [args['label'] for args in successful] == (['soup', 'tea'] if fail_first else labels)
     assert all(args['minutes'] == 5 for args in successful)
 
 
@@ -204,3 +206,61 @@ def test_compilation_cannot_invent_a_missing_duration_or_start_a_timer(monkeypat
     assert not result.success
     assert entries == []
     assert not {'hours', 'minutes', 'seconds'} & prepared.arguments.keys()
+
+
+def test_reverse_order_calls_keep_each_requested_duration_and_purpose(monkeypatch, mock_config):
+    compiled = {'timers': [{'label': 'tea'}, {'label': 'soup'}]}
+    monkeypatch.setattr(timer_delivery, 'get_llm_backend', lambda cfg: SimpleNamespace(chat=lambda *a, **kw: {
+        'message': {'content': json.dumps(compiled)}}))
+    monkeypatch.setattr(timer_delivery, 'render_timer_announcement', lambda cfg, request, text, **kw: text)
+    query = 'Start a five-minute tea timer and a ten-minute soup timer.'
+    soup = {'action': 'set', 'label': 'soup', 'minutes': 10, 'expiry_announcement': 'Soup timer has elapsed'}
+    first = timer_delivery.prepare_timer_arguments(mock_config, query, soup)
+    assert first.arguments == soup
+    tea = {'action': 'set', 'label': 'tea', 'minutes': 5, 'expiry_announcement': 'Tea timer has elapsed'}
+    second = timer_delivery.prepare_timer_arguments(mock_config, query, tea, timer_request=first.request,
+        consumed_purposes={first.purpose_index})
+    assert second.arguments == tea
+    assert first.purpose_index != second.purpose_index
+
+
+def test_ambiguous_multi_purpose_call_requires_recovery_without_relabelling(monkeypatch, mock_config):
+    compiled = {'timers': [{'label': 'tea'}, {'label': 'soup'}]}
+    monkeypatch.setattr(timer_delivery, 'get_llm_backend', lambda cfg: SimpleNamespace(chat=lambda *a, **kw: {
+        'message': {'content': json.dumps(compiled)}}))
+    monkeypatch.setattr(timer_delivery, 'render_timer_announcement', lambda cfg, request, text, **kw: text)
+    args = {'action': 'set', 'minutes': 10, 'expiry_announcement': 'Timer has elapsed'}
+    prepared = timer_delivery.prepare_timer_arguments(mock_config, 'Start a tea timer and a soup timer.', args)
+    assert prepared.error
+    assert prepared.arguments == args
+    assert prepared.purpose_index is None
+
+@pytest.mark.parametrize('ambiguous', [False, True])
+def test_engine_preserves_reversed_effect_pairs_and_rejects_ambiguous_admission(monkeypatch, mock_config, db, dialogue_memory, ambiguous):
+    from jarvis.tools.builtin.timer import _duration_seconds
+    monkeypatch.setattr(engine, 'prepare_timer_arguments', timer_delivery.prepare_timer_arguments)
+    mock_config.planner_enabled = False
+    mock_config.llm_chat_model = mock_config.ollama_chat_model = 'gpt-oss:20b'
+    monkeypatch.setattr(engine, 'select_tools', lambda **kw: ['timer', 'stop'])
+    monkeypatch.setattr(engine, 'extract_search_params_for_memory', lambda **kw: {})
+    args = ([{'action': 'set', 'minutes': 10, 'expiry_announcement': 'Timer has elapsed'}] if ambiguous else [
+        {'action': 'set', 'label': 'soup', 'minutes': 10, 'expiry_announcement': 'Soup timer has elapsed'},
+        {'action': 'set', 'label': 'tea', 'minutes': 5, 'expiry_announcement': 'Tea timer has elapsed'}])
+    calls = [{'id': str(index), 'function': {'name': 'timer', 'arguments': argument}} for index, argument in enumerate(args)]
+    final = '{"blocker":"The ambiguous timer was not started."}' if ambiguous else 'Recorded timers started.'
+    responses = iter([{'message': {'tool_calls': calls}}, {'message': {'content': final}}])
+    monkeypatch.setattr(engine, 'chat_with_messages', lambda **kw: next(responses))
+    backend = SimpleNamespace(chat=lambda *a, **kw: {'message': {'content': '{"timers":[{"label":"tea"},{"label":"soup"}]}'}},
+                              direct=lambda model, system, content, **kw: json.loads(content)['text_to_translate'])
+    monkeypatch.setattr(timer_delivery, 'get_llm_backend', lambda cfg: backend)
+    monkeypatch.setattr(delivery, 'get_llm_backend', lambda cfg: backend)
+    effects = []
+    def execute(**kw):
+        label, duration = kw['tool_args'].get('label'), _duration_seconds(kw['tool_args'])
+        effects.append((label, duration))
+        return ToolExecutionResult(True, 'Countdown running.', result_metadata={'created_timer': {
+            'id': str(len(effects)), 'label': label, 'duration_sec': duration, 'state': 'running'}})
+    monkeypatch.setattr(engine, 'run_tool_with_retries', execute)
+    assert engine.run_reply_engine(db, mock_config, None,
+        'Start a five-minute tea timer and a ten-minute soup timer.', dialogue_memory, language='en')
+    assert effects == ([] if ambiguous else [('soup', 600), ('tea', 300)])

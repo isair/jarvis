@@ -1967,9 +1967,11 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     timer_creation_only = True
     requested_timer_count = None
     timer_request = None
+    consumed_purposes = set()
     def run_with_localised_expiry(**kwargs):
         nonlocal timer_creation_only, requested_timer_count, timer_request
         args = kwargs.get('tool_args')
+        purpose_index = None
         is_timer_set = (kwargs.get('tool_name') == 'timer' and isinstance(args, dict)
                         and isinstance(args.get('action'), str) and args['action'].strip().lower() == 'set')
         if kwargs.get('tool_name') == 'timer' and not is_timer_set:
@@ -1980,14 +1982,17 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 return ToolExecutionResult(False, None, error_message='The requested timer count is already admitted. No additional timer was started. Use the recorded outcomes.')
             preparation = prepare_timer_arguments(
                 cfg, redacted, args, language=language, cancel_event=cancel_event,
-                ordinal=len(created_timer_records) + 1, timer_request=timer_request, dialogue_context=_dialogue_ctx,
+                timer_request=timer_request, dialogue_context=_dialogue_ctx, consumed_purposes=frozenset(consumed_purposes),
             )
             if timer_request is None:
                 timer_request = preparation.request
             if cancel_event is not None and cancel_event.is_set():
                 return ToolExecutionResult(False, None, error_message='Request cancelled before timer admission.')
+            purpose_index = preparation.purpose_index
             if requested_timer_count is None and preparation.requested_count is not None:
                 requested_timer_count = preparation.requested_count
+            if preparation.error:
+                return ToolExecutionResult(False, None, error_message=preparation.error)
             if requested_timer_count is not None and len(created_timer_records) >= requested_timer_count:
                 return ToolExecutionResult(False, None, error_message='The original request does not authorise another timer. No additional timer was started.')
             kwargs = {**kwargs, 'tool_args': preparation.arguments}
@@ -1997,6 +2002,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             created = result.result_metadata.get('created_timer')
             if isinstance(created, dict):
                 created_timer_records.append(dict(created))
+                if purpose_index is not None:
+                    consumed_purposes.add(purpose_index)
         return result
 
     contextual_tool_runner = ContextualToolRunner(

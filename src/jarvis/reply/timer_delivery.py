@@ -59,6 +59,8 @@ class TimerRequest:
 class TimerPreparation:
     arguments: dict
     request: TimerRequest
+    purpose_index: int | None = None
+    error: str | None = None
 
     @property
     def requested_count(self):
@@ -111,26 +113,43 @@ def _compile_request(cfg, request, dialogue_context, deadline):
     return TimerRequest(tuple(dict(entry) for entry in entries))
 
 
-def prepare_timer_arguments(cfg, request, arguments, language=None, cancel_event=None, ordinal=1,
-                            timer_request=None, dialogue_context=''):
+def prepare_timer_arguments(cfg, request, arguments, language=None, cancel_event=None,
+                            timer_request=None, dialogue_context='', consumed_purposes=frozenset()):
     if cancel_event is not None and cancel_event.is_set():
         return TimerPreparation(dict(arguments), timer_request or TimerRequest(None))
     deadline = time.monotonic() + float(cfg.llm_chat_timeout_sec)
     compiled = timer_request if timer_request is not None else _compile_request(cfg, request, dialogue_context, deadline)
     prepared = dict(arguments)
-    if compiled.entries is not None and 0 < ordinal <= len(compiled.entries):
-        entry = compiled.entries[ordinal - 1]
-        if entry['label']:
-            prepared['label'] = entry['label']
+    purpose_index = None
+    if compiled.entries:
+        from ..tools.builtin.timer import _label_key
+        keys = [_label_key(entry['label']) for entry in compiled.entries]
+        remaining = [index for index in range(len(keys)) if index not in consumed_purposes]
+        proposed = _label_key(arguments.get('label'))
+        matches = [index for index in remaining if keys[index] == proposed]
+        if matches:
+            purpose_index = matches[0]
+        elif len(set(keys)) == 1 and remaining:
+            purpose_index = remaining[0]
+        else:
+            labels = [compiled.entries[index]['label'] for index in remaining]
+            return TimerPreparation(prepared, compiled, error=(
+                'Timer purpose is ambiguous or already admitted. No timer was started. '
+                'Retry with an exact unfulfilled label from the original request and its corresponding duration. '
+                'The user has already supplied the purposes: ' + json.dumps(labels, ensure_ascii=False)
+            ))
+        label = compiled.entries[purpose_index]['label']
+        if label:
+            prepared['label'] = label
         else:
             prepared.pop('label', None)
     if compiled.count == 0 or (cancel_event is not None and cancel_event.is_set()):
-        return TimerPreparation(prepared, compiled)
+        return TimerPreparation(prepared, compiled, purpose_index=purpose_index)
     prepared['expiry_announcement'] = render_timer_announcement(
         cfg, request, arguments['expiry_announcement'], language=language,
         cancel_event=cancel_event, deadline=deadline,
     )
-    return TimerPreparation(prepared, compiled)
+    return TimerPreparation(prepared, compiled, purpose_index=purpose_index)
 
 
 def timer_confirmation(records):
