@@ -71,11 +71,8 @@ from desktop_app.diary_dialog import DiaryUpdateDialog
 from desktop_app.themes import JARVIS_THEME_STYLESHEET, COLORS, apply_theme
 from desktop_app.log_output import LogStream, clean_log, parse_progress
 from desktop_app.face_widget import FaceWindow
-from desktop_app.timer_alarm_dialog import (
-    TIMER_ALARM_IPC_PREFIX,
-    TimerAlarmDialog,
-    parse_alarm_event,
-)
+from jarvis.timer_events import TIMER_ALARM_IPC_PREFIX, parse_alarm_event
+from desktop_app.timer_alarm_dialog import TimerAlarmDialog
 
 
 _LOG_SEPARATOR = "─" * 50

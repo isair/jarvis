@@ -14,7 +14,7 @@ that owns all active countdowns and announces them when they elapse.
     id, label, duration, and ETA. Multiple timers run concurrently.
 - **`list`** — return all active timers, sorted by ETA.
 - **`cancel`** — cancel one or more timers by `timer_id`, by `label`
-  (case-insensitive, cancels every match), or by `all=true`. Cancelling
+  (Unicode case-insensitive after shared label sanitisation, cancels every match), or by `all=true`. Cancelling
   a non-existent timer is a successful no-op.
 
 ## Hard limits
@@ -22,25 +22,28 @@ that owns all active countdowns and announces them when they elapse.
 | Limit | Value | Why |
 |------|-------|-----|
 | Max duration per timer | 24 hours | Bounds runaway LLM args (e.g. "999 hours"). |
-| Max active timers | 32 | Caps in-process thread fan-out. |
+| Max active timers | 32 | Bounds countdowns and pending notification speech together. |
 
 Both limits surface as `ValueError` / `RuntimeError` from
 `TimerManager.start`, returned to the LLM as tool errors.
 
 ## Announcement contract (language-agnostic)
 
-When a timer elapses, the manager calls a pluggable announcer. The
-default announcer fires three best-effort side-effects:
+When a timer elapses, the manager calls an announcer with the entry and a
+terminal callback. A synchronous announcer returns `None`; an asynchronous
+announcer returns its `SpeechRequest` and reports termination through the callback.
+The manager releases the notification only after the announcer returns and
+terminal cleanup completes. Duplicate terminal reports are harmless.
 
-1. **Stdout banner** — printed immediately so headless / CLI users see
-   the event even when TTS / face are unavailable.
-2. **Desktop face** — flips `JarvisState` to `SPEAKING` for the visual
-   cue, then restores it to `IDLE` via the TTS engine's
-   `completion_callback`. If TTS is disabled or the face widget is
-   missing, the state restore happens inline so the face never sticks
-   on `SPEAKING`.
-3. **TTS** — speaks via the daemon's global TTS engine.
-4. **Looping alarm + dialogue** — the `AlarmRegistry` emits a
+The default announcer publishes independent best-effort outputs:
+
+1. **Stdout banner**: printed immediately for headless and CLI users.
+2. **Shared speech**: submitted to the daemon's TTS engine with its own terminal
+   callback and the entry's cancellation event. Shared playback observers track
+   echo and acquire speaking activity only when audio starts. Queueing or disabled
+   speech preserves other activity; termination cannot overwrite newer activity.
+   Timer announcements do not open conversational follow-up listening.
+3. **Looping alarm + dialogue** — the `AlarmRegistry` emits a
    `__TIMER_ALARM__:` IPC line over stdout. The desktop app intercepts
    this on the same channel it already reads for diary IPC, opens
    `TimerAlarmDialog`, and starts a looping `QSoundEffect` playing
@@ -57,19 +60,26 @@ The looping alarm stops, and the dialogue closes, on **any** of:
 
 - The user clicking **Dismiss** in the dialogue.
 - The user closing the dialogue window (X button or `Esc`).
-- The user saying "stop" — handled by the
-  [`stop` tool](stop.py), which calls `stop_all_alarms()` before
-  emitting the conversation-stop signal.
-- The user setting another timer via the `timer` tool — `start()`
-  calls `AlarmRegistry.stop_all()` first, since the user is clearly
-  re-engaged with the tool.
+- The Stop tool and the listener's configured speech interruption path both
+  call `stop_all_alarms()`. The tool then emits the conversation-stop signal. A configured
+  stop captured during a currently ringing alarm also dismisses it after speech
+  finishes or when speech is disabled. A capture predating the alarm cannot
+  dismiss it. Unrelated speech and future countdowns retain their ownership.
+- The user setting another timer via the `timer` tool: `start()` dismisses
+  current expiry notifications and alarms before admitting its countdown worker.
 - The user cancelling timers via the `timer` tool (`timer_id`,
-  `label`, or `all=true`) — every cancel path silences the matching
-  alarms.
-- The 30-second hard cap (`_ALARM_AUTO_STOP_SEC`), enforced by both
+  `label`, or `all=true`): every cancel path silences matching alarms,
+  including alarms whose countdowns have already elapsed.
+- The 30-second hard cap (`TIMER_ALARM_MAX_SECONDS`), enforced by both
   the daemon-side registry and the dialogue's local `QTimer`. The
   caps are independent so the alarm goes quiet even if the daemon or
   the desktop app crashes between start and stop.
+
+The Stop tool and new-timer path signal every currently announcing entry before
+silencing registered alarms. Pending speech is cancelled, and a notification
+still preparing speech cannot register an alarm after dismissal. Future
+countdowns remain active. Notification ownership is retained until terminal
+cleanup, including when dismissal occurs inside the announcer.
 
 The audio is owned by the dialogue, not by the daemon, so dismissal
 silences the noise immediately regardless of which path closed the
@@ -97,9 +107,14 @@ only across dictionary mutations; `threading.Timer.cancel()` and the
 announcer run **outside** the lock to avoid blocking the manager during
 expensive I/O (TTS synthesis, file writes for face state).
 
-`_on_elapsed` pops the entry under the lock before invoking the
-announcer, so a concurrent `cancel()` of an already-elapsed timer is a
-harmless no-op.
+Elapsed countdowns stay owned while their announcement drains, and continue to
+occupy admission capacity. Cancellation signals these entries as well as
+countdowns, so a pending announcement cannot start a new alarm after cancellation.
+Cancellation prevents queued playback and cooperatively interrupts active speech.
+An in-flight synthesis retains ownership until its worker returns. The alarm registry serialises
+start and stop delivery with its registration state; cancellation during start
+delivery leaves the alarm stopped. Announcement work runs outside the manager
+lock, and the owned entry is released only after both producer return and speech termination.
 
 ## Persistence
 
@@ -114,3 +129,38 @@ the assistant session.
 [`reply/engine.py`](../../reply/engine.py)) because its output is short
 structured data and the timer ids / etas are needed verbatim for
 follow-up cancel-by-id calls.
+
+## Local alarm event boundary
+
+The daemon and desktop share `jarvis.timer_events` for the event prefix,
+maximum alarm duration and typed parser. Only known start/stop objects with
+object payloads reach desktop dispatch. Starts require a non-empty string ID;
+optional label and duration fields are strings, and a supplied cap is a
+positive integer within the shared maximum. Stops identify an alarm or carry
+a boolean all flag. Malformed messages create no dialogue or audio.
+
+## Manager shutdown
+
+Shutdown closes countdown admission and signals cancellation for countdowns
+and active announcements before silencing alarms. Countdown thread admission
+serialises with closure; a submission which loses that race cannot start
+a worker. Worker draining shares one bounded deadline and reports whether
+owned countdown workers and speech requests finished. Shutdown never waits for
+its calling countdown worker; that worker remains owned until a later drain.
+A timed-out announcement remains owned and cancelled,
+so a later drain can wait for it without admitting new timers.
+
+A daemon generation owns its timer service. Normal and smoke cleanup close
+admission and cancel pending work before retiring shared engines. They retain
+those engines until active announcement workers finish. A replacement daemon
+can open a new service only after the closed service drains.
+
+Alarm titles and duration text render as plain text. Labels cannot supply Qt markup or embedded resources.
+
+Supplied cancellation flags must be booleans. Invalid flags reject the whole
+request before cancelling any timer. Omitted duration components count as zero;
+supplied components must be finite numeric values, including supported numeric
+strings and fractions. Invalid components reject the whole request rather than
+scheduling only the remaining duration.
+
+Tool results carry factual countdown state and elapsed status alongside identities, durations and ETAs. Response instructions belong to the shared system prompt.

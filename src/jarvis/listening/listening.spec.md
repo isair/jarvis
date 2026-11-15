@@ -614,3 +614,7 @@ A control captured before that request cannot cancel it after delayed recognitio
 The matching preparation request handle owns interruption, preserving queued
 replacements when synthesis finishes during control recognition. The control
 remains valid when that same utterance starts playback before recognition ends.
+
+Configured stop commands and directed stop judgements dismiss current timer
+notifications and alarms without cancelling future countdowns. Outside speech,
+a configured stop must have been captured while the alarm was ringing.

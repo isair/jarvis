@@ -525,3 +525,11 @@ This graph is the reference for LLM-latency optimisation. Treat it as authoritat
 - **Input and prompt**: dictated text and the static inline cleanup prompt. Meaning and language must remain intact; output contains only the cleaned text.
 - **Limits**: five-second timeout; generation cap `max(64, len(text) // 2)` including reasoning. No assistant tools or conversation memory are involved.
 - **Output**: cleaned text for the clipboard/history path. Errors, empty answers and explicit generation-limit or unfinished completion metadata preserve the full original transcription through the caller's fallback.
+
+## Countdown timer tool
+
+The `timer` tool returns factual running/elapsed state, identifiers, durations
+and ETAs without a digest call. The reply model selects duration, label and a
+localised expiry announcement through the canonical tool schema. Expiry submits
+that text to local shared speech without another LLM call or conversational
+follow-up. Cancellation retains ownership through speech termination.

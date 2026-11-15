@@ -13,15 +13,18 @@ sent to any external service.
 from __future__ import annotations
 
 import json
+import math
 import secrets
 import sys
 import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional
 
 from ...debug import debug_log
-from ...ipc_constants import TIMER_ALARM_IPC_PREFIX
+from ...output.tts import SpeechRequest
+from ...timer_events import TIMER_ALARM_IPC_PREFIX, TIMER_ALARM_MAX_SECONDS
 from ..base import Tool, ToolContext
 from ..types import ToolExecutionResult
 
@@ -38,7 +41,6 @@ _MAX_ACTIVE_TIMERS = 32
 # Hard cap for how long an unattended alarm can keep ringing. The
 # desktop dialogue and the daemon-side fallback both honour this so a
 # missed alarm never loops forever.
-_ALARM_AUTO_STOP_SEC = 30
 
 
 def _sanitise_label(label: Optional[str]) -> Optional[str]:
@@ -59,6 +61,11 @@ def _sanitise_label(label: Optional[str]) -> Optional[str]:
         return None
     cleaned = " ".join(label.replace(",", " ").replace("=", " ").split())
     return cleaned or None
+
+
+def _label_key(label: Optional[str]) -> str:
+    """Use the stored label spelling and Unicode folding for cancellation."""
+    return (_sanitise_label(label) or "").casefold()
 
 
 def _sanitise_announcement(text: Optional[str]) -> Optional[str]:
@@ -110,6 +117,11 @@ class TimerEntry:
     # caller forgot to localise, never as the primary path.
     announcement: Optional[str] = None
     timer: Optional[threading.Timer] = field(default=None, repr=False)
+    cancelled: threading.Event = field(default_factory=threading.Event, repr=False, compare=False)
+    speech_request: Optional[SpeechRequest] = field(default=None, repr=False, compare=False)
+    announcement_started: bool = field(default=False, repr=False, compare=False)
+    announcement_returned: bool = field(default=False, repr=False, compare=False)
+    announcement_terminal: threading.Event = field(default_factory=threading.Event, repr=False, compare=False)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -131,12 +143,16 @@ class TimerManager:
     poking the desktop face widget.
     """
 
-    def __init__(self, announcer: Optional[Callable[[TimerEntry], None]] = None) -> None:
+    def __init__(self, announcer: Optional[Callable[[TimerEntry, Callable[[str], None]], Optional[SpeechRequest]]] = None) -> None:
         self._timers: Dict[str, TimerEntry] = {}
+        self._announcing: Dict[str, TimerEntry] = {}
+        self._retiring: Dict[str, TimerEntry] = {}
         self._lock = threading.Lock()
+        self._start_lock = threading.Lock()
+        self._closed = False
         self._announcer = announcer or _default_announcer
 
-    def set_announcer(self, announcer: Callable[[TimerEntry], None]) -> None:
+    def set_announcer(self, announcer: Callable[[TimerEntry, Callable[[str], None]], Optional[SpeechRequest]]) -> None:
         with self._lock:
             self._announcer = announcer
 
@@ -164,7 +180,9 @@ class TimerManager:
         rounded = max(1, int(round(actual)))
 
         with self._lock:
-            if len(self._timers) >= _MAX_ACTIVE_TIMERS:
+            if self._closed:
+                raise RuntimeError("timer manager is shut down")
+            if len(self._timers) + len(self._announcing) >= _MAX_ACTIVE_TIMERS:
                 raise RuntimeError(
                     f"too many active timers (limit {_MAX_ACTIVE_TIMERS})"
                 )
@@ -172,7 +190,7 @@ class TimerManager:
             now = datetime.now(timezone.utc)
             timer_id = secrets.token_hex(4)
             # Avoid the (statistically vanishing) chance of a collision.
-            while timer_id in self._timers:
+            while timer_id in self._timers or timer_id in self._announcing:
                 timer_id = secrets.token_hex(4)
 
             entry = TimerEntry(
@@ -192,16 +210,25 @@ class TimerManager:
         # Setting a new timer dismisses any currently-ringing alarms; the
         # user is clearly engaged with the timer tool, so the spec treats
         # this as an implicit "stop" for the noise.
-        try:
-            get_alarm_registry().stop_all()
-        except Exception:
-            pass
+        self.dismiss_notifications()
 
         # Spawn the OS thread for the countdown OUTSIDE the manager lock.
         # threading.Timer.start() is fast in practice but it's still I/O
         # we don't need to serialise; the spec promises expensive work
         # runs unlocked, so honour that here too.
-        t.start()
+        with self._start_lock:
+            with self._lock:
+                if self._closed:
+                    self._timers.pop(timer_id, None)
+                    t.cancel()
+                    raise RuntimeError("timer manager is shut down")
+            try:
+                t.start()
+            except Exception:
+                with self._lock:
+                    self._timers.pop(timer_id, None)
+                t.cancel()
+                raise
 
         debug_log(
             f"⏲️ timer started id={timer_id} label={entry.label!r} "
@@ -210,58 +237,69 @@ class TimerManager:
         )
         return entry
 
+    @staticmethod
+    def _cancel_entry_work(entries: List[TimerEntry]) -> None:
+        for entry in entries:
+            if entry.timer is not None:
+                entry.timer.cancel()
+            request = entry.speech_request
+            if request is not None:
+                request.cancel()
+
+    def dismiss_notifications(self) -> int:
+        """Cancel current expiry notifications while preserving future countdowns."""
+        with self._lock:
+            entries = list(self._announcing.values())
+            for entry in entries:
+                entry.cancelled.set()
+        self._cancel_entry_work(entries)
+        try:
+            stopped = get_alarm_registry().stop_all()
+        except Exception as error:
+            debug_log(f'Timer alarm dismissal failed: {type(error).__name__}', 'tools')
+            stopped = 0
+        debug_log(f'Timer notifications dismissed pending={len(entries)} alarms={stopped}', 'tools')
+        return stopped
+
     def cancel(self, timer_id: str) -> Optional[TimerEntry]:
         with self._lock:
-            entry = self._timers.pop(timer_id, None)
-            if entry and entry.timer is not None:
-                try:
-                    entry.timer.cancel()
-                except Exception:
-                    pass
-        # Cancelling a timer also silences its alarm if it had already
-        # elapsed; the dismiss-via-cancel path documented in the spec.
+            entry = self._timers.pop(timer_id, None) or self._announcing.get(timer_id)
+            if entry is not None:
+                entry.cancelled.set()
         if entry is not None:
-            try:
-                get_alarm_registry().stop(entry.id)
-            except Exception:
-                pass
+            self._cancel_entry_work([entry])
+        try:
+            get_alarm_registry().stop(timer_id)
+        except Exception as error:
+            debug_log(f'Timer alarm cancellation failed: {type(error).__name__}', 'tools')
         return entry
 
     def cancel_by_label(self, label: str) -> List[TimerEntry]:
-        if not label or not label.strip():
+        target = _label_key(label)
+        if not target:
             return []
-        target = label.strip().lower()
         with self._lock:
-            matching = [
-                tid for tid, entry in self._timers.items()
-                if entry.label and entry.label.lower() == target
-            ]
-            cancelled: List[TimerEntry] = []
-            for tid in matching:
-                entry = self._timers.pop(tid)
-                if entry.timer is not None:
-                    try:
-                        entry.timer.cancel()
-                    except Exception:
-                        pass
-                cancelled.append(entry)
-        for entry in cancelled:
-            try:
-                get_alarm_registry().stop(entry.id)
-            except Exception:
-                pass
+            matching = [tid for tid, entry in self._timers.items()
+                        if _label_key(entry.label) == target]
+            cancelled = [self._timers.pop(tid) for tid in matching]
+            cancelled.extend(entry for entry in self._announcing.values()
+                             if _label_key(entry.label) == target)
+            for entry in cancelled:
+                entry.cancelled.set()
+        self._cancel_entry_work(cancelled)
+        try:
+            get_alarm_registry().stop_by_label(label)
+        except Exception:
+            pass
         return cancelled
 
     def cancel_all(self) -> List[TimerEntry]:
         with self._lock:
-            entries = list(self._timers.values())
+            entries = list(self._timers.values()) + list(self._announcing.values())
             self._timers.clear()
-        for entry in entries:
-            if entry.timer is not None:
-                try:
-                    entry.timer.cancel()
-                except Exception:
-                    pass
+            for entry in entries:
+                entry.cancelled.set()
+        self._cancel_entry_work(entries)
         # Silence any alarms that already elapsed before we got here.
         try:
             get_alarm_registry().stop_all()
@@ -269,23 +307,83 @@ class TimerManager:
             pass
         return entries
 
+    def shutdown(self, timeout_sec: Optional[float] = 5.0) -> bool:
+        """Close admission and drain countdowns and notification speech together."""
+        deadline = None if timeout_sec is None else time.monotonic() + max(0.0, timeout_sec)
+        with self._start_lock:
+            with self._lock:
+                self._closed = True
+                self._retiring.update(self._timers)
+                self._retiring.update(self._announcing)
+                entries = list(self._retiring.values())
+                self._timers.clear()
+                for entry in entries:
+                    entry.cancelled.set()
+            self._cancel_entry_work(entries)
+        get_alarm_registry().stop_all()
+        for entry in entries:
+            worker = entry.timer
+            if worker is threading.current_thread():
+                continue
+            if worker is not None and worker.ident is not None:
+                worker.join(None if deadline is None else max(0.0, deadline - time.monotonic()))
+            if entry.announcement_started:
+                entry.announcement_terminal.wait(None if deadline is None else max(0.0, deadline - time.monotonic()))
+        with self._lock:
+            for entry in entries:
+                worker_finished = entry.timer is None or not entry.timer.is_alive()
+                notification_finished = not entry.announcement_started or entry.announcement_terminal.is_set()
+                if worker_finished and notification_finished:
+                    self._retiring.pop(entry.id, None)
+            drained = not self._retiring
+        debug_log(f"timer shutdown drained={drained}", "tools")
+        return drained
+
     def list(self) -> List[TimerEntry]:
         with self._lock:
             return sorted(self._timers.values(), key=lambda e: e.eta)
 
+    def _release_notification_locked(self, entry: TimerEntry) -> None:
+        if entry.announcement_returned and entry.announcement_terminal.is_set():
+            if self._announcing.get(entry.id) is entry:
+                self._announcing.pop(entry.id)
+            entry.speech_request = None
+
+    def _notification_finished(self, entry: TimerEntry, outcome: str) -> None:
+        with self._lock:
+            if entry.announcement_terminal.is_set():
+                return
+            entry.announcement_terminal.set()
+            self._release_notification_locked(entry)
+        debug_log(f'Timer notification terminated id={entry.id} outcome={outcome}', 'tools')
+
     def _on_elapsed(self, timer_id: str) -> None:
         with self._lock:
             entry = self._timers.pop(timer_id, None)
-        if entry is None:
-            return
-        debug_log(
-            f"⏰ timer elapsed id={entry.id} label={entry.label!r}",
-            "tools",
-        )
+            if entry is None:
+                return
+            entry.announcement_started = True
+            self._announcing[timer_id] = entry
+        debug_log(f'Timer elapsed id={entry.id}', 'tools')
         try:
-            self._announcer(entry)
-        except Exception as e:
-            debug_log(f"timer announcer raised: {e}", "tools")
+            request = None
+            if not entry.cancelled.is_set():
+                request = self._announcer(entry, lambda outcome: self._notification_finished(entry, outcome))
+            if request is None:
+                self._notification_finished(entry, 'cancelled' if entry.cancelled.is_set() else 'completed')
+            else:
+                with self._lock:
+                    entry.speech_request = request
+                    cancelled = entry.cancelled.is_set()
+                if cancelled:
+                    request.cancel()
+        except Exception as error:
+            debug_log(f'Timer announcer failed: {type(error).__name__}', 'tools')
+            self._notification_finished(entry, 'failed')
+        finally:
+            with self._lock:
+                entry.announcement_returned = True
+                self._release_notification_locked(entry)
 
 
 _manager_instance: Optional[TimerManager] = None
@@ -310,10 +408,7 @@ def _resolve_daemon_tts() -> Optional[Any]:
     ``None`` and the announcer falls back to its non-TTS path.
     """
     import sys
-    daemon_mod = (
-        sys.modules.get("src.jarvis.daemon")
-        or sys.modules.get("jarvis.daemon")
-    )
+    daemon_mod = sys.modules.get("jarvis.daemon")
     if daemon_mod is None:
         return None
     try:
@@ -342,88 +437,49 @@ def get_timer_manager() -> TimerManager:
         return _manager_instance
 
 
-def _default_announcer(entry: TimerEntry) -> None:
-    """Default announcement: face → SPEAKING + TTS + stdout banner.
+def initialise_timer_manager() -> TimerManager:
+    """Own an open service for a daemon generation without replacing live work."""
+    global _manager_instance
+    with _manager_lock:
+        if _manager_instance is not None and _manager_instance._closed:
+            if not _manager_instance.shutdown(timeout_sec=0):
+                raise RuntimeError("previous timer service is still draining")
+            _manager_instance = None
+        if _manager_instance is None:
+            _manager_instance = TimerManager()
+        return _manager_instance
 
-    Each side-effect is best-effort: the daemon may not be running (e.g.
-    in tests, evals, or when the tool is exercised standalone) and the
-    desktop face widget is optional. Failing one side-effect must not
-    suppress the others.
 
-    Language note: the spoken text is taken from ``entry.announcement``,
-    which the reply LLM is expected to pre-localise into the user's
-    current language when calling the tool. We only fall back to the
-    English default when the caller forgot to provide one (older models,
-    evals, direct test calls). This keeps the language-handling
-    responsibility on the LLM rather than hardcoding patterns here.
-
-    Face-state note: TTS engines flip the face into SPEAKING themselves
-    when ``speak()`` runs, but they intentionally don't restore IDLE on
-    completion; the daemon does that as part of its turn loop. A timer
-    fire happens *outside* a turn, so we'd leave the face stuck on
-    SPEAKING. Pass a completion callback that restores IDLE once playback
-    finishes (or the synthesis fails), keeping the face in sync with
-    actual audio state.
-    """
-    label_part = f" '{entry.label}'" if entry.label else ""
+def _default_announcer(entry: TimerEntry, on_terminal: Callable[[str], None]) -> Optional[SpeechRequest]:
+    """Publish an elapsed timer and retain speech ownership until termination."""
+    if entry.cancelled.is_set():
+        on_terminal('cancelled')
+        return None
+    label_part = f" '{entry.label}'" if entry.label else ''
     duration = _format_duration(entry.duration_sec)
-    spoken = entry.announcement or f"Timer{label_part} is up. {duration} have elapsed."
-    banner = f"⏰ Timer{label_part} done ({duration} elapsed)"
-
-    # Visible side: stdout banner so headless / CLI users still see it.
+    spoken = entry.announcement or f'Timer{label_part} is up. {duration} have elapsed.'
     try:
-        print(banner, flush=True)
-    except Exception:
-        pass
+        print(f'⏰ Timer{label_part} done ({duration} elapsed)', flush=True)
+    except Exception as error:
+        debug_log(f'Timer banner failed: {type(error).__name__}', 'tools')
 
-    # Resolve the desktop face manager once so we can both flip it to
-    # SPEAKING now and restore IDLE from the TTS completion callback.
-    state_manager = None
-    try:
-        from desktop_app.face_widget import JarvisState, get_jarvis_state
-        state_manager = get_jarvis_state()
-        state_manager.set_state(JarvisState.SPEAKING)
-    except Exception:
-        # Desktop app not running (CLI, eval, tests); silently skip.
-        state_manager = None
-
-    def _restore_idle() -> None:
-        if state_manager is None:
-            return
-        try:
-            from desktop_app.face_widget import JarvisState as _JS
-            state_manager.set_state(_JS.IDLE)
-        except Exception:
-            pass
-
-    # Audible side: speak via the daemon's global TTS engine, looked up
-    # through the pluggable provider so tests don't have to import the
-    # heavy daemon module. The completion callback restores the face to
-    # IDLE; we also schedule a safety-net restore so a missed callback
-    # (TTS disabled, exception during synthesis) can't leave the face
-    # stuck on SPEAKING.
-    spoken_via_tts = False
+    request = None
     try:
         tts = _tts_provider()
-        if tts is not None and getattr(tts, "enabled", True):
-            tts.speak(spoken, completion_callback=_restore_idle)
-            spoken_via_tts = True
-    except Exception as e:
-        debug_log(f"timer TTS announce failed: {e}", "tools")
-
-    if not spoken_via_tts and state_manager is not None:
-        # No TTS playback ⇒ the completion callback will never fire.
-        # Restore IDLE inline so the face doesn't stay on SPEAKING.
-        _restore_idle()
-
-    # Audible alarm: trigger the looping desktop alarm dialogue (if the
-    # desktop app is listening) and the headless fallback (if there is
-    # no UI). The registry handles the auto-stop cap so a missed alarm
-    # never rings forever.
+        if tts is not None and tts.enabled:
+            request = tts.speak(spoken, terminal_callback=on_terminal,
+                                cancellation_event=entry.cancelled)
+        else:
+            on_terminal('rejected')
+    except Exception as error:
+        debug_log(f'Timer speech failed: {type(error).__name__}', 'tools')
+        on_terminal('failed')
     try:
-        get_alarm_registry().start(entry)
-    except Exception as e:
-        debug_log(f"timer alarm start failed: {e}", "tools")
+        if not entry.cancelled.is_set():
+            get_alarm_registry().start(entry)
+    except Exception as error:
+        debug_log(f'Timer alarm failed: {type(error).__name__}', 'tools')
+    return request
 
 
 def _emit_alarm_event(event_type: str, payload: Dict[str, Any]) -> None:
@@ -462,13 +518,13 @@ class AlarmRegistry:
     - Drive a headless fallback: if the daemon is running with no
       desktop app, repeatedly print the BEL character so a CLI user
       still gets an audible cue.
-    - Auto-cap each alarm at :data:`_ALARM_AUTO_STOP_SEC` so a missed
+    - Auto-cap each alarm at :data:`TIMER_ALARM_MAX_SECONDS` so a missed
       alarm never loops forever.
     """
 
     def __init__(self) -> None:
         self._alarms: Dict[str, _ActiveAlarm] = {}
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         # Pluggable writer for the BEL fallback. Defaults to stdout but
         # tests inject a fake to assert the loop exits cleanly without
         # hijacking the global stream.
@@ -494,29 +550,36 @@ class AlarmRegistry:
             return False
 
     def start(self, entry: TimerEntry) -> None:
-        # Emit IPC start so the desktop dialogue (if any) opens and its
-        # QSoundEffect begins looping. Even when there is no listener
-        # the line is harmless: just one extra log line on stdout.
         payload = {
             "id": entry.id,
             "label": entry.label,
             "duration_human": _format_duration(entry.duration_sec),
-            "auto_stop_sec": _ALARM_AUTO_STOP_SEC,
+            "auto_stop_sec": TIMER_ALARM_MAX_SECONDS,
         }
-        _emit_alarm_event("start", payload)
-
         fallback_stop = threading.Event()
-        # Headless fallback: short BEL loop on a daemon thread. Only
-        # spawned when stdout is a real terminal: when the desktop_app
-        # captures stdout via a subprocess pipe, isatty() is False and
-        # the BEL bytes would just get logged silently with no audible
-        # cue, so there's no point running the loop at all.
-        if self._stdout_is_tty():
+        auto_stop = threading.Timer(TIMER_ALARM_MAX_SECONDS, lambda: self.stop(entry.id))
+        auto_stop.daemon = True
+        alarm = _ActiveAlarm(
+            timer_id=entry.id, label=entry.label,
+            duration_human=payload["duration_human"],
+            started_at=datetime.now(timezone.utc), auto_stop=auto_stop,
+            fallback_stop=fallback_stop,
+        )
+        # Serialise registration and delivery with dismissal. A stop cannot
+        # reach the client before the start it is meant to dismiss.
+        with self._lock:
+            if entry.cancelled.is_set():
+                return
+            self.stop(entry.id)
+            self._alarms[entry.id] = alarm
+            _emit_alarm_event("start", payload)
+
+        if self._stdout_is_tty() and not fallback_stop.is_set():
             writer = self._fallback_writer
 
-            def _fallback_loop() -> None:
+            def fallback_loop() -> None:
                 ticks = 0
-                while not fallback_stop.is_set() and ticks < _ALARM_AUTO_STOP_SEC:
+                while not fallback_stop.is_set() and ticks < TIMER_ALARM_MAX_SECONDS:
                     try:
                         writer("\a")
                     except Exception:
@@ -524,65 +587,51 @@ class AlarmRegistry:
                     fallback_stop.wait(1.0)
                     ticks += 1
 
-            threading.Thread(target=_fallback_loop, daemon=True).start()
-
-        # Auto-cap so an unattended alarm (no dialogue, no stop tool, no
-        # cancel) eventually goes quiet on its own. The cap honours the
-        # same 30s contract that the desktop dialogue advertises.
-        #
-        # Register the alarm BEFORE starting the auto-stop timer so
-        # there's no window in which the cap can fire and find nothing
-        # to stop (which would leave the BEL fallback running until its
-        # own wall-clock guard).
-        auto_stop = threading.Timer(_ALARM_AUTO_STOP_SEC, lambda: self.stop(entry.id))
-        auto_stop.daemon = True
-
-        with self._lock:
-            self._alarms[entry.id] = _ActiveAlarm(
-                timer_id=entry.id,
-                label=entry.label,
-                duration_human=payload["duration_human"],
-                started_at=datetime.now(timezone.utc),
-                auto_stop=auto_stop,
-                fallback_stop=fallback_stop,
-            )
-
+            threading.Thread(target=fallback_loop, daemon=True).start()
         auto_stop.start()
-        debug_log(
-            f"🔔 alarm started id={entry.id} label={entry.label!r}",
-            "tools",
-        )
+        debug_log(f"🔔 alarm started id={entry.id}", "tools")
 
     def stop(self, timer_id: str) -> bool:
         """Stop a single alarm by timer id. Idempotent."""
         with self._lock:
             alarm = self._alarms.pop(timer_id, None)
-        if alarm is None:
-            return False
-        alarm.fallback_stop.set()
-        try:
+            if alarm is None:
+                return False
+            alarm.fallback_stop.set()
             alarm.auto_stop.cancel()
-        except Exception:
-            pass
-        _emit_alarm_event("stop", {"id": timer_id})
+            _emit_alarm_event("stop", {"id": timer_id})
         debug_log(f"🔕 alarm stopped id={timer_id}", "tools")
         return True
+
+    def stop_by_label(self, label: str) -> int:
+        """Silence matching alarms independently of active countdowns."""
+        target = _label_key(label)
+        if not target:
+            return 0
+        with self._lock:
+            matching = [timer_id for timer_id, alarm in self._alarms.items()
+                        if _label_key(alarm.label) == target]
+            return sum(self.stop(timer_id) for timer_id in matching)
 
     def stop_all(self) -> int:
         """Stop every active alarm. Returns count stopped."""
         with self._lock:
             alarms = list(self._alarms.values())
             self._alarms.clear()
-        for alarm in alarms:
-            alarm.fallback_stop.set()
-            try:
+            for alarm in alarms:
+                alarm.fallback_stop.set()
                 alarm.auto_stop.cancel()
-            except Exception:
-                pass
+            if alarms:
+                _emit_alarm_event("stop", {"all": True})
         if alarms:
-            _emit_alarm_event("stop", {"all": True})
             debug_log(f"🔕 stopped {len(alarms)} alarm(s)", "tools")
         return len(alarms)
+
+    def active_at(self, captured_at: float) -> bool:
+        """Whether a currently ringing alarm existed when speech was captured."""
+        with self._lock:
+            return any(alarm.started_at.timestamp() <= captured_at
+                       for alarm in self._alarms.values())
 
     def active_ids(self) -> List[str]:
         with self._lock:
@@ -603,7 +652,11 @@ def get_alarm_registry() -> AlarmRegistry:
 
 
 def stop_all_alarms() -> int:
-    """Public helper for the stop tool: silence every ringing alarm."""
+    """Dismiss elapsed notifications and alarms without cancelling countdowns."""
+    with _manager_lock:
+        manager = _manager_instance
+    if manager is not None:
+        return manager.dismiss_notifications()
     return get_alarm_registry().stop_all()
 
 
@@ -677,7 +730,14 @@ class TimerTool(Tool):
 
     def run(self, args: Optional[Dict[str, Any]], context: ToolContext) -> ToolExecutionResult:
         args = args or {}
-        action = str(args.get("action", "")).strip().lower() or "set"
+        raw_action = args.get("action")
+        if not isinstance(raw_action, str) or not raw_action.strip():
+            debug_log("timer rejected missing or malformed action", "tools")
+            return ToolExecutionResult(
+                success=False, reply_text=None,
+                error_message="An action is required: set, list, or cancel.",
+            )
+        action = raw_action.strip().lower()
 
         manager = get_timer_manager()
 
@@ -700,25 +760,28 @@ class TimerTool(Tool):
         context: ToolContext,
         manager: TimerManager,
     ) -> ToolExecutionResult:
-        def _to_float(value: Any) -> float:
-            # Schema declares integer, but small models routinely pass
-            # decimals ("minutes": 0.5) or numeric strings ("30"). Sum
-            # everything in floats and round once at the end so a
-            # half-minute doesn't silently collapse to zero.
-            if value is None or value == "":
-                return 0.0
-            if isinstance(value, bool):
-                # Bool is a subclass of int; treat as "no value" so that
-                # `True`/`False` doesn't sneak in as 1/0 seconds.
-                return 0.0
-            try:
-                return float(value)
-            except (TypeError, ValueError):
-                return 0.0
+        def _to_float(name: str) -> float:
+            value = args.get(name, 0)
+            if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+                raise ValueError("Duration components must be finite numbers.")
+            number = float(value)
+            if not math.isfinite(number):
+                raise ValueError("Duration components must be finite numbers.")
+            return number
 
-        hours = _to_float(args.get("hours"))
-        minutes = _to_float(args.get("minutes"))
-        seconds = _to_float(args.get("seconds"))
+        try:
+            hours = _to_float("hours")
+            minutes = _to_float("minutes")
+            seconds = _to_float("seconds")
+            total = hours * 3600 + minutes * 60 + seconds
+            if not math.isfinite(total):
+                raise ValueError("Duration components must be finite numbers.")
+        except (TypeError, ValueError, OverflowError):
+            debug_log("timer rejected malformed duration components", "tools")
+            return ToolExecutionResult(
+                success=False, reply_text=None,
+                error_message="Duration components must be finite numbers.",
+            )
         if hours < 0 or minutes < 0 or seconds < 0:
             return ToolExecutionResult(
                 success=False,
@@ -726,7 +789,7 @@ class TimerTool(Tool):
                 error_message="Duration components must be non-negative.",
             )
 
-        total_sec = int(round(hours * 3600 + minutes * 60 + seconds))
+        total_sec = int(round(total))
         if total_sec <= 0:
             return ToolExecutionResult(
                 success=False,
@@ -777,7 +840,13 @@ class TimerTool(Tool):
         context: ToolContext,
         manager: TimerManager,
     ) -> ToolExecutionResult:
-        cancel_all = bool(args.get("all"))
+        if "all" in args and not isinstance(args["all"], bool):
+            debug_log("timer cancellation rejected non-boolean all flag", "tools")
+            return ToolExecutionResult(
+                success=False, reply_text=None,
+                error_message="The all flag must be a boolean.",
+            )
+        cancel_all = args.get("all", False)
         timer_id = args.get("timer_id")
         label = args.get("label")
 
@@ -822,18 +891,8 @@ def _render_payload(payload: Dict[str, Any]) -> str:
             f"New timer: id={timer['id']}, label={timer.get('label') or 'none'}, "
             f"duration={timer['duration_human']}, eta={timer['eta']}"
         )
-        # Anchor small models against confabulating completion. Without
-        # this hint, gemma-class models often append "the N minutes are
-        # up" right after setting a timer, because their language prior
-        # links "timer for N minutes" with "N minutes have elapsed".
-        # Spell out the state explicitly so the reply LLM only confirms
-        # the SET event.
-        lines.append(
-            "Note: this timer is now COUNTING DOWN. It has NOT elapsed. "
-            "Confirm to the user only that the timer has been set; do "
-            "not claim it is up, complete, or finished. Jarvis will "
-            "announce the elapse automatically when the duration ends."
-        )
+        lines.append("Countdown state: running")
+        lines.append("Elapsed: false")
 
     cancelled = payload.get("cancelled") or []
     if cancelled:

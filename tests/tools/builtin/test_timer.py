@@ -6,8 +6,10 @@ from unittest.mock import Mock
 
 import pytest
 
-from src.jarvis.tools.base import ToolContext
-from src.jarvis.tools.builtin.timer import (
+pytestmark = pytest.mark.unit
+
+from jarvis.tools.base import ToolContext
+from jarvis.tools.builtin.timer import (
     AlarmRegistry,
     TimerEntry,
     TimerManager,
@@ -21,8 +23,8 @@ from src.jarvis.tools.builtin.timer import (
     set_tts_provider,
     stop_all_alarms,
 )
-from src.jarvis.tools.builtin import timer as timer_mod
-from src.jarvis.tools.types import ToolExecutionResult
+from jarvis.tools.builtin import timer as timer_mod
+from jarvis.tools.types import ToolExecutionResult
 
 
 @pytest.fixture
@@ -33,9 +35,9 @@ def fresh_manager(monkeypatch):
     so swap it out for the duration of each test to avoid leaking state.
     """
     announced: list = []
-    mgr = TimerManager(announcer=lambda entry: announced.append(entry))
+    mgr = TimerManager(announcer=lambda entry, on_terminal: announced.append(entry))
     monkeypatch.setattr(
-        "src.jarvis.tools.builtin.timer._manager_instance", mgr
+        "jarvis.tools.builtin.timer._manager_instance", mgr
     )
     yield mgr, announced
     # Make sure no Timer threads leak past the test.
@@ -201,21 +203,15 @@ class TestTimerSet:
         entry = mgr.list()[0]
         assert entry.announcement == "Makarna zamanlayıcısı doldu."
 
-    def test_set_payload_warns_against_claiming_elapsed(self, fresh_manager):
-        # Gemma-class small models routinely append "the N minutes are
-        # up" right after setting a timer. The set payload must contain
-        # an explicit, unmistakable instruction that the timer is still
-        # counting down, otherwise small models confabulate completion.
-        tool = TimerTool()
-        result = tool.run(
-            {"action": "set", "minutes": 1, "label": "foo"},
-            make_context(),
+    def test_set_payload_reports_the_running_countdown(self, fresh_manager):
+        result = TimerTool().run(
+            {"action": "set", "minutes": 1, "label": "foo"}, make_context(),
         )
-        assert result.success is True
-        text = result.reply_text.lower()
-        assert "counting down" in text
-        assert "has not elapsed" in text or "not elapsed" in text
-        assert "do not claim" in text
+        assert result.success
+        fields = dict(line.split(": ", 1) for line in result.reply_text.splitlines()
+                      if ": " in line)
+        assert fields["Countdown state"] == "running"
+        assert fields["Elapsed"] == "false"
 
     def test_set_sanitises_label_newlines(self, fresh_manager):
         mgr, _ = fresh_manager
@@ -335,7 +331,7 @@ class TestTimerHardLimits:
     """Cover the spec's promised 24h / 32-timer caps as tool errors."""
 
     def test_rejects_duration_over_24_hours(self, fresh_manager):
-        from src.jarvis.tools.builtin.timer import _MAX_DURATION_SEC
+        from jarvis.tools.builtin.timer import _MAX_DURATION_SEC
         tool = TimerTool()
         result = tool.run(
             {"action": "set", "seconds": _MAX_DURATION_SEC + 1},
@@ -347,7 +343,7 @@ class TestTimerHardLimits:
     def test_rejects_more_than_max_active(self, fresh_manager, monkeypatch):
         # Lower the cap so we don't have to spawn 32 real Timer threads.
         monkeypatch.setattr(
-            "src.jarvis.tools.builtin.timer._MAX_ACTIVE_TIMERS", 2
+            "jarvis.tools.builtin.timer._MAX_ACTIVE_TIMERS", 2
         )
         tool = TimerTool()
         # First two succeed.
@@ -388,6 +384,14 @@ class TestDefaultAnnouncer:
     the face must end up on IDLE rather than stuck on SPEAKING.
     """
 
+    @pytest.fixture(autouse=True)
+    def owned_alarms(self, monkeypatch):
+        registry = timer_mod.AlarmRegistry()
+        monkeypatch.setattr(timer_mod, '_alarm_registry_instance', registry)
+        monkeypatch.setattr(registry, '_stdout_is_tty', lambda: False)
+        yield
+        registry.stop_all()
+
     def _make_entry(self, announcement=None, label=None) -> TimerEntry:
         from datetime import datetime, timezone, timedelta
         now = datetime.now(timezone.utc)
@@ -406,10 +410,9 @@ class TestDefaultAnnouncer:
         class FakeTTS:
             enabled = True
 
-            def speak(self, text, completion_callback=None, duration_callback=None):
+            def speak(self, text, *, terminal_callback, cancellation_event):
                 spoken_texts.append(text)
-                if completion_callback is not None:
-                    completion_callback()
+                terminal_callback('completed')
 
         # Inject the fake via the pluggable provider so we don't drag
         # in the heavy daemon import chain.
@@ -420,7 +423,7 @@ class TestDefaultAnnouncer:
             announcement="Makarna zamanlayıcısı doldu.",
             label="makarna",
         )
-        _default_announcer(entry)
+        _default_announcer(entry, lambda outcome: None)
         assert spoken_texts == ["Makarna zamanlayıcısı doldu."]
 
     def test_falls_back_to_english_when_no_announcement(self, monkeypatch):
@@ -429,76 +432,18 @@ class TestDefaultAnnouncer:
         class FakeTTS:
             enabled = True
 
-            def speak(self, text, completion_callback=None, duration_callback=None):
+            def speak(self, text, *, terminal_callback, cancellation_event):
                 spoken_texts.append(text)
-                if completion_callback is not None:
-                    completion_callback()
+                terminal_callback('completed')
 
         fake = FakeTTS()
         monkeypatch.setattr(timer_mod, "_tts_provider", lambda: fake)
 
         entry = self._make_entry(announcement=None, label="laundry")
-        _default_announcer(entry)
+        _default_announcer(entry, lambda outcome: None)
         assert len(spoken_texts) == 1
         assert "Timer" in spoken_texts[0]
         assert "laundry" in spoken_texts[0]
-
-    def test_completion_callback_restores_face_to_idle(self, monkeypatch):
-        # Pretend the desktop face widget is loaded; record state changes.
-        try:
-            from desktop_app.face_widget import JarvisState
-        except Exception:
-            pytest.skip("desktop_app face widget unavailable")
-
-        states: list = []
-
-        class FakeStateManager:
-            def set_state(self, state):
-                states.append(state)
-
-        from desktop_app import face_widget as fw_mod
-        monkeypatch.setattr(fw_mod, "_jarvis_state_instance", FakeStateManager())
-
-        class FakeTTS:
-            enabled = True
-
-            def speak(self, text, completion_callback=None, duration_callback=None):
-                # Simulate playback finishing.
-                if completion_callback is not None:
-                    completion_callback()
-
-        fake = FakeTTS()
-        monkeypatch.setattr(timer_mod, "_tts_provider", lambda: fake)
-
-        _default_announcer(self._make_entry(announcement="done"))
-
-        # SPEAKING flipped on first, IDLE flipped back on last.
-        assert states[0] == JarvisState.SPEAKING
-        assert states[-1] == JarvisState.IDLE
-
-    def test_face_restored_inline_when_tts_unavailable(self, monkeypatch):
-        try:
-            from desktop_app.face_widget import JarvisState
-        except Exception:
-            pytest.skip("desktop_app face widget unavailable")
-
-        states: list = []
-
-        class FakeStateManager:
-            def set_state(self, state):
-                states.append(state)
-
-        from desktop_app import face_widget as fw_mod
-        monkeypatch.setattr(fw_mod, "_jarvis_state_instance", FakeStateManager())
-
-        # No TTS engine available; completion callback would never
-        # fire, so the announcer must restore IDLE inline.
-        monkeypatch.setattr(timer_mod, "_tts_provider", lambda: None)
-
-        _default_announcer(self._make_entry(announcement="done"))
-
-        assert states[0] == JarvisState.SPEAKING
-        assert states[-1] == JarvisState.IDLE
 
     def test_announcer_survives_tts_failure(self, monkeypatch):
         # An exception in TTS must not propagate out of the announcer
@@ -513,19 +458,19 @@ class TestDefaultAnnouncer:
         monkeypatch.setattr(timer_mod, "_tts_provider", lambda: boom)
 
         # Should not raise.
-        _default_announcer(self._make_entry(announcement="done"))
+        _default_announcer(self._make_entry(announcement="done"), lambda outcome: None)
 
 
 class TestRegistry:
     def test_timer_tool_in_registry(self):
-        from src.jarvis.tools.registry import BUILTIN_TOOLS
+        from jarvis.tools.registry import BUILTIN_TOOLS
         assert "timer" in BUILTIN_TOOLS
         assert isinstance(BUILTIN_TOOLS["timer"], TimerTool)
 
     def test_singleton_returns_same_manager(self, monkeypatch):
         # Reset the singleton so the test is independent of test order.
         monkeypatch.setattr(
-            "src.jarvis.tools.builtin.timer._manager_instance", None
+            "jarvis.tools.builtin.timer._manager_instance", None
         )
         a = get_timer_manager()
         b = get_timer_manager()
@@ -544,7 +489,7 @@ class TestAlarmRegistry:
     def registry(self, monkeypatch):
         # Shrink the auto-stop to a tick so a missed stop doesn't
         # leave a 30-second daemon thread running past the test.
-        monkeypatch.setattr(timer_mod, "_ALARM_AUTO_STOP_SEC", 1)
+        monkeypatch.setattr(timer_mod, "TIMER_ALARM_MAX_SECONDS", 1)
         # Reset the module-level singleton so each test starts fresh.
         monkeypatch.setattr(timer_mod, "_alarm_registry_instance", None)
         # Capture every IPC event so tests assert on the wire format.
@@ -654,7 +599,7 @@ class TestAlarmRegistry:
 
     def test_setting_new_timer_silences_active_alarms(self, registry, monkeypatch):
         reg, _events = registry
-        mgr = TimerManager(announcer=lambda e: None)
+        mgr = TimerManager(announcer=lambda e, on_terminal: None)
         monkeypatch.setattr(timer_mod, "_manager_instance", mgr)
         reg.start(self._entry("a", "old"))
         assert reg.active_ids() == ["a"]

@@ -884,3 +884,94 @@ def test_failed_callback_does_not_skip_cleanup_or_abandon_the_next_utterance(voi
     assert completed == ['first', 'second']
     assert activity.get_jarvis_state().state is activity.JarvisState.IDLE
     assert not voice.is_speaking()
+
+
+@pytest.mark.parametrize('phase', ['before-admission', 'queued', 'synthesis', 'before-playback'])
+def test_linked_cancellation_releases_only_its_utterance(voice, monkeypatch, phase):
+    import threading
+    cancelled = threading.Event()
+    outcomes, completed = [], []
+    if phase == 'before-admission':
+        cancelled.set()
+    if phase == 'synthesis':
+        target, method = (voice._voice, 'synthesize') if isinstance(voice, speech.PiperTTS) else (voice._model, 'generate')
+        original = getattr(target, method)
+        def generate(*args, **kwargs):
+            cancelled.set()
+            return original(*args, **kwargs)
+        monkeypatch.setattr(target, method, generate)
+    if phase == 'before-playback':
+        voice.set_playback_callbacks(lambda request, duration: cancelled.set() if request.text == 'first' else None, None)
+    voice.speak('first', completion_callback=lambda: completed.append('first'),
+                terminal_callback=lambda outcome: outcomes.append(('first', outcome)),
+                cancellation_event=cancelled)
+    if phase == 'queued':
+        cancelled.set()
+    voice.speak('second', completion_callback=lambda: completed.append('second'),
+                terminal_callback=lambda outcome: outcomes.append(('second', outcome)))
+    voice._run()
+    assert completed == ['second']
+    assert outcomes == [('first', 'cancelled'), ('second', 'completed')]
+    assert voice.get_last_spoken_text() == 'second'
+
+
+def test_linked_cancellation_stops_active_audio_without_abandoning_queued_speech(voice, monkeypatch):
+    import threading
+    from types import SimpleNamespace
+    import numpy as np
+    cancelled = threading.Event()
+    outcomes, after_cancellation = [], []
+    if isinstance(voice, speech.PiperTTS):
+        import sounddevice
+        original = voice._voice.synthesize
+        def synthesise(text, config):
+            if text == 'first':
+                return [SimpleNamespace(audio_int16_array=np.zeros(8192, dtype=np.int16))]
+            return original(text, config)
+        monkeypatch.setattr(voice._voice, 'synthesize', synthesise)
+        class OwnedStream:
+            active = False
+            def __init__(self, **kwargs):
+                self.callback = kwargs['callback']
+                self.frames = kwargs['blocksize']
+            def start(self):
+                self.active = True
+                try:
+                    for _ in range(16):
+                        self.callback(np.zeros((self.frames, 1), dtype=np.int16), self.frames, None, None)
+                        if voice.get_last_spoken_text() == 'first':
+                            if cancelled.is_set():
+                                after_cancellation.append('audio frame')
+                            cancelled.set()
+                except (sounddevice.CallbackStop, sounddevice.CallbackAbort):
+                    self.active = False
+                else:
+                    raise AssertionError('Owned stream did not terminate')
+            def abort(self): self.active = False
+            def close(self): self.active = False
+        monkeypatch.setattr(sounddevice, 'OutputStream', OwnedStream)
+    else:
+        pygame = sys.modules['pygame']
+        audio = {'busy': False, 'ticks': 0}
+        def play():
+            audio.update(busy=True, ticks=0)
+        def busy():
+            return audio['busy'] and audio['ticks'] < 4
+        def stop():
+            audio['busy'] = False
+        def progress(milliseconds):
+            audio['ticks'] += 1
+            if voice.get_last_spoken_text() == 'first':
+                if cancelled.is_set():
+                    after_cancellation.append('audio frame')
+                cancelled.set()
+        monkeypatch.setattr(pygame.mixer, 'music', SimpleNamespace(load=lambda path: None,
+                            play=play, get_busy=busy, stop=stop))
+        monkeypatch.setattr(pygame.time, 'wait', progress)
+    voice.speak('first', cancellation_event=cancelled,
+                terminal_callback=lambda outcome: outcomes.append(('first', outcome)))
+    voice.speak('second', terminal_callback=lambda outcome: outcomes.append(('second', outcome)))
+    voice._run()
+    assert outcomes == [('first', 'cancelled'), ('second', 'completed')]
+    assert after_cancellation == []
+    assert voice.get_last_spoken_text() == 'second'

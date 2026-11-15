@@ -570,3 +570,10 @@ that connection after a complete or empty import, an early read or graph failure
 and when the client closes the stream before completion. The shared graph store
 retains its separate viewer lifetime. Per-summary failures remain isolated so
 the stream can continue processing later entries.
+
+## Countdown alarms
+
+Typed local timer events open one reusable alarm dialogue. Timer labels render
+as plain text. Dismiss, window close, Escape, a daemon stop event or the shared
+maximum alarm duration stops local audio. The packaged desktop includes its
+local alarm sound. Countdown ownership and speech remain in the core daemon.

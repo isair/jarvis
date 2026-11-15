@@ -14,7 +14,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from jarvis.ipc_constants import TIMER_ALARM_IPC_PREFIX
+pytestmark = pytest.mark.unit
+
+from jarvis.timer_events import TIMER_ALARM_IPC_PREFIX
 
 
 # ---------------------------------------------------------------------------
@@ -24,7 +26,7 @@ from jarvis.ipc_constants import TIMER_ALARM_IPC_PREFIX
 
 class TestParseAlarmEvent:
     def test_returns_none_for_non_ipc_line(self):
-        from desktop_app.timer_alarm_dialog import parse_alarm_event
+        from jarvis.timer_events import parse_alarm_event
 
         assert parse_alarm_event("just a normal log line") is None
 
@@ -33,18 +35,18 @@ class TestParseAlarmEvent:
         # with the prefix are real IPC events. Otherwise an attacker
         # (or a quirky log line) could smuggle a fake stop event into
         # an arbitrary banner.
-        from desktop_app.timer_alarm_dialog import parse_alarm_event
+        from jarvis.timer_events import parse_alarm_event
 
         line = f'log: user said "{TIMER_ALARM_IPC_PREFIX}{{}}"'
         assert parse_alarm_event(line) is None
 
     def test_returns_none_for_invalid_json(self):
-        from desktop_app.timer_alarm_dialog import parse_alarm_event
+        from jarvis.timer_events import parse_alarm_event
 
         assert parse_alarm_event(f"{TIMER_ALARM_IPC_PREFIX}not-json") is None
 
     def test_parses_well_formed_start_event(self):
-        from desktop_app.timer_alarm_dialog import parse_alarm_event
+        from jarvis.timer_events import parse_alarm_event
 
         payload = {
             "type": "start",
@@ -57,7 +59,7 @@ class TestParseAlarmEvent:
         # The daemon prints lines via `print(..., flush=True)` which
         # already adds a trailing newline; a tolerant parser keeps the
         # IPC robust to incidental whitespace.
-        from desktop_app.timer_alarm_dialog import parse_alarm_event
+        from jarvis.timer_events import parse_alarm_event
 
         payload = {"type": "stop", "data": {"id": "abc"}}
         line = "  " + TIMER_ALARM_IPC_PREFIX + json.dumps(payload) + "\n"
@@ -248,44 +250,19 @@ class TestTimerAlarmDialog:
 
 
 def _invoke_dispatch(line: str, dialog: object | None) -> object | None:
-    """Run the dispatch body against a stand-in object.
+    """Dispatch the actual production handler without constructing the tray."""
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    from desktop_app import app
 
-    Re-implements the exact branching from
-    ``desktop_app.app.JarvisSystemTray._handle_timer_alarm_line`` on a
-    Mock so we can verify the prefix gate, the parser hop, and the
-    start/stop routing without needing a Qt main window.
-    """
-    from desktop_app.timer_alarm_dialog import parse_alarm_event
-
-    holder = MagicMock()
-    holder.timer_alarm_dialog = dialog
-
-    # Body under test, mirroring app.py:
-    if not line.lstrip().startswith(TIMER_ALARM_IPC_PREFIX):
-        return holder.timer_alarm_dialog
-    event = parse_alarm_event(line)
-    if not event:
-        return holder.timer_alarm_dialog
-    event_type = event.get("type")
-    data = event.get("data") or {}
-    if event_type == "start":
-        if holder.timer_alarm_dialog is None:
-            holder.timer_alarm_dialog = MagicMock(name="TimerAlarmDialog")
-        holder.timer_alarm_dialog.handle_start(data)
-    elif event_type == "stop" and holder.timer_alarm_dialog is not None:
-        holder.timer_alarm_dialog.handle_stop(data)
+    holder = SimpleNamespace(timer_alarm_dialog=dialog)
+    with patch.object(app, "TimerAlarmDialog", side_effect=lambda: MagicMock(name="TimerAlarmDialog")):
+        app.JarvisSystemTray._handle_timer_alarm_line(holder, line)
     return holder.timer_alarm_dialog
 
 
 class TestHandleTimerAlarmLineDispatch:
-    """Behaviour-level coverage for the app.py dispatch logic.
-
-    These tests deliberately re-state the dispatch body in
-    ``_invoke_dispatch`` so the test asserts the *shape* of the routing
-    rather than reaching into the full DesktopApp class. Construction
-    of DesktopApp pulls in the daemon process tree; that's out of scope
-    here.
-    """
+    """Behavioural coverage for production alarm dispatch."""
 
     def test_non_ipc_line_is_ignored(self):
         result = _invoke_dispatch("plain log line", dialog=None)
@@ -357,46 +334,3 @@ class TestHandleTimerAlarmLineDispatch:
         _invoke_dispatch(line, dialog=existing)
         existing.handle_start.assert_not_called()
         existing.handle_stop.assert_not_called()
-
-    def test_real_handler_uses_startswith_prefix_check(self):
-        """Guard against regressing from startswith back to substring match.
-
-        The substring-matching variant (``in``) lets any log line that
-        merely *contains* the IPC marker trigger the parser, which in
-        turn allows attacker-controlled stdout content to spoof start
-        and stop events. Keep the prefix gate lexically anchored.
-
-        Reads the source of ``app.py`` rather than importing the class
-        because ``app.py`` is the PyInstaller entry point and pulls in
-        the daemon process tree at import time.
-        """
-        import ast
-        from pathlib import Path
-
-        app_py = (
-            Path(__file__).parent.parent
-            / "src" / "desktop_app" / "app.py"
-        )
-        tree = ast.parse(app_py.read_text(encoding="utf-8"))
-
-        target = None
-        for node in ast.walk(tree):
-            if (
-                isinstance(node, ast.FunctionDef)
-                and node.name == "_handle_timer_alarm_line"
-            ):
-                target = node
-                break
-        assert target is not None, "_handle_timer_alarm_line not found in app.py"
-
-        uses_startswith = any(
-            isinstance(call, ast.Call)
-            and isinstance(call.func, ast.Attribute)
-            and call.func.attr == "startswith"
-            for call in ast.walk(target)
-        )
-        assert uses_startswith, (
-            "_handle_timer_alarm_line must guard the parser with a "
-            "startswith() check on the IPC prefix; a substring check "
-            "(`in`) lets quoted log content spoof IPC events."
-        )

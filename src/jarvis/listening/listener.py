@@ -769,6 +769,8 @@ class VoiceListener(threading.Thread):
                     print(f'  🔇 Heard (echo): "{text_lower[:50]}"', flush=True)
                     return
                 debug_log(f"stop command detected during TTS: {text_lower} (energy: {utterance_energy:.4f})", "voice")
+                from ..tools.builtin.timer import stop_all_alarms
+                stop_all_alarms()
                 if active_tts_overlapped:
                     self.tts.interrupt()
                 else:
@@ -778,6 +780,16 @@ class VoiceListener(threading.Thread):
                         self._audio_q.get_nowait()
                 except Exception:
                     pass
+                return
+
+        if (not received_during_tts
+                and is_stop_command(text_lower, self.cfg.stop_commands,
+                                    self.cfg.stop_command_fuzzy_ratio)):
+            from ..tools.builtin.timer import get_alarm_registry, stop_all_alarms
+            if get_alarm_registry().active_at(utterance_end_time):
+                debug_log("configured stop dismisses a captured timer alarm", "voice")
+                stop_all_alarms()
+                self._stop_thinking_tune()
                 return
 
         if self.tts and self.tts.enabled and active_tts_overlapped:
@@ -951,6 +963,8 @@ class VoiceListener(threading.Thread):
                 # If judge says stop command, interrupt TTS
                 if intent_judgment.stop and active_tts_overlapped:
                     debug_log(f"🛑 Intent judge detected stop command", "voice")
+                    from ..tools.builtin.timer import stop_all_alarms
+                    stop_all_alarms()
                     self.tts.interrupt()
                     return
 

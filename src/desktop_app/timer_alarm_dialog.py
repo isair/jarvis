@@ -16,9 +16,7 @@ silenced the moment the dialogue closes regardless of how it closed.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
-from typing import Optional
 
 from PyQt6.QtCore import Qt, QTimer, QUrl
 from PyQt6.QtWidgets import QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
@@ -35,7 +33,7 @@ except Exception:  # pragma: no cover - import-time guard
     QSoundEffect = None  # type: ignore[assignment]
     _HAS_SOUND = False
 
-from jarvis.ipc_constants import TIMER_ALARM_IPC_PREFIX
+from jarvis.timer_events import TIMER_ALARM_MAX_SECONDS
 
 from .themes import JARVIS_THEME_STYLESHEET
 
@@ -43,7 +41,7 @@ from .themes import JARVIS_THEME_STYLESHEET
 # omits ``auto_stop_sec``. The authoritative value is the one the
 # daemon emits, so the two sides cannot drift even if the daemon
 # constant changes.
-_FALLBACK_AUTO_STOP_MS = 30 * 1000
+_FALLBACK_AUTO_STOP_MS = TIMER_ALARM_MAX_SECONDS * 1000
 
 
 class TimerAlarmDialog(QDialog):
@@ -93,11 +91,13 @@ class TimerAlarmDialog(QDialog):
 
         self.title_label = QLabel("⏰ Timer done")
         self.title_label.setObjectName("title")
+        self.title_label.setTextFormat(Qt.TextFormat.PlainText)
         self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.title_label)
 
         self.body_label = QLabel("")
         self.body_label.setObjectName("subtitle")
+        self.body_label.setTextFormat(Qt.TextFormat.PlainText)
         self.body_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.body_label.setWordWrap(True)
         layout.addWidget(self.body_label)
@@ -213,14 +213,3 @@ class TimerAlarmDialog(QDialog):
     def reject(self) -> None:  # Esc key
         self._dismiss()
         super().reject()
-
-
-def parse_alarm_event(line: str) -> Optional[dict]:
-    """Return the parsed event dict if ``line`` is a TIMER_ALARM IPC line."""
-    line = line.strip()
-    if not line.startswith(TIMER_ALARM_IPC_PREFIX):
-        return None
-    try:
-        return json.loads(line[len(TIMER_ALARM_IPC_PREFIX):])
-    except Exception:
-        return None
