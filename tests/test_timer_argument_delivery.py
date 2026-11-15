@@ -36,7 +36,7 @@ def test_expiry_speech_is_localised_before_one_action_or_cancellation(
             cancelled.set()
         return translated
     def bind(*a, **kw):
-        return {'message': {'content': json.dumps({'language': 'de', 'requested_count': 1, 'label': 'Tee', 'hours': 0, 'minutes': 5, 'seconds': 0})}}
+        return {'message': {'content': json.dumps({'requested_count': 1, 'label': 'Tee', 'hours': 0, 'minutes': 5, 'seconds': 0})}}
     backend = SimpleNamespace(direct=render, chat=bind)
     monkeypatch.setattr(delivery, 'get_llm_backend', lambda cfg: backend)
     monkeypatch.setattr(timer_delivery, 'get_llm_backend', lambda cfg: backend)
@@ -85,3 +85,14 @@ def test_non_creation_actions_do_not_prepare_expiry(monkeypatch, mock_config, db
     monkeypatch.setattr(engine, 'chat_with_messages', lambda **kw: next(responses))
     monkeypatch.setattr(engine, 'run_tool_with_retries', lambda **kw: ToolExecutionResult(True, 'Recorded state.'))
     assert engine.run_reply_engine(db, mock_config, None, 'Report the recorded state.', dialogue_memory) == 'Recorded state.'
+
+
+def test_oversized_numeric_binding_keeps_original_arguments(monkeypatch, mock_config):
+    arguments = {'action': 'set', 'minutes': 5, 'expiry_announcement': 'Timer is up'}
+    binding = {'requested_count': 1, 'label': None, 'hours': 10 ** 310, 'minutes': 0, 'seconds': 0}
+    monkeypatch.setattr(timer_delivery, 'get_llm_backend', lambda cfg: SimpleNamespace(chat=lambda *a, **kw: {
+        'message': {'content': json.dumps(binding)}}))
+    monkeypatch.setattr(timer_delivery, 'render_timer_announcement', lambda cfg, request, text, **kw: text)
+    prepared = timer_delivery.prepare_timer_arguments(mock_config, 'Start a five-minute timer.', arguments)
+    assert prepared.arguments == arguments
+    assert prepared.requested_count is None

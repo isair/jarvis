@@ -183,6 +183,15 @@ def _model_messages(messages, *, text_protocol, mcp_tools=None):
         content = message.get('content') or ''
         calls = message.get('tool_calls')
         text_calls = content.startswith('tool_calls:')
+        if content.lstrip().startswith('{'):
+            try:
+                envelope = json.loads(content)
+                if isinstance(envelope, dict) and set(envelope) == {'tool_calls'} and isinstance(envelope['tool_calls'], list):
+                    text_calls = True
+                    if not calls:
+                        calls = envelope['tool_calls']
+            except (ValueError, TypeError):
+                pass
         if not calls and text_calls:
             try:
                 calls = json.loads(content.split(':', 1)[1])

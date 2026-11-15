@@ -235,14 +235,16 @@ def test_missing_expiry_can_be_supplied_after_a_failed_attempt(mock_config, db, 
 
 
 @pytest.mark.parametrize('encoded', [False, True])
-def test_future_alarm_speech_is_not_repeated_in_confirmation_context(encoded):
+@pytest.mark.parametrize('canonical', [False, True])
+def test_future_alarm_speech_is_not_repeated_in_confirmation_context(encoded, canonical):
     import json
     from jarvis.reply import engine
     args = {'action': 'set', 'minutes': 5, 'expiry_announcement': 'The tea timer has elapsed'}
     call = _call('', 'owned', name='timer', arguments=args)
     if encoded:
         call['function']['arguments'] = json.dumps(args)
-    messages = [{'role': 'assistant', 'content': 'tool_calls: '+json.dumps([call]), 'tool_calls': [call]},
+    content = json.dumps({'tool_calls': [call]}) if canonical else 'tool_calls: '+json.dumps([call])
+    messages = [{'role': 'assistant', 'content': content, 'tool_calls': [call]},
                 {'role': 'tool', 'tool_call_id': 'owned', 'content': 'Countdown state: running'}]
     before = deepcopy(messages)
     for text_protocol in (False, True):

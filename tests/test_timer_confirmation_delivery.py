@@ -38,10 +38,9 @@ def test_recorded_creation_corrects_false_expiry_before_publication(monkeypatch,
         return packet['text_to_translate']
     def extract(model, messages, **kw):
         packet = json.loads(messages[1]['content'])
-        assert packet['draft_reply'] == 'Your tea timer is up.'
-        assert '5 minutes' in packet['completed_timer_confirmation']
+        assert packet == {'current_request': 'Start a five-minute tea timer.'}
         assert committed['id'] not in messages[1]['content']
-        return {'message': {'content': '{"additional_text":""}'}}
+        return {'message': {'content': '{"other_requests":[]}'}}
     backend = SimpleNamespace(direct=render, chat=extract)
     monkeypatch.setattr(delivery, 'get_llm_backend', lambda cfg: backend)
     monkeypatch.setattr(timer_delivery, 'get_llm_backend', lambda cfg: backend)
@@ -97,3 +96,23 @@ def test_creation_records_do_not_override_a_later_cancellation(monkeypatch, mock
     monkeypatch.setattr(timer_delivery, 'get_llm_backend', lambda cfg: backend)
     assert engine.run_reply_engine(db, mock_config, None, 'Start then cancel a five minute timer.', dialogue_memory) == draft
     assert effects == actions
+
+
+def test_timer_only_request_rejects_a_drafts_invented_extra_goal(monkeypatch, mock_config):
+    responses = iter([{'other_requests': []}, {'additional_text': 'Your tea timer is up.'}])
+    monkeypatch.setattr(timer_delivery, 'get_llm_backend', lambda cfg: SimpleNamespace(chat=lambda *a, **kw: {
+        'message': {'content': json.dumps(next(responses))}}))
+    records = [{'id': 'private', 'label': 'Tea', 'duration_sec': 300, 'state': 'running'}]
+    result = timer_delivery.timer_reply_source(mock_config, 'Start a tea timer.', 'Your tea timer is up.', records,
+        time.monotonic() + mock_config.llm_chat_timeout_sec)
+    assert result == timer_delivery.timer_confirmation(records)
+
+
+def test_mixed_request_copies_only_selected_original_answer_spans(monkeypatch, mock_config):
+    responses = iter([{'other_requests': ['tell me the capital of France']}, {'answer_indices': [1]}])
+    monkeypatch.setattr(timer_delivery, 'get_llm_backend', lambda cfg: SimpleNamespace(chat=lambda *a, **kw: {
+        'message': {'content': json.dumps(next(responses))}}))
+    records = [{'id': 'private', 'label': 'Tea', 'duration_sec': 300, 'state': 'running'}]
+    result = timer_delivery.timer_reply_source(mock_config, 'Start a tea timer and tell me the capital of France.',
+        'Your tea timer is up. Paris is the capital of France.', records, time.monotonic() + mock_config.llm_chat_timeout_sec)
+    assert result == timer_delivery.timer_confirmation(records) + '\nParis is the capital of France.'
