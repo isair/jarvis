@@ -36,26 +36,37 @@ Contract:
 from __future__ import annotations
 
 import json
-from ..tools.schema import missing_required_arguments
+from ..tools.schema import missing_required_arguments, tool_call_output_schema
 import math
 import re
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Sequence, Tuple
 
 from ..debug import debug_log
-from ..llm import get_llm_backend, resolve_model, Tier
+from ..llm import get_llm_backend, resolve_model, Tier, extract_text_from_response
 
 
 def call_llm_direct(*, cfg, chat_model, system_prompt, user_content,
                     timeout_sec=10.0, thinking=False, num_ctx=4096,
-                    temperature=None, max_tokens=None):
+                    temperature=None, max_tokens=None, response_schema=None):
     """Local indirection: route the planner's chat call through the
     backend configured by ``cfg.llm_provider``.
 
     Kept module-level so tests can patch this single symbol to intercept
     every planner LLM call without reaching into the backend ABC.
     """
-    return get_llm_backend(cfg).direct(
+    backend = get_llm_backend(cfg)
+    if response_schema is not None:
+        options = {'response_schema': response_schema, 'num_ctx': num_ctx}
+        if temperature is not None:
+            options['temperature'] = temperature
+        if max_tokens is not None:
+            options['max_tokens'] = max_tokens
+        return extract_text_from_response(backend.chat(
+            chat_model, [{'role': 'system', 'content': system_prompt}, {'role': 'user', 'content': user_content}],
+            timeout_sec=timeout_sec, thinking=thinking, extra_options=options,
+        ))
+    return backend.direct(
         chat_model, system_prompt, user_content,
         timeout_sec=timeout_sec, thinking=thinking,
         num_ctx=num_ctx, temperature=temperature,
@@ -593,6 +604,9 @@ _STEP_RESOLVER_SYSTEM = (
     "if an argument is present, every field in its dependency list must also be present. "
     "Compose their values using each property's description and the original user request, "
     "including explicit labels and language constraints that the shortened plan omits.\n"
+    "For a follow-up identifying a specific recorded resource, copy its recorded ID into the "
+    "tool's ID field when available. Descriptive command words are not stored labels. "
+    "Use an actual recorded label only when label-based scope is requested.\n"
     "Compose concrete arguments using entities discovered in the prior "
     "tool results — substitute any `<placeholder>` in the step text with "
     "the actual value from the results. The NEXT PLANNED STEP is a distinct "
@@ -916,6 +930,7 @@ def resolve_next_tool_call(
     original_query: str,
     timeout_sec: Optional[float] = None,
     transcript_context: str = "",
+    resource_context: str = "",
 ) -> Optional[Tuple[str, dict]]:
     """Turn a planned step + prior results into a concrete tool call.
 
@@ -997,6 +1012,7 @@ def resolve_next_tool_call(
     user_content = (
         clock_context + f"ALLOWED TOOLS:\n{json.dumps(tool_catalogue, ensure_ascii=False, separators=(',', ':'))}\n\n"
         + (f"{transcript_context}\n\n" if transcript_context else "")
+        + (f"{resource_context}\n\n" if resource_context else "")
         + f"ORIGINAL CURRENT USER REQUEST:\n{json.dumps(original_query, ensure_ascii=False)}\n\n"
         f"PRIOR TOOL CALLS IN THIS SESSION:\n"
         f"{_format_prior_results(prior_results)}\n\n"
@@ -1015,6 +1031,7 @@ def resolve_next_tool_call(
             thinking=False,
             num_ctx=8192,
             max_tokens=_PLANNER_TOKEN_BUDGET,
+            response_schema={'oneOf': [{'type': 'null'}, tool_call_output_schema(referenced_names or allowed_names)]},
         )
     except Exception as exc:  # pragma: no cover — defensive
         debug_log(f"planner.resolve_next_tool_call: LLM failed — {exc}", "planning")

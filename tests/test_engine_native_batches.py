@@ -18,7 +18,7 @@ def _call(city, call_id=None, name="getWeather", arguments=None):
     return request
 
 
-def _run(mock_config, db, dialogue_memory, requests, *, outcome=None, budget=8, cancel=None, allowed=None, followup=None):
+def _run(mock_config, db, dialogue_memory, requests, *, outcome=None, budget=8, cancel=None, allowed=None, followup=None, textual=False):
     from jarvis.reply import engine
     from jarvis.tools.types import ToolExecutionResult
 
@@ -30,6 +30,9 @@ def _run(mock_config, db, dialogue_memory, requests, *, outcome=None, budget=8, 
     def chat(*args, **kwargs):
         histories.append(deepcopy(kwargs.get("messages", args[2] if len(args) > 2 else [])))
         if len(histories) == 1:
+            if textual:
+                import json
+                return {'message': {'content': json.dumps({'tool_calls': requests})}}
             return {"message": {"role": "assistant", "content": "", "tool_calls": deepcopy(requests)}}
         if len(histories) == 2 and followup:
             return {"message": {"role": "assistant", "content": "", "tool_calls": deepcopy(followup)}}
@@ -198,6 +201,22 @@ def test_distinct_labels_in_the_same_creation_batch_remain_separate(mock_config,
     assert calls == [('timer', tea), ('timer', soup)]
 
 
+def test_distinct_named_countdowns_on_successive_turns_remain_separate(mock_config, db, dialogue_memory):
+    tea = {'action': 'set', 'minutes': 5, 'label': 'tea', 'expiry_announcement': 'Tea is ready'}
+    soup = {**tea, 'label': 'soup'}
+    calls, histories, reply = _run(mock_config, db, dialogue_memory,
+        [_call('', 'tea', name='timer', arguments=tea)], allowed=['timer', 'stop'],
+        followup=[_call('', 'soup', name='timer', arguments=soup)])
+    assert calls == [('timer', tea), ('timer', soup)]
+
+
+def test_a_complete_json_text_batch_executes_every_distinct_request(mock_config, db, dialogue_memory):
+    requests = [_call('London', 'one'), _call('Paris', 'two')]
+    calls, histories, reply = _run(mock_config, db, dialogue_memory, requests, textual=True)
+    assert calls == [('getWeather', {'location': 'London'}), ('getWeather', {'location': 'Paris'})]
+    assert len(_paired_results(histories[1])) == 2
+
+
 def test_missing_expiry_can_be_supplied_after_a_failed_attempt(mock_config, db, dialogue_memory):
     from jarvis.tools.types import ToolExecutionResult
     incomplete = {'action': 'set', 'minutes': 5}
@@ -229,7 +248,7 @@ def test_future_alarm_speech_is_not_repeated_in_confirmation_context(encoded):
     for text_protocol in (False, True):
         visible = engine._model_messages(messages, text_protocol=text_protocol)
         assert 'The tea timer has elapsed' not in json.dumps(visible)
-        requests = json.loads(visible[0]['content'].split(':', 1)[1])
+        requests = json.loads(visible[0]['content'])['tool_calls']
         assert requests[0]['id'] == visible[1]['tool_call_id'] == 'owned'
         assert requests[0]['function']['arguments'] == {'action': 'set', 'minutes': 5}
         assert visible[0]['tool_calls'] == requests

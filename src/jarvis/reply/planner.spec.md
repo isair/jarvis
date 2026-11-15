@@ -362,3 +362,5 @@ executing an incomplete call. Registered tool names remain explicit in plan
 output; unsupported prose retains router fallback.
 
 Each next planned ordinal represents a distinct requested action, including matching arguments from an earlier ordinal. Prior results supply discovered entities, rather than suppressing explicitly repeated actions.
+
+Step resolution requests a nullable JSON tool-call object through the backend's structured-output option. Recorded resource references are supplied separately from speech reference data so a follow-up can copy an actual ID. The same required-field and dependency checks apply after parsing.

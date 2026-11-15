@@ -100,13 +100,15 @@ def test_ineligible_reply_does_not_enter_written_delivery(monkeypatch, mock_conf
 def test_written_delivery_stops_between_language_and_translation(monkeypatch, mock_config, stop):
     from threading import Event
     cancelled = Event()
-    clocks = iter([0.0, float(mock_config.llm_chat_timeout_sec) + 1])
-    monkeypatch.setattr(delivery, 'time', SimpleNamespace(monotonic=lambda: next(clocks)))
+    clock = [0.0]
+    monkeypatch.setattr(delivery, 'time', SimpleNamespace(monotonic=lambda: clock[0]))
     requests = []
     def select(*a, **kw):
         requests.append(kw)
         if stop == 'cancel':
             cancelled.set()
+        else:
+            clock[0] = float(mock_config.llm_chat_timeout_sec) + 1
         return 'tr'
     monkeypatch.setattr(delivery, 'get_llm_backend', lambda cfg: SimpleNamespace(direct=select))
     text = 'The timer is running.'

@@ -60,6 +60,10 @@ class Tool(ABC):
         """Arguments identifying the effect when a model retries a call."""
         return args
 
+    def bind_retry_identity(self, current: dict, previous: dict) -> Optional[dict]:
+        """Bind non-identical identities when they describe the same prior effect."""
+        return None
+
     def allows_repeated_action(self, args: Dict[str, Any]) -> bool:
         """Whether distinct matching calls in one batch are separate actions.
 

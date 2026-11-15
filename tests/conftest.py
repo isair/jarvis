@@ -479,5 +479,7 @@ def owned_written_delivery_boundary(monkeypatch, request):
     if 'mock_config' not in request.fixturenames and 'jarvis.reply.engine' not in sys.modules:
         return
     from jarvis.reply import engine
-    monkeypatch.setattr(engine, 'render_written_reply', lambda cfg, request, text, cancel_event=None, timer_facts=None: text)
-    monkeypatch.setattr(engine, 'render_timer_announcement', lambda cfg, request, text, language=None, cancel_event=None: text)
+    from jarvis.reply.timer_delivery import TimerPreparation
+    monkeypatch.setattr(engine, 'render_written_reply', lambda cfg, request, text, cancel_event=None, protect_numbers=False, deadline=None: text)
+    monkeypatch.setattr(engine, 'prepare_timer_arguments', lambda cfg, request, args, language=None, cancel_event=None, ordinal=1: TimerPreparation(dict(args), None))
+    monkeypatch.setattr(engine, 'timer_reply_source', lambda cfg, request, draft, records, deadline, cancel_event=None: draft)

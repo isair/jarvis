@@ -251,7 +251,7 @@ def generate_tools_description(allowed_tools: Optional[List[str]] = None, mcp_to
     """Produce a compact tool help string for the system prompt using OpenAI standard format."""
     lines: List[str] = []
     lines.append("Tool-use protocol: Use the tool_calls field in your response:")
-    lines.append('tool_calls: [{"id": "call_<id>", "type": "function", "function": {"name": "<toolName>", "arguments": {"<argument_name>": "<value>"}}}]')
+    lines.append('{"tool_calls": [{"function": {"name": "<toolName>", "arguments": {"<argument_name>": "<value>"}}}]}')
     lines.append("\nAvailable tools and when to use them:")
 
     for definition in generate_tools_json_schema(allowed_tools, mcp_tools):

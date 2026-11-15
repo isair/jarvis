@@ -1,6 +1,27 @@
 """Shared required-field presence checks for tool planning and dispatch."""
 
 
+def tool_call_output_schema(names):
+    return {'type': 'object', 'properties': {
+        'name': {'type': 'string', 'enum': sorted(names)},
+        'arguments': {'type': 'object', 'additionalProperties': True},
+    }, 'required': ['name', 'arguments'], 'additionalProperties': False}
+
+
+def reply_output_schema(names, maximum_calls):
+    call = {'type': 'object', 'properties': {'function': tool_call_output_schema(names)},
+            'required': ['function'], 'additionalProperties': False}
+    return {'oneOf': [
+        {'type': 'object', 'properties': {'tool_calls': {'type': 'array', 'items': call,
+                                                       'minItems': 1, 'maxItems': maximum_calls}},
+         'required': ['tool_calls'], 'additionalProperties': False},
+    ] + [
+        {'type': 'object', 'properties': {field: {'type': 'string', 'minLength': 1}},
+         'required': [field], 'additionalProperties': False}
+        for field in ('reply', 'question', 'blocker')
+    ]}
+
+
 def missing_required_arguments(schema: dict, arguments: dict) -> list[str]:
     """Include root requirements and dependencies of supplied fields."""
     if not isinstance(schema, dict):

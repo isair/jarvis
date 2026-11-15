@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from jarvis.reply import delivery, engine
+from jarvis.reply import delivery, engine, timer_delivery
 from jarvis.tools.types import ToolExecutionResult
 
 pytestmark = [pytest.mark.unit, pytest.mark.usefixtures('no_network')]
@@ -15,7 +15,7 @@ pytestmark = [pytest.mark.unit, pytest.mark.usefixtures('no_network')]
 @pytest.mark.parametrize('cancel_during_translation', [False, True])
 def test_expiry_speech_is_localised_before_one_action_or_cancellation(
         monkeypatch, mock_config, db, dialogue_memory, planned, cancel_during_translation):
-    monkeypatch.setattr(engine, 'render_timer_announcement', delivery.render_timer_announcement, raising=False)
+    monkeypatch.setattr(engine, 'prepare_timer_arguments', timer_delivery.prepare_timer_arguments)
     mock_config.llm_chat_model = mock_config.ollama_chat_model = 'gemma4:e2b'
     mock_config.planner_enabled = planned
     cancelled = Event()
@@ -35,11 +35,17 @@ def test_expiry_speech_is_localised_before_one_action_or_cancellation(
         if cancel_during_translation:
             cancelled.set()
         return translated
-    monkeypatch.setattr(delivery, 'get_llm_backend', lambda cfg: SimpleNamespace(direct=render))
+    def bind(*a, **kw):
+        return {'message': {'content': json.dumps({'language': 'de', 'requested_count': 1, 'label': 'Tee', 'hours': 0, 'minutes': 5, 'seconds': 0})}}
+    backend = SimpleNamespace(direct=render, chat=bind)
+    monkeypatch.setattr(delivery, 'get_llm_backend', lambda cfg: backend)
+    monkeypatch.setattr(timer_delivery, 'get_llm_backend', lambda cfg: backend)
     effects = []
     def execute(**kw):
         effects.append(kw['tool_args'])
-        return ToolExecutionResult(True, 'Countdown state: running\nElapsed: false')
+        return ToolExecutionResult(True, 'Countdown state: running\nElapsed: false', result_metadata={'created_timer': {
+            'id': 'owned', 'label': 'Tee', 'duration_sec': 300, 'state': 'running',
+        }})
     monkeypatch.setattr(engine, 'run_tool_with_retries', execute)
     result = engine.run_reply_engine(db, mock_config, None, query, dialogue_memory, language='de', cancel_event=cancelled)
     assert effects == ([] if cancel_during_translation else [{**args, 'expiry_announcement': translated}])
@@ -72,7 +78,7 @@ def test_oversized_expiry_text_never_reaches_a_model(monkeypatch, mock_config, l
 @pytest.mark.parametrize('tool,args', [('timer', {'action': 'list'}), ('timer', {'action': 'cancel', 'label': 'tea'}), ('getWeather', {'location': 'London'})])
 def test_non_creation_actions_do_not_prepare_expiry(monkeypatch, mock_config, db, dialogue_memory, tool, args):
     mock_config.planner_enabled = False
-    monkeypatch.setattr(engine, 'render_timer_announcement', lambda *a, **kw: pytest.fail('Non-creation action prepared expiry speech'))
+    monkeypatch.setattr(engine, 'prepare_timer_arguments', lambda *a, **kw: pytest.fail('Non-creation action prepared expiry speech'))
     monkeypatch.setattr(engine, 'select_tools', lambda **kw: [tool, 'stop'])
     monkeypatch.setattr(engine, 'extract_search_params_for_memory', lambda **kw: {})
     responses = iter([{'message': {'tool_calls': [{'id': 'owned', 'function': {'name': tool, 'arguments': args}}]}}, {'message': {'content': 'Recorded state.'}}])

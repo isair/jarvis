@@ -890,8 +890,8 @@ def test_planned_actions_are_reported_as_completed_calls_without_losing_repeated
         messages = kw.get('messages') or a[2]
         assert not any(m.get('tool_calls') for m in messages), 'Planner-owned text requests retain the text protocol'
         calls = {c['id'] for m in messages
-                 for c in (json.loads(m['content'].split(':', 1)[1])
-                           if m.get('role') == 'assistant' and (m.get('content') or '').startswith('tool_calls:')
+                 for c in (json.loads(m['content']).get('tool_calls', [])
+                           if m.get('role') == 'assistant' and (m.get('content') or '').startswith('{')
                            else m.get('tool_calls', []))
                  if c.get('function', {}).get('name') == 'timer'}
         completed = {m.get('tool_call_id') for m in messages if m.get('tool_name') == 'timer'}

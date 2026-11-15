@@ -7,11 +7,12 @@ Handles memory enrichment, tool planning and execution.
 from __future__ import annotations
 from typing import Optional, TYPE_CHECKING
 import json
+import time
 from hashlib import sha256
 from contextlib import closing
 
 from ..tools.types import ToolExecutionResult
-from ..tools.schema import missing_required_arguments
+from ..tools.schema import missing_required_arguments, reply_output_schema
 from ..memory.conversation import DialogueMemory, is_tool_message
 
 from ..utils.redact import redact
@@ -48,7 +49,8 @@ def chat_with_messages(cfg, messages, *, timeout_sec=30.0, extra_options=None,
         tools=tools,
         thinking=thinking,
     )
-from .delivery import render_english_speech, render_written_reply, render_timer_announcement
+from .delivery import render_english_speech, render_written_reply
+from .timer_delivery import prepare_timer_arguments, timer_reply_source
 from .enrichment import (
     extract_search_params_for_memory,
     digest_memory_for_query,
@@ -204,7 +206,7 @@ def _model_messages(messages, *, text_protocol, mcp_tools=None):
             projected.append(call)
         row = dict(message)
         if text_protocol or text_calls:
-            row['content'] = 'tool_calls: ' + json.dumps(projected, ensure_ascii=False)
+            row['content'] = json.dumps({'tool_calls': projected}, ensure_ascii=False)
         if text_protocol and message.get('_planner_text_request'):
             row.pop('tool_calls', None)
         elif not text_protocol or message.get('tool_calls'):
@@ -218,6 +220,25 @@ def _tool_retry_signature(name, args):
     spec = BUILTIN_TOOLS.get(name)
     identity = spec.retry_arguments(args) if spec is not None else args
     return name, json.dumps(identity, sort_keys=True, ensure_ascii=False)
+
+
+def _matching_tool_outcome(signature, outcomes):
+    if signature in outcomes:
+        return signature, signature
+    spec = BUILTIN_TOOLS.get(signature[0])
+    if spec is None:
+        return None, None
+    try:
+        current = json.loads(signature[1])
+        for previous in outcomes:
+            if previous[0] != signature[0]:
+                continue
+            bound = spec.bind_retry_identity(current, json.loads(previous[1]))
+            if bound is not None:
+                return previous, (signature[0], json.dumps(bound, sort_keys=True, ensure_ascii=False))
+    except (ValueError, TypeError, AttributeError):
+        pass
+    return None, None
 
 
 def _validate_tool_args_against_schema(
@@ -308,8 +329,8 @@ def _text_tool_call_guidance(allowed_names: list[str]) -> str:
     return (
         "\nExact tool-call syntax (copy this shape — emit nothing else on a "
         "tool-calling turn):\n"
-        'tool_calls: [{"id": "call_1", "type": "function", "function": '
-        '{"name": "webSearch", "arguments": {"search_query": "example query"}}}]\n'
+        '{"tool_calls": [{"function": '
+        '{"name": "webSearch", "arguments": {"search_query": "example query"}}}]}\n'
         "Notes:\n"
         "- `arguments` is a JSON object containing the tool's input fields. "
         "Copy the object shape above without double-encoding it as a string.\n"
@@ -326,9 +347,10 @@ def _text_tool_call_guidance(allowed_names: list[str]) -> str:
         "```tool_output ...``` fenced blocks, do NOT emit `<unused88>` or "
         "any `<unused…>` sentinel token, do NOT emit Python-style "
         "`print(google_search.search(query=...))` scaffolding. The ONLY "
-        "accepted tool-call format is the `tool_calls: [...]` JSON "
-        "literal shown above. On a prose turn, write natural-language "
-        "sentences — never the scaffolding tokens.\n"
+        "canonical tool-call format is the JSON object shown above. "
+        'For a final answer return {"reply":"your natural-language answer"}. '
+        'For missing information use {"question":"your question"}; for a blocked action '
+        'use {"blocker":"the reason"}. Never mix these fields with tool_calls.\n'
         "- Multi-part requests: compare every requested outcome and constraint "
         "with the actual tool results. One result can cover several parts. "
         "A constraint may already be satisfied without another action. "
@@ -364,6 +386,14 @@ def _is_malformed_model_output(content: str) -> bool:
         return False
 
     trimmed = content.strip()
+
+    if trimmed.startswith('{') and trimmed.endswith('}'):
+        try:
+            packet = json.loads(trimmed)
+        except ValueError:
+            packet = None
+        if isinstance(packet, dict) and 'tool_calls' in packet:
+            return True
 
     # Truncated JSON (starts with { but no closing brace).
     if trimmed.startswith("{") and not trimmed.endswith("}"):
@@ -1709,7 +1739,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
     tools_desc = generate_tools_description(allowed_tools, mcp_tools)
     tools_json_schema = generate_tools_json_schema(allowed_tools, mcp_tools)
-    # Flat list of tool names for anti-hallucination prompt and parser filter.
+    # Flat list of tool names for schema constraints and parser filtering.
     known_tool_names: set = set()
     try:
         for _schema in (tools_json_schema or []):
@@ -1875,13 +1905,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 guidance.append(format_plan_block(action_plan))
 
         if use_text_tools and tools_desc:
-            # Text-based tool calling: inject tool descriptions as plain text. The tools_desc
-            # already specifies the protocol (`tool_calls: [{...}]` JSON literal); don't
-            # append a competing markdown-fence protocol here — two formats in the same
-            # prompt confuses small models and they emit half-native/half-fenced hybrids
-            # that neither parser recognises. The engine's _extract_structured_tool_call
-            # parses both the `tool_calls: [...]` literal and a markdown fence, so either
-            # form the model naturally emits will succeed.
+            # Text-mode calls use one JSON object protocol. External model output
+            # remains subject to the parser's complete argument and identity checks.
             guidance.append("\n" + tools_desc)
             # List the exact allowed tool names so the model can't invent ones
             # like `wikipedia.run` or `google.search` — gemma models have strong
@@ -1901,7 +1926,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 "it is done. An announcement or promise does not run a tool. "
                 "If identity is unclear, retrieve or clarify it."
                 + (
-                    " For the action turn, emit ONLY the tool_calls: [...] "
+                    " For the action turn, emit ONLY the JSON tool_calls object "
                     "JSON literal using the available tool and recorded ID. "
                     "Wait for its result before writing a prose confirmation."
                     if use_text_tools else ""
@@ -1931,8 +1956,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     from .personal_context import ContextualToolRunner
     created_timer_records = []
     timer_creation_only = True
+    requested_timer_count = None
     def run_with_localised_expiry(**kwargs):
-        nonlocal timer_creation_only
+        nonlocal timer_creation_only, requested_timer_count
         args = kwargs.get('tool_args')
         is_timer_set = (kwargs.get('tool_name') == 'timer' and isinstance(args, dict)
                         and isinstance(args.get('action'), str) and args['action'].strip().lower() == 'set')
@@ -1940,12 +1966,19 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             timer_creation_only = False
         if (is_timer_set
                 and isinstance(args.get('expiry_announcement'), str) and args['expiry_announcement'].strip()):
-            announcement = render_timer_announcement(
-                cfg, redacted, args['expiry_announcement'], language=language, cancel_event=cancel_event,
+            if requested_timer_count is not None and len(created_timer_records) >= requested_timer_count:
+                return ToolExecutionResult(False, None, error_message='The requested timer count is already admitted. No additional timer was started. Use the recorded outcomes.')
+            preparation = prepare_timer_arguments(
+                cfg, redacted, args, language=language, cancel_event=cancel_event,
+                ordinal=len(created_timer_records) + 1,
             )
             if cancel_event is not None and cancel_event.is_set():
                 return ToolExecutionResult(False, None, error_message='Request cancelled before timer admission.')
-            kwargs = {**kwargs, 'tool_args': {**args, 'expiry_announcement': announcement}}
+            if requested_timer_count is None and preparation.requested_count is not None:
+                requested_timer_count = preparation.requested_count
+            if requested_timer_count is not None and len(created_timer_records) >= requested_timer_count:
+                return ToolExecutionResult(False, None, error_message='The original request does not authorise another timer. No additional timer was started.')
+            kwargs = {**kwargs, 'tool_args': preparation.arguments}
             debug_log('timer expiry speech prepared in the request language', 'planning')
         result = run_tool_with_retries(**kwargs)
         if kwargs.get('tool_name') == 'timer' and result.success and result.result_metadata:
@@ -1996,6 +2029,15 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             if isinstance(resp, dict) and isinstance(resp.get("message"), dict):
                 msg = resp["message"]
                 native_calls = msg.get("tool_calls")
+                from_text = False
+                if not native_calls and isinstance(msg.get('content'), str):
+                    try:
+                        packet = json.loads(msg['content'])
+                    except (ValueError, TypeError):
+                        packet = None
+                    if isinstance(packet, dict) and set(packet) == {'tool_calls'}:
+                        native_calls = packet['tool_calls']
+                        from_text = True
                 if isinstance(native_calls, list) and native_calls:
                     requests, retained = [], []
                     used_ids = {
@@ -2030,7 +2072,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                             "name": name, "arguments": raw_args,
                         }})
                     if requests:
-                        return requests, False, retained
+                        return requests, from_text, retained
 
                 # Content-mode tool-call parsing: the model returned prose that may
                 # encode a tool call in one of several shapes (markdown fence,
@@ -2171,7 +2213,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 return None
 
             # Common fields that contain human-readable responses
-            text_fields = ["response", "message", "text", "content", "answer", "reply", "error"]
+            text_fields = ["response", "message", "text", "content", "answer", "reply", "error", "question", "blocker"]
             for field in text_fields:
                 if field in data and isinstance(data[field], str) and data[field].strip():
                     debug_log(f"  🔧 Extracted text from JSON '{field}' field", "planning")
@@ -2299,6 +2341,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                         prior_results=_prior,
                         tools_schema=tools_json_schema or [],
                         transcript_context=transcript_context,
+                        resource_context=_resource_context,
                     )
                     if cancel_event is not None and cancel_event.is_set():
                         debug_log("reply cancelled after plan-step resolution", "planning")
@@ -2386,7 +2429,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                                             "function": {"name": _name, "arguments": _args}}
                             planned_message = {
                                 "role": "assistant",
-                                "content": "tool_calls: " + json.dumps([planned_call], ensure_ascii=False),
+                                "content": json.dumps({'tool_calls': [planned_call]}, ensure_ascii=False),
                                 "tool_calls": [planned_call],
                             }
                             if use_text_tools:
@@ -2452,7 +2495,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 cfg=cfg,
                 messages=_model_messages(messages, text_protocol=use_text_tools, mcp_tools=mcp_tools),
                 timeout_sec=float(getattr(cfg, 'llm_chat_timeout_sec', 45.0)),
-                extra_options=None,
+                extra_options={'response_schema': reply_output_schema(known_tool_names, max(1, max_turns - turn + 1))} if use_text_tools else None,
                 tools=_dump_tools_schema,
                 thinking=getattr(cfg, 'llm_thinking_enabled', False),
             )
@@ -2485,7 +2528,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 cfg=cfg,
                 messages=_model_messages(messages, text_protocol=True, mcp_tools=mcp_tools),
                 timeout_sec=float(getattr(cfg, 'llm_chat_timeout_sec', 45.0)),
-                extra_options=None,
+                extra_options={'response_schema': reply_output_schema(known_tool_names, max(1, max_turns - turn + 1))},
                 tools=None,
                 thinking=getattr(cfg, 'llm_thinking_enabled', False),
             )
@@ -2679,11 +2722,20 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 signature = (tool_name, "__unserializable_args__")
 
             spec = BUILTIN_TOOLS.get(tool_name)
+            matched, bound = _matching_tool_outcome(signature, recent_tool_outcomes)
+            previous_batch_match, _ = _matching_tool_outcome(signature, outcomes_before_batch)
             distinct_batch_action = (
                 spec is not None and spec.allows_repeated_action(tool_args or {})
-                and signature not in outcomes_before_batch
+                and (previous_batch_match is None or (
+                    matched is not None and recent_tool_outcomes[matched]
+                    and requested_timer_count is not None and len(created_timer_records) < requested_timer_count
+                ))
             )
-            if signature in recent_tool_outcomes and not distinct_batch_action:
+            if matched is not None and not distinct_batch_action:
+                previous_success = recent_tool_outcomes[matched]
+                if bound != matched:
+                    recent_tool_outcomes.pop(matched)
+                    _remember_tool_outcome(bound, previous_success)
                 debug_log(f"  ⚠️ Duplicate {tool_name} call - returning cached guidance", "planning")
                 feedback = (
                     f"[Tool: {tool_name}] You already attempted this requested action. Use the recorded outcome from the previous call to answer the user."
@@ -2692,7 +2744,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 )
                 _append_tool_feedback(
                     tool_name, tool_call_id, feedback,
-                    failed=not recent_tool_outcomes[signature],
+                    failed=not previous_success,
                 )
                 continue
 
@@ -2946,6 +2998,17 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         if tool_requests:
             continue
 
+        if (timer_creation_only and requested_timer_count is not None
+                and len(created_timer_records) < requested_timer_count and turn < max_turns
+                and _handoff_non_completion_reply(content) is None):
+            messages.pop()
+            messages.append({'role': 'user', 'content': (
+                f'Only {len(created_timer_records)} of {requested_timer_count} requested countdowns have been admitted. '
+                'Execute the remaining requested timer creations before confirming completion. '
+                'Do not repeat an admitted ordinal or invent another requested timer.'
+            )})
+            continue
+
         # Plans and prior errors cannot establish a current completed result.
         if _completion_evidence_missing():
             non_completion_reply = _handoff_non_completion_reply(content)
@@ -3053,8 +3116,13 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
         return reply
 
-    timer_delivery = {'timer_facts': {'created_count': len(created_timer_records),
-                                    'created_timers': created_timer_records}} if created_timer_records and timer_creation_only else {}
+    timer_delivery = {}
+    if created_timer_records and timer_creation_only:
+        deadline = time.monotonic() + float(cfg.llm_chat_timeout_sec)
+        reply = timer_reply_source(cfg, redacted, reply, created_timer_records, deadline, cancel_event)
+        if cancel_event is not None and cancel_event.is_set():
+            return None
+        timer_delivery = {'protect_numbers': True, 'deadline': deadline}
     if (_delivery_guidance == ENGLISH_SPEECH_REPLY_GUIDANCE
             and not malformed_fallback and reply != _UNEXECUTED_ACTION_REPLY):
         rendered = render_english_speech(cfg, reply, **timer_delivery)

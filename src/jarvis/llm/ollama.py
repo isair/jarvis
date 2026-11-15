@@ -280,7 +280,9 @@ class OllamaBackend(LLMBackend):
         # know which knob each server speaks.
         if extra_options and isinstance(extra_options, dict):
             for key, value in extra_options.items():
-                if key in {"keep_alive", "format", "think"}:
+                if key == 'response_schema':
+                    payload['format'] = value
+                elif key in {"keep_alive", "format", "think"}:
                     payload[key] = value
                 elif key == "max_tokens":
                     payload["options"]["num_predict"] = int(value)

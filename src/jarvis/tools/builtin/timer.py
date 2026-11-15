@@ -687,9 +687,19 @@ class TimerTool(Tool):
             return args
         try:
             duration = _duration_seconds(args)
-            return {'action': 'set', 'duration_sec': duration} if duration <= _MAX_DURATION_SEC else args
+            return {'action': 'set', 'duration_sec': duration, 'label': _label_key(args.get('label'))} if duration <= _MAX_DURATION_SEC else args
         except ValueError:
             return args
+
+    def bind_retry_identity(self, current: dict, previous: dict) -> Optional[dict]:
+        keys = {'action', 'duration_sec', 'label'}
+        if current.keys() != keys or previous.keys() != keys:
+            return None
+        if current['action'] != 'set' or previous['action'] != 'set' or current['duration_sec'] != previous['duration_sec']:
+            return None
+        if current['label'] and previous['label'] and current['label'] != previous['label']:
+            return None
+        return {**previous, 'label': previous['label'] or current['label']}
 
     def allows_repeated_action(self, args: Dict[str, Any]) -> bool:
         action = args.get("action")
@@ -837,7 +847,7 @@ class TimerTool(Tool):
         return ToolExecutionResult(success=True, reply_text=_render_payload(payload), result_metadata={
             'created_timer': {'id': entry.id, 'label': entry.label,
                               'duration_sec': entry.duration_sec, 'state': 'running'},
-        })
+        }, resource_references=({'kind': 'timer', 'id': entry.id, 'label': entry.label or 'timer'},))
 
     def _handle_list(
         self,
