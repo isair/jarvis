@@ -40,7 +40,7 @@ _geocode_cache: Dict[str, Tuple[Optional[str], str]] = {}
 # A bare IANA zone path ("Europe/Athens", "Asia/Tokyo", "America/New_York").
 # The "/" never appears in a plain city name, so it disambiguates zone
 # arguments from places without needing a lookup.
-_IANA_ZONE_RE = re.compile(r"^[A-Za-z_+-]+(?:/[A-Za-z_+-]+)+$")
+_IANA_ZONE_RE = re.compile(r"^[A-Za-z0-9_+-]+(?:/[A-Za-z0-9_+-]+)+$")
 
 
 def _is_valid_iana_zone(value: str) -> bool:
