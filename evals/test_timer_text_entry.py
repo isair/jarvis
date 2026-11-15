@@ -34,3 +34,13 @@ def test_written_override_does_not_change_the_source_language_of_expiry(countdow
     assert entries[0].duration_sec == 300
     assert judge_pass_fail('The announcement must be in German and state that the countdown has elapsed.', entries[0].announcement) == 'PASS'
     assert judge_pass_fail('The reply must be in English and confirm a running five-minute countdown, without claiming expiry.', reply) == 'PASS'
+
+
+def test_named_creation_can_be_cancelled_in_the_shared_conversation(countdowns):
+    reply_to(countdowns, 'Çay için beş dakikalık bir zamanlayıcı başlat.', None)
+    entries = countdowns[0].list()
+    assert len(entries) == 1
+    assert entries[0].label and entries[0].label.casefold() == 'çay'
+    countdowns[0].start(3600, 'çorba')
+    reply_to(countdowns, 'Çay zamanlayıcısını iptal et, çorba zamanlayıcısını çalışır bırak.', None)
+    assert {entry.label for entry in countdowns[0].list()} == {'çorba'}

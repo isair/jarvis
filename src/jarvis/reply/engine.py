@@ -1929,10 +1929,16 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     _carryover_state = {"recorded": False}
 
     from .personal_context import ContextualToolRunner
+    created_timer_records = []
+    timer_creation_only = True
     def run_with_localised_expiry(**kwargs):
+        nonlocal timer_creation_only
         args = kwargs.get('tool_args')
-        if (kwargs.get('tool_name') == 'timer' and isinstance(args, dict)
-                and isinstance(args.get('action'), str) and args['action'].strip().lower() == 'set'
+        is_timer_set = (kwargs.get('tool_name') == 'timer' and isinstance(args, dict)
+                        and isinstance(args.get('action'), str) and args['action'].strip().lower() == 'set')
+        if kwargs.get('tool_name') == 'timer' and not is_timer_set:
+            timer_creation_only = False
+        if (is_timer_set
                 and isinstance(args.get('expiry_announcement'), str) and args['expiry_announcement'].strip()):
             announcement = render_timer_announcement(
                 cfg, redacted, args['expiry_announcement'], language=language, cancel_event=cancel_event,
@@ -1941,7 +1947,12 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 return ToolExecutionResult(False, None, error_message='Request cancelled before timer admission.')
             kwargs = {**kwargs, 'tool_args': {**args, 'expiry_announcement': announcement}}
             debug_log('timer expiry speech prepared in the request language', 'planning')
-        return run_tool_with_retries(**kwargs)
+        result = run_tool_with_retries(**kwargs)
+        if kwargs.get('tool_name') == 'timer' and result.success and result.result_metadata:
+            created = result.result_metadata.get('created_timer')
+            if isinstance(created, dict):
+                created_timer_records.append(dict(created))
+        return result
 
     contextual_tool_runner = ContextualToolRunner(
         run_with_localised_expiry, db, cfg, redacted, recent_messages or [],
@@ -2675,9 +2686,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             if signature in recent_tool_outcomes and not distinct_batch_action:
                 debug_log(f"  ⚠️ Duplicate {tool_name} call - returning cached guidance", "planning")
                 feedback = (
-                    f"[Tool: {tool_name}] You already called this tool with these arguments. Use the results from the previous tool call to answer the user."
+                    f"[Tool: {tool_name}] You already attempted this requested action. Use the recorded outcome from the previous call to answer the user."
                     if use_text_tools else
-                    f"You already called {tool_name} with these exact arguments. The results are in the previous messages. Please use those results to answer the user."
+                    f"You already attempted this {tool_name} action. The outcome is in the previous messages. Use that recorded outcome to answer the user."
                 )
                 _append_tool_feedback(
                     tool_name, tool_call_id, feedback,
@@ -3042,15 +3053,17 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
         return reply
 
+    timer_delivery = {'timer_facts': {'created_count': len(created_timer_records),
+                                    'created_timers': created_timer_records}} if created_timer_records and timer_creation_only else {}
     if (_delivery_guidance == ENGLISH_SPEECH_REPLY_GUIDANCE
             and not malformed_fallback and reply != _UNEXECUTED_ACTION_REPLY):
-        rendered = render_english_speech(cfg, reply)
+        rendered = render_english_speech(cfg, reply, **timer_delivery)
         if not _is_malformed_model_output(rendered):
             reply = rendered
     elif (_delivery_guidance == SILENT_REPLY_GUIDANCE
             and not malformed_fallback and reply != _UNEXECUTED_ACTION_REPLY
             and any(_is_executed_tool_result(m) for m in messages[user_msg_index + 1:])):
-        rendered = render_written_reply(cfg, redacted, reply, cancel_event=cancel_event)
+        rendered = render_written_reply(cfg, redacted, reply, cancel_event=cancel_event, **timer_delivery)
         if not _is_malformed_model_output(rendered):
             reply = rendered
 

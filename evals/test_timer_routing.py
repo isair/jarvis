@@ -35,3 +35,14 @@ def test_two_explicitly_requested_matching_timers_remain_distinct(countdowns, mo
     assert judge_pass_fail(
         'The reply must confirm two running five-minute timers, not one or an elapsed timer.', reply,
     ) == 'PASS'
+
+
+def test_distinct_named_timers_with_the_same_duration_remain_separate(countdowns, monkeypatch):
+    monkeypatch.setattr(engine, 'select_tools', select_tools)
+    reply = reply_to(countdowns, 'Start two separate five-minute timers, one for tea and one for soup.', 'en')
+    entries = countdowns[0].list()
+    assert len(entries) == 2
+    assert len({entry.id for entry in entries}) == 2
+    assert {entry.label.casefold() for entry in entries} == {'tea', 'soup'}
+    assert all(entry.duration_sec == 300 for entry in entries)
+    assert judge_pass_fail('The reply must confirm two running five-minute timers, one for tea and one for soup, without claiming expiry.', reply) == 'PASS'

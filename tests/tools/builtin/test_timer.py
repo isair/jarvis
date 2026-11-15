@@ -50,6 +50,16 @@ def make_context() -> ToolContext:
     return ToolContext(None, None, "", "", "", 1, Mock())
 
 
+def test_creation_metadata_identifies_the_admitted_countdown(fresh_manager):
+    manager, _ = fresh_manager
+    result = TimerTool().run({'action': 'set', 'minutes': 5, 'label': 'Tea', 'expiry_announcement': 'Tea is ready'}, make_context())
+    assert result.success
+    entry, = manager.list()
+    assert result.result_metadata == {'created_timer': {
+        'id': entry.id, 'label': entry.label, 'duration_sec': entry.duration_sec, 'state': 'running',
+    }}
+
+
 class TestFormatDuration:
     def test_seconds_only(self):
         assert _format_duration(45) == "45 seconds"

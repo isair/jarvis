@@ -179,6 +179,42 @@ def test_changed_expiry_wording_does_not_restart_a_completed_countdown(mock_conf
     assert len(histories) == 3
 
 
+def test_label_or_duration_units_on_a_retry_do_not_start_another_countdown(mock_config, db, dialogue_memory):
+    args = {'action': 'set', 'minutes': 5, 'expiry_announcement': 'Tea is ready'}
+    retry = {'action': 'set', 'seconds': 300, 'label': 'çay', 'expiry_announcement': 'Your tea is ready'}
+    calls, histories, reply = _run(mock_config, db, dialogue_memory,
+        [_call('', 'one', name='timer', arguments=args)], allowed=['timer', 'stop'],
+        followup=[_call('', 'retry', name='timer', arguments=retry)])
+    assert calls == [('timer', args)]
+    assert len(histories) == 3
+
+
+def test_distinct_labels_in_the_same_creation_batch_remain_separate(mock_config, db, dialogue_memory):
+    tea = {'action': 'set', 'minutes': 5, 'label': 'tea', 'expiry_announcement': 'Tea is ready'}
+    soup = {**tea, 'label': 'soup'}
+    calls, histories, reply = _run(mock_config, db, dialogue_memory,
+        [_call('', 'tea', name='timer', arguments=tea), _call('', 'soup', name='timer', arguments=soup)],
+        allowed=['timer', 'stop'], followup=[_call('', 'retry', name='timer', arguments={**soup, 'minutes': 0, 'seconds': 300})])
+    assert calls == [('timer', tea), ('timer', soup)]
+
+
+def test_missing_expiry_can_be_supplied_after_a_failed_attempt(mock_config, db, dialogue_memory):
+    from jarvis.tools.types import ToolExecutionResult
+    incomplete = {'action': 'set', 'minutes': 5}
+    complete = {**incomplete, 'expiry_announcement': 'Tea is ready'}
+    effects = []
+    def outcome(attempt):
+        if attempt == 1:
+            return ToolExecutionResult(False, None, error_message='Expiry text is missing.')
+        effects.append('started')
+        return ToolExecutionResult(True, 'Countdown state: running')
+    calls, histories, reply = _run(mock_config, db, dialogue_memory,
+        [_call('', 'missing', name='timer', arguments=incomplete)], outcome=outcome,
+        allowed=['timer', 'stop'], followup=[_call('', 'complete', name='timer', arguments=complete)])
+    assert len(calls) == 2
+    assert effects == ['started']
+
+
 @pytest.mark.parametrize('encoded', [False, True])
 def test_future_alarm_speech_is_not_repeated_in_confirmation_context(encoded):
     import json

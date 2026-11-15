@@ -68,6 +68,25 @@ def _label_key(label: Optional[str]) -> str:
     return (_sanitise_label(label) or "").casefold()
 
 
+def _duration_seconds(args: Dict[str, Any]) -> int:
+    try:
+        values = [args.get(name, 0) for name in ('hours', 'minutes', 'seconds')]
+        if any(isinstance(value, bool) or not isinstance(value, (int, float, str)) for value in values):
+            raise ValueError
+        hours, minutes, seconds = map(float, values)
+        total = hours * 3600 + minutes * 60 + seconds
+        if not all(math.isfinite(value) for value in (hours, minutes, seconds, total)):
+            raise ValueError
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError('Duration components must be finite numbers.') from exc
+    if min(hours, minutes, seconds) < 0:
+        raise ValueError('Duration components must be non-negative.')
+    duration = int(round(total))
+    if duration <= 0:
+        raise ValueError('No duration provided. Pass hours, minutes, and/or seconds.')
+    return duration
+
+
 def _sanitise_announcement(text: Optional[str]) -> Optional[str]:
     """Trim a pre-localised announcement string.
 
@@ -664,9 +683,13 @@ class TimerTool(Tool):
     """Tool to set / list / cancel countdown timers."""
 
     def retry_arguments(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        if self.allows_repeated_action(args):
-            return {key: value for key, value in args.items() if key != 'expiry_announcement'}
-        return args
+        if not self.allows_repeated_action(args) or not _sanitise_announcement(args.get('expiry_announcement')):
+            return args
+        try:
+            duration = _duration_seconds(args)
+            return {'action': 'set', 'duration_sec': duration} if duration <= _MAX_DURATION_SEC else args
+        except ValueError:
+            return args
 
     def allows_repeated_action(self, args: Dict[str, Any]) -> bool:
         action = args.get("action")
@@ -719,7 +742,7 @@ class TimerTool(Tool):
                 },
                 "label": {
                     "type": "string",
-                    "description": "Optional human label (e.g. 'pasta'). For action='set' it tags the new timer; for action='cancel' it cancels every running timer with that label (case-insensitive).",
+                    "description": "For set: copy the user's named purpose or label whenever present (for tea means label='tea'), preserving its original language. Omit only when no purpose or name is given. For cancel: cancels running timers with this label, case-insensitively.",
                 },
                 "expiry_announcement": {
                     "type": "string",
@@ -771,41 +794,13 @@ class TimerTool(Tool):
         context: ToolContext,
         manager: TimerManager,
     ) -> ToolExecutionResult:
-        def _to_float(name: str) -> float:
-            value = args.get(name, 0)
-            if isinstance(value, bool) or not isinstance(value, (int, float, str)):
-                raise ValueError("Duration components must be finite numbers.")
-            number = float(value)
-            if not math.isfinite(number):
-                raise ValueError("Duration components must be finite numbers.")
-            return number
-
         try:
-            hours = _to_float("hours")
-            minutes = _to_float("minutes")
-            seconds = _to_float("seconds")
-            total = hours * 3600 + minutes * 60 + seconds
-            if not math.isfinite(total):
-                raise ValueError("Duration components must be finite numbers.")
-        except (TypeError, ValueError, OverflowError):
+            total_sec = _duration_seconds(args)
+        except ValueError as exc:
             debug_log("timer rejected malformed duration components", "tools")
             return ToolExecutionResult(
                 success=False, reply_text=None,
-                error_message="Duration components must be finite numbers.",
-            )
-        if hours < 0 or minutes < 0 or seconds < 0:
-            return ToolExecutionResult(
-                success=False,
-                reply_text=None,
-                error_message="Duration components must be non-negative.",
-            )
-
-        total_sec = int(round(total))
-        if total_sec <= 0:
-            return ToolExecutionResult(
-                success=False,
-                reply_text=None,
-                error_message="No duration provided. Pass hours, minutes, and/or seconds.",
+                error_message=str(exc),
             )
 
         label = args.get("label")
@@ -839,7 +834,10 @@ class TimerTool(Tool):
             "timer": entry.to_dict(),
             "active_timers": [t.to_dict() for t in manager.list()],
         }
-        return ToolExecutionResult(success=True, reply_text=_render_payload(payload))
+        return ToolExecutionResult(success=True, reply_text=_render_payload(payload), result_metadata={
+            'created_timer': {'id': entry.id, 'label': entry.label,
+                              'duration_sec': entry.duration_sec, 'state': 'running'},
+        })
 
     def _handle_list(
         self,

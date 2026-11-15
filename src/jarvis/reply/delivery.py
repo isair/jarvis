@@ -5,18 +5,21 @@ import time
 
 from ..debug import debug_log
 from ..llm import get_llm_backend, resolve_model, Tier
-from ..system_prompt import ENGLISH_SPEECH_RENDER_PROMPT, REPLY_RENDER_PROMPT, WRITTEN_LANGUAGE_PROMPT, REQUEST_LANGUAGE_PROMPT
+from ..system_prompt import ENGLISH_SPEECH_RENDER_PROMPT, REPLY_RENDER_PROMPT, TIMER_REPLY_RENDER_PROMPT, WRITTEN_LANGUAGE_PROMPT, REQUEST_LANGUAGE_PROMPT
 
 _MAX_RENDER_INPUT_BYTES = 4096
 _QUOTED_LITERAL = re.compile(r'"(?:\\.|[^"\\])*"|“[^”]*”|«[^»]*»')
 
 
-def _prepare(text):
-    content = json.dumps({'text_to_translate': text}, ensure_ascii=False)
+def _prepare(text, timer_facts=None):
+    packet = {'text_to_translate': text}
+    if timer_facts:
+        packet['timer_facts'] = timer_facts
+    content = json.dumps(packet, ensure_ascii=False)
     if len(content.encode('utf-8')) > _MAX_RENDER_INPUT_BYTES:
         return None
     prefix = 'JARVIS_LITERAL_'
-    while prefix in text:
+    while prefix in content:
         prefix = '_' + prefix
     literals = []
     def protect(match):
@@ -24,7 +27,7 @@ def _prepare(text):
         literals.append((marker, match.group()))
         return marker
     masked = _QUOTED_LITERAL.sub(protect, text)
-    content = json.dumps({'text_to_translate': masked}, ensure_ascii=False)
+    content = json.dumps({**packet, 'text_to_translate': masked}, ensure_ascii=False)
     if len(content.encode('utf-8')) > _MAX_RENDER_INPUT_BYTES:
         return None
     return content, literals, prefix
@@ -61,34 +64,48 @@ def _render(cfg, text, prompt, timeout, prepared):
     return rendered.strip()
 
 
-def render_english_speech(cfg, text: str) -> str:
+def _timer_fallback(text, timer_facts):
+    if not timer_facts:
+        return text
+    records = timer_facts['created_timers']
+    details = '; '.join(str(record['duration_sec']) + ' seconds'
+                        + (' for ' + json.dumps(record['label'], ensure_ascii=False) if record.get('label') else '')
+                        for record in records)
+    return f"Started {len(records)} timer{'s' if len(records) != 1 else ''}: {details}."
+
+
+def render_english_speech(cfg, text: str, timer_facts=None) -> str:
     """Translate completed spoken output without execution authority."""
-    return _render(cfg, text, ENGLISH_SPEECH_RENDER_PROMPT, float(cfg.llm_chat_timeout_sec), _prepare(text))
+    prompt = TIMER_REPLY_RENDER_PROMPT.format(language='English') if timer_facts else ENGLISH_SPEECH_RENDER_PROMPT
+    return _render(cfg, _timer_fallback(text, timer_facts), prompt,
+                   float(cfg.llm_chat_timeout_sec), _prepare(text, timer_facts))
 
 
-def render_written_reply(cfg, request: str, text: str, cancel_event=None) -> str:
+def render_written_reply(cfg, request: str, text: str, cancel_event=None, timer_facts=None) -> str:
     """Select the request's written language, then translate the completed text."""
-    return _render_request_text(cfg, request, text, WRITTEN_LANGUAGE_PROMPT, None, cancel_event)
+    return _render_request_text(cfg, request, text, WRITTEN_LANGUAGE_PROMPT, None, cancel_event, timer_facts)
 
 
 def render_timer_announcement(cfg, request: str, text: str, language=None, cancel_event=None) -> str:
     """Translate future expiry speech into the captured or inferred request language."""
-    return _render_request_text(cfg, request, text, REQUEST_LANGUAGE_PROMPT, language, cancel_event)
+    return _render_request_text(cfg, request, text, REQUEST_LANGUAGE_PROMPT, language, cancel_event, None)
 
 
-def _render_request_text(cfg, request, text, language_prompt, known_language, cancel_event):
-    prepared = _prepare(text)
+def _render_request_text(cfg, request, text, language_prompt, known_language, cancel_event, timer_facts):
+    prepared = _prepare(text, timer_facts)
+    fallback = _timer_fallback(text, timer_facts)
+    template = TIMER_REPLY_RENDER_PROMPT if timer_facts else REPLY_RENDER_PROMPT
     if cancel_event is not None and cancel_event.is_set():
-        return text
+        return fallback
     if known_language is not None:
         if not isinstance(known_language, str) or not re.fullmatch(r'[A-Za-z]{2,3}', known_language):
-            return text
-        return _render(cfg, text, REPLY_RENDER_PROMPT.format(language=known_language),
+            return fallback
+        return _render(cfg, fallback, template.format(language=known_language),
                        float(cfg.llm_chat_timeout_sec), prepared)
     reference = json.dumps({'current_request': request}, ensure_ascii=False)
     if prepared is None or len(reference.encode('utf-8')) > _MAX_RENDER_INPUT_BYTES:
         debug_log('written rendering: packet exceeds budget', 'planning')
-        return text
+        return fallback
     deadline = time.monotonic() + float(cfg.llm_chat_timeout_sec)
     try:
         language = get_llm_backend(cfg).direct(
@@ -98,15 +115,15 @@ def _render_request_text(cfg, request, text, language_prompt, known_language, ca
         )
     except Exception as exc:
         debug_log(f'written language unavailable: {type(exc).__name__}', 'planning')
-        return text
+        return fallback
     if cancel_event is not None and cancel_event.is_set():
-        return text
+        return fallback
     if not isinstance(language, str):
-        return text
+        return fallback
     language = language.strip()
     if not re.fullmatch(r'[A-Za-z]{2,3}', language):
         debug_log('written language: invalid classification', 'planning')
-        return text
+        return fallback
     debug_log('written language selected for translation', 'planning')
-    return _render(cfg, text, REPLY_RENDER_PROMPT.format(language=language),
+    return _render(cfg, fallback, template.format(language=language),
                    deadline - time.monotonic(), prepared)
