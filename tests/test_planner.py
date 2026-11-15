@@ -784,6 +784,10 @@ class TestPlanHasUnresolvedToolSteps:
 class TestStopOnlyPlanGuard:
     """Post-plan guard in plan_query rejects stop-only plans."""
 
+    def test_stop_followed_only_by_synthesis_returns_to_normal_routing(self):
+        with patch.object(planner_mod, "call_llm_direct", return_value="stop\nReply to the user."):
+            assert plan_query(_cfg(), "Cancel only the tea timer.", "", [("timer", "Countdowns"), ("stop", "End conversation")]) == []
+
     def test_stop_only_plan_returns_empty(self):
         cfg = _cfg()
         with patch.object(planner_mod, "call_llm_direct", return_value="stop"):

@@ -35,6 +35,10 @@ def _render(cfg, text, prompt, timeout, prepared):
         debug_log('reply rendering: packet exceeds budget or deadline', 'planning')
         return text
     content, literals, prefix = prepared
+    if literals:
+        prompt += (" Copy the supplied literal markers exactly, once each, in the same order: "
+                   + ", ".join(marker for marker, _ in literals)
+                   + ". They represent quoted text. Do not translate, expand or invent markers.")
     try:
         rendered = get_llm_backend(cfg).direct(
             resolve_model(cfg, Tier.CHAT), prompt, content, timeout_sec=timeout,

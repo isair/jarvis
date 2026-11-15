@@ -515,7 +515,8 @@ def plan_query(
     # never the right behaviour — the engine always adds "stop" to
     # the allow-list separately. Return empty so the engine falls
     # through to the tool router + chat model.
-    if steps and all(_is_stop_step(s) for s in steps):
+    action_steps = tool_steps_of(steps) if len(steps) > 1 else steps
+    if action_steps and all(_is_stop_step(s) for s in action_steps):
         debug_log(
             "planner: rejecting stop-only plan (forbidden by rule 13)",
             "planning",
@@ -589,7 +590,10 @@ _STEP_RESOLVER_SYSTEM = (
     "Your job: emit ONE JSON object, and nothing else, of the shape "
     "`{\"name\": \"<tool_name>\", \"arguments\": {...}}`. The `name` MUST "
     "be one of the allowed tool names. The `arguments` MUST match the "
-    "tool's JSON schema.\n"
+    "tool's JSON schema. Include required fields AND dependentRequired fields: "
+    "if an argument is present, every field in its dependency list must also be present. "
+    "Compose their values using each property's description and the original user request, "
+    "including explicit labels and language constraints that the shortened plan omits.\n"
     "Compose concrete arguments using entities discovered in the prior "
     "tool results — substitute any `<placeholder>` in the step text with "
     "the actual value from the results. Do NOT re-issue arguments "
@@ -998,7 +1002,8 @@ def resolve_next_tool_call(
         f"PRIOR TOOL CALLS IN THIS SESSION:\n"
         f"{_format_prior_results(prior_results)}\n\n"
         f"NEXT PLANNED STEP: {next_step_text.strip()}\n\n"
-        "Emit the JSON tool call now (or `null` if this is a synthesis step)."
+        "Emit ONE complete JSON tool call for this step (or `null` for synthesis). "
+        "Check required and dependentRequired fields before returning it."
     )
 
     try:

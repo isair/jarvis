@@ -508,3 +508,5 @@ request alone. Translation then receives only completed text and an explicit
 target language. Selection (64 output tokens) and translation share one chat
 deadline; cancellation between them prevents the second call. The renderer
 does not infer the language from tool output or future expiry speech.
+
+Literal-marker instructions are included only when the translation packet contains protected quoted text.

@@ -571,3 +571,5 @@ Planner and dispatch share required-field/dependency checks. A concrete duration
 without its required expiry text reaches schema-aware CHAT resolution before
 execution. Planner output guidance keeps exact registered names and distinct
 action ordinals, while under-specified plans retain router fallback.
+
+The step resolver explicitly applies `dependentRequired` alongside root required fields, using property descriptions and the original request for omitted labels and language constraints. Delivery translation receives literal-marker instructions only for packets containing protected quoted text.

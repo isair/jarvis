@@ -718,7 +718,7 @@ class TimerTool(Tool):
                 },
                 "expiry_announcement": {
                     "type": "string",
-                    "description": "For action='set': the exact phrase Jarvis will speak when the timer elapses, written in the user's current language. Keep it short and natural (e.g. 'Your pasta timer is up'). Supply it together with the duration when setting a timer.",
+                    "description": "Required with a duration: the exact phrase spoken AFTER the countdown finishes, in the user's current language. Explicitly say that the timer has elapsed or finished, not merely that it is ringing or running. Keep it short and natural (e.g. 'Your pasta timer is up').",
                 },
                 "timer_id": {
                     "type": "string",

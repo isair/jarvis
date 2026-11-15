@@ -144,7 +144,7 @@ The planner prompt instructs the model to emit:
   Instead, emit `Reply to the user.` for dismissive queries so
   the assistant handles tone and termination naturally.
   A deterministic post-plan guard in `plan_query` rejects any
-  plan where every step is `stop`, returning `[]` so the engine
+  plan whose only action steps are `stop` (including one followed by synthesis), returning `[]` so the engine
   falls through to the tool router and chat model.
 - Trust the tool router: when the available-tools catalogue contains
   a tool relevant to the query, plan to use it even for seemingly
