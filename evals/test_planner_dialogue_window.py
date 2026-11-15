@@ -40,12 +40,13 @@ def test_real_planner_dispatches_the_dialogue_entity(eval_db, eval_dialogue_memo
         return ToolExecutionResult(success=True, reply_text='Local evaluation result.')
 
     # Exercise the selected backend's real planner/resolver and engine dispatch.
-    # Force direct execution for every backend; synthesis and external search
-    # are isolated so this case measures the planning context boundary.
+    # Force direct execution for every backend; synthesis, final delivery and
+    # external search are isolated so this case measures the planning context boundary.
     with patch.object(engine, 'select_tools', return_value=['webSearch', 'stop']), \
          patch.object(engine, 'detect_model_size', return_value=ModelSize.SMALL), \
          patch.object(engine, 'run_tool_with_retries', side_effect=run_tool), \
-         patch.object(engine, 'chat_with_messages', return_value={'message': {'content': 'Evaluation complete.'}}):
+         patch.object(engine, 'chat_with_messages', return_value={'message': {'content': 'Evaluation complete.'}}), \
+         patch.object(engine, 'render_written_reply', side_effect=lambda cfg, request, text, **kwargs: text):
         reply = engine.run_reply_engine(eval_db, cfg, None, query, eval_dialogue_memory)
     assert reply == 'Evaluation complete.'
     searches = [call['args'].get('search_query', '') for call in capture.calls if call['name'] == 'webSearch']
