@@ -109,10 +109,39 @@ def test_timer_only_request_rejects_a_drafts_invented_extra_goal(monkeypatch, mo
 
 
 def test_mixed_request_copies_only_selected_original_answer_spans(monkeypatch, mock_config):
-    responses = iter([{'other_requests': ['tell me the capital of France']}, {'answer_indices': [1]}])
+    responses = iter([{'other_requests': ['tell me the capital of France']}, {'verbatim_spans': ['Paris is the capital of France.']}])
     monkeypatch.setattr(timer_delivery, 'get_llm_backend', lambda cfg: SimpleNamespace(chat=lambda *a, **kw: {
         'message': {'content': json.dumps(next(responses))}}))
     records = [{'id': 'private', 'label': 'Tea', 'duration_sec': 300, 'state': 'running'}]
     result = timer_delivery.timer_reply_source(mock_config, 'Start a tea timer and tell me the capital of France.',
         'Your tea timer is up. Paris is the capital of France.', records, time.monotonic() + mock_config.llm_chat_timeout_sec)
     assert result == timer_delivery.timer_confirmation(records) + '\nParis is the capital of France.'
+
+
+def test_mixed_answer_sharing_a_sentence_cannot_reintroduce_false_expiry(monkeypatch, mock_config):
+    responses = iter([{'other_requests': ['tell me the capital of France']},
+                      {'verbatim_spans': ['Paris is the capital of France.']}])
+    monkeypatch.setattr(timer_delivery, 'get_llm_backend', lambda cfg: SimpleNamespace(chat=lambda *a, **kw: {
+        'message': {'content': json.dumps(next(responses))}}))
+    records = [{'id': 'private', 'label': 'Tea', 'duration_sec': 300, 'state': 'running'}]
+    result = timer_delivery.timer_reply_source(mock_config, 'Start a tea timer and tell me the capital of France.',
+        'Your tea timer is up; Paris is the capital of France.', records, time.monotonic() + mock_config.llm_chat_timeout_sec)
+    assert result == timer_delivery.timer_confirmation(records) + '\nParis is the capital of France.'
+
+
+def test_cancel_during_goal_extraction_prevents_another_inference(monkeypatch, mock_config):
+    from threading import Event
+    cancelled = Event()
+    inference_after_cancellation = Event()
+    def backend(model, messages, **kw):
+        if cancelled.is_set():
+            inference_after_cancellation.set()
+            return None
+        cancelled.set()
+        return {'message': {'content': '{"other_requests":["tell me the capital of France"]}'}}
+    monkeypatch.setattr(timer_delivery, 'get_llm_backend', lambda cfg: SimpleNamespace(chat=backend))
+    records = [{'id': 'private', 'label': 'Tea', 'duration_sec': 300, 'state': 'running'}]
+    result = timer_delivery.timer_reply_source(mock_config, 'Start a tea timer and tell me the capital of France.',
+        'Paris is the capital of France.', records, time.monotonic() + mock_config.llm_chat_timeout_sec, cancelled)
+    assert not inference_after_cancellation.is_set()
+    assert result == timer_delivery.timer_confirmation(records)

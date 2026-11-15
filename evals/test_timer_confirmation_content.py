@@ -15,6 +15,7 @@ pytestmark = pytest.mark.eval
     ('Stelle einen Timer für fünf Minuten für Tee. Antworte auf Englisch.', 'Your tea timer is up.', 'en', ['Tee'], ''),
     ('Start a five-minute tea timer and tell me the capital of France.', 'Your tea timer is up. Paris is the capital of France.', 'en', ['Tea'], 'The capital of France is Paris.'),
     ('Stelle einen Timer für fünf Minuten für Tee und nenne die Hauptstadt von Frankreich.', 'Your tea timer is up. Paris is the capital of France.', 'de', ['Tee'], 'The capital of France is Paris.'),
+    ('Start a five-minute tea timer and tell me the capital of France.', 'Your tea timer is up; Paris is the capital of France.', 'en', ['Tea'], 'The capital of France is Paris.'),
     ('Start two separate five-minute timers for tea and soup.', 'One timer has already elapsed.', 'en', ['tea', 'soup'], ''),
 ])
 def test_confirmation_uses_records_and_retains_other_requested_facts(query, draft, language, labels, additional):
