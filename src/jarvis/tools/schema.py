@@ -1,20 +1,68 @@
-"""Shared required-field presence checks for tool planning and dispatch."""
+"""Canonical argument constraints and scoped structured tool output."""
 
 
-def tool_call_output_schema(schemas):
-    return {'oneOf': [
-        {'type': 'object', 'properties': {
+from copy import deepcopy
+
+from referencing import Resource
+from referencing.jsonschema import DRAFT202012
+
+from ..debug import debug_log
+
+
+def _scoped_schemas(schemas):
+    definitions = {}
+    branches = []
+    for index, name in enumerate(sorted(schemas)):
+        namespace = f'tool_{index}'
+        try:
+            schema = deepcopy(schemas[name])
+            pending = [Resource.from_contents(schema, default_specification=DRAFT202012)]
+            seen = set()
+            while pending:
+                resource = pending.pop()
+                node = resource.contents
+                if id(node) in seen:
+                    continue
+                seen.add(id(node))
+                if isinstance(node, dict):
+                    if any(key in node for key in ('$id', 'id', '$anchor', '$dynamicAnchor',
+                                                    '$dynamicRef', '$recursiveRef', '$recursiveAnchor')):
+                        debug_log('structured tool format unavailable: unsupported reference scope', 'planning')
+                        return None
+                    if '$ref' in node:
+                        reference = node['$ref']
+                        if not isinstance(reference, str) or not (reference == '#' or reference.startswith('#/')):
+                            debug_log('structured tool format unavailable: non-local reference', 'planning')
+                            return None
+                        node['$ref'] = f'#/$defs/{namespace}' + reference[1:]
+                pending.extend(resource.subresources())
+        except Exception as exc:
+            debug_log(f'structured tool format unavailable: {type(exc).__name__}', 'planning')
+            return None
+        definitions[namespace] = schema
+        branches.append({'type': 'object', 'properties': {
             'name': {'type': 'string', 'enum': [name]},
-            'arguments': schemas[name],
-        }, 'required': ['name', 'arguments'], 'additionalProperties': False}
-        for name in sorted(schemas)
-    ]}
+            'arguments': {'$ref': f'#/$defs/{namespace}'},
+        }, 'required': ['name', 'arguments'], 'additionalProperties': False})
+    return definitions, branches
+
+
+def tool_call_output_schema(schemas, *, nullable=False):
+    scoped = _scoped_schemas(schemas)
+    if scoped is None:
+        return None
+    definitions, branches = scoped
+    return {'$defs': definitions, 'oneOf': ([{'type': 'null'}] if nullable else []) + branches}
 
 
 def reply_output_schema(schemas, maximum_calls):
-    call = {'type': 'object', 'properties': {'function': tool_call_output_schema(schemas)},
+    scoped = _scoped_schemas(schemas)
+    if scoped is None:
+        return None
+    definitions, branches = scoped
+    call = {'type': 'object', 'properties': {'function': {'oneOf': branches}},
             'required': ['function'], 'additionalProperties': False}
-    return {'oneOf': [
+    return {'$defs': definitions, 'oneOf': [
         {'type': 'object', 'properties': {'tool_calls': {'type': 'array', 'items': call,
                                                        'minItems': 1, 'maxItems': maximum_calls}},
          'required': ['tool_calls'], 'additionalProperties': False},

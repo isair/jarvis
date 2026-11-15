@@ -44,3 +44,13 @@ def test_named_creation_can_be_cancelled_in_the_shared_conversation(countdowns):
     countdowns[0].start(3600, 'çorba')
     reply_to(countdowns, 'Çay zamanlayıcısını iptal et, çorba zamanlayıcısını çalışır bırak.', None)
     assert {entry.label for entry in countdowns[0].list()} == {'çorba'}
+
+
+def test_another_timer_uses_the_shared_conversation_duration(countdowns):
+    reply_to(countdowns, 'Start a five-minute timer for tea.', None)
+    assert len(countdowns[0].list()) == 1
+    reply_to(countdowns, 'Start another timer just like that tea timer.', None)
+    entries = countdowns[0].list()
+    assert len(entries) == 2
+    assert all(entry.duration_sec == 300 and entry.label.casefold() == 'tea' for entry in entries)
+    assert len({entry.id for entry in entries}) == 2

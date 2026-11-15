@@ -2,7 +2,7 @@
 import pytest
 
 from jarvis.reply import engine
-from jarvis.reply.timer_delivery import TimerPreparation
+from jarvis.reply.timer_delivery import TimerPreparation, TimerRequest
 from jarvis.tools.types import ToolExecutionResult
 
 pytestmark = [pytest.mark.unit, pytest.mark.usefixtures('no_network')]
@@ -14,7 +14,7 @@ def test_current_request_count_owns_sequential_creation_admission(
         monkeypatch, mock_config, db, dialogue_memory, requested, second_label):
     mock_config.planner_enabled = False
     mock_config.llm_chat_model = mock_config.ollama_chat_model = 'gpt-oss:20b'
-    monkeypatch.setattr(engine, 'prepare_timer_arguments', lambda cfg, request, args, **kw: TimerPreparation(dict(args), requested))
+    monkeypatch.setattr(engine, 'prepare_timer_arguments', lambda cfg, request, args, **kw: TimerPreparation(dict(args), TimerRequest(tuple({} for _ in range(requested)))))
     monkeypatch.setattr(engine, 'select_tools', lambda **kw: ['timer', 'stop'])
     monkeypatch.setattr(engine, 'extract_search_params_for_memory', lambda **kw: {})
     def call(label, identity):
@@ -36,7 +36,7 @@ def test_current_request_count_owns_sequential_creation_admission(
 
 def test_premature_confirmation_cannot_replace_a_remaining_requested_creation(monkeypatch, mock_config, db, dialogue_memory):
     mock_config.planner_enabled = False
-    monkeypatch.setattr(engine, 'prepare_timer_arguments', lambda cfg, request, args, **kw: TimerPreparation(dict(args), 2))
+    monkeypatch.setattr(engine, 'prepare_timer_arguments', lambda cfg, request, args, **kw: TimerPreparation(dict(args), TimerRequest(({}, {}))))
     monkeypatch.setattr(engine, 'select_tools', lambda **kw: ['timer', 'stop'])
     monkeypatch.setattr(engine, 'extract_search_params_for_memory', lambda **kw: {})
     call = {'message': {'tool_calls': [{'function': {'name': 'timer', 'arguments': {

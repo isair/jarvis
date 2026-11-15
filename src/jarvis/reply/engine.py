@@ -1966,8 +1966,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     created_timer_records = []
     timer_creation_only = True
     requested_timer_count = None
+    timer_request = None
     def run_with_localised_expiry(**kwargs):
-        nonlocal timer_creation_only, requested_timer_count
+        nonlocal timer_creation_only, requested_timer_count, timer_request
         args = kwargs.get('tool_args')
         is_timer_set = (kwargs.get('tool_name') == 'timer' and isinstance(args, dict)
                         and isinstance(args.get('action'), str) and args['action'].strip().lower() == 'set')
@@ -1979,8 +1980,10 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 return ToolExecutionResult(False, None, error_message='The requested timer count is already admitted. No additional timer was started. Use the recorded outcomes.')
             preparation = prepare_timer_arguments(
                 cfg, redacted, args, language=language, cancel_event=cancel_event,
-                ordinal=len(created_timer_records) + 1,
+                ordinal=len(created_timer_records) + 1, timer_request=timer_request, dialogue_context=_dialogue_ctx,
             )
+            if timer_request is None:
+                timer_request = preparation.request
             if cancel_event is not None and cancel_event.is_set():
                 return ToolExecutionResult(False, None, error_message='Request cancelled before timer admission.')
             if requested_timer_count is None and preparation.requested_count is not None:

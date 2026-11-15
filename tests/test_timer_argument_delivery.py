@@ -36,7 +36,7 @@ def test_expiry_speech_is_localised_before_one_action_or_cancellation(
             cancelled.set()
         return translated
     def bind(*a, **kw):
-        return {'message': {'content': json.dumps({'requested_count': 1, 'label': 'Tee', 'hours': 0, 'minutes': 5, 'seconds': 0})}}
+        return {'message': {'content': json.dumps({'timers': [{'label': 'Tee', 'hours': 0, 'minutes': 5, 'seconds': 0}]})}}
     backend = SimpleNamespace(direct=render, chat=bind)
     monkeypatch.setattr(delivery, 'get_llm_backend', lambda cfg: backend)
     monkeypatch.setattr(timer_delivery, 'get_llm_backend', lambda cfg: backend)
@@ -91,8 +91,71 @@ def test_oversized_numeric_binding_keeps_original_arguments(monkeypatch, mock_co
     arguments = {'action': 'set', 'minutes': 5, 'expiry_announcement': 'Timer is up'}
     binding = {'requested_count': 1, 'label': None, 'hours': 10 ** 310, 'minutes': 0, 'seconds': 0}
     monkeypatch.setattr(timer_delivery, 'get_llm_backend', lambda cfg: SimpleNamespace(chat=lambda *a, **kw: {
-        'message': {'content': json.dumps(binding)}}))
+        'message': {'content': json.dumps({'timers': [{key: value for key, value in binding.items() if key != 'requested_count'}]})}}))
     monkeypatch.setattr(timer_delivery, 'render_timer_announcement', lambda cfg, request, text, **kw: text)
     prepared = timer_delivery.prepare_timer_arguments(mock_config, 'Start a five-minute timer.', arguments)
     assert prepared.arguments == arguments
     assert prepared.requested_count is None
+
+
+@pytest.mark.parametrize('labels,fail_first', [(['tea', 'soup'], False), (['tea', 'tea'], False), (['tea', 'soup'], True)])
+def test_one_ordered_request_owns_successful_timer_admissions(monkeypatch, mock_config, db, dialogue_memory, labels, fail_first):
+    monkeypatch.setattr(engine, 'prepare_timer_arguments', timer_delivery.prepare_timer_arguments)
+    mock_config.planner_enabled = False
+    monkeypatch.setattr(engine, 'select_tools', lambda **kw: ['timer', 'stop'])
+    monkeypatch.setattr(engine, 'extract_search_params_for_memory', lambda **kw: {})
+    def call(label, identity):
+        return {'message': {'tool_calls': [{'id': identity, 'function': {'name': 'timer', 'arguments': {
+            'action': 'set', 'minutes': 5, 'label': label, 'expiry_announcement': 'Timer has elapsed',
+        }}}]}}
+    replies = [call('tea', 'first'), call('tea' if labels[1] == 'soup' and not fail_first else 'soup', 'second')]
+    if fail_first:
+        replies.append(call('soup', 'third'))
+    responses = iter(replies + [{'message': {'content': 'Recorded timers started.'}}])
+    monkeypatch.setattr(engine, 'chat_with_messages', lambda **kw: next(responses))
+    compiled = [{'label': label, 'hours': 0, 'minutes': 5, 'seconds': 0} for label in labels]
+    backend = SimpleNamespace(chat=lambda *a, **kw: {'message': {'content': json.dumps({'timers': compiled})}},
+                              direct=lambda model, system, content, **kw: json.loads(content)['text_to_translate'])
+    monkeypatch.setattr(timer_delivery, 'get_llm_backend', lambda cfg: backend)
+    monkeypatch.setattr(delivery, 'get_llm_backend', lambda cfg: backend)
+    successful = []
+    failed = []
+    def execute(**kw):
+        if fail_first and not failed:
+            failed.append(kw['tool_args'])
+            return ToolExecutionResult(False, None, error_message='Owned temporary admission failure.')
+        successful.append(kw['tool_args'])
+        return ToolExecutionResult(True, 'Countdown running.', result_metadata={'created_timer': {
+            'id': str(len(successful)), 'label': kw['tool_args']['label'], 'duration_sec': 300, 'state': 'running'}})
+    monkeypatch.setattr(engine, 'run_tool_with_retries', execute)
+    query = 'Start two five-minute timers, one for tea and one for soup.' if labels[1] == 'soup' else 'Start two five-minute timers for tea.'
+    assert engine.run_reply_engine(db, mock_config, None, query, dialogue_memory, language='en')
+    assert [args['label'] for args in successful] == labels
+    assert all(args['minutes'] == 5 for args in successful)
+
+
+def test_contextual_followup_binds_the_recorded_duration(monkeypatch, mock_config):
+    context = 'user: Start a five-minute tea timer.\nassistant: Started 1 timer: 5 minutes for "tea". It is running.'
+    def compile(model, messages, **kw):
+        packet = json.loads(messages[1]['content'])
+        assert packet['dialogue_context'] == context
+        assert 'proposed' not in packet
+        return {'message': {'content': '{"timers":[{"label":"tea","hours":0,"minutes":5,"seconds":0}]}'}}
+    monkeypatch.setattr(timer_delivery, 'get_llm_backend', lambda cfg: SimpleNamespace(chat=compile))
+    monkeypatch.setattr(timer_delivery, 'render_timer_announcement', lambda cfg, request, text, **kw: text)
+    result = timer_delivery.prepare_timer_arguments(mock_config, 'Start another like that tea timer.',
+        {'action': 'set', 'expiry_announcement': 'Timer has elapsed'}, dialogue_context=context)
+    assert result.requested_count == 1
+    assert result.arguments == {'action': 'set', 'label': 'tea', 'minutes': 5, 'expiry_announcement': 'Timer has elapsed'}
+
+
+def test_unavailable_compilation_is_cached_as_unknown_not_zero(monkeypatch, mock_config):
+    responses = iter([{'timers': None}, {'timers': [{'label': 'tea', 'hours': 0, 'minutes': 9, 'seconds': 0}]}])
+    monkeypatch.setattr(timer_delivery, 'get_llm_backend', lambda cfg: SimpleNamespace(chat=lambda *a, **kw: {
+        'message': {'content': json.dumps(next(responses))}}))
+    monkeypatch.setattr(timer_delivery, 'render_timer_announcement', lambda cfg, request, text, **kw: text)
+    arguments = {'action': 'set', 'minutes': 5, 'expiry_announcement': 'Timer has elapsed'}
+    first = timer_delivery.prepare_timer_arguments(mock_config, 'Start a tea timer.', arguments)
+    second = timer_delivery.prepare_timer_arguments(mock_config, 'Start a tea timer.', arguments, timer_request=first.request)
+    assert first.requested_count is second.requested_count is None
+    assert first.arguments == second.arguments == arguments
