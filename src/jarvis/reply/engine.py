@@ -48,7 +48,7 @@ def chat_with_messages(cfg, messages, *, timeout_sec=30.0, extra_options=None,
         tools=tools,
         thinking=thinking,
     )
-from .delivery import render_english_speech, render_written_reply
+from .delivery import render_english_speech, render_written_reply, render_timer_announcement
 from .enrichment import (
     extract_search_params_for_memory,
     digest_memory_for_query,
@@ -1929,8 +1929,22 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     _carryover_state = {"recorded": False}
 
     from .personal_context import ContextualToolRunner
+    def run_with_localised_expiry(**kwargs):
+        args = kwargs.get('tool_args')
+        if (kwargs.get('tool_name') == 'timer' and isinstance(args, dict)
+                and isinstance(args.get('action'), str) and args['action'].strip().lower() == 'set'
+                and isinstance(args.get('expiry_announcement'), str) and args['expiry_announcement'].strip()):
+            announcement = render_timer_announcement(
+                cfg, redacted, args['expiry_announcement'], language=language, cancel_event=cancel_event,
+            )
+            if cancel_event is not None and cancel_event.is_set():
+                return ToolExecutionResult(False, None, error_message='Request cancelled before timer admission.')
+            kwargs = {**kwargs, 'tool_args': {**args, 'expiry_announcement': announcement}}
+            debug_log('timer expiry speech prepared in the request language', 'planning')
+        return run_tool_with_retries(**kwargs)
+
     contextual_tool_runner = ContextualToolRunner(
-        run_tool_with_retries, db, cfg, redacted, recent_messages or [],
+        run_with_localised_expiry, db, cfg, redacted, recent_messages or [],
     )
 
     # Per-reply memo for the time/location context line (see _get_context_string).

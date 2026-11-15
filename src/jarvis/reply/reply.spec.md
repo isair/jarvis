@@ -514,3 +514,5 @@ Literal-marker instructions are included only when the translation packet contai
 Model-facing request copies exclude schema properties marked `writeOnly`, including timer expiry speech, while preserving call IDs and matching results. Planner-owned text requests use content protocol. Recognised model requests retain their existing structured identity metadata alongside text protocol content. Execution and recorded history retain the full arguments.
 
 The same projection applies to JSON-string native arguments and max-turn summary input.
+
+Before timer creation, the reply-scoped runner translates a non-empty proposed expiry phrase into the captured request language. Without a captured language it classifies the redacted request prose, independently of written-reply overrides. This uses the shared bounded delivery renderer and a copy of tool arguments; raw model proposals remain recorded. Duration, label, call identity and creation multiplicity are unchanged. Cancellation after preparation prevents admission. Listing, cancellation, duplicate feedback and missing expiry text start no translation.

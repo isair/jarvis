@@ -187,3 +187,5 @@ from later model turns retain retry protection. Read-only tools retain their
 existing same-batch coalescing.
 
 Expiry speech is a write-only creation argument. It remains owned by the countdown and is absent from model-facing confirmation requests. Changing only that wording on a later model retry does not start another countdown; distinct requested ordinals and identified calls in the original batch still create separate timers.
+
+The reply runner prepares expiry language before tool admission. Captured language bypasses classification; text entry classifies the request prose and ignores written-reply language overrides. The tool and expiry worker perform no model inference. Preparation retains the original phrase on unavailable rendering, under the shared delivery failure policy.

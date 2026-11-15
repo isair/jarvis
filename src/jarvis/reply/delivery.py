@@ -5,7 +5,7 @@ import time
 
 from ..debug import debug_log
 from ..llm import get_llm_backend, resolve_model, Tier
-from ..system_prompt import ENGLISH_SPEECH_RENDER_PROMPT, REPLY_RENDER_PROMPT, WRITTEN_LANGUAGE_PROMPT
+from ..system_prompt import ENGLISH_SPEECH_RENDER_PROMPT, REPLY_RENDER_PROMPT, WRITTEN_LANGUAGE_PROMPT, REQUEST_LANGUAGE_PROMPT
 
 _MAX_RENDER_INPUT_BYTES = 4096
 _QUOTED_LITERAL = re.compile(r'"(?:\\.|[^"\\])*"|“[^”]*”|«[^»]*»')
@@ -68,7 +68,23 @@ def render_english_speech(cfg, text: str) -> str:
 
 def render_written_reply(cfg, request: str, text: str, cancel_event=None) -> str:
     """Select the request's written language, then translate the completed text."""
+    return _render_request_text(cfg, request, text, WRITTEN_LANGUAGE_PROMPT, None, cancel_event)
+
+
+def render_timer_announcement(cfg, request: str, text: str, language=None, cancel_event=None) -> str:
+    """Translate future expiry speech into the captured or inferred request language."""
+    return _render_request_text(cfg, request, text, REQUEST_LANGUAGE_PROMPT, language, cancel_event)
+
+
+def _render_request_text(cfg, request, text, language_prompt, known_language, cancel_event):
     prepared = _prepare(text)
+    if cancel_event is not None and cancel_event.is_set():
+        return text
+    if known_language is not None:
+        if not isinstance(known_language, str) or not re.fullmatch(r'[A-Za-z]{2,3}', known_language):
+            return text
+        return _render(cfg, text, REPLY_RENDER_PROMPT.format(language=known_language),
+                       float(cfg.llm_chat_timeout_sec), prepared)
     reference = json.dumps({'current_request': request}, ensure_ascii=False)
     if prepared is None or len(reference.encode('utf-8')) > _MAX_RENDER_INPUT_BYTES:
         debug_log('written rendering: packet exceeds budget', 'planning')
@@ -76,7 +92,7 @@ def render_written_reply(cfg, request: str, text: str, cancel_event=None) -> str
     deadline = time.monotonic() + float(cfg.llm_chat_timeout_sec)
     try:
         language = get_llm_backend(cfg).direct(
-            resolve_model(cfg, Tier.CHAT), WRITTEN_LANGUAGE_PROMPT, reference,
+            resolve_model(cfg, Tier.CHAT), language_prompt, reference,
             timeout_sec=float(cfg.llm_chat_timeout_sec), thinking=False,
             num_ctx=8192, temperature=0.0, max_tokens=8,
         )

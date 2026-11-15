@@ -480,3 +480,4 @@ def owned_written_delivery_boundary(monkeypatch, request):
         return
     from jarvis.reply import engine
     monkeypatch.setattr(engine, 'render_written_reply', lambda cfg, request, text, cancel_event=None: text)
+    monkeypatch.setattr(engine, 'render_timer_announcement', lambda cfg, request, text, language=None, cancel_event=None: text)
