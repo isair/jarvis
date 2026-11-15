@@ -730,7 +730,7 @@ class TimerTool(Tool):
 
     @property
     def inputSchema(self) -> Dict[str, Any]:
-        return {
+        schema = {
             "type": "object",
             "properties": {
                 "action": {
@@ -771,6 +771,18 @@ class TimerTool(Tool):
             "required": ["action"],
             "dependentRequired": {name: ["expiry_announcement"] for name in ("hours", "minutes", "seconds")},
         }
+
+        # Complete action variants keep grammar constraints aligned with admission.
+        properties = {name: {key: value for key, value in prop.items() if key != 'description'}
+                      for name, prop in schema['properties'].items()}
+        expiry_fields = sorted({field for fields in schema['dependentRequired'].values() for field in fields})
+        schema['oneOf'] = [
+            {'type': 'object', 'properties': {**properties, 'action': {'type': 'string', 'enum': [action]}},
+             'required': schema['required'] + (expiry_fields if action == 'set' else []),
+             'dependentRequired': schema['dependentRequired']}
+            for action in schema['properties']['action']['enum']
+        ]
+        return schema
 
     def run(self, args: Optional[Dict[str, Any]], context: ToolContext) -> ToolExecutionResult:
         args = args or {}

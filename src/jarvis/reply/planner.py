@@ -1031,7 +1031,7 @@ def resolve_next_tool_call(
             thinking=False,
             num_ctx=8192,
             max_tokens=_PLANNER_TOKEN_BUDGET,
-            response_schema={'oneOf': [{'type': 'null'}, tool_call_output_schema(referenced_names or allowed_names)]},
+            response_schema={'oneOf': [{'type': 'null'}, tool_call_output_schema({name: parameter_schemas[name] for name in (referenced_names or allowed_names)})]},
         )
     except Exception as exc:  # pragma: no cover — defensive
         debug_log(f"planner.resolve_next_tool_call: LLM failed — {exc}", "planning")

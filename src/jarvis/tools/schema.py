@@ -1,15 +1,18 @@
 """Shared required-field presence checks for tool planning and dispatch."""
 
 
-def tool_call_output_schema(names):
-    return {'type': 'object', 'properties': {
-        'name': {'type': 'string', 'enum': sorted(names)},
-        'arguments': {'type': 'object', 'additionalProperties': True},
-    }, 'required': ['name', 'arguments'], 'additionalProperties': False}
+def tool_call_output_schema(schemas):
+    return {'oneOf': [
+        {'type': 'object', 'properties': {
+            'name': {'type': 'string', 'enum': [name]},
+            'arguments': schemas[name],
+        }, 'required': ['name', 'arguments'], 'additionalProperties': False}
+        for name in sorted(schemas)
+    ]}
 
 
-def reply_output_schema(names, maximum_calls):
-    call = {'type': 'object', 'properties': {'function': tool_call_output_schema(names)},
+def reply_output_schema(schemas, maximum_calls):
+    call = {'type': 'object', 'properties': {'function': tool_call_output_schema(schemas)},
             'required': ['function'], 'additionalProperties': False}
     return {'oneOf': [
         {'type': 'object', 'properties': {'tool_calls': {'type': 'array', 'items': call,

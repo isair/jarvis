@@ -43,7 +43,7 @@ def test_written_tool_reply_translates_after_execution_and_shares_saved_text(mon
             assert packet == {'current_request': query}
             return 'tr'
         assert packet == {'text_to_translate': draft}
-        assert 'into tr.' in system
+        assert 'into Turkish.' in system
         assert len(content.encode('utf-8')) <= delivery._MAX_RENDER_INPUT_BYTES
         assert 'PRIVATE ORIGINAL' not in content
         if cancel_during_render:
@@ -114,3 +114,19 @@ def test_written_delivery_stops_between_language_and_translation(monkeypatch, mo
     text = 'The timer is running.'
     assert delivery.render_written_reply(mock_config, 'Çay için zamanlayıcı.', text, cancel_event=cancelled) == text
     assert len(requests) == 1
+
+
+@pytest.mark.parametrize('code', ['de', 'deu', 'ger', 'spa', 'tr'])
+def test_translation_target_uses_the_canonical_iso_language_name(monkeypatch, mock_config, code):
+    import pycountry
+    from types import SimpleNamespace
+    from jarvis.reply import delivery
+    entry = (pycountry.languages.get(alpha_2=code) if len(code) == 2 else
+             pycountry.languages.get(alpha_3=code) or pycountry.languages.get(bibliographic=code))
+    def direct(model, system, content, **kw):
+        if 'current_request' in json.loads(content):
+            return code
+        assert f'into {entry.name}.' in system
+        return 'Owned translated result.'
+    monkeypatch.setattr(delivery, 'get_llm_backend', lambda cfg: SimpleNamespace(direct=direct))
+    assert delivery.render_written_reply(mock_config, 'Report the result.', 'Completed result.') == 'Owned translated result.'

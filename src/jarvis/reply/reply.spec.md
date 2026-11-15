@@ -504,8 +504,7 @@ configured chat deadline. Failure preserves the original truthful result.
 Cancellation after rendering suppresses output and dialogue publication.
 
 Written-language selection returns a two- or three-letter ASCII ISO 639 language code from the redacted
-request alone. Translation then receives only completed text and an explicit
-target language. Selection (8 output tokens) and translation share one chat
+request alone. A local ISO 639 catalogue resolves the code to its canonical language name, including three-letter bibliographic aliases. Unknown codes retain the input without translation. Translation then receives only completed text and that explicit target language name. Selection (8 output tokens) and translation share one chat
 deadline; cancellation between them prevents the second call. The renderer
 does not infer the language from tool output or future expiry speech.
 
@@ -519,4 +518,4 @@ Timer argument binding uses a bounded structured CHAT request over the redacted 
 
 For turns whose timer operations are all creations, final confirmation text is constructed from admitted records, including count, labels and original durations. An isolated structured context extracts verbatim clauses for other requested goals from the original request. A positively empty goal list prevents supplementary extraction. For mixed requests, a second bounded context copies exact verbatim draft spans answering those goals, validated as ordered non-overlapping substrings; it cannot rewrite or invent text. It cannot supply the timer acknowledgement. Final translation protects numeric literals and quoted names, and all final preparation contexts share one chat deadline. Unavailable supplementary rendering retains the record-derived acknowledgement. Listing or cancellation disables creation-only confirmation snapshots so they cannot override later state.
 
-Text-mode inference requests a provider-neutral JSON output schema: complete tool-call batches, final reply, explicit question or blocker. Every recognised call retains its own request/result identity. Provider constraints do not replace input validation; malformed arguments, incomplete JSON and unknown tools retain their existing rejection paths. External model text formats remain subject to the same parser checks.
+Text-mode inference requests a provider-neutral JSON output schema using each selected tool's canonical argument schema and exact registered name: complete tool-call batches, final reply, explicit question or blocker. Every recognised call retains its own request/result identity. Provider constraints do not replace input validation; malformed arguments, incomplete JSON and unknown tools retain their existing rejection paths. External model text formats remain subject to the same parser checks.

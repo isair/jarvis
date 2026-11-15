@@ -29,7 +29,7 @@ def test_expiry_speech_is_localised_before_one_action_or_cancellation(
     responses = iter(([{'message': {'tool_calls': [{'id': 'owned', 'function': {'name': 'timer', 'arguments': dict(args)}}]}}] if not planned else []) + [{'message': {'content': 'Der Timer läuft.'}}])
     monkeypatch.setattr(engine, 'chat_with_messages', lambda **kw: next(responses))
     def render(model, system, content, **kw):
-        assert 'into de.' in system
+        assert 'into German.' in system
         assert json.loads(content) == {'text_to_translate': args['expiry_announcement']}
         assert query not in content
         if cancel_during_translation:

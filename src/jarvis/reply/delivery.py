@@ -3,6 +3,8 @@ import json
 import re
 import time
 
+import pycountry
+
 from ..debug import debug_log
 from ..llm import get_llm_backend, resolve_model, Tier
 from ..system_prompt import ENGLISH_SPEECH_RENDER_PROMPT, REPLY_RENDER_PROMPT, WRITTEN_LANGUAGE_PROMPT, REQUEST_LANGUAGE_PROMPT
@@ -63,6 +65,15 @@ def _render(cfg, text, prompt, timeout, prepared):
     return rendered.strip()
 
 
+def _language_name(code):
+    if not isinstance(code, str) or not re.fullmatch(r'[A-Za-z]{2,3}', code):
+        return None
+    code = code.lower()
+    entry = (pycountry.languages.get(alpha_2=code) if len(code) == 2 else
+             pycountry.languages.get(alpha_3=code) or pycountry.languages.get(bibliographic=code))
+    return entry.name if entry is not None else None
+
+
 def render_english_speech(cfg, text: str, protect_numbers=False, deadline=None) -> str:
     """Translate completed spoken output without execution authority."""
     timeout = float(cfg.llm_chat_timeout_sec) if deadline is None else deadline - time.monotonic()
@@ -87,9 +98,10 @@ def _render_request_text(cfg, request, text, language_prompt, known_language, ca
     if cancel_event is not None and cancel_event.is_set():
         return fallback
     if known_language is not None:
-        if not isinstance(known_language, str) or not re.fullmatch(r'[A-Za-z]{2,3}', known_language):
+        target = _language_name(known_language)
+        if target is None:
             return fallback
-        return _render(cfg, fallback, REPLY_RENDER_PROMPT.format(language=known_language),
+        return _render(cfg, fallback, REPLY_RENDER_PROMPT.format(language=target),
                        deadline - time.monotonic(), prepared)
     reference = json.dumps({'current_request': request}, ensure_ascii=False)
     if prepared is None or len(reference.encode('utf-8')) > _MAX_RENDER_INPUT_BYTES:
@@ -111,8 +123,8 @@ def _render_request_text(cfg, request, text, language_prompt, known_language, ca
         return fallback
     if not isinstance(language, str):
         return fallback
-    language = language.strip()
-    if not re.fullmatch(r'[A-Za-z]{2,3}', language):
+    language = _language_name(language.strip())
+    if language is None:
         debug_log('written language: invalid classification', 'planning')
         return fallback
     debug_log('written language selected for translation', 'planning')

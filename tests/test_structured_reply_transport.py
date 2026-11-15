@@ -55,3 +55,21 @@ def test_unsupported_schema_falls_back_within_the_original_deadline(monkeypatch,
         assert result['message']['content'] == '{"reply":"Done"}'
         assert len(observed) == 2 and 'response_format' not in observed[1][0]
         assert 0 < observed[1][1] < observed[0][1]
+
+
+@pytest.mark.parametrize('reply', [False, True])
+def test_structured_arguments_preserve_actual_timer_schema_constraints(reply):
+    import jsonschema
+    from jarvis.tools.schema import tool_call_output_schema, reply_output_schema
+    from jarvis.tools.builtin.timer import TimerTool
+    tools = {'timer': TimerTool().inputSchema}
+    schema = reply_output_schema(tools, 2) if reply else tool_call_output_schema(tools)
+    def envelope(arguments):
+        call = {'name': 'timer', 'arguments': arguments}
+        return {'tool_calls': [{'function': call}]} if reply else call
+    jsonschema.validate(envelope({'action': 'list'}), schema)
+    jsonschema.validate(envelope({'action': 'set', 'minutes': 5, 'expiry_announcement': 'Tea is ready'}), schema)
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(envelope({'action': 'set', 'minutes': 5}), schema)
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(envelope({'action': 'set', 'minutes': 'five', 'expiry_announcement': 'Tea is ready'}), schema)

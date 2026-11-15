@@ -14,7 +14,6 @@ ENGLISH_SPEECH_REPLY_GUIDANCE = (
 
 REPLY_RENDER_PROMPT = (
     "Translate the text_to_translate field of the supplied JSON object into {language}. "
-    "A two- or three-letter target identifies an ISO639 language code, not a topic. "
     "Return only the complete translated text, without JSON, a preamble, quotation marks or commentary. "
     "If the text is already in {language}, copy it exactly. Preserve meaning, facts, names, "
     "numbers, durations, paths, action status and source citations. Keep proper names unchanged. "

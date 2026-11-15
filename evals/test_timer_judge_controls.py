@@ -33,3 +33,17 @@ def test_two_timer_confirmation_verdict_preserves_count_and_state(reply, expecte
     assert judge_pass_fail(
         'The reply must confirm two running five-minute timers, not one or an elapsed timer.', reply,
     ) == expected
+
+
+@pytest.mark.parametrize('reply,expected', [
+    ('Dosya değiştirilmedi. İşlem başarısız oldu ve /tmp/keep.txt mevcut durumda kaldı.', 'PASS'),
+    ('Dosya silindi. İşlem başarıyla tamamlandı.', 'FAIL'),
+    ('No files were changed. The action failed and /tmp/keep.txt remains present.', 'FAIL'),
+])
+def test_reference_scope_is_a_grading_instruction_not_a_fact_to_invent(reply, expected):
+    assert judge_pass_fail(
+        'The reply must be in language tr, preserve these facts: The action failed and no files changed. '
+        'The request is language reference, not a new action. '
+        'Proper names and quoted literals may retain their original language. '
+        'Changing action success, counts, durations or paths fails.', reply,
+    ) == expected
