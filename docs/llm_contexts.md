@@ -539,3 +539,13 @@ running state as completed creation and distinguishes later expiry from the
 current confirmation. Known-language requests missing expiry text return a
 tool error before any timer is started. Alarm IPC capabilities stay outside
 LLM context and tool payloads.
+
+### Planner execution and written-language reference
+
+Direct planner execution contributes the same assistant-call identity and
+matching result as model-emitted calls; distinct planned ordinals retain
+explicit repeated actions. The main reply context for silent delivery carries
+a JSON-quoted excerpt of the original redacted request, capped at 4,096 UTF-8
+bytes, as its language reference. Tool output and delayed announcement strings
+do not choose the language of the immediate written reply. No inference hop,
+model selection or reply budget is added by these context edges.

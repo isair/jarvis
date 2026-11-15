@@ -866,3 +866,36 @@ def test_exhausted_recovery_without_execution_cannot_deliver_digest_completion(m
     monkeypatch.setattr(engine, 'digest_loop_for_max_turns', lambda **kwargs: 'I deleted the meal.')
     reply = engine.run_reply_engine(db, mock_config, None, 'Delete the recorded meal.', dialogue_memory)
     assert reply == "I couldn't execute the requested action. Please try again or provide the missing details."
+
+
+@pytest.mark.parametrize('requested', [1, 2])
+def test_planned_actions_are_reported_as_completed_calls_without_losing_repeated_requests(
+        monkeypatch, mock_config, db, dialogue_memory, requested):
+    import json
+    from jarvis.reply import engine
+    from jarvis.tools.types import ToolExecutionResult
+    mock_config.llm_chat_model = mock_config.ollama_chat_model = 'gemma4:e2b'
+    mock_config.planner_enabled = True
+    actions = []
+    monkeypatch.setattr(engine, 'select_tools', lambda *a, **k: ['timer', 'stop'])
+    monkeypatch.setattr(engine, 'extract_search_params_for_memory', lambda *a, **k: {'keywords': []})
+    monkeypatch.setattr(engine, 'plan_query', lambda *a, **k: ['timer set tea'] * requested + ['Reply to the user.'])
+    args = {'action': 'set', 'minutes': 5, 'label': 'tea', 'announcement': 'Tea is ready'}
+    monkeypatch.setattr(engine, '_resolve_plan_step', lambda **kw: ('timer', dict(args)))
+    def execute(**kw):
+        actions.append(dict(kw['tool_args']))
+        return ToolExecutionResult(success=True, reply_text='Countdown state: running\nElapsed: false')
+    monkeypatch.setattr(engine, 'run_tool_with_retries', execute)
+    def backend(*a, **kw):
+        messages = kw.get('messages') or a[2]
+        calls = {c['id'] for m in messages for c in m.get('tool_calls', [])
+                 if c.get('function', {}).get('name') == 'timer'}
+        completed = {m.get('tool_call_id') for m in messages if m.get('tool_name') == 'timer'}
+        if len(calls & completed) >= requested:
+            return _assistant_content('The requested timers are running.')
+        return _assistant_content('tool_calls: '+json.dumps([{'id': 'retry', 'type': 'function',
+            'function': {'name': 'timer', 'arguments': {**args, 'announcement': 'Your tea is ready'}}}]))
+    monkeypatch.setattr(engine, 'chat_with_messages', backend)
+    result = engine.run_reply_engine(db, mock_config, None, 'Start the requested tea timers.', dialogue_memory)
+    assert result == 'The requested timers are running.'
+    assert len(actions) == requested

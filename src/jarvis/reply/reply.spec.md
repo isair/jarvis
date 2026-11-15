@@ -489,3 +489,8 @@ fallback and before output or dialogue writes. A cancelled request returns no
 reply and starts no subsequent tool action. In-flight inference and tool calls
 finish under their existing deadlines; cancellation cannot undo completed actions.
 Voice and text chat do not supply a task cancellation event.
+
+Silent delivery includes a JSON-quoted language-reference excerpt of the
+redacted current request, capped at 4,096 UTF-8 bytes. This reference remains
+distinct from English tool results, plans and scheduled speech text. It does
+not override an explicit requested language in the actual user message.

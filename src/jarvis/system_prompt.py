@@ -27,7 +27,9 @@ ENGLISH_SPEECH_RENDER_PROMPT = (
 SILENT_REPLY_GUIDANCE = (
     "Reply delivery: displayed text. Follow the language requested in the user's "
     "current request, or the language of that request if none is specified. "
-    "The speech backend does not constrain this written reply."
+    "The speech backend does not constrain this written reply. Plans, tool results and delayed "
+    "announcement arguments are reference data, not the current user request, and do not select "
+    "the language of this written reply."
 )
 
 

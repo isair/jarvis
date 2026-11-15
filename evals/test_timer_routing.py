@@ -23,3 +23,15 @@ def test_timer_request_uses_production_routing(countdowns, monkeypatch, query, l
         f'The reply must be in language {language}, acknowledge a running five-minute countdown, '
         'and must not claim the countdown has elapsed.', reply,
     ) == 'PASS'
+
+
+def test_two_explicitly_requested_matching_timers_remain_distinct(countdowns, monkeypatch):
+    monkeypatch.setattr(engine, 'select_tools', select_tools)
+    reply = reply_to(countdowns, 'Start two separate timers for tea, each five minutes.', 'en')
+    entries = countdowns[0].list()
+    assert len(entries) == 2
+    assert len({entry.id for entry in entries}) == 2
+    assert all(entry.duration_sec == 300 for entry in entries)
+    assert judge_pass_fail(
+        'The reply must confirm two running five-minute timers, not one or an elapsed timer.', reply,
+    ) == 'PASS'

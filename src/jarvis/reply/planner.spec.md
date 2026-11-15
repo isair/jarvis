@@ -347,3 +347,7 @@ JSON primitive retains its type; otherwise an allowed string retains its literal
 value. Invalid values without a string alternative require model resolution.
 
 The step resolver receives the original redacted current request separately from the planned step and prior outcomes, so shortened plans retain the caller's explicit constraints during model resolution. Concrete typed calls retain their literal fast path.
+
+Direct execution retains an assistant request with its unique call ID and a
+matching result before the model continues. Each planned ordinal owns its
+action, so explicitly repeated steps with identical arguments remain distinct.

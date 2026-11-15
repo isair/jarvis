@@ -14,6 +14,8 @@ pytestmark = pytest.mark.eval
     ('de', 'Der Timer für fünf Minuten läuft und ist bereits abgelaufen.', 'FAIL'),
     ('es', 'El temporizador de cinco minutos ya está en marcha.', 'PASS'),
     ('es', 'El temporizador de cinco minutos acaba de terminar.', 'FAIL'),
+    ('en', 'A five-minute timer for Çay has been set and is now running.', 'PASS'),
+    ('tr', 'A five-minute timer for Çay has been set and is now running.', 'FAIL'),
 ])
 def test_timer_judge_requires_truthful_running_state(language, reply, expected):
     assert judge_pass_fail(

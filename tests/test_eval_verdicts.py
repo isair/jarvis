@@ -20,7 +20,7 @@ def test_verdict_uses_constrained_output_without_changing_the_actor(monkeypatch,
         payloads.append(kwargs['json'])
         response = MagicMock()
         response.__enter__.return_value = response
-        answer = '{"verdict": "' + expected + '"}'
+        answer = '{"assessment": "Recorded facts checked.", "verdict": "' + expected + '"}'
         response.json.return_value = {'message': {'content': answer},
                                      'choices': [{'message': {'content': answer}}]}
         return response
@@ -32,7 +32,8 @@ def test_verdict_uses_constrained_output_without_changing_the_actor(monkeypatch,
     schema = (payload['format'] if provider == 'ollama'
               else payload['response_format']['json_schema']['schema'])
     assert schema['type'] == 'object'
-    assert schema['required'] == ['verdict']
+    assert schema['required'] == ['assessment', 'verdict']
+    assert schema['properties']['assessment']['minLength'] == 1
     assert schema['properties']['verdict']['enum'] == ['PASS', 'FAIL']
     assert schema['additionalProperties'] is False
     assert payload['model'] == 'fixture-verifier'
@@ -46,6 +47,10 @@ def test_verdict_uses_constrained_output_without_changing_the_actor(monkeypatch,
     '{"verdict":true}', '{"verdict":null}', '{"verdict":"UNKNOWN"}',
     '{"verdict":"pass"}', '{"verdict":"PASS","explanation":"fine"}',
     '{"verdict":"FAIL","verdict":"PASS"}',
+    '{"assessment":"","verdict":"PASS"}',
+    '{"assessment":null,"verdict":"PASS"}',
+    '{"assessment":"checked","verdict":"FAIL","verdict":"PASS"}',
+    '{"assessment":"checked","verdict":"PASS","extra":true}',
 ])
 def test_malformed_or_unavailable_verdict_is_unknown(output):
     with patch.object(helpers, 'call_judge_llm', return_value=output):
@@ -54,5 +59,13 @@ def test_malformed_or_unavailable_verdict_is_unknown(output):
 
 @pytest.mark.parametrize('verdict', ['PASS', 'FAIL'])
 def test_valid_verdict_retains_its_meaning(verdict):
-    with patch.object(helpers, 'call_judge_llm', return_value='\n{"verdict":"' + verdict + '"}\n'):
+    with patch.object(helpers, 'call_judge_llm', return_value='\n{"assessment":"Recorded facts checked.","verdict":"' + verdict + '"}\n'):
+        assert helpers.judge_pass_fail('Requires the actual reading.', 'Recorded answer.') == verdict
+
+
+@pytest.mark.parametrize('verdict', ['PASS', 'FAIL'])
+def test_evidence_assessment_precedes_a_strict_verdict(verdict):
+    import json
+    payload = {'assessment': 'The recorded facts satisfy the stated criteria.' if verdict == 'PASS' else 'The reply contradicts a stated criterion.', 'verdict': verdict}
+    with patch.object(helpers, 'call_judge_llm', return_value=json.dumps(payload)):
         assert helpers.judge_pass_fail('Requires the actual reading.', 'Recorded answer.') == verdict
