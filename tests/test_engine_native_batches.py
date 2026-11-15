@@ -2,6 +2,7 @@
 from copy import deepcopy
 from threading import Event
 from unittest.mock import patch
+import pytest
 
 import pytest
 
@@ -178,11 +179,14 @@ def test_changed_expiry_wording_does_not_restart_a_completed_countdown(mock_conf
     assert len(histories) == 3
 
 
-def test_future_alarm_speech_is_not_repeated_in_confirmation_context():
+@pytest.mark.parametrize('encoded', [False, True])
+def test_future_alarm_speech_is_not_repeated_in_confirmation_context(encoded):
     import json
     from jarvis.reply import engine
     args = {'action': 'set', 'minutes': 5, 'expiry_announcement': 'The tea timer has elapsed'}
     call = _call('', 'owned', name='timer', arguments=args)
+    if encoded:
+        call['function']['arguments'] = json.dumps(args)
     messages = [{'role': 'assistant', 'content': 'tool_calls: '+json.dumps([call]), 'tool_calls': [call]},
                 {'role': 'tool', 'tool_call_id': 'owned', 'content': 'Countdown state: running'}]
     before = deepcopy(messages)
@@ -194,3 +198,28 @@ def test_future_alarm_speech_is_not_repeated_in_confirmation_context():
         assert requests[0]['function']['arguments'] == {'action': 'set', 'minutes': 5}
         assert bool(visible[0].get('tool_calls')) is not text_protocol
     assert messages == before
+
+
+def test_max_turn_summary_does_not_receive_future_alarm_speech(monkeypatch, mock_config, db, dialogue_memory):
+    from jarvis.reply import engine
+    from jarvis.tools.types import ToolExecutionResult
+    import json
+    mock_config.llm_chat_model = mock_config.ollama_chat_model = 'gpt-oss:20b'
+    mock_config.agentic_max_turns = 1
+    monkeypatch.setattr(engine, 'plan_query', lambda **kw: [])
+    monkeypatch.setattr(engine, 'select_tools', lambda **kw: ['timer', 'stop'])
+    monkeypatch.setattr(engine, 'extract_search_params_for_memory', lambda **kw: {})
+    args = {'action': 'set', 'minutes': 5, 'expiry_announcement': 'Your tea timer has elapsed'}
+    monkeypatch.setattr(engine, 'chat_with_messages', lambda **kw: {'message': {'tool_calls': [_call('', 'one', name='timer', arguments=args)]}})
+    effects = []
+    def execute(**kw):
+        effects.append(kw['tool_args'])
+        return ToolExecutionResult(True, 'Countdown state: running\nElapsed: false')
+    monkeypatch.setattr(engine, 'run_tool_with_retries', execute)
+    def digest(**kw):
+        assert args['expiry_announcement'] not in json.dumps(kw['loop_messages'])
+        assert 'Countdown state: running' in json.dumps(kw['loop_messages'])
+        return 'The timer is running for five minutes.'
+    monkeypatch.setattr(engine, 'digest_loop_for_max_turns', digest)
+    assert engine.run_reply_engine(db, mock_config, None, 'Start a five minute timer.', dialogue_memory) == 'The timer is running for five minutes.'
+    assert effects == [args]

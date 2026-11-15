@@ -196,6 +196,8 @@ def _model_messages(messages, *, text_protocol, mcp_tools=None):
             hidden = {key for key, prop in schema.get('properties', {}).items()
                       if isinstance(prop, dict) and prop.get('writeOnly') is True}
             args = function.get('arguments')
+            if hidden and isinstance(args, str):
+                args = _decode_tool_arguments(args)
             if hidden and isinstance(args, dict):
                 call = {**call, 'function': {**function, 'arguments': {
                     key: value for key, value in args.items() if key not in hidden}}}
@@ -2973,7 +2975,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         try:
             digested = digest_loop_for_max_turns(
                 user_query=redacted,
-                loop_messages=messages[user_msg_index + 1:],
+                loop_messages=_model_messages(messages[user_msg_index + 1:], text_protocol=use_text_tools, mcp_tools=mcp_tools),
                 transcript_context=transcript_context,
                 cfg=cfg,
             )

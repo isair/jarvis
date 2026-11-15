@@ -575,3 +575,5 @@ action ordinals, while under-specified plans retain router fallback.
 The step resolver explicitly applies `dependentRequired` alongside root required fields, using property descriptions and the original request for omitted labels and language constraints. Delivery translation receives literal-marker instructions only for packets containing protected quoted text.
 
 Reply model contexts project write-only tool inputs out of completed assistant requests, retaining call IDs and matching results. Full arguments remain available to execution, retry identity and recorded history. Timer expiry speech is write-only.
+
+Write-only projection covers native object and JSON-string argument shapes and the max-turn digest input, as well as ordinary reply inference.
