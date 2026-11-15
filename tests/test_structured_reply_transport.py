@@ -71,9 +71,9 @@ def test_structured_arguments_preserve_actual_timer_schema_constraints(reply):
     jsonschema.validate({'action': 'set', 'minutes': 5, 'expiry_announcement': 'Tea is ready'}, tools['timer'])
     jsonschema.validate(envelope({'action': 'set', 'hours': 0, 'minutes': 5, 'seconds': 0, 'label': 'tea', 'expiry_announcement': 'Tea is ready'}), schema)
     with pytest.raises(jsonschema.ValidationError):
-        jsonschema.validate(envelope({'action': 'set', 'minutes': 5}), schema)
+        jsonschema.validate(envelope({'action': 'set', 'hours': 0, 'minutes': 5, 'seconds': 0, 'label': 'tea'}), schema)
     with pytest.raises(jsonschema.ValidationError):
-        jsonschema.validate(envelope({'action': 'set', 'minutes': 'five', 'expiry_announcement': 'Tea is ready'}), schema)
+        jsonschema.validate(envelope({'action': 'set', 'hours': 0, 'minutes': 'five', 'seconds': 0, 'label': 'tea', 'expiry_announcement': 'Tea is ready'}), schema)
 
 
 @pytest.mark.parametrize('reply', [False, True])
