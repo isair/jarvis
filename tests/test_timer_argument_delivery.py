@@ -36,7 +36,7 @@ def test_expiry_speech_is_localised_before_one_action_or_cancellation(
             cancelled.set()
         return translated
     def bind(*a, **kw):
-        return {'message': {'content': json.dumps({'timers': [{'label': 'Tee', 'hours': 0, 'minutes': 5, 'seconds': 0}]})}}
+        return {'message': {'content': json.dumps({'timers': [{'label': 'Tee'}]})}}
     backend = SimpleNamespace(direct=render, chat=bind)
     monkeypatch.setattr(delivery, 'get_llm_backend', lambda cfg: backend)
     monkeypatch.setattr(timer_delivery, 'get_llm_backend', lambda cfg: backend)
@@ -113,7 +113,7 @@ def test_one_ordered_request_owns_successful_timer_admissions(monkeypatch, mock_
         replies.append(call('soup', 'third'))
     responses = iter(replies + [{'message': {'content': 'Recorded timers started.'}}])
     monkeypatch.setattr(engine, 'chat_with_messages', lambda **kw: next(responses))
-    compiled = [{'label': label, 'hours': 0, 'minutes': 5, 'seconds': 0} for label in labels]
+    compiled = [{'label': label} for label in labels]
     backend = SimpleNamespace(chat=lambda *a, **kw: {'message': {'content': json.dumps({'timers': compiled})}},
                               direct=lambda model, system, content, **kw: json.loads(content)['text_to_translate'])
     monkeypatch.setattr(timer_delivery, 'get_llm_backend', lambda cfg: backend)
@@ -134,17 +134,17 @@ def test_one_ordered_request_owns_successful_timer_admissions(monkeypatch, mock_
     assert all(args['minutes'] == 5 for args in successful)
 
 
-def test_contextual_followup_binds_the_recorded_duration(monkeypatch, mock_config):
+def test_contextual_followup_preserves_the_resolved_duration(monkeypatch, mock_config):
     context = 'user: Start a five-minute tea timer.\nassistant: Started 1 timer: 5 minutes for "tea". It is running.'
     def compile(model, messages, **kw):
         packet = json.loads(messages[1]['content'])
         assert packet['dialogue_context'] == context
         assert 'proposed' not in packet
-        return {'message': {'content': '{"timers":[{"label":"tea","hours":0,"minutes":5,"seconds":0}]}'}}
+        return {'message': {'content': '{"timers":[{"label":"tea"}]}'}}
     monkeypatch.setattr(timer_delivery, 'get_llm_backend', lambda cfg: SimpleNamespace(chat=compile))
     monkeypatch.setattr(timer_delivery, 'render_timer_announcement', lambda cfg, request, text, **kw: text)
     result = timer_delivery.prepare_timer_arguments(mock_config, 'Start another like that tea timer.',
-        {'action': 'set', 'expiry_announcement': 'Timer has elapsed'}, dialogue_context=context)
+        {'action': 'set', 'minutes': 5, 'expiry_announcement': 'Timer has elapsed'}, dialogue_context=context)
     assert result.requested_count == 1
     assert result.arguments == {'action': 'set', 'label': 'tea', 'minutes': 5, 'expiry_announcement': 'Timer has elapsed'}
 
@@ -159,3 +159,48 @@ def test_unavailable_compilation_is_cached_as_unknown_not_zero(monkeypatch, mock
     second = timer_delivery.prepare_timer_arguments(mock_config, 'Start a tea timer.', arguments, timer_request=first.request)
     assert first.requested_count is second.requested_count is None
     assert first.arguments == second.arguments == arguments
+
+
+def test_compilation_cannot_replace_an_explicit_duration(monkeypatch, mock_config):
+    packet = {'timers': [{'label': 'tea', 'hours': 0, 'minutes': 30, 'seconds': 0}]}
+    monkeypatch.setattr(timer_delivery, 'get_llm_backend', lambda cfg: SimpleNamespace(chat=lambda *a, **kw: {
+        'message': {'content': json.dumps(packet)}}))
+    monkeypatch.setattr(timer_delivery, 'render_timer_announcement', lambda cfg, request, text, **kw: text)
+    args = {'action': 'set', 'minutes': 5, 'expiry_announcement': 'Timer has elapsed'}
+    prepared = timer_delivery.prepare_timer_arguments(mock_config, 'Start a five-minute tea timer.', args)
+    assert prepared.arguments['minutes'] == args['minutes']
+    assert not {'hours', 'seconds'} & prepared.arguments.keys()
+
+
+def test_structured_creation_rejects_a_missing_duration():
+    import jsonschema
+    from jarvis.tools.builtin.timer import TimerTool
+    from jarvis.tools.schema import tool_call_output_schema
+    schema = tool_call_output_schema({'timer': TimerTool().inputSchema})
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate({'name': 'timer', 'arguments': {'action': 'set', 'expiry_announcement': 'Timer has elapsed'}}, schema)
+    jsonschema.validate({'name': 'timer', 'arguments': {'action': 'set', 'hours': 1, 'minutes': 15,
+        'expiry_announcement': 'Timer has elapsed'}}, schema)
+
+
+def test_compilation_cannot_invent_a_missing_duration_or_start_a_timer(monkeypatch, mock_config):
+    from datetime import datetime, timedelta, timezone
+    from jarvis.tools.base import ToolContext
+    from jarvis.tools.builtin import timer
+    packet = {'timers': [{'label': 'tea', 'hours': 0, 'minutes': 5, 'seconds': 0}]}
+    monkeypatch.setattr(timer_delivery, 'get_llm_backend', lambda cfg: SimpleNamespace(chat=lambda *a, **kw: {
+        'message': {'content': json.dumps(packet)}}))
+    monkeypatch.setattr(timer_delivery, 'render_timer_announcement', lambda cfg, request, text, **kw: text)
+    entries = []
+    def start(duration, label, announcement=None):
+        now = datetime.now(timezone.utc)
+        entry = timer.TimerEntry('owned', label, duration, now, now + timedelta(seconds=duration), announcement)
+        entries.append(entry)
+        return entry
+    monkeypatch.setattr(timer, 'get_timer_manager', lambda: SimpleNamespace(start=start, list=lambda: list(entries)))
+    args = {'action': 'set', 'expiry_announcement': 'Timer has elapsed'}
+    prepared = timer_delivery.prepare_timer_arguments(mock_config, 'Start a tea timer.', args)
+    result = timer.TimerTool().run(prepared.arguments, ToolContext(None, mock_config, '', '', 'Start a tea timer.', 1, lambda text: None))
+    assert not result.success
+    assert entries == []
+    assert not {'hours', 'minutes', 'seconds'} & prepared.arguments.keys()

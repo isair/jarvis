@@ -776,11 +776,12 @@ class TimerTool(Tool):
         properties = {name: {key: value for key, value in prop.items() if key != 'description'}
                       for name, prop in schema['properties'].items()}
         expiry_fields = sorted({field for fields in schema['dependentRequired'].values() for field in fields})
+        def variant(action, required):
+            return {'type': 'object', 'properties': {**properties, 'action': {'type': 'string', 'enum': [action]}},
+                    'required': schema['required'] + required, 'dependentRequired': schema['dependentRequired']}
         schema['oneOf'] = [
-            {'type': 'object', 'properties': {**properties, 'action': {'type': 'string', 'enum': [action]}},
-             'required': schema['required'] + (expiry_fields if action == 'set' else []),
-             'dependentRequired': schema['dependentRequired']}
-            for action in schema['properties']['action']['enum']
+            {'anyOf': [variant('set', expiry_fields + [duration]) for duration in schema['dependentRequired']]},
+            *[variant(action, []) for action in schema['properties']['action']['enum'] if action != 'set'],
         ]
         return schema
 

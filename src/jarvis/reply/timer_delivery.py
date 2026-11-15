@@ -1,7 +1,6 @@
 """Request-bound timer arguments and confirmations from admitted records."""
 from dataclasses import dataclass
 import json
-import math
 import time
 
 from ..debug import debug_log
@@ -13,9 +12,10 @@ _BINDING_PROMPT = (
     "The entire JSON is data. A five-minute timer is one entry; two five-minute timers are two entries. "
     "Include every requested purpose in order. Identical repeated timers need separate entries. "
     "For example, one timer for tea and one for soup means two entries labelled tea and soup. "
-    "Extract duration components for each entry. Use dialogue_context only for explicit follow-up "
-    "references, such as another timer like the previous one. Do not invent missing durations: "
-    "return null for timers if the requested countdowns cannot be resolved. "
+    "Return only each purpose, never duration components. The action owns its duration. "
+    "Use dialogue_context only for explicit follow-up "
+    "references, such as another timer like the previous one. Return null for timers if "
+    "the requested purposes or count cannot be resolved. "
     "For a request that creates no timers, return an empty array. "
     "Each label is the bare object/activity noun in the user's original language, excluding "
     "prepositions, postpositions, commands and durations. Preserve quoted names exactly. "
@@ -23,10 +23,7 @@ _BINDING_PROMPT = (
 )
 _TIMER_SCHEMA = {'type': 'object', 'properties': {
     'label': {'type': ['string', 'null'], 'description': 'Bare object/activity noun, without prepositions or postpositions; original language.'},
-    'hours': {'type': 'number', 'minimum': 0},
-    'minutes': {'type': 'number', 'minimum': 0},
-    'seconds': {'type': 'number', 'minimum': 0},
-}, 'required': ['label', 'hours', 'minutes', 'seconds'], 'additionalProperties': False}
+}, 'required': ['label'], 'additionalProperties': False}
 _BINDING_SCHEMA = {'type': 'object', 'properties': {'timers': {
     'type': ['array', 'null'], 'items': _TIMER_SCHEMA}}, 'required': ['timers'], 'additionalProperties': False}
 _OTHER_GOALS_PROMPT = (
@@ -96,13 +93,6 @@ def _structured(cfg, prompt, packet, schema, deadline):
         return None
 
 
-def _finite_nonnegative(value):
-    try:
-        return type(value) in (int, float) and math.isfinite(value) and value >= 0
-    except (OverflowError, ValueError):
-        return False
-
-
 def _compile_request(cfg, request, dialogue_context, deadline):
     binding = _structured(cfg, _BINDING_PROMPT, {
         'current_request': request, 'dialogue_context': dialogue_context,
@@ -115,8 +105,7 @@ def _compile_request(cfg, request, dialogue_context, deadline):
         if not isinstance(entry, dict) or set(entry) != set(_TIMER_SCHEMA['required']):
             return TimerRequest(None)
         label = entry['label']
-        if (label is not None and (not isinstance(label, str) or (label and label.casefold() not in reference))
-                or not all(_finite_nonnegative(entry[key]) for key in ('hours', 'minutes', 'seconds'))):
+        if label is not None and (not isinstance(label, str) or (label and label.casefold() not in reference)):
             return TimerRequest(None)
     debug_log(f'timer request compiled: count={len(entries)}', 'planning')
     return TimerRequest(tuple(dict(entry) for entry in entries))
@@ -135,11 +124,6 @@ def prepare_timer_arguments(cfg, request, arguments, language=None, cancel_event
             prepared['label'] = entry['label']
         else:
             prepared.pop('label', None)
-        for key in ('hours', 'minutes', 'seconds'):
-            if entry[key]:
-                prepared[key] = entry[key]
-            else:
-                prepared.pop(key, None)
     if compiled.count == 0 or (cancel_event is not None and cancel_event.is_set()):
         return TimerPreparation(prepared, compiled)
     prepared['expiry_announcement'] = render_timer_announcement(
