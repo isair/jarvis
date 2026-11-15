@@ -367,3 +367,39 @@ def test_configured_stop_reaches_bare_alarm_only_for_current_user_capture(
     finally:
         registry.stop_all()
         listener.stop()
+
+
+@pytest.mark.parametrize('transcript,dismisses', [('Your stop timer is up', False), ('stop', True)])
+def test_delayed_timer_speech_echo_preserves_the_alarm(service, mock_config, monkeypatch, transcript, dismisses):
+    from jarvis.listening.listener import VoiceListener
+    manager, engine, submitted, _ = service
+    registry = timer.AlarmRegistry()
+    monkeypatch.setattr(registry, '_stdout_is_tty', lambda: False)
+    monkeypatch.setattr(timer, 'get_alarm_registry', lambda: registry)
+    monkeypatch.setattr(timer, '_manager_instance', manager)
+    monkeypatch.setattr('jarvis.listening.listener.create_intent_judge', lambda cfg: None)
+    mock_config.tune_enabled = False
+    mock_config.hot_window_enabled = True
+    mock_config.stop_commands = ['stop']
+    listener = VoiceListener(None, mock_config, engine, None)
+    try:
+        future = manager.start(60, 'future countdown')
+        entry = manager.start(.01, 'stop', announcement='Your stop timer is up')
+        assert submitted.wait(3)
+        entry.timer.join(3)
+        assert not entry.timer.is_alive()
+        engine._run()
+        assert not engine.is_speaking()
+        assert registry.active_ids() == [entry.id]
+        assert not listener.state_manager.is_hot_window_active()
+        captured_at = (listener.echo_detector._tts_start_time + listener.echo_detector._last_tts_finish_time) / 2
+        listener._process_transcript(transcript, utterance_energy=1.0,
+            utterance_start_time=captured_at, utterance_end_time=captured_at,
+            captured_during_tts=True, captured_tts_start_time=listener.echo_detector._tts_start_time,
+            generation=listener._capture_generation, language=None)
+        assert registry.active_ids() == ([] if dismisses else [entry.id])
+        assert [item.id for item in manager.list()] == [future.id]
+        assert not listener.state_manager.is_hot_window_active()
+    finally:
+        registry.stop_all()
+        listener.stop()

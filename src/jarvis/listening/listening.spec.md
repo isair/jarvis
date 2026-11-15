@@ -618,3 +618,7 @@ remains valid when that same utterance starts playback before recognition ends.
 Configured stop commands and directed stop judgements dismiss current timer
 notifications and alarms without cancelling future countdowns. Outside speech,
 a configured stop must have been captured while the alarm was ringing.
+
+Delayed captures from finished timer speech retain literal stop-echo rejection
+for their matching speech context. Standalone configured stop commands keep
+priority and dismiss the captured alarm without interrupting unrelated speech.

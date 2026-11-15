@@ -787,6 +787,11 @@ class VoiceListener(threading.Thread):
                                     self.cfg.stop_command_fuzzy_ratio)):
             from ..tools.builtin.timer import get_alarm_registry, stop_all_alarms
             if get_alarm_registry().active_at(utterance_end_time):
+                if (received_during_tts and same_tts_context
+                        and is_stop_command_echo(text_lower, self.echo_detector._last_tts_text,
+                                                 self.cfg.stop_commands, self.cfg.stop_command_fuzzy_ratio)):
+                    debug_log("ignored delayed timer speech containing a literal stop echo", "echo")
+                    return
                 debug_log("configured stop dismisses a captured timer alarm", "voice")
                 stop_all_alarms()
                 self._stop_thinking_tune()
