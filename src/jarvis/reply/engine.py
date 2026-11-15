@@ -324,8 +324,8 @@ def _format_tool_schema_hint(
 def _text_tool_call_guidance(allowed_names: list[str]) -> str:
     """Build the text-based tool-call guidance block for gemma-class models.
 
-    Gemma isn't a natively tool-calling model — we teach the `tool_calls:
-    [...]` literal shape via prompt. Gemma's pre-training carries a
+    Gemma isn't a natively tool-calling model; guidance teaches a complete
+    JSON object containing the tool_calls array. Gemma's pre-training carries a
     *different* protocol (Google's code-interpreter `tool_code` /
     `tool_output` fenced blocks and `<unusedNN>` sentinel tokens), and a
     confused model falls back to those. The guidance both teaches the
