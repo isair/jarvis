@@ -508,7 +508,7 @@ request alone. A local ISO 639 catalogue resolves the code to its canonical lang
 deadline; cancellation between them prevents the second call. The renderer
 does not infer the language from tool output or future expiry speech.
 
-Literal-marker instructions are included only when the translation packet contains protected quoted text.
+Literal-token instructions are included only when the translation packet contains protected literals. Tokens stay inline in the translated passage, with no separately enumerated marker list. Exact-once, original-order and unknown-token guards remain mandatory.
 
 Model-facing request copies exclude schema properties marked `writeOnly`, including timer expiry speech, while preserving call IDs and matching results. Planner-owned text requests use content protocol. Recognised model requests retain their existing structured identity metadata alongside text protocol content. Execution and recorded history retain the full arguments.
 
@@ -521,3 +521,5 @@ For turns whose timer operations are all creations, final confirmation text is c
 Text-mode inference requests a provider-neutral JSON output schema using each selected tool's canonical argument schema and exact registered name: complete tool-call batches, final reply, explicit question or blocker. Every recognised call retains its own request/result identity. Provider constraints do not replace input validation; malformed arguments, incomplete JSON and unknown tools retain their existing rejection paths. External model text formats remain subject to the same parser checks.
 
 Structured formats hoist complete selected-tool schemas into separate root definitions and rebase root self-references and direct root `$defs` references without changing literal data. URI-fragment decoding, JSON-Pointer escaping and target existence are validated. Nullable resolution retains definitions at the actual root. Explicit dialects, other local pointers, identifiers, anchors, dynamic or external-reference scopes omit the whole format constraint for that context; ordinary parser, runtime and server validation remain authoritative.
+
+Before reference scoping, registered executable tools can prepare an owned generation-schema copy. The default preserves the canonical schema. Timer set generation requires all three additive duration components and a label, with zero/empty values for unused inputs. Public tool declarations, admission validation, deterministic parsing and recorded arguments remain independent of this stricter model normal form.

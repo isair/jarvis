@@ -364,3 +364,5 @@ output; unsupported prose retains router fallback.
 Each next planned ordinal represents a distinct requested action, including matching arguments from an earlier ordinal. Prior results supply discovered entities, rather than suppressing explicitly repeated actions.
 
 Step resolution requests a nullable JSON tool-call object through the backend's structured-output option, constrained by exact registered names and their canonical input schemas. Root self-references and direct root `$defs` references use isolated definitions; unsupported reference scopes omit the format constraint while retaining ordinary validation. Recorded resource references are supplied separately from speech reference data so a follow-up can copy an actual ID. The same required-field and dependency checks apply after parsing.
+
+Step-resolver constrained output uses the tool-owned generation view of its canonical schema. Timer set calls include every additive component and purpose, preserving compound and fractional remainders. The deterministic fast path continues to validate the public optional-component contract.

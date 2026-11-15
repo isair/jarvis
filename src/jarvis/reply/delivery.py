@@ -40,9 +40,9 @@ def _render(cfg, text, prompt, timeout, prepared):
         return text
     content, literals, prefix = prepared
     if literals:
-        prompt += (" Copy the supplied literal markers exactly, once each, in the same order: "
-                   + ", ".join(marker for marker, _ in literals)
-                   + ". They represent protected literals. Do not translate, expand or invent markers.")
+        prompt += (f" Protected literal tokens beginning with {prefix} are already positioned "
+                   "inside text_to_translate. Keep each token inline in its corresponding translated "
+                   "sentence, exactly once and in the same order. Return the translated passage itself.")
     try:
         rendered = get_llm_backend(cfg).direct(
             resolve_model(cfg, Tier.CHAT), prompt, content, timeout_sec=timeout,

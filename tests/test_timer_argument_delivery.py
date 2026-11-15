@@ -181,7 +181,7 @@ def test_structured_creation_rejects_a_missing_duration():
     schema = tool_call_output_schema({'timer': TimerTool().inputSchema})
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate({'name': 'timer', 'arguments': {'action': 'set', 'expiry_announcement': 'Timer has elapsed'}}, schema)
-    jsonschema.validate({'name': 'timer', 'arguments': {'action': 'set', 'hours': 1, 'minutes': 15,
+    jsonschema.validate({'name': 'timer', 'arguments': {'action': 'set', 'hours': 1, 'minutes': 15, 'seconds': 0, 'label': 'tea',
         'expiry_announcement': 'Timer has elapsed'}}, schema)
 
 

@@ -68,7 +68,8 @@ def test_structured_arguments_preserve_actual_timer_schema_constraints(reply):
         call = {'name': 'timer', 'arguments': arguments}
         return {'tool_calls': [{'function': call}]} if reply else call
     jsonschema.validate(envelope({'action': 'list'}), schema)
-    jsonschema.validate(envelope({'action': 'set', 'minutes': 5, 'expiry_announcement': 'Tea is ready'}), schema)
+    jsonschema.validate({'action': 'set', 'minutes': 5, 'expiry_announcement': 'Tea is ready'}, tools['timer'])
+    jsonschema.validate(envelope({'action': 'set', 'hours': 0, 'minutes': 5, 'seconds': 0, 'label': 'tea', 'expiry_announcement': 'Tea is ready'}), schema)
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate(envelope({'action': 'set', 'minutes': 5}), schema)
     with pytest.raises(jsonschema.ValidationError):
@@ -194,3 +195,25 @@ def test_root_definition_pointer_escaping_retains_its_contract(reference):
 def test_reference_scopes_outside_the_supported_subset_omit_the_whole_format(schema):
     from jarvis.tools.schema import tool_call_output_schema
     assert tool_call_output_schema({'external': schema}) is None
+
+
+@pytest.mark.parametrize('reply', [False, True])
+def test_timer_generation_requires_complete_components_without_changing_admission(reply):
+    import jsonschema
+    from copy import deepcopy
+    from jarvis.tools.builtin.timer import TimerTool
+    from jarvis.tools.schema import tool_call_output_schema, reply_output_schema
+    public = TimerTool().inputSchema
+    before = deepcopy(public)
+    partial = {'action': 'set', 'minutes': 5, 'expiry_announcement': 'Timer has elapsed'}
+    jsonschema.validate(partial, public)
+    schema = reply_output_schema({'timer': public}, 2) if reply else tool_call_output_schema({'timer': public}, nullable=True)
+    def envelope(arguments):
+        call = {'name': 'timer', 'arguments': arguments}
+        return {'tool_calls': [{'function': call}]} if reply else call
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(envelope(partial), schema)
+    for hours, minutes, seconds in [(1, 15, 0), (0, 12, 30)]:
+        complete = {**partial, 'hours': hours, 'minutes': minutes, 'seconds': seconds, 'label': 'tea'}
+        jsonschema.validate(envelope(complete), schema)
+    assert public == before

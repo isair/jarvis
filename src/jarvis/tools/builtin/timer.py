@@ -682,6 +682,15 @@ def stop_all_alarms() -> int:
 class TimerTool(Tool):
     """Tool to set / list / cancel countdown timers."""
 
+    def prepare_generation_schema(self, schema: dict) -> dict:
+        """Require a complete additive duration and purpose in generated set calls."""
+        dependencies = schema['dependentRequired']
+        set_schema = schema['oneOf'][0]['anyOf'][0]
+        set_schema['required'] = sorted(set(schema['required']) | set(dependencies)
+                                        | {field for fields in dependencies.values() for field in fields} | {'label'})
+        schema['oneOf'][0] = set_schema
+        return schema
+
     def retry_arguments(self, args: Dict[str, Any]) -> Dict[str, Any]:
         if not self.allows_repeated_action(args) or not _sanitise_announcement(args.get('expiry_announcement')):
             return args
@@ -717,7 +726,9 @@ class TimerTool(Tool):
             "in 2 hours', 'cancel the pasta timer', 'what timers are running?'). "
             "When the timer elapses Jarvis announces it audibly and visibly. "
             "Provide the duration as integer hours/minutes/seconds; convert "
-            "natural-language durations yourself before calling. Always pass "
+            "natural-language durations yourself before calling. Generated calls include all three "
+            "additive components, with zero for unused ones. Preserve fractional remainders "
+            "in smaller integral units. Always pass "
             "the user's label (e.g. 'pasta', 'laundry') in the label field "
             "when they name one. For action='set', ALSO pass an "
             "'expiry_announcement' string written in the SAME LANGUAGE the user is "
@@ -740,19 +751,19 @@ class TimerTool(Tool):
                 },
                 "hours": {
                     "type": "integer",
-                    "description": "Hours portion of the duration for action='set'. Optional; defaults to 0.",
+                    "description": "Hours component of the additive duration. Generated calls include all components; unused components are zero. Direct calls may omit it (default 0).",
                 },
                 "minutes": {
                     "type": "integer",
-                    "description": "Minutes portion of the duration for action='set'. Optional; defaults to 0.",
+                    "description": "Minutes component, including the remainder after whole hours. Preserve every additive part. Direct calls may omit it (default 0).",
                 },
                 "seconds": {
                     "type": "integer",
-                    "description": "Seconds portion of the duration for action='set'. Optional; defaults to 0.",
+                    "description": "Seconds component, including fractional-minute remainders (half a minute is 30 seconds). Generated calls use zero when unused. Direct calls may omit it (default 0).",
                 },
                 "label": {
                     "type": "string",
-                    "description": "For set: copy the user's named purpose or label whenever present (for tea means label='tea'), preserving its original language. Omit only when no purpose or name is given. For cancel: cancels running timers with this label, case-insensitively.",
+                    "description": "For set: copy the user's named purpose or label whenever present (for tea means label='tea'), preserving its original language. Generated calls use an empty string only when no purpose or name is given; direct calls may omit it. For cancel: cancels running timers with this label, case-insensitively.",
                 },
                 "expiry_announcement": {
                     "type": "string",

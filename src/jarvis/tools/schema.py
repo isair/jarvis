@@ -29,12 +29,17 @@ def _supported_local_reference(reference, root):
 
 
 def _scoped_schemas(schemas):
+    from .base import Tool
+    from .registry import BUILTIN_TOOLS
     definitions = {}
     branches = []
     for index, name in enumerate(sorted(schemas)):
         namespace = f'tool_{index}'
         try:
             schema = deepcopy(schemas[name])
+            tool = BUILTIN_TOOLS.get(name)
+            if isinstance(tool, Tool):
+                schema = tool.prepare_generation_schema(schema)
             pending = [Resource.from_contents(schema, default_specification=DRAFT202012)]
             seen = set()
             while pending:
