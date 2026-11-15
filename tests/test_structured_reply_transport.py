@@ -120,7 +120,7 @@ def test_unsupported_reference_scopes_omit_the_whole_format(scope):
 def test_reference_like_literal_data_is_not_rewritten_or_rejected():
     import jsonschema
     from jarvis.tools.schema import tool_call_output_schema
-    literal = {'$ref': 'literal data, not a schema reference'}
+    literal = {'$ref': 'literal data, not a schema reference', '$schema': 'literal data, not a dialect'}
     schema = tool_call_output_schema({'literal': {'type': 'object', 'properties': {
         'value': {'const': literal}}, 'required': ['value']}})
     assert schema is not None
@@ -148,9 +148,10 @@ def test_shared_reference_nodes_keep_their_single_definition_scope():
 
 
 @pytest.mark.parametrize('provider', ['ollama', 'compatible'])
-def test_unsupported_reference_scope_uses_the_unconstrained_transport(provider):
+@pytest.mark.parametrize('scope', [{'$id': 'urn:external:tool'}, {'$schema': 'http://json-schema.org/draft-07/schema#'}, {'$ref': '#/x-template'}])
+def test_unsupported_reference_scope_uses_the_unconstrained_transport(provider, scope):
     from jarvis.tools.schema import tool_call_output_schema
-    schema = tool_call_output_schema({'external': {'$id': 'urn:external:tool', 'type': 'object'}})
+    schema = tool_call_output_schema({'external': {'type': 'object', **scope}})
     response = MagicMock()
     response.__enter__.return_value = response
     response.json.return_value = {'message': {'content': '{"reply":"Done"}'}, 'choices': [{'message': {'content': '{"reply":"Done"}'}}]}
@@ -160,3 +161,36 @@ def test_unsupported_reference_scope_uses_the_unconstrained_transport(provider):
     payload = post.call_args.kwargs['json']
     assert 'format' not in payload and 'response_format' not in payload
     assert 'response_schema' not in payload and 'response_schema' not in payload.get('options', {})
+
+
+def test_foreign_schema_storage_uses_the_existing_transport_fallback():
+    import jsonschema
+    from jarvis.tools.schema import tool_call_output_schema
+    arguments = {'type': 'object', '$defs': {'Value': {'type': 'integer'}},
+        'x-templates': {'Node': {'type': 'object', 'properties': {'value': {'$ref': '#/$defs/Value'}}, 'required': ['value']}},
+        'properties': {'item': {'$ref': '#/x-templates/Node'}}, 'required': ['item']}
+    jsonschema.validate({'item': {'value': 1}}, arguments)
+    assert tool_call_output_schema({'external': arguments}) is None
+
+
+@pytest.mark.parametrize('reference', ['#/$defs/Slash~1Name~0', '#/%24defs/Slash~1Name~0'])
+def test_root_definition_pointer_escaping_retains_its_contract(reference):
+    import jsonschema
+    from jarvis.tools.schema import tool_call_output_schema
+    arguments = {'type': 'object', '$defs': {'Slash/Name~': {'type': 'integer'}},
+        'properties': {'value': {'$ref': reference}}, 'required': ['value']}
+    schema = tool_call_output_schema({'escaped': arguments})
+    assert schema is not None
+    jsonschema.validate({'name': 'escaped', 'arguments': {'value': 1}}, schema)
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate({'name': 'escaped', 'arguments': {'value': 'bad'}}, schema)
+
+
+@pytest.mark.parametrize('schema', [
+    {'$schema': 'http://json-schema.org/draft-07/schema#', 'type': 'object'},
+    {'$ref': '#/$defs/missing', '$defs': {}},
+    {'$defs': {'Container': {'x-value': {'type': 'integer'}}}, '$ref': '#/$defs/Container/x-value'},
+])
+def test_reference_scopes_outside_the_supported_subset_omit_the_whole_format(schema):
+    from jarvis.tools.schema import tool_call_output_schema
+    assert tool_call_output_schema({'external': schema}) is None

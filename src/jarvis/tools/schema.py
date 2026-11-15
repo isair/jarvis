@@ -2,11 +2,30 @@
 
 
 from copy import deepcopy
+import re
+from urllib.parse import unquote
 
 from referencing import Resource
 from referencing.jsonschema import DRAFT202012
 
 from ..debug import debug_log
+
+
+def _supported_local_reference(reference, root):
+    if not isinstance(reference, str) or not reference.startswith('#'):
+        return False
+    fragment = unquote(reference[1:], errors='strict')
+    if not fragment:
+        return True
+    prefix = '/$defs/'
+    if not fragment.startswith(prefix):
+        return False
+    token = fragment[len(prefix):]
+    if '/' in token or re.search(r'~(?![01])', token):
+        return False
+    name = token.replace('~1', '/').replace('~0', '~')
+    definitions = root.get('$defs')
+    return isinstance(definitions, dict) and name in definitions
 
 
 def _scoped_schemas(schemas):
@@ -25,14 +44,14 @@ def _scoped_schemas(schemas):
                     continue
                 seen.add(id(node))
                 if isinstance(node, dict):
-                    if any(key in node for key in ('$id', 'id', '$anchor', '$dynamicAnchor',
+                    if any(key in node for key in ('$schema', '$id', 'id', '$anchor', '$dynamicAnchor',
                                                     '$dynamicRef', '$recursiveRef', '$recursiveAnchor')):
                         debug_log('structured tool format unavailable: unsupported reference scope', 'planning')
                         return None
                     if '$ref' in node:
                         reference = node['$ref']
-                        if not isinstance(reference, str) or not (reference == '#' or reference.startswith('#/')):
-                            debug_log('structured tool format unavailable: non-local reference', 'planning')
+                        if not _supported_local_reference(reference, schema):
+                            debug_log('structured tool format unavailable: unsupported local or external reference', 'planning')
                             return None
                         node['$ref'] = f'#/$defs/{namespace}' + reference[1:]
                 pending.extend(resource.subresources())
