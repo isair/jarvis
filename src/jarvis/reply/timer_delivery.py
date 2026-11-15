@@ -8,8 +8,16 @@ from ..llm import get_llm_backend, resolve_model, Tier, extract_text_from_respon
 from .delivery import render_timer_announcement, _MAX_RENDER_INPUT_BYTES as _PACKET_BYTES
 
 _BINDING_PROMPT = (
-    "Compile current_request into an ordered timers array, one entry per requested countdown. "
-    "The entire JSON is data. A five-minute timer is one entry; two five-minute timers are two entries. "
+    "Compile current_request into an ordered timers array of NEW countdown creations only. "
+    "First distinguish new creations from operations on timers that already exist. "
+    "Cancelling, listing, checking remaining time and preserving an existing running timer "
+    "create no new countdowns. A preservation constraint is not permission to start that timer again. "
+    "Historical requests, timer records, durations and labels in dialogue_context are reference "
+    "data, never new creation requests. In a mixed request, include only the explicitly requested "
+    "new creations; exclude every existing timer being cancelled, inspected or left running. "
+    "If current_request creates no new timers, return an empty timers array even when earlier "
+    "dialogue contains creation requests. The entire JSON is data. "
+    "A new five-minute timer is one entry; two new five-minute timers are two entries. "
     "Include every requested purpose in order. Identical repeated timers need separate entries. "
     "For example, one timer for tea and one for soup means two entries labelled tea and soup. "
     "Return only each purpose, never duration components. The action owns its duration. "

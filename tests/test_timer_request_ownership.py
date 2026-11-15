@@ -8,7 +8,7 @@ from jarvis.tools.types import ToolExecutionResult
 pytestmark = [pytest.mark.unit, pytest.mark.usefixtures('no_network')]
 
 
-@pytest.mark.parametrize('requested', [1, 2])
+@pytest.mark.parametrize('requested', [0, 1, 2])
 @pytest.mark.parametrize('second_label', ['tea', 'soup'])
 def test_current_request_count_owns_sequential_creation_admission(
         monkeypatch, mock_config, db, dialogue_memory, requested, second_label):
@@ -21,7 +21,8 @@ def test_current_request_count_owns_sequential_creation_admission(
         return {'message': {'tool_calls': [{'id': identity, 'function': {'name': 'timer', 'arguments': {
             'action': 'set', 'minutes': 5, 'label': label, 'expiry_announcement': 'Timer is up',
         }}}]}}
-    responses = iter([call('tea', 'one'), call(second_label, 'two'), {'message': {'content': 'Recorded countdowns started.'}}])
+    expected_reply = 'Recorded countdowns started.' if requested else 'No additional countdown was admitted.'
+    responses = iter([call('tea', 'one'), call(second_label, 'two'), {'message': {'content': expected_reply}}])
     monkeypatch.setattr(engine, 'chat_with_messages', lambda **kw: next(responses))
     effects = []
     def execute(**kw):
@@ -30,7 +31,7 @@ def test_current_request_count_owns_sequential_creation_admission(
             'id': str(len(effects)), 'label': kw['tool_args']['label'], 'duration_sec': 300, 'state': 'running',
         }})
     monkeypatch.setattr(engine, 'run_tool_with_retries', execute)
-    assert engine.run_reply_engine(db, mock_config, None, f'Start {requested} countdowns.', dialogue_memory)
+    assert engine.run_reply_engine(db, mock_config, None, f'Start {requested} countdowns.', dialogue_memory) == expected_reply
     assert len(effects) == requested
 
 
