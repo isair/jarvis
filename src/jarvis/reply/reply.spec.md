@@ -490,7 +490,14 @@ reply and starts no subsequent tool action. In-flight inference and tool calls
 finish under their existing deadlines; cancellation cannot undo completed actions.
 Voice and text chat do not supply a task cancellation event.
 
-Silent delivery includes a JSON-quoted language-reference excerpt of the
-redacted current request, capped at 4,096 UTF-8 bytes. This reference remains
-distinct from English tool results, plans and scheduled speech text. It does
-not override an explicit requested language in the actual user message.
+Completed written replies after tool execution pass through
+`delivery.render_written_reply`. It uses the configured CHAT tier and the shared
+`WRITTEN_REPLY_RENDER_PROMPT` to translate the completed text into the language
+of the redacted current request (or the explicitly requested reply language).
+The request is language-reference data, not execution authority. The original
+request, plan, arguments and tool execution are unchanged. Tool-free written
+replies avoid this stage. Both delivery renderers share one bounded literal-
+preserving implementation: complete raw and protected JSON packets are capped
+at 4,096 UTF-8 bytes, with 8,192 context tokens, 2,048 output tokens and the
+configured chat deadline. Failure preserves the original truthful result.
+Cancellation after rendering suppresses output and dialogue publication.

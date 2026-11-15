@@ -657,3 +657,25 @@ def test_known_request_language_needs_expiry_text_before_start(fresh_manager, la
     result = TimerTool().run({'action': 'set', 'minutes': 5, 'announcement': 'Owned expiry text'}, context)
     assert result.success
     assert len(fresh_manager[0].list()) == 1
+
+
+def test_text_request_needs_localised_expiry_before_start(fresh_manager):
+    context = make_context()
+    context.redacted_text = 'Çay için beş dakika.'
+    context.language = None
+    result = TimerTool().run({'action': 'set', 'minutes': 5}, context)
+    assert not result.success
+    assert fresh_manager[0].list() == []
+
+
+def test_terminal_controls_are_removed_without_losing_label_identity(fresh_manager):
+    context = make_context()
+    raw = '\x1b]52;c;clipboard\x07 茶\u200d'
+    result = TimerTool().run({'action': 'set', 'minutes': 5, 'label': raw}, context)
+    assert result.success
+    entry = fresh_manager[0].list()[0]
+    output = context.user_print.call_args[0][0]
+    assert all(ord(c) >= 32 and not 127 <= ord(c) <= 159 for c in entry.label)
+    assert '\x1b' not in output and '\x07' not in output
+    assert '茶\u200d' in entry.label
+    assert fresh_manager[0].cancel_by_label(raw) == [entry]

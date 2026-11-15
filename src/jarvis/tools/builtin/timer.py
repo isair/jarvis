@@ -58,7 +58,8 @@ def _sanitise_label(label: Optional[str]) -> Optional[str]:
     """
     if not isinstance(label, str):
         return None
-    cleaned = " ".join(label.replace(",", " ").replace("=", " ").split())
+    safe = "".join(c for c in label if c.isspace() or (ord(c) >= 32 and not 127 <= ord(c) <= 159))
+    cleaned = " ".join(safe.replace(",", " ").replace("=", " ").split())
     return cleaned or None
 
 
@@ -798,7 +799,7 @@ class TimerTool(Tool):
 
         label = args.get("label")
         announcement = args.get("announcement")
-        if context.language and not _sanitise_announcement(announcement if isinstance(announcement, str) else None):
+        if (context.language or context.redacted_text.strip()) and not _sanitise_announcement(announcement if isinstance(announcement, str) else None):
             debug_log("timer needs expiry text for the request language before admission", "tools")
             return ToolExecutionResult(
                 success=False, reply_text=None,

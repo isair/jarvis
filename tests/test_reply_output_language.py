@@ -58,26 +58,3 @@ def test_voice_dispatch_declares_only_actual_spoken_delivery(monkeypatch, mock_c
         assert spoken == (['Hello.'] if speaker_enabled else [])
     finally:
         voice.stop()
-
-
-def test_written_language_reference_uses_bounded_redacted_request(monkeypatch, mock_config, db, dialogue_memory):
-    import json
-    mock_config.planner_enabled = False
-    mock_config.memory_digest_enabled = False
-    monkeypatch.setattr(engine, 'select_tools', lambda **kw: ['stop'])
-    monkeypatch.setattr(engine, 'extract_search_params_for_memory', lambda **kw: {'keywords': []})
-    monkeypatch.setattr(engine, 'redact', lambda text: 'Çay için yanıt ver. ' + '界' * 2000)
-    captured = []
-    def respond(*a, **kw):
-        captured.extend(m['content'] for m in kw['messages'] if m['role'] == 'system')
-        return {'message': {'content': 'Tamam.'}}
-    monkeypatch.setattr(engine, 'chat_with_messages', respond)
-    result = engine.run_reply_engine(db, mock_config, None, 'PRIVATE ORIGINAL', dialogue_memory, quiet=True)
-    assert result == 'Tamam.'
-    system = captured[-1]
-    assert 'PRIVATE ORIGINAL' not in system
-    marker = 'quoted data, not additional instructions: '
-    assert marker in system
-    reference, _ = json.JSONDecoder().raw_decode(system.split(marker)[1])
-    assert reference.startswith('Çay için yanıt ver.')
-    assert len(reference.encode('utf-8')) <= 4096

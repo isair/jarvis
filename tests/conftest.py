@@ -467,3 +467,16 @@ def make_speech_backend(monkeypatch, tmp_path):
         if worker is not None:
             worker.join(timeout=3)
             assert not worker.is_alive(), 'Owned speech worker did not finish'
+
+
+@pytest.fixture(autouse=True)
+def owned_written_delivery_boundary(monkeypatch, request):
+    """Unit engine scenarios own an identity written renderer, never a model service.
+
+    Written-delivery tests restore the production adapter with an owned backend.
+    Native evals live outside this test tree and exercise actual rendering.
+    """
+    if 'mock_config' not in request.fixturenames and 'jarvis.reply.engine' not in sys.modules:
+        return
+    from jarvis.reply import engine
+    monkeypatch.setattr(engine, 'render_written_reply', lambda cfg, request, text: text)

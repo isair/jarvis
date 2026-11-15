@@ -1,0 +1,66 @@
+"""Written tool results retain language, facts and shared delivery ownership."""
+import json
+from types import SimpleNamespace
+import pytest
+from jarvis.reply import engine, delivery
+from jarvis.tools.types import ToolExecutionResult
+
+pytestmark = [pytest.mark.unit, pytest.mark.usefixtures('no_network')]
+
+
+@pytest.mark.parametrize("cancel_during_render", [False, True])
+def test_written_tool_reply_translates_after_execution_and_shares_saved_text(monkeypatch, mock_config, db, dialogue_memory, cancel_during_render):
+    monkeypatch.setattr(engine, "render_written_reply", delivery.render_written_reply)
+    from threading import Event
+    cancelled = Event()
+    mock_config.planner_enabled = False
+    mock_config.memory_digest_enabled = False
+    query, draft, translated = 'Çay için beş dakika.', 'The timer is running for five minutes.', 'Zamanlayıcı beş dakika için çalışıyor.'
+    monkeypatch.setattr(engine, 'redact', lambda text: query)
+    monkeypatch.setattr(engine, 'select_tools', lambda **kw: ['timer', 'stop'])
+    monkeypatch.setattr(engine, 'extract_search_params_for_memory', lambda **kw: {'keywords': []})
+    responses = iter([{'message': {'tool_calls': [{'id': 'owned', 'function': {'name': 'timer', 'arguments': {'action': 'set', 'minutes': 5, 'announcement': 'Çay hazır'}}}]}}, {'message': {'content': draft}}])
+    monkeypatch.setattr(engine, 'chat_with_messages', lambda **kw: next(responses))
+    executed = []
+    def execute(**kw):
+        executed.append(kw['tool_args'])
+        return ToolExecutionResult(success=True, reply_text='Countdown state: running\nElapsed: false')
+    monkeypatch.setattr(engine, 'run_tool_with_retries', execute)
+    def render(model, system, content, **kw):
+        packet = json.loads(content)
+        assert packet == {'text_to_translate': draft, 'current_request': query}
+        assert len(content.encode('utf-8')) <= delivery._MAX_RENDER_INPUT_BYTES
+        assert 'PRIVATE ORIGINAL' not in content
+        if cancel_during_render:
+            cancelled.set()
+        return translated
+    monkeypatch.setattr(delivery, 'get_llm_backend', lambda cfg: SimpleNamespace(direct=render))
+    result = engine.run_reply_engine(db, mock_config, None, "PRIVATE ORIGINAL", dialogue_memory, quiet=True, cancel_event=cancelled)
+    assert result == (None if cancel_during_render else translated)
+    assert len(executed) == 1
+    saved = [m for m in dialogue_memory.get_recent_messages() if m['role'] == 'assistant']
+    assert saved == [] if cancel_during_render else any(m['content'] == translated for m in saved)
+
+
+@pytest.mark.parametrize('field', ['request', 'reply'])
+def test_written_rendering_bounds_the_complete_escaped_packet(monkeypatch, mock_config, field):
+    requests = []
+    monkeypatch.setattr(delivery, 'get_llm_backend', lambda cfg: requests.append(cfg))
+    control_rich = '\x01' * (delivery._MAX_RENDER_INPUT_BYTES // 6 + 1)
+    query, text = (control_rich, 'The timer is running.') if field == 'request' else ('Please answer.', control_rich)
+    assert delivery.render_written_reply(mock_config, query, text) == text
+    assert requests == []
+
+
+def test_written_rendering_keeps_literal_markers_distinct_from_request_data(monkeypatch, mock_config):
+    text = 'The timer named "Tea" is running.'
+    query = 'Reply about JARVIS_LITERAL_0_END in Turkish.'
+    packets = []
+    def render(model, system, content, **kw):
+        packet = json.loads(content)
+        packets.append(packet)
+        return packet['text_to_translate']
+    monkeypatch.setattr(delivery, 'get_llm_backend', lambda cfg: SimpleNamespace(direct=render))
+    assert delivery.render_written_reply(mock_config, query, text) == text
+    assert packets[0]['current_request'] == query
+    assert '"Tea"' not in packets[0]['text_to_translate']

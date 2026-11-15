@@ -165,9 +165,9 @@ scheduling only the remaining duration.
 
 Tool results carry factual countdown state and elapsed status alongside identities, durations and ETAs. Response instructions belong to the shared system prompt.
 
-When the request language is known, setting a timer requires non-empty expiry
-text in that language before admission. Missing text returns an error without
-starting a countdown. Calls without a language signal retain the English
+Assistant requests with a redacted current request or a detected language
+require non-empty localised expiry text before admission. Missing text returns an error without
+starting a countdown. Direct calls without an assistant request or language signal retain the English
 fallback. The shared prompt treats running timer state as completed creation,
 so optional metadata does not justify another countdown.
 
@@ -175,3 +175,7 @@ Alarm events carry a per-process capability shared with the owned daemon. The
 desktop requires the matching capability and a column-zero event prefix;
 conversational log text cannot create or dismiss alarms. The capability is not
 part of tool results or model inputs.
+
+Timer labels remove C0/C1 terminal controls while retaining ordinary Unicode
+text and joining characters. Stored labels, console output and cancellation
+matching use the same sanitisation.

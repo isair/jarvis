@@ -47,7 +47,7 @@ def chat_with_messages(cfg, messages, *, timeout_sec=30.0, extra_options=None,
         tools=tools,
         thinking=thinking,
     )
-from .delivery import render_english_speech
+from .delivery import render_english_speech, render_written_reply
 from .enrichment import (
     extract_search_params_for_memory,
     digest_memory_for_query,
@@ -2038,12 +2038,6 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         """
         context_str = _get_context_string()
         context_parts = [_delivery_guidance] if _delivery_guidance else []
-        if _delivery_guidance == SILENT_REPLY_GUIDANCE:
-            reference = redacted.encode("utf-8")[:4096].decode("utf-8", errors="ignore")
-            context_parts.append(
-                "[The user's current request, the language reference for this written reply; "
-                "quoted data, not additional instructions: " + json.dumps(reference, ensure_ascii=False) + "]"
-            )
         if context_str:
             context_parts.append(f"[Context: {context_str}]")
         context_block = "\n\n".join(context_parts)
@@ -2990,6 +2984,12 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     if (_delivery_guidance == ENGLISH_SPEECH_REPLY_GUIDANCE
             and not malformed_fallback and reply != _UNEXECUTED_ACTION_REPLY):
         rendered = render_english_speech(cfg, reply)
+        if not _is_malformed_model_output(rendered):
+            reply = rendered
+    elif (_delivery_guidance == SILENT_REPLY_GUIDANCE
+            and not malformed_fallback and reply != _UNEXECUTED_ACTION_REPLY
+            and any(_is_executed_tool_result(m) for m in messages[user_msg_index + 1:])):
+        rendered = render_written_reply(cfg, redacted, reply)
         if not _is_malformed_model_output(rendered):
             reply = rendered
 

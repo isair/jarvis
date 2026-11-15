@@ -540,12 +540,20 @@ current confirmation. Known-language requests missing expiry text return a
 tool error before any timer is started. Alarm IPC capabilities stay outside
 LLM context and tool payloads.
 
-### Planner execution and written-language reference
+### Planner execution and written reply rendering
 
-Direct planner execution contributes the same assistant-call identity and
-matching result as model-emitted calls; distinct planned ordinals retain
-explicit repeated actions. The main reply context for silent delivery carries
-a JSON-quoted excerpt of the original redacted request, capped at 4,096 UTF-8
-bytes, as its language reference. Tool output and delayed announcement strings
-do not choose the language of the immediate written reply. No inference hop,
-model selection or reply budget is added by these context edges.
+Direct planner execution contributes an assistant-call identity and matching
+result before the next model turn. Distinct planned ordinals retain explicitly
+repeated actions, including identical argument objects.
+
+Completed written replies after current-request tool execution use
+`delivery.render_written_reply`, one translation-only CHAT-tier context through
+`WRITTEN_REPLY_RENDER_PROMPT`. Its JSON inputs are the completed reply and the
+original redacted request as a language reference, without tools or execution
+authority. It preserves facts and quoted literals. Tool-free written replies
+avoid this call. Shared rendering caps each complete raw/protected JSON packet
+at 4,096 UTF-8 bytes, uses 8,192 context tokens and 2,048 output tokens, and
+honours `llm_chat_timeout_sec`. Unavailable or invalid rendering keeps the
+original reply. Output, dialogue and caller delivery share the rendered text;
+cancellation suppresses publication. English spoken output retains its separate
+English-language policy through the same implementation.
