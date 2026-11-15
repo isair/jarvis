@@ -88,7 +88,11 @@ def test_text_tool_call_preserves_declared_operation_and_scope(monkeypatch, quer
 
 
 @pytest.mark.parametrize('spoken_output', [False, True])
-def test_literal_multiword_labels_keep_their_complete_names(monkeypatch, record_property, spoken_output):
+@pytest.mark.parametrize('query', [
+    'Delete only the entry named "tea reminder" and keep the entry named "soup reminder".',
+    'Delete only the entry named tea reminder and keep the entry named soup reminder.',
+])
+def test_literal_multiword_labels_keep_their_complete_names(monkeypatch, record_property, spoken_output, query):
     tool = OwnedEntryManager()
     tool.entries = {'tea reminder', 'soup reminder'}
     monkeypatch.setitem(registry.BUILTIN_TOOLS, tool.name, tool)
@@ -99,7 +103,7 @@ def test_literal_multiword_labels_keep_their_complete_names(monkeypatch, record_
     try:
         reply = engine.run_reply_engine(
             db, cfg, None,
-            'Delete only the entry named "tea reminder" and keep the entry named "soup reminder".',
+            query,
             DialogueMemory(), language='en', spoken_output=spoken_output,
         )
         record_property('reply', reply)
