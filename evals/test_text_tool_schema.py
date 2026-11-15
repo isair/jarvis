@@ -85,3 +85,31 @@ def test_text_tool_call_preserves_declared_operation_and_scope(monkeypatch, quer
         assert tool.entries == remaining
     finally:
         db.close()
+
+
+@pytest.mark.parametrize('spoken_output', [False, True])
+def test_literal_multiword_labels_keep_their_complete_names(monkeypatch, record_property, spoken_output):
+    tool = OwnedEntryManager()
+    tool.entries = {'tea reminder', 'soup reminder'}
+    monkeypatch.setitem(registry.BUILTIN_TOOLS, tool.name, tool)
+    monkeypatch.setattr(engine, 'select_tools', lambda *args, **kwargs: [tool.name, 'stop'])
+    cfg = replace(isolated_voice_settings(), location_enabled=False, mcps={}, planner_enabled=False,
+                  llm_chat_timeout_sec=60, planner_timeout_sec=15)
+    db = Database(':memory:')
+    try:
+        reply = engine.run_reply_engine(
+            db, cfg, None,
+            'Delete only the entry named "tea reminder" and keep the entry named "soup reminder".',
+            DialogueMemory(), language='en', spoken_output=spoken_output,
+        )
+        record_property('reply', reply)
+        record_property('tool_calls', json.dumps(tool.calls))
+        assert reply
+        assert_not_fallback_reply(reply, 'literal multiword tool labels')
+        assert len(tool.calls) == 1, 'Exact labels require one call without repair or duplicate execution'
+        assert tool.calls[0] == {
+            'operation': 'discard_entries', 'scope': 'matching_labels', 'labels': ['tea reminder'],
+        }
+        assert tool.entries == {'soup reminder'}
+    finally:
+        db.close()
