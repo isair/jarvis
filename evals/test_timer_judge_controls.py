@@ -75,3 +75,14 @@ def test_empty_remaining_state_does_not_invent_an_effect(reply, expected):
         'Request: Cancel every timer.\nBefore labels: []\nTool result: No timers were cancelled.\n'
         f'Remaining labels: []\nReply: {reply}',
     ) == expected
+
+
+@pytest.mark.parametrize('reply', [
+    'The five-minute timer is set but paused.',
+    'The five-minute timer is set to start tomorrow.',
+])
+def test_pending_or_paused_countdowns_do_not_satisfy_running_state(reply):
+    assert judge_pass_fail(
+        'The reply must acknowledge a running five-minute countdown and must not claim it has elapsed.',
+        reply,
+    ) == 'FAIL'
