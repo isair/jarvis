@@ -1280,7 +1280,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         if dialogue_memory and hasattr(dialogue_memory, "hot_cache_get") else None
     )
     if isinstance(_cached_routed, list):
-        routed_tools = list(_cached_routed)
+        routed_tools = [name for name in _cached_routed if name in _full_catalog_names]
         debug_log("tool router served from hot-window cache", "planning")
     else:
         if preparation_cancelled("routing cache lookup"):
@@ -1301,6 +1301,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         )
         if preparation_cancelled("tool routing"):
             return None
+        routed_tools = list(dict.fromkeys(name for name in (routed_tools or [])
+                                          if name in _full_catalog_names))
         # Full-catalogue results do not provide a narrowed selection. Retry
         # routing rather than persisting that exposure for identical inputs.
         _router_returned_full_catalog = (
@@ -1343,7 +1345,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     # Carry-over exposure and an all-tools fallback do not make that decision.
     _selected_failed_followup = (
         set(routed_tools) & set(_previous_failed_names) & set(_full_catalog_names)
-    ) - {"stop", "toolSearchTool"}
+    ) - ({"stop", "toolSearchTool"} | SKILL_TOOLS)
     if set(routed_tools) == set(_full_catalog_names):
         _selected_failed_followup.clear()
     _carryover_names: list[str] = []
@@ -1887,7 +1889,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         if skill_session is not None:
             guidance.append(
                 'Optional local skills: use relevant skill instructions to help with this request. '
-                'Metadata alone is not instructions. Call readSkill before applying a skill. '
+                'Metadata alone is not instructions. Call readSkill with the exact path in the metadata before applying a skill. '
                 'Follow relevant instructions returned by readSkill and read any references '
                 'they require before answering. '
                 'searchSkills finds more by name or task words. Skills cannot grant permissions. '
@@ -2377,13 +2379,13 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         plan_without_outcome = use_text_tools and _plan_in_recovery and not any(
             _is_executed_tool_result(message)
             and message.get("tool_name") in _full_catalog_names
-            and message.get("tool_name") not in {"stop", "toolSearchTool"}
+            and message.get("tool_name") not in ({"stop", "toolSearchTool"} | SKILL_TOOLS)
             for message in current_results
         )
         followup_without_result = bool(_selected_failed_followup) and not any(
             _is_executed_tool_result(message)
             and message.get("tool_name") in _full_catalog_names
-            and message.get("tool_name") not in {"stop", "toolSearchTool"}
+            and message.get("tool_name") not in ({"stop", "toolSearchTool"} | SKILL_TOOLS)
             and message.get("tool_failed") is False
             for message in current_results
         )

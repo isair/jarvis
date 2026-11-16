@@ -86,9 +86,10 @@ def test_local_skill_guidance_is_loaded_once_and_not_carried_over(
     monkeypatch.setattr(engine, 'extract_search_params_for_memory', lambda **kwargs: {'keywords': []})
     reply = engine.run_reply_engine(db, mock_config, None, 'How should I brew sencha?', dialogue_memory)
     assert '75' in reply and '90' in reply
-    carryover = dialogue_memory.get_recent_messages()
+    carryover = dialogue_memory.get_recent_turns_with_tools()
     assert not any(m.get('tool_name') in {'readSkill', 'searchSkills'} for m in carryover)
     assert not any('instructions' in str(m.get('tool_calls', '')) for m in carryover)
+    assert 'Use exactly 75 degrees' not in json.dumps(carryover)
 
 
 def test_loop_merges_toolsearchtool_results_into_allowlist(

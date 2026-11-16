@@ -29,6 +29,8 @@ The caller filters optional skill tools out of the catalogue when local skills
 are disabled. Enabled replies additionally expose `searchSkills` and `readSkill`
 after routing, allowing discovery without expanding the router's input to the
 installed skill catalogue. The mid-loop tool search uses the same filtered map.
+The reply engine discards unknown or disabled routed names before caching or
+planning. A full available catalogue does not establish narrowed continuation intent.
 
 Regardless of strategy, these tools are **always** included:
 - `stop` — needed so the user can dismiss the assistant at any time.

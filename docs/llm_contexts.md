@@ -11,6 +11,8 @@ These files are subordinate to user intent, privacy and existing tool authority.
 Skill results bypass tool-result digestion. Duplicate reads return acknowledgements
 without repeating instruction bodies. Skill requests/results
 are excluded from tool carryover; the index and guidance expire with the reply.
+Native assistant prose and reasoning in a skill-using reply's tool carryover are
+removed. Skill preparation does not establish action-completion evidence.
 The router and planner see two optional tool definitions, never the installed
 skill catalogue. Both tools are always exposed to enabled reply loops, and
 absent from disabled routing. Models, deadlines and turn limits are unchanged.

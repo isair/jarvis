@@ -8,7 +8,7 @@ from ..types import ToolExecutionResult
 class SearchSkillsTool(Tool):
     name = 'searchSkills'
     description = ('Find local skills by name or words describing a task. Returns a small metadata '
-                   'shortlist, not instructions. Use readSkill with an exact returned ID before '
+                   'shortlist, not instructions. Use readSkill with the exact returned path before '
                    'following a skill. Try more specific words if no match is found.')
     inputSchema = {'type': 'object', 'properties': {
         'query': {'type': 'string', 'description': 'Skill name or relevant task words'}},

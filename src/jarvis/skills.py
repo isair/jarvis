@@ -27,6 +27,7 @@ def without_skill_messages(messages):
         call.get('id') for msg in messages for call in (msg.get('tool_calls') or [])
         if call.get('function', {}).get('name') in SKILL_TOOLS and call.get('id')
     }
+    uses_skills = bool(removed_ids) or any(msg.get('tool_name') in SKILL_TOOLS for msg in messages)
     kept = []
     for msg in messages:
         if msg.get('tool_name') in SKILL_TOOLS or msg.get('tool_call_id') in removed_ids:
@@ -35,9 +36,12 @@ def without_skill_messages(messages):
             calls = [call for call in msg['tool_calls']
                      if call.get('function', {}).get('name') not in SKILL_TOOLS]
             if calls:
-                # Native requests must not retain prose containing skill content.
-                kept.append({**msg, 'tool_calls': calls, 'content': ''}
-                            if len(calls) != len(msg['tool_calls']) else msg)
+                # Later ordinary calls can also quote loaded guidance in reasoning.
+                if uses_skills:
+                    clean = {key: value for key, value in msg.items() if key != 'thinking'}
+                    kept.append({**clean, 'tool_calls': calls, 'content': ''})
+                else:
+                    kept.append(msg)
         else:
             kept.append(msg)
     return kept
@@ -109,7 +113,11 @@ class SkillSession:
                 header.extend(line)
             else:
                 raise ValueError('Skill frontmatter is too large')
-        meta = yaml.safe_load(header.decode('utf-8'))
+        text = header.decode('utf-8')
+        # Scanning does not construct or expand alias-backed merge mappings.
+        if any(isinstance(token, yaml.tokens.AliasToken) for token in yaml.scan(text)):
+            raise ValueError('Skill frontmatter cannot contain YAML aliases')
+        meta = yaml.safe_load(text)
         if not isinstance(meta, dict):
             raise ValueError('Skill frontmatter must be a mapping')
         name, description = meta.get('name'), meta.get('description')
@@ -136,6 +144,7 @@ class SkillSession:
         hits = []
         for key in ranked:
             item = {field: self._catalogue[key][field] for field in ('id', 'name', 'description')}
+            item['path'] = key + '/SKILL.md'
             description = item['description'].encode('utf-8')
             if len(description) > 512:
                 item['description'] = description[:512].decode('utf-8', errors='ignore')

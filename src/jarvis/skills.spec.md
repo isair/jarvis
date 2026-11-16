@@ -9,7 +9,8 @@ additional filesystem or tool authority is implied by a skill.
 A package contains `SKILL.md` with safe YAML frontmatter: a directory-matching,
 lowercase alphanumeric/hyphen `name` (1–64 characters, no adjacent or edge hyphens)
 and a non-empty `description` (at most 1,024 characters). Other frontmatter cannot
-grant permissions. Discovery reads at most 8 KiB of frontmatter per file and
+grant permissions. YAML aliases are rejected by lexical scanning before
+construction, preventing merge-alias expansion. Discovery reads at most 8 KiB of frontmatter per file and
 never reads instruction bodies. Invalid or inaccessible packages are skipped
 with bounded diagnostics. Duplicate names remain distinct and require their IDs.
 
@@ -21,7 +22,8 @@ retrieves at most five entries; `searchSkills` supports refined queries during
 the loop. All metadata disclosure together is capped at 4 KiB per reply.
 The full catalogue is never sent to an LLM. Description excerpts are at most
 512 UTF-8 bytes and explicitly labelled when partial; search indexes the full
-validated description.
+validated description. Each hit includes its canonical exact-ID `/SKILL.md`
+entrypoint so callers do not need to construct a filename.
 
 `readSkill` loads the complete instructions or a UTF-8 reference relative to a
 discovered package. Its single `path` argument joins the exact skill ID or an
@@ -38,7 +40,9 @@ reply's `readSkill` results without LLM digestion, accompanied by a reminder to
 apply relevant instructions and read required references. Duplicate reads return an
 acknowledgement referring to the earlier result, without repeating the body.
 Skill tool requests and results are excluded from tool carryover, retaining
-paired native requests/results for other tools in mixed batches. Search metadata
+paired native requests/results for other tools in mixed batches. Assistant prose
+and reasoning accompanying native calls are removed throughout a skill-using
+reply's tool carryover. Search metadata
 and loaded guidance cannot persist through this route into later replies.
 
 Both skill tools are absent from routing and schemas when disabled, and direct
@@ -46,3 +50,7 @@ execution also rejects disabled use. Enabled replies expose both tools so late
 discovery does not depend on the tool router guessing a skill's name. The same
 configuration and reply engine serve voice and text. Settings use the existing
 metadata-driven Features controls.
+
+Skill discovery and instruction preparation are not evidence of executing the
+user's requested action. Both completion and failed-follow-up guards retain this
+distinction.

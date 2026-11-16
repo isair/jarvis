@@ -36,6 +36,7 @@ def test_progressive_disclosure_and_request_scope(tmp_path):
     s = session(tmp_path)
     hits = s.search('sencha')
     assert hits[0]['name'] == 'tea-guide'
+    assert hits[0]['path'] == hits[0]['id'] + '/SKILL.md'
     assert '75 degrees' not in json.dumps(hits)
     instructions = s.read(hits[0]['id'])
     reference = s.read(hits[0]['id'], 'references/timing.md')
@@ -96,8 +97,8 @@ def test_symlinks_and_oversized_files_are_not_loaded(tmp_path):
 
 def test_native_mixed_batch_carryover_remains_paired():
     messages = [
-        {'role': 'assistant', 'tool_calls': [
-            {'id': 's', 'function': {'name': 'readSkill', 'arguments': {'skill': 'tea-guide'}}},
+        {'role': 'assistant', 'content': 'SECRET SKILL INSTRUCTIONS', 'thinking': 'SECRET SKILL INSTRUCTIONS', 'tool_calls': [
+            {'id': 's', 'function': {'name': 'readSkill', 'arguments': {'path': 'tea-guide/SKILL.md'}}},
             {'id': 'w', 'function': {'name': 'getWeather', 'arguments': {}}},
         ]},
         {'role': 'tool', 'tool_call_id': 's', 'tool_name': 'readSkill', 'content': 'loaded'},
@@ -107,7 +108,39 @@ def test_native_mixed_batch_carryover_remains_paired():
     assert len(kept) == 2
     assert [call['id'] for call in kept[0]['tool_calls']] == ['w']
     assert kept[1]['tool_call_id'] == 'w'
+    assert kept[0]['content'] == ''
+    assert 'thinking' not in kept[0]
     assert len(messages[0]['tool_calls']) == 2
+
+
+def test_skill_reasoning_is_not_saved_in_later_native_calls():
+    from jarvis.memory.conversation import DialogueMemory
+    messages = [
+        {'role': 'tool', 'tool_name': 'readSkill', 'tool_call_id': 's', 'content': 'SECRET SKILL INSTRUCTIONS'},
+        {'role': 'assistant', 'content': 'SECRET SKILL INSTRUCTIONS', 'thinking': 'SECRET SKILL INSTRUCTIONS',
+         'tool_calls': [{'id': 'w', 'function': {'name': 'getWeather', 'arguments': {}}}]},
+        {'role': 'tool', 'tool_call_id': 'w', 'tool_name': 'getWeather', 'content': 'sunny'},
+    ]
+    memory = DialogueMemory()
+    memory.record_tool_turn(without_skill_messages(messages))
+    carried = memory.get_recent_turns_with_tools()
+    assert 'SECRET SKILL INSTRUCTIONS' not in json.dumps(carried)
+    assert 'sunny' in json.dumps(carried)
+
+
+def test_yaml_aliases_are_rejected_before_metadata_construction(tmp_path):
+    p = package(tmp_path)
+    (p / 'SKILL.md').write_text(
+        '---\nbase: &base {x: y}\nmerged: {<<: [*base, *base]}\n'
+        'name: tea-guide\ndescription: Brew tea\n---\nInstructions', encoding='utf-8')
+    assert session(tmp_path).search('tea') == []
+
+
+def test_folded_yaml_description_is_supported(tmp_path):
+    p = package(tmp_path)
+    (p / 'SKILL.md').write_text(
+        '---\nname: tea-guide\ndescription: >\n  Brew Japanese tea\n  with local instructions\n---\nBrew it.', encoding='utf-8')
+    assert session(tmp_path).search('Japanese')[0]['name'] == 'tea-guide'
 
 
 def test_unrelated_carryover_is_unchanged():

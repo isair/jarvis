@@ -106,13 +106,15 @@
   "web_search_enabled": true,
   "brave_search_api_key": "",
   "wikipedia_fallback_enabled": true,
+  "background_tasks_enabled": false,
+  "document_search_enabled": false,
+  "document_search_paths": [],
+  "skills_enabled": false,
+  "skills_paths": [],
   "dictation_enabled": true,
   "dictation_hotkey": "ctrl+alt",
   "dictation_filler_removal": false,
   "dictation_thinking_enabled": false,
   "dictation_custom_dictionary": [],
-  "mcps": {},
-  "background_tasks_enabled": false,
-  "document_search_enabled": false,
-  "document_search_paths": []
+  "mcps": {}
 }
