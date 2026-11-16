@@ -36,10 +36,14 @@ def test_recovery_selector_arguments_produce_the_requested_effect(
     assert tool.entries == remaining
 
 
-def test_recovery_query_uses_the_discovered_entity(monkeypatch):
+@pytest.mark.parametrize('first_query', [
+    'Who directed Possessor?',
+    'director of Possessor and their filmography',
+])
+def test_recovery_query_uses_the_discovered_entity(monkeypatch, first_query):
     tool = OwnedFilmLookup()
     monkeypatch.setitem(registry.BUILTIN_TOOLS, tool.name, tool)
-    first_args = {'query': 'Who directed Possessor?'}
+    first_args = {'query': first_query}
     first = tool.run(first_args, None)
     schemas = registry.generate_tools_json_schema([tool.name, 'stop', 'toolSearchTool'])
     proposal = resolve_uncovered_request(

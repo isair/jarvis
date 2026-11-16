@@ -137,3 +137,5 @@ Text tool help uses the registry's complete canonical JSON input schemas, includ
 parameter descriptions, allowed values, nesting and constraints. It shares
 selection and schema construction with native function calling. The presentation
 contract is defined in `../../tools/registry.spec.md`.
+
+After a successful partial information lookup identifies a dependent subject, the next query uses that actual subject and requests the missing information. Earlier query wording does not establish returned facts.
