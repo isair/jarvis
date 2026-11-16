@@ -71,12 +71,17 @@ def _scoped_schemas(schemas):
     return definitions, branches
 
 
-def tool_call_output_schema(schemas, *, nullable=False):
+def tool_call_output_schema(schemas, *, nullable=False, allow_complete=False):
     scoped = _scoped_schemas(schemas)
     if scoped is None:
         return None
     definitions, branches = scoped
-    return {'$defs': definitions, 'oneOf': ([{'type': 'null'}] if nullable else []) + branches}
+    alternatives = ([{'type': 'null'}] if nullable else []) + branches
+    if allow_complete:
+        alternatives.append({'type': 'object', 'properties': {
+            'complete': {'type': 'boolean', 'enum': [True]},
+        }, 'required': ['complete'], 'additionalProperties': False})
+    return {'$defs': definitions, 'oneOf': alternatives}
 
 
 def reply_output_schema(schemas, maximum_calls):

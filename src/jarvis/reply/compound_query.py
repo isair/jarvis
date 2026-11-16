@@ -21,7 +21,8 @@ import json
 from .prompts.tool_arguments import TOOL_ARGUMENT_GUIDANCE
 from .tool_identity import pack_identity_evidence
 from ..debug import debug_log
-from ..llm import get_llm_backend, resolve_model, Tier
+from ..llm import get_llm_backend, resolve_model, Tier, extract_text_from_response
+from ..tools.schema import missing_required_arguments, tool_call_output_schema
 from dataclasses import dataclass
 from typing import Optional
 
@@ -218,11 +219,27 @@ def resolve_uncovered_request(cfg, query: str, results: list, tools: list, *, pr
             f'compound coverage: current results={len(results)}, prior identities={len(packed["prior_identity_evidence"])}, '
             f'prior omitted={packed["prior_identity_evidence_omitted"]}', 'planning',
         )
-        response = get_llm_backend(cfg).direct(
-            resolve_model(cfg, Tier.CHAT), _COVERAGE_PROMPT, packet,
-            timeout_sec=min(20.0, cfg.llm_chat_timeout_sec), thinking=False,
-            num_ctx=8192, temperature=0.0, max_tokens=512,
-        )
+        schemas = {
+            tool['function']['name']: tool['function'].get('parameters', {})
+            for tool in tools
+        }
+        output_schema = tool_call_output_schema(schemas, allow_complete=True)
+        backend = get_llm_backend(cfg)
+        if output_schema is None:
+            response = backend.direct(
+                resolve_model(cfg, Tier.CHAT), _COVERAGE_PROMPT, packet,
+                timeout_sec=min(20.0, cfg.llm_chat_timeout_sec), thinking=False,
+                num_ctx=8192, temperature=0.0, max_tokens=512,
+            )
+        else:
+            response = extract_text_from_response(backend.chat(
+                resolve_model(cfg, Tier.CHAT), [
+                    {'role': 'system', 'content': _COVERAGE_PROMPT},
+                    {'role': 'user', 'content': packet},
+                ], timeout_sec=min(20.0, cfg.llm_chat_timeout_sec), thinking=False,
+                extra_options={'num_ctx': 8192, 'temperature': 0.0, 'max_tokens': 512,
+                               'response_schema': output_schema},
+            ))
         text = (response or '').strip()
         fenced = re.fullmatch(r"```(?:json)?\s*\n(.*?)\n```", text, re.DOTALL)
         if fenced:
@@ -239,7 +256,7 @@ def resolve_uncovered_request(cfg, query: str, results: list, tools: list, *, pr
                 continue
             schema = function.get('parameters', {})
             properties = schema.get('properties', {})
-            if not set(schema.get('required', [])) <= set(arguments) <= set(properties):
+            if missing_required_arguments(schema, arguments) or not set(arguments) <= set(properties):
                 return None
             debug_log(f'compound coverage: unresolved outcome needs {name}', 'planning')
             return {'name': name, 'arguments': arguments}

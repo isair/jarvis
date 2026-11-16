@@ -50,25 +50,25 @@ def test_duplicate_request_identifiers_cannot_establish_a_namespace():
 
 def test_prior_observations_do_not_become_current_execution_results(mock_config):
     backend = Mock()
-    backend.direct.return_value = '{"complete":true}'
+    backend.chat.return_value = {'message': {'content': '{"complete":true}'}}
     prior = [{'name': 'ownedLookup', 'tool_call_id': 'old', 'result': 'A previous action succeeded.'}]
     with patch.object(compound_query, 'get_llm_backend', return_value=backend):
         compound_query.resolve_uncovered_request(mock_config, 'Perform the action again.', [], [], prior_results=prior)
-    packet = json.loads(backend.direct.call_args.args[2])
+    packet = json.loads(backend.chat.call_args.args[1][-1]['content'])
     assert packet['results'] == []
     assert packet['prior_identity_evidence'] == prior
 
 
 def test_prior_budget_keeps_whole_values_and_reports_omissions(mock_config):
     backend = Mock()
-    backend.direct.return_value = '{"complete":true}'
+    backend.chat.return_value = {'message': {'content': '{"complete":true}'}}
     literal = 'quoted "name" with \\ and 日本語'
     small = {'name': 'ownedLookup', 'tool_call_id': 'small', 'result': literal}
     large = {'name': 'ownedLookup', 'tool_call_id': 'large',
              'result': '\\' * compound_query.COVERAGE_INPUT_BYTE_LIMIT}
     with patch.object(compound_query, 'get_llm_backend', return_value=backend):
         compound_query.resolve_uncovered_request(mock_config, 'Find the record.', [], [], prior_results=[small, large])
-    encoded = backend.direct.call_args.args[2]
+    encoded = backend.chat.call_args.args[1][-1]['content']
     packet = json.loads(encoded)
     assert len(encoded.encode('utf-8')) <= compound_query.COVERAGE_INPUT_BYTE_LIMIT
     assert packet['prior_identity_evidence'] == [small]
