@@ -59,7 +59,7 @@ Rendering uses temperature zero, thinking disabled, an 8,192-token context, a 2,
    - The planner emits an ordered list of short sub-tasks (max 5). Two of the tokens are structural for the engine:
      - `searchMemory topic='...'` as a leading step means "answering requires information from prior conversations"; the engine runs memory enrichment. Omitting it means "no memory needed".
      - Concrete tool steps (e.g. `webSearch search_query='...'`) name specific tools; the engine adds those names to the router's selection for the reply loop.
-   - An empty plan (disabled, LLM timeout, too short) is the fail-open state — the engine reverts to running the memory extractor and the `select_tools` router as before.
+   - An empty plan (disabled, LLM timeout, too short) is the fail-open state: the engine permits memory extraction subject to source availability and runs the `select_tools` router.
    - A single-step `["Reply to the user."]` plan is a positive "no memory, no tools" decision — the engine skips the memory extractor, the tool router, the diary / graph / digest LLM calls, and the direct-exec path entirely.
    - See `planner.spec.md` for the full prompt contract, helpers, and fail-open invariants.
 
@@ -68,6 +68,7 @@ Rendering uses temperature zero, thinking disabled, an 8,192-token context, a 2,
      connection ownership closes its store after successful retrieval, skipped
      searches and failures.
    - Runs only when the planner emitted a `searchMemory` directive OR the planner returned an empty plan (fail-open). Skipped otherwise, along with the keyword-extractor LLM call, the diary and graph queries, and the memory-digest LLM call.
+   - With diary-only enrichment, a bounded local existence check skips extraction and retrieval when no saved summary exists. Availability is checked for each reply, so subsequently saved summaries are eligible immediately. An unavailable check preserves recall. Graph and combined-source enrichment retain their own preparation gates.
    - Extract search parameters via `extract_search_params_for_memory(query, cfg, router_model, ..., context_hint=...)`.
      - Runs on the fast tier (`resolve_model(cfg, Tier.FAST)`), not the big chat model. The extractor is a small classification-shaped task and rides the already-warm fast model instead of paging in the chat weights.
      - The planner's `topic` hint (when present) is appended to the query the extractor sees, so keyword selection anchors on what the planner actually wanted to look up.

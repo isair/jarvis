@@ -10,9 +10,9 @@ pytestmark = [pytest.mark.unit, pytest.mark.usefixtures('no_network')]
 
 @pytest.mark.parametrize('stop_during,failed_stage', [
     (None, False), ('discovery', False), ('router_cache', False), ('router', False), ('planner', False),
-    ('profile', False), ('keywords', False), ('diary', False), ('graph', False), ('digest', False),
+    ('profile', False), ('diary_availability', False), ('keywords', False), ('diary', False), ('graph', False), ('digest', False),
     ('discovery', True), ('planner', True), ('keywords', True),
-    ('diary', True), ('digest', True),
+    ('diary', True), ('digest', True), ('diary_availability', True),
 ])
 def test_preparation_stops_after_the_inflight_stage(monkeypatch, mock_config, db, dialogue_memory, tmp_path, stop_during, failed_stage):
     cancelled = Event()
@@ -22,6 +22,7 @@ def test_preparation_stops_after_the_inflight_stage(monkeypatch, mock_config, db
     mock_config.memory_digest_enabled = True
     mock_config.tool_result_digest_enabled = False
     mock_config.tts_engine = 'none'
+    db.upsert_conversation_summary('2020-01-01', 'The user grows orchids.', 'preferences')
 
     def stage(name, value):
         if cancelled.is_set():
@@ -31,6 +32,9 @@ def test_preparation_stops_after_the_inflight_stage(monkeypatch, mock_config, db
             if failed_stage:
                 raise RuntimeError('Owned cancelled preparation failure')
         return value
+
+    if stop_during == 'diary_availability':
+        monkeypatch.setattr(db, 'has_conversation_summaries', lambda: stage('diary_availability', True))
 
     if stop_during in {'profile', 'graph'}:
         from jarvis.memory import graph, graph_ops

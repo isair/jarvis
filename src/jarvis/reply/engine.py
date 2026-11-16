@@ -1493,6 +1493,13 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     # Step 4: Memory enrichment — controlled by cfg.memory_enrichment_source
     # "all" = diary + graph, "diary" = diary only, "graph" = graph only
     enrichment_source = getattr(cfg, "memory_enrichment_source", "diary")
+    if needs_memory and enrichment_source == "diary":
+        try:
+            if not db.has_conversation_summaries():
+                needs_memory = False
+                debug_log("memory enrichment skipped: selected diary has no saved summaries", "memory")
+        except Exception as exc:
+            debug_log(f"diary availability check failed, preserving recall: {type(exc).__name__}", "memory")
     conversation_context = ""
     # For small models, the diary + graph text is replaced by a single
     # distilled note stored here. Injected by _build_initial_system_message.

@@ -167,8 +167,14 @@ The planner prompt instructs the model to emit:
   engine injects the ACTION PLAN block, and direct-exec runs the tool
   without waiting for the chat model. Only an **empty** list means
   "planner failed / disabled; fall open to legacy safe defaults"
-  (run memory enrichment + tool router). The two states must stay
+  (permit memory enrichment subject to source availability, and run the tool router). The two states must stay
   distinguishable.
+
+Diary-only enrichment checks for saved summaries before extracting search
+parameters. A confirmed empty diary needs no preparation inference; unavailable
+reads preserve recall. Graph and combined-source preparation keep their own
+gates. This availability check applies to both explicit recall directives and
+the empty-plan path.
 
 ### Engine integration
 

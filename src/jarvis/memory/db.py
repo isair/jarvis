@@ -428,6 +428,11 @@ class Database:
                 "SELECT * FROM conversation_summaries WHERE id = ?", (summary_id,),
             ).fetchone()
 
+    def has_conversation_summaries(self) -> bool:
+        """Report whether any saved diary summary is available for retrieval."""
+        with self._lock:
+            return self.conn.execute('SELECT 1 FROM conversation_summaries LIMIT 1').fetchone() is not None
+
     def get_recent_conversation_summaries(self, days: int = 7) -> list[sqlite3.Row]:
         """Get conversation summaries from the last N days."""
         from datetime import datetime, timedelta, timezone
