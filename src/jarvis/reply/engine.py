@@ -240,8 +240,8 @@ def _matching_tool_outcome(signature, outcomes):
         return None, None
     try:
         current = json.loads(signature[1])
-        for previous in outcomes:
-            if previous[0] != signature[0]:
+        for previous, succeeded in outcomes.items():
+            if not succeeded or previous[0] != signature[0]:
                 continue
             bound = spec.bind_retry_identity(current, json.loads(previous[1]))
             if bound is not None:

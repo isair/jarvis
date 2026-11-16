@@ -136,6 +136,43 @@ def test_one_ordered_request_owns_successful_timer_admissions(monkeypatch, mock_
     assert all(args['minutes'] == 5 for args in successful)
 
 
+
+@pytest.mark.parametrize('planned', [False, True])
+def test_rejected_unlabelled_creation_allows_corrected_named_timers(
+        monkeypatch, mock_config, db, dialogue_memory, planned):
+    monkeypatch.setattr(engine, 'prepare_timer_arguments', timer_delivery.prepare_timer_arguments)
+    mock_config.planner_enabled = planned
+    monkeypatch.setattr(engine, 'plan_query', lambda **kw: ['timer action=set minutes=5', 'Reply.'] if planned else [])
+    monkeypatch.setattr(engine, '_resolve_plan_step', lambda **kw: ('timer', {
+        'action': 'set', 'minutes': 5, 'expiry_announcement': 'Timer has elapsed'}))
+    monkeypatch.setattr(engine, 'select_tools', lambda **kw: ['timer', 'stop'])
+    monkeypatch.setattr(engine, 'extract_search_params_for_memory', lambda **kw: {})
+    replies = []
+    for index, label in enumerate([None, 'tea', 'soup', 'tea']):
+        arguments = {'action': 'set', 'minutes': 5, 'expiry_announcement': 'Timer has elapsed'}
+        if label is not None:
+            arguments['label'] = label
+        replies.append({'message': {'tool_calls': [{'id': str(index), 'function': {
+            'name': 'timer', 'arguments': arguments}}]}})
+    replies.append({'message': {'content': '{"blocker":"No additional timers were started."}'}})
+    responses = iter(replies[1:] if planned else replies)
+    monkeypatch.setattr(engine, 'chat_with_messages', lambda **kw: next(responses))
+    backend = SimpleNamespace(chat=lambda *a, **kw: {'message': {'content':
+        '{"timers":[{"label":"tea"},{"label":"soup"}]}'}})
+    monkeypatch.setattr(timer_delivery, 'get_llm_backend', lambda cfg: backend)
+    monkeypatch.setattr(timer_delivery, 'render_timer_announcement', lambda cfg, request, text, **kw: text)
+    effects = []
+    def execute(**kw):
+        arguments = kw['tool_args']
+        effects.append((arguments['label'], arguments['minutes'] * 60))
+        return ToolExecutionResult(True, 'Countdown running.', result_metadata={'created_timer': {
+            'id': str(len(effects)), 'label': arguments['label'], 'duration_sec': 300, 'state': 'running'}})
+    monkeypatch.setattr(engine, 'run_tool_with_retries', execute)
+    assert engine.run_reply_engine(db, mock_config, None,
+        'Start two five-minute timers, one for tea and one for soup.', dialogue_memory, language='en')
+    assert effects == [('tea', 300), ('soup', 300)]
+
+
 def test_contextual_followup_preserves_the_resolved_duration(monkeypatch, mock_config):
     context = 'user: Start a five-minute tea timer.\nassistant: Started 1 timer: 5 minutes for "tea". It is running.'
     def compile(model, messages, **kw):
