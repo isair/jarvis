@@ -285,6 +285,10 @@ class Settings:
     document_search_enabled: bool
     document_search_paths: list[str]
 
+    # Optional instructions from explicitly authorised local skill folders
+    skills_enabled: bool
+    skills_paths: list[str]
+
     # Dictation (hold-to-dictate)
     dictation_enabled: bool
     dictation_hotkey: str
@@ -672,6 +676,8 @@ def get_default_config() -> Dict[str, Any]:
         "background_tasks_enabled": False,
         "document_search_enabled": False,
         "document_search_paths": [],
+        "skills_enabled": False,
+        "skills_paths": [],
 
         # Dictation (hold-to-dictate, WisprFlow-like)
         "dictation_enabled": True,
@@ -882,6 +888,10 @@ def load_settings() -> Settings:
     brave_search_api_key = str(merged.get("brave_search_api_key", "") or "").strip()
     wikipedia_fallback_enabled = bool(merged.get("wikipedia_fallback_enabled", True))
     background_tasks_enabled = merged["background_tasks_enabled"] is True
+    skills_enabled = merged['skills_enabled'] is True
+    raw_skill_paths = merged['skills_paths']
+    skills_paths = [path.strip() for path in raw_skill_paths
+                    if isinstance(path, str) and path.strip()] if isinstance(raw_skill_paths, list) else []
     document_search_enabled = bool(merged.get("document_search_enabled", False))
     raw_document_paths = merged.get("document_search_paths", [])
     document_search_paths = [path.strip() for path in raw_document_paths
@@ -1020,6 +1030,8 @@ def load_settings() -> Settings:
         brave_search_api_key=brave_search_api_key,
         wikipedia_fallback_enabled=wikipedia_fallback_enabled,
         background_tasks_enabled=background_tasks_enabled,
+        skills_enabled=skills_enabled,
+        skills_paths=skills_paths,
         document_search_enabled=document_search_enabled,
         document_search_paths=document_search_paths,
 

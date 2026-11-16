@@ -66,7 +66,8 @@ class ToolSearchTool(Tool):
 
         cfg = context.cfg
         # Local imports to avoid circulars at module load time.
-        from ..registry import BUILTIN_TOOLS, get_cached_mcp_tools
+        from ..registry import available_builtin_tools, get_cached_mcp_tools
+        builtin_tools = available_builtin_tools(cfg)
 
         try:
             strategy = ToolSelectionStrategy(getattr(cfg, "tool_selection_strategy", "llm"))
@@ -83,7 +84,7 @@ class ToolSearchTool(Tool):
             selected = select_tools(
                 query=query,
                 transcript_context=context.transcript_context,
-                builtin_tools=BUILTIN_TOOLS,
+                builtin_tools=builtin_tools,
                 mcp_tools=mcp_tools,
                 strategy=strategy,
                 llm_backend=get_llm_backend(cfg),
@@ -118,7 +119,7 @@ class ToolSearchTool(Tool):
         lines: list[str] = []
         for tname in real:
             desc = ""
-            tool_obj = BUILTIN_TOOLS.get(tname)
+            tool_obj = builtin_tools.get(tname)
             if tool_obj is not None:
                 desc = (getattr(tool_obj, "description", "") or "").strip()
             else:

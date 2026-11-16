@@ -53,6 +53,44 @@ def _assistant_content(text: str):
     return {"message": {"role": "assistant", "content": text}}
 
 
+@pytest.mark.parametrize('model', ['gemma4:e2b', 'gpt-oss:20b'])
+def test_local_skill_guidance_is_loaded_once_and_not_carried_over(
+    mock_config, db, dialogue_memory, tmp_path, monkeypatch, model,
+):
+    from jarvis.reply import engine
+    import json
+
+    folder = tmp_path / 'tea-guide'
+    folder.mkdir()
+    (folder / 'SKILL.md').write_text(
+        '---\nname: tea-guide\ndescription: Sencha brewing instructions\n---\n'
+        'Use exactly 75 degrees and steep for 90 seconds.', encoding='utf-8')
+    mock_config.skills_enabled = True
+    mock_config.skills_paths = [str(tmp_path)]
+    mock_config.llm_chat_model = model
+    snapshots = []
+
+    def chat(*args, **kwargs):
+        messages = kwargs['messages']
+        snapshots.append(json.loads(json.dumps(messages)))
+        if len(snapshots) == 1:
+            assert 'Sencha brewing instructions' in messages[0]['content']
+            assert '75 degrees' not in messages[0]['content']
+            assert 'readSkill' in str(kwargs.get('tools', '')) or 'readSkill' in messages[0]['content']
+            return _assistant_tool_call('readSkill', {'path': 'tea-guide/SKILL.md'})
+        assert sum(m.get('content', '').count('Use exactly 75 degrees') for m in messages) == 1
+        return _assistant_content('Use 75 degrees and steep for 90 seconds.')
+
+    monkeypatch.setattr(engine, 'chat_with_messages', chat)
+    monkeypatch.setattr(engine, 'select_tools', lambda **kwargs: ['stop'])
+    monkeypatch.setattr(engine, 'extract_search_params_for_memory', lambda **kwargs: {'keywords': []})
+    reply = engine.run_reply_engine(db, mock_config, None, 'How should I brew sencha?', dialogue_memory)
+    assert '75' in reply and '90' in reply
+    carryover = dialogue_memory.get_recent_messages()
+    assert not any(m.get('tool_name') in {'readSkill', 'searchSkills'} for m in carryover)
+    assert not any('instructions' in str(m.get('tool_calls', '')) for m in carryover)
+
+
 def test_loop_merges_toolsearchtool_results_into_allowlist(
     mock_config, db, dialogue_memory
 ):
