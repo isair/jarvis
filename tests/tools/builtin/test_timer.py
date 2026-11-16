@@ -334,6 +334,24 @@ class TestTimerCancel:
         # No matching timer is not an error — it's a successful no-op.
         assert result.success is True
 
+    @pytest.mark.parametrize('match', [False, True])
+    def test_cancel_receipt_reports_actual_affected_ids(self, fresh_manager, match):
+        manager, _ = fresh_manager
+        entry = manager.start(60, 'tea')
+        keeper = manager.start(60, 'soup')
+        result = TimerTool().run(
+            {'action': 'cancel', 'timer_id': entry.id if match else 'not-a-timer'},
+            make_context(),
+        )
+        expected = [entry.id] if match else []
+        assert result.success is True
+        assert result.result_metadata['cancelled_timer_ids'] == expected
+        assert result.result_metadata['cancelled_timer_count'] == len(expected)
+        assert f'Cancelled timer count: {len(expected)}' in result.reply_text
+        assert {timer.id for timer in manager.list()} == (
+            {keeper.id} if match else {entry.id, keeper.id}
+        )
+
 
 class TestTimerHardLimits:
     """Cover the spec's promised 24h / 32-timer caps as tool errors."""

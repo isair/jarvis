@@ -16,6 +16,9 @@ that owns all active countdowns and announces them when they elapse.
 - **`cancel`** — cancel one or more timers by `timer_id`, by `label`
   (Unicode case-insensitive after shared label sanitisation, cancels every match), or by `all=true`. Cancelling
   a non-existent timer is a successful no-op.
+  Cancellation results report the actual affected IDs and count in structured
+  result metadata, and include the count in their factual text. A successful
+  no-op reports zero affected timers rather than evidence of a removed timer.
 
 ## Hard limits
 

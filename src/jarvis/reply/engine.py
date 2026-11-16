@@ -2386,13 +2386,13 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                             _cand_sig = _tool_retry_signature(_name, _args or {})
                         except Exception:
                             _cand_sig = (_name, "__unserializable__")
-                        # Reject toolSearchTool here — its allow-list
-                        # widening logic lives on the model-emitted path.
+                        # Conversation dismissal and catalogue expansion belong
+                        # to the main assistant rather than a planned step.
                         # Each planned ordinal owns its execution, including
                         # explicitly requested actions with identical arguments.
                         _plan_exec_ok = (
                             _name in allowed_tools
-                            and _name != "toolSearchTool"
+                            and _name not in {"stop", "toolSearchTool"}
                         )
                         if _plan_exec_ok:
                             debug_log(

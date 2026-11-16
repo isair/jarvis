@@ -522,17 +522,18 @@ def plan_query(
     steps = _parse_plan(raw)
     if not steps:
         return []
-    # Post-plan guard: reject plans where every step is "stop".
-    # The planner prompt forbids emitting "stop" (rule 13), but small
-    # models occasionally ignore instruction. A stop-only plan would
-    # produce a silent dismissal for any non-trivial query, which is
-    # never the right behaviour — the engine always adds "stop" to
-    # the allow-list separately. Return empty so the engine falls
-    # through to the tool router + chat model.
+    # Conversation termination cannot precede pending tool work. Runtime
+    # dismissal belongs to the main assistant, independently of its plan.
     action_steps = tool_steps_of(steps) if len(steps) > 1 else steps
-    if action_steps and all(_is_stop_step(s) for s in action_steps):
+    real_tools = [name for name, _ in tools if name != 'stop']
+    interrupts_work = any(
+        _is_stop_step(step)
+        and any(tool_names_in_plan([following], real_tools) for following in steps[index + 1:])
+        for index, step in enumerate(steps)
+    )
+    if interrupts_work or (action_steps and all(_is_stop_step(s) for s in action_steps)):
         debug_log(
-            "planner: rejecting stop-only plan (forbidden by rule 13)",
+            "planner: returning conversation termination to the main assistant",
             "planning",
         )
         return []

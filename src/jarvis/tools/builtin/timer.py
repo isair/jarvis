@@ -921,7 +921,13 @@ class TimerTool(Tool):
             "cancelled": [t.to_dict() for t in cancelled],
             "active_timers": [t.to_dict() for t in manager.list()],
         }
-        return ToolExecutionResult(success=True, reply_text=_render_payload(payload))
+        return ToolExecutionResult(
+            success=True, reply_text=_render_payload(payload),
+            result_metadata={
+                'cancelled_timer_ids': [entry.id for entry in cancelled],
+                'cancelled_timer_count': len(cancelled),
+            },
+        )
 
 
 def _render_payload(payload: Dict[str, Any]) -> str:
@@ -944,6 +950,8 @@ def _render_payload(payload: Dict[str, Any]) -> str:
         lines.append("Elapsed: false")
 
     cancelled = payload.get("cancelled") or []
+    if 'cancelled' in payload:
+        lines.append(f"Cancelled timer count: {len(cancelled)}")
     if cancelled:
         lines.append("Cancelled timers:")
         for t in cancelled:

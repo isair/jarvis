@@ -146,6 +146,9 @@ The planner prompt instructs the model to emit:
   A deterministic post-plan guard in `plan_query` rejects any
   plan whose only action steps are `stop` (including one followed by synthesis), returning `[]` so the engine
   falls through to the tool router and chat model.
+  A stop directive preceding another registered tool also rejects the plan.
+  Direct execution cannot dispatch `stop`; an unresolved termination step
+  returns pending work to the main assistant within the existing reply loop.
 - Trust the tool router: when the available-tools catalogue contains
   a tool relevant to the query, plan to use it even for seemingly
   trivial requests (jokes, opinions, creative content). The tool

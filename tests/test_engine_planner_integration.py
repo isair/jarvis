@@ -219,7 +219,7 @@ def test_empty_plan_falls_through_to_existing_behaviour(
     )
 
 
-@pytest.mark.parametrize("resolution", ["missing", "error", "disallowed"])
+@pytest.mark.parametrize("resolution", ["missing", "error", "disallowed", "stop"])
 def test_resolver_failure_on_tool_step_falls_back_to_chat(
     mock_config, db, dialogue_memory, resolution
 ):
@@ -265,6 +265,8 @@ def test_resolver_failure_on_tool_step_falls_back_to_chat(
     def resolve(**kwargs):
         if resolution == "error":
             raise RuntimeError("Resolver unavailable")
+        if resolution == "stop":
+            return 'stop', {}
         return ("not_registered", {}) if resolution == "disallowed" else None
 
     with patch.object(engine_mod, "run_tool_with_retries", side_effect=fake_tool_runner), \
@@ -291,6 +293,7 @@ def test_resolver_failure_on_tool_step_falls_back_to_chat(
     assert "webSearch" in invoked_tools, (
         "Chat model's own tool call should still be dispatched after resolver failure"
     )
+    assert 'stop' not in invoked_tools, 'A planned step cannot dismiss the conversation'
 
 
 def test_paraphrased_plan_falls_back_to_tool_router(
