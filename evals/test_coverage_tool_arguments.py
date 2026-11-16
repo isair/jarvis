@@ -130,3 +130,54 @@ def test_missing_identity_does_not_produce_a_mutation(monkeypatch):
     assert proposal is None, 'An observed namespace without the requested record requires clarification'
     assert len(tool.calls) == 1
     assert tool.entries == {'tea', 'soup'}
+
+
+@pytest.mark.parametrize('entries,query',[
+    ({'reminder','soup'},'Delete only the cocoa reminder in this collection and keep the soup reminder.'),
+    ({'note','shopping'},'Remove only my travel note and keep my shopping note.'),
+    ({'tea','soup'},'Delete only the cocoa reminder.'),
+    ({'tea','tea reminder','soup'},'Delete only the tea reminder and keep the soup reminder.'),
+    ({'tea green','tea black','soup'},'Delete only the tea reminder and keep the soup reminder.'),
+])
+def test_contract_snapshot_never_guesses_an_absent_or_ambiguous_target(monkeypatch,entries,query):
+    tool=OwnedEntryManager();tool.entries=set(entries)
+    monkeypatch.setitem(registry.BUILTIN_TOOLS,tool.name,tool)
+    args={'operation':'enumerate_entries','scope':'whole_collection'}
+    observed=tool.run(args,None)
+    schemas=registry.generate_tools_json_schema([tool.name,'stop','toolSearchTool'])
+    proposal=resolve_uncovered_request(isolated_voice_settings(),query,[{'name':tool.name,'arguments':args,'success':True,'result':observed.reply_text}],schemas,prior_results=[])
+    assert proposal is None
+    assert len(tool.calls)==1
+    assert tool.entries==entries
+
+def test_contract_fresh_complete_snapshot_replaces_stale_identity(monkeypatch):
+    tool=OwnedEntryManager()
+    monkeypatch.setitem(registry.BUILTIN_TOOLS,tool.name,tool)
+    prior=[observed_entry_names(tool)]
+    removed=tool.run({'operation':'discard_entries','scope':'matching_labels','labels':['tea']},None)
+    assert removed.success
+    tool.calls.clear()
+    args={'operation':'enumerate_entries','scope':'whole_collection'};observed=tool.run(args,None)
+    schemas=registry.generate_tools_json_schema([tool.name,'stop','toolSearchTool'])
+    proposal=resolve_uncovered_request(isolated_voice_settings(),'Delete only the tea reminder and keep the soup reminder.',[{'name':tool.name,'arguments':args,'success':True,'result':observed.reply_text}],schemas,prior_results=prior)
+    assert proposal is None
+    assert len(tool.calls)==1
+    assert tool.entries=={'soup'}
+
+@pytest.mark.parametrize('query,target,keeper',[
+    ('Entferne nur die Tee-Erinnerung und behalte Suppe.','Tee','Suppe'),
+    ('Sadece çay hatırlatıcısını sil, çorba hatırlatıcısı kalsın.','çay','çorba'),
+    ('Delete only the tea reminder and keep the soup reminder.','tea '+('kettle '*50),'soup'),
+])
+def test_contract_discovers_then_copies_the_actual_identifier(monkeypatch,query,target,keeper):
+    tool=OwnedEntryManager();tool.entries={target,keeper}
+    monkeypatch.setitem(registry.BUILTIN_TOOLS,tool.name,tool)
+    cfg=isolated_voice_settings();schemas=registry.generate_tools_json_schema([tool.name,'stop','toolSearchTool'])
+    first=resolve_uncovered_request(cfg,query,[],schemas,prior_results=[])
+    assert first=={'name':tool.name,'arguments':{'operation':'enumerate_entries','scope':'whole_collection'}}
+    observed=tool.run(first['arguments'],None);assert observed.success
+    second=resolve_uncovered_request(cfg,query,[{'name':tool.name,'arguments':first['arguments'],'success':True,'result':observed.reply_text}],schemas,prior_results=[])
+    assert second=={'name':tool.name,'arguments':{'operation':'discard_entries','scope':'matching_labels','labels':[target]}}
+    assert tool.run(second['arguments'],None).success
+    assert len(tool.calls)==2
+    assert tool.entries=={keeper}

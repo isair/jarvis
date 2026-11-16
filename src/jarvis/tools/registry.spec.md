@@ -33,3 +33,42 @@ without duration fields do not. Incomplete calls cannot be directly executed.
 `bind_retry_identity(current, previous)` can bind non-identical identities to one recorded effect. The default declines binding. Timer binding retains named ownership while distinguishing different non-empty labels. This memo is reply-local, bounded and independent of committed record metadata. Text-mode tool descriptions use JSON objects containing a complete `tool_calls` array; normal answers, questions and blockers use their separate JSON fields.
 
 Constrained reply, step and coverage generation use an owned model-facing schema copy prepared by executable tools. Coverage admits a separate completion object without changing tool-reference scopes. Its single inference retains the existing context, output and deadline limits; unsupported scopes use the ordinary unconstrained path. Coverage proposals enforce the shared required-field and dependency contract before dispatch. The public tool declarations retain their canonical input contract. Metadata-only external tool descriptions retain their supplied schema.
+
+## Optional declared record relationships
+
+A tool can supply `x-jarvis-records` inside its canonical `inputSchema`:
+
+```json
+{
+  "discovery": 0,
+  "collection": {"source": "result", "path": "/remaining_entries", "complete": true},
+  "actions": [
+    {"purpose": "List all saved entries", "arguments": {"operation": "list"}, "selector": null},
+    {"purpose": "Delete selected entries", "arguments": {"operation": "delete"}, "selector": "labels"}
+  ]
+}
+```
+
+`discovery` indexes an action of the same tool whose fixed arguments perform a
+read-only namespace lookup. `collection.source` is `result` (raw JSON) or
+`result_metadata`; `path` is a local JSON pointer to its record array.
+`complete` truthfully declares whether such arrays describe the full namespace.
+Scalar string/integer records are their own identifiers; object records use an
+action's `identity` pointer and the collection's `display` pointer. Both pointers
+default to the whole value. Optional `reference_kind` admits matching raw
+resource references through the same identity/display pointers.
+
+Every action has a non-empty purpose, fixed public argument variant and a
+nullable selector property. Selectors declare an inline `string`, `integer` or `array` type; item constraints
+and local definition references still apply to the copied identifiers.
+Actions with free generated parameters are unsupported. Declarations and
+compiled calls must satisfy the canonical public schema; unsupported reference
+scopes decline this path. The owner declares the complete applicable capability
+set and tests discovery and mutation effects. Code cannot infer these
+relationships safely from operation names or prose.
+
+Built-ins and discovered MCP tools preserve the same extension through native
+and text presentation. The record compiler derives its choices and operations
+from that definition. See `../reply/record_binding.spec.md` for interpretation,
+execution, budgets and evidence rules. A metadata-free or mixed catalogue uses
+the ordinary tool path, without a claimed declared-record guarantee.

@@ -606,3 +606,32 @@ Text-mode agent inference requests `reply_output_schema`: a complete bounded too
 The engine supplies a whole-observation identity view to CHAT planning and step resolution, capped at 2,000 UTF-8 bytes including its header and escaped JSON. Coverage receives the same qualified observations as `prior_results`, distinct from current `results`; its existing complete 6,000-byte JSON budget includes current data and whole prior items selected newest-first. Omitted items are marked unknown, never partially trimmed into new names. Prior identities and historical facts do not prove current execution or fresh measurements. These are input edges to existing contexts; tiers, inference count, context/output caps, deadlines and the two-check coverage limit remain unchanged. The timer purpose/count compiler keeps its separate dialogue/resource packet.
 
 Coverage recovery distinguishes facts requested in call arguments from facts actually returned. A partial informational lookup grounds the next query in its discovered subject and missing evidence. Initial compound queries and distinct repeated actions remain valid. Existing inference and packet/output/deadline limits apply.
+
+### Declared record view of existing reply and coverage contexts
+
+`reply.record_binding` reads optional `x-jarvis-records` relationships from the
+canonical tool schema. A fully declared routed catalogue skips ordinary planning
+(#12). The existing first main reply generation (#1) uses
+`prompts.record_binding.RECORD_INTENT_PROMPT` with static interpretation examples,
+the redacted request, bounded dialogue/resource reference and declared purposes.
+It emits at most five ordered intents. Normal replies, questions, blockers and
+canonical stop/toolSearchTool calls share the format. This replacement uses CHAT,
+thinking disabled, zero temperature, 8,192 context tokens, 512 output tokens and
+`min(20, llm_chat_timeout_sec)` seconds. It adds no classifier stage.
+
+The complete request, tools, reference context and current raw results share
+coverage's 6,000-byte packet budget with whole prior observations. Tool schemas
+and observations stay separate from request interpretation; code binds actual
+identifiers from namespaced observations and selects declared discovery before
+mutation. The reply-local plan is fingerprinted to its request and catalogue.
+Each compiled call consumes an existing reply slot and uses normal dispatch;
+lookup results trigger recompilation without inference. Current successful
+effects determine completion. Final generation and language delivery use their
+existing contexts and caps. Cancellation gates all subsequent work.
+
+Coverage (#16) uses this same declared interpretation/compiler in place of its
+ordinary inference, with the same 512/8,192/20-second limits. Metadata-free,
+mixed or unsupported initial catalogues retain the generic path and its separate
+opaque-tool diagnostics. This does not establish deterministic natural-language
+classification or unrestricted semantic matching. See
+`../src/jarvis/reply/record_binding.spec.md` for the exact supported contract.

@@ -61,6 +61,7 @@ from .prompt_dump import dump_reply_turn, is_enabled as _prompt_dump_enabled, ne
 from .prompts import ModelSize, detect_model_size, get_system_prompts
 from .compound_query import split_compound_query, resolve_uncovered_request
 from .tool_identity import observed_tool_identities, render_identity_context
+from .record_binding import prepare_record_request, decode_record_plan, resolve_record_plan
 from .planner import (
     plan_query,
     format_plan_block,
@@ -1344,6 +1345,11 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 _planner_tool_catalog.append((str(_nm), _first[:120]))
 
     action_plan: list[str] = []
+    _declared_records = prepare_record_request(
+        redacted, generate_tools_json_schema(
+            list(dict.fromkeys([*routed_tools, 'stop', 'toolSearchTool'])), mcp_tools,
+        ), [], _prior_identities, reference_context=_dialogue_ctx,
+    ) is not None
 
     # Fast-path: skip the planner when the tool router found no real tools
     # AND the query is short. The planner's main job is decomposing multi-step
@@ -1370,7 +1376,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         and _query_word_count <= 8
         and getattr(cfg, "planner_enabled", True)
     )
-    if _skip_planner:
+    if _declared_records:
+        debug_log("declared records: request interpretation uses the existing reply generation", "planning")
+    elif _skip_planner:
         # Positive signal: no tools, no memory needed. The warm profile
         # (injected unconditionally below) provides user-context for the
         # chat model; memory enrichment is skipped as if the planner had
@@ -2284,6 +2292,11 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     empty_response_retry_used = False
     compound_coverage_checks = 0
     coverage_evidence: list[dict] = []
+    _record_bound_names = {tool['function']['name'] for tool in tools_json_schema or []
+                           if tool['function']['name'] not in {'stop', 'toolSearchTool'}} if _declared_records else set()
+    _record_plan = None
+    _record_interpreted = False
+    _record_blocker_reported = False
 
     # Per-reply session id used to group prompt dumps on disk when
     # JARVIS_DUMP_PROMPTS=1 is set. Generated unconditionally so the
@@ -2524,25 +2537,67 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         # tools API not supported).
         _dump_tools_schema = None if use_text_tools else tools_json_schema
         _chat_model = cfg.llm_chat_model
+        _record_request = prepare_record_request(
+            redacted, tools_json_schema or [], coverage_evidence, _prior_identities,
+            reference_context=_dialogue_ctx,
+        ) if _declared_records else None
+        _record_compiled_call = None
+        _record_interpret_now = _record_request is not None and not _record_interpreted
+        if _record_plan is not None:
+            _resolution = resolve_record_plan(_record_request, _record_plan) if _record_request else None
+            if _resolution is not None:
+                _record_compiled_call = _resolution.call
+                if _resolution.status == 'blocked' and not _record_blocker_reported:
+                    messages.append({'role': 'user', 'content': '[Execution status: ' + _resolution.reason + ']',
+                                     'tool_feedback': True})
+                    _record_blocker_reported = True
+        _generated_this_turn = _record_compiled_call is None
         try:
-            llm_resp = chat_with_messages(
-                cfg=cfg,
-                messages=_model_messages(messages, text_protocol=use_text_tools, mcp_tools=mcp_tools),
-                timeout_sec=float(getattr(cfg, 'llm_chat_timeout_sec', 45.0)),
-                extra_options={'response_schema': reply_output_schema({name: _get_tool_input_schema(name, mcp_tools) or {} for name in known_tool_names}, max(1, max_turns - turn + 1))} if use_text_tools else None,
-                tools=_dump_tools_schema,
-                thinking=getattr(cfg, 'llm_thinking_enabled', False),
-            )
-            dump_reply_turn(
-                session_id=_dump_session_id,
-                turn=turn,
-                query=text,
-                model=_chat_model,
-                messages=_model_messages(messages, text_protocol=use_text_tools, mcp_tools=mcp_tools),
-                tools_schema=_dump_tools_schema,
-                use_text_tools=use_text_tools,
-                response=llm_resp,
-            )
+            if _record_compiled_call is not None:
+                llm_resp = {'message': {'tool_calls': [{'type': 'function', 'function': _record_compiled_call}]}}
+            elif _record_interpret_now:
+                # This replaces the existing generation, rather than adding a
+                # classifier context. Control tools and ordinary replies remain
+                # available alongside the declared intent representation.
+                from .prompts.record_binding import record_reply_format
+                _interpret_messages, _record_schema = record_reply_format(
+                    _record_request, tools_json_schema or [], max(1, max_turns - turn + 1),
+                )
+                llm_resp = chat_with_messages(
+                    cfg=cfg, messages=_interpret_messages,
+                    timeout_sec=min(20.0, float(cfg.llm_chat_timeout_sec)), thinking=False,
+                    extra_options={'response_schema': _record_schema, 'num_ctx': 8192,
+                                   'temperature': 0.0, 'max_tokens': 512}, tools=None,
+                )
+                _record_interpreted = True
+                _record_plan = decode_record_plan(_record_request, extract_text_from_response(llm_resp) or '')
+                if _record_plan is not None:
+                    _resolution = resolve_record_plan(_record_request, _record_plan)
+                    _record_compiled_call = _resolution.call
+                    if _record_compiled_call is not None:
+                        llm_resp = {'message': {'tool_calls': [{'type': 'function', 'function': _record_compiled_call}]}}
+                    else:
+                        messages.append({'role': 'user', 'content': '[Execution status: ' +
+                                         (_resolution.reason or 'No declared record action was requested.') + ']',
+                                         'tool_feedback': True})
+                        continue
+            else:
+                llm_resp = chat_with_messages(
+                    cfg=cfg,
+                    messages=_model_messages(messages, text_protocol=use_text_tools, mcp_tools=mcp_tools),
+                    timeout_sec=float(getattr(cfg, 'llm_chat_timeout_sec', 45.0)),
+                    extra_options={'response_schema': reply_output_schema({name: _get_tool_input_schema(name, mcp_tools) or {} for name in known_tool_names}, max(1, max_turns - turn + 1))} if use_text_tools else None,
+                    tools=_dump_tools_schema,
+                    thinking=getattr(cfg, 'llm_thinking_enabled', False),
+                )
+            if _generated_this_turn:
+                dump_reply_turn(
+                    session_id=_dump_session_id, turn=turn, query=text, model=_chat_model,
+                    messages=_interpret_messages if _record_interpret_now else _model_messages(
+                        messages, text_protocol=use_text_tools, mcp_tools=mcp_tools),
+                    tools_schema=None if _record_interpret_now else _dump_tools_schema,
+                    use_text_tools=use_text_tools, response=llm_resp,
+                )
         except ToolsNotSupportedError:
             if cancel_event is not None and cancel_event.is_set():
                 debug_log("reply cancelled before tool-protocol fallback", "planning")
@@ -2612,7 +2667,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         # Extract tool call if present
         tool_requests, text_tool_request, retained_calls = _extract_structured_tool_calls(llm_resp)
 
-        if (use_text_tools and _compound_sub_questions and not action_plan
+        if (use_text_tools and _compound_sub_questions and not action_plan and not _declared_records
                 and not tool_requests and content and compound_coverage_checks < 2):
             compound_coverage_checks += 1
             proposed = resolve_uncovered_request(
@@ -2710,6 +2765,13 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 )
                 continue
 
+            if (tool_name in _record_bound_names
+                    and {'name': tool_name, 'arguments': tool_args} != _record_compiled_call):
+                debug_log('record binding: unadmitted record call rejected before dispatch', 'planning')
+                _append_tool_feedback(tool_name, tool_call_id,
+                    'This record operation has no admitted source-bound action. No tool was executed.', failed=True)
+                continue
+
             if not isinstance(tool_args, dict):
                 _enter_plan_recovery()
                 debug_log(f"invalid argument object for {tool_name}; tool not executed", "planning")
@@ -2804,6 +2866,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 'success': bool(result.success),
                 'result': result.reply_text or result.error_message or '',
             }
+            if _declared_records:
+                coverage_record.update(result_metadata=result.result_metadata,
+                                       resource_references=list(result.resource_references or ()))
             coverage_evidence.append(coverage_record)
 
             # Handle stop tool - end conversation without response
@@ -2933,7 +2998,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 effective_result, resource_records = _tool_result_content(
                     cfg, redacted, tool_name, result, transcript_context,
                 )
-                coverage_record['result'] = effective_result
+
+                if not _declared_records:
+                    coverage_record['result'] = effective_result
 
                 if use_text_tools:
                     # Plan-aware remainder nudge. When a pre-loop plan exists,

@@ -36,6 +36,18 @@ class OwnedEntryManager(Tool):
         },
         'required': ['operation', 'scope'],
         'additionalProperties': False,
+        'x-jarvis-records': {
+            'discovery': 0,
+            'collection': {'source': 'result', 'path': '/remaining_entries', 'complete': True},
+            'actions': [
+                {'purpose': 'List all current saved entries',
+                 'arguments': {'operation': 'enumerate_entries', 'scope': 'whole_collection'}, 'selector': None},
+                {'purpose': 'Delete every saved entry',
+                 'arguments': {'operation': 'discard_entries', 'scope': 'whole_collection'}, 'selector': None},
+                {'purpose': 'Delete only selected existing entries and preserve every other entry',
+                 'arguments': {'operation': 'discard_entries', 'scope': 'matching_labels'}, 'selector': 'labels'},
+            ],
+        },
     }
 
     def __init__(self):

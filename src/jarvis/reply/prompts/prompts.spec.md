@@ -139,3 +139,14 @@ selection and schema construction with native function calling. The presentation
 contract is defined in `../../tools/registry.spec.md`.
 
 After a successful partial information lookup identifies a dependent subject, the next query uses that actual subject and requests the missing information. Earlier query wording does not establish returned facts.
+
+### Declared record interpretation
+
+`record_binding.py` presents purposes derived from canonical schema metadata.
+Its static examples distinguish explicit literal names from descriptive topics
+and preserve source language. The model emits an ordered purpose/description
+plan, not operation arguments, stored-identifier choices or completion claims.
+Code verifies naming attribution and resolves actual records. The main reply
+format also admits ordinary reply/question/blocker envelopes and canonical
+control calls. Coverage uses the same bounded interpretation prompt in its
+existing inference. `../record_binding.spec.md` owns the execution and limits.

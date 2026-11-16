@@ -377,3 +377,11 @@ Step resolution requests a nullable JSON tool-call object through the backend's 
 Step-resolver constrained output uses the tool-owned generation view of its canonical schema. Timer set calls include every additive component and purpose, preserving compound and fractional remainders. The deterministic fast path continues to validate the public optional-component contract.
 
 Planning and step resolution receive a separate bounded identity view of earlier successful tool observations. That view preserves source tool/call identifiers and recorded resources, excludes request arguments, and does not establish completion of any current step. Its full header and escaped JSON fit within 2,000 UTF-8 bytes using whole observations; omitted history remains unknown. Timer request compilation uses its existing dialogue/resource view.
+
+### Declared record catalogue
+
+When every routed non-control tool supplies the supported canonical record
+contract, the ordinary planner is skipped. The first reply generation owns the
+bounded request interpretation, and code resolves subsequent prerequisites and
+effects from the cached plan. This uses no plan-step classifier or resolver
+inference. See `record_binding.spec.md` for the shared dispatch/evidence contract.

@@ -536,3 +536,14 @@ Planning and step resolution receive at most 2,000 UTF-8 bytes of header and esc
 Coverage selects the next prerequisite under the shared identity contract. Request arguments describe intended evidence, while actual results establish returned facts. Initial compound queries remain valid, but a successful partial information lookup identifying a dependent subject requires a new query about that subject and the missing fact, rather than replaying broad arguments. Separately requested repeated actions retain their execution identity.
 
 Coverage uses the canonical scoped tool-call output schema with a separate completion alternative. This constrains its existing single inference without adding a model context. Required fields and triggered dependencies remain mandatory before dispatch; unsupported reference scopes retain unconstrained generation and ordinary validation.
+
+### Declared record execution
+
+A fully declared routed record catalogue uses the existing first reply
+inference to interpret purposes and source descriptions, skipping the ordinary
+planner. `record_binding.spec.md` defines deterministic identifier binding,
+discovery, ordered effect completion and fail-closed dispatch. The reply caches
+the plan locally and recompiles after raw results without another model stage.
+Ordinary controls, cancellation, turn limits and final delivery remain active.
+Mixed and metadata-free catalogues retain ordinary generation. Opaque-tool
+diagnostics do not establish the declared-contract qualification precondition.

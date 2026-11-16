@@ -208,6 +208,18 @@ _COVERAGE_PROMPT = (
 def resolve_uncovered_request(cfg, query: str, results: list, tools: list, *, prior_results: list) -> Optional[dict]:
     """Propose one permitted call for an unresolved outcome, without executing it."""
     try:
+        from .record_binding import prepare_record_request, resolve_record_plan
+        record_request = prepare_record_request(query, tools, results, prior_results,
+                                                byte_limit=COVERAGE_INPUT_BYTE_LIMIT)
+        if record_request is not None:
+            response = extract_text_from_response(get_llm_backend(cfg).chat(
+                resolve_model(cfg, Tier.CHAT), list(record_request.messages),
+                timeout_sec=min(20.0, cfg.llm_chat_timeout_sec), thinking=False,
+                extra_options={'num_ctx': 8192, 'temperature': 0.0, 'max_tokens': 512,
+                               'response_schema': record_request.response_schema},
+            ))
+            resolution = resolve_record_plan(record_request, response)
+            return resolution.call
         packet = pack_identity_evidence(
             {'request': query, 'results': results, 'tools': tools}, prior_results, COVERAGE_INPUT_BYTE_LIMIT,
         )
