@@ -157,3 +157,8 @@ Descriptive targets contain complete distinctive topics, excluding generic kind
 nouns; explicit literal identifiers retain their complete supplied names. The
 structured format requires null target fields for an untargeted collection
 classification, so contradictory individual-target data cannot admit a bulk call.
+
+Declared follow-up examples use reference data to resolve a subject without
+executing historical instructions. Reference-supplied names use the descriptive
+precondition, preserving namespace discovery when no qualified identity exists.
+An explicit current request takes priority over earlier speech and TTS data.

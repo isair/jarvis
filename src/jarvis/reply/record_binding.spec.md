@@ -85,3 +85,12 @@ An untargeted collection classification has null literal, naming-marker and topi
 fields. Contradictory target data makes the plan invalid before dispatch. The
 same existing interpretation retains each explicitly requested operation in order
 and separates distinctive topic spans from generic record-category nouns.
+
+Voice interpretation receives the same captured, redacted and fenced
+`SpeechContext` as ordinary reply generation, alongside dialogue/resource
+references in its existing reference packet. Relevant speech can resolve a
+subject or pronoun; only the current request authorises operations. Topics may
+copy an exact span from that reference, while literal naming claims remain
+anchored to the current request. The complete packet retains its 6,000-byte cap
+and request-local fingerprint. Raw ambient speech is not conversation history;
+only actual tool request/result observations enter carryover.

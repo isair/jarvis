@@ -595,3 +595,45 @@ def test_collection_intent_cannot_carry_an_individual_target_into_a_bulk_mutatio
     assert proposed.status == 'blocked'
     assert tool.entries == {'tea', 'soup'}
     assert tool.calls == []
+
+
+@pytest.mark.parametrize('model', ['gemma4:e2b', 'gpt-oss:20b'])
+def test_declared_voice_reference_reaches_the_same_generation_without_persisting(
+        mock_config, db, dialogue_memory, monkeypatch, model):
+    from jarvis.reply import engine
+    from jarvis.tools import registry
+    from jarvis.listening.speech_context import SpeechContext
+    tool, _ = declared_tool()
+    monkeypatch.setitem(registry.BUILTIN_TOOLS, tool.name, tool)
+    mock_config.llm_chat_model = model
+    mock_config.planner_enabled = False
+    query = 'Delete that reminder and keep the other entry.'
+    ambient = 'Earlier we discussed the tea reminder.'
+    context = SpeechContext(current_text=query, segments=((ambient, 1., 2., False, True),))
+    generations = []
+
+    def chat(**kwargs):
+        generations.append(kwargs['messages'])
+        if len(generations) == 1:
+            has_reference = any(ambient in message.get('content', '') for message in kwargs['messages'])
+            value = {'plan': [intent()]} if has_reference else {'question': 'Which reminder should I delete?'}
+            return {'message': {'content': json.dumps(value)}}
+        return {'message': {'content': 'Tea is removed and soup remains.'}}
+
+    monkeypatch.setattr(engine, 'select_tools', lambda *args, **kwargs: [tool.name, 'stop'])
+    monkeypatch.setattr(engine, 'chat_with_messages', chat)
+    monkeypatch.setattr(engine, 'run_tool_with_retries', lambda **kwargs: tool.run(kwargs['tool_args'], None))
+    reply = engine.run_reply_engine(db, mock_config, None, query, dialogue_memory, speech_context=context)
+    assert reply == 'Tea is removed and soup remains.'
+    assert tool.entries == {'soup'}
+    assert tool.calls == [{'operation': 'enumerate_entries', 'scope': 'whole_collection'},
+                          {'operation': 'discard_entries', 'scope': 'matching_labels', 'labels': ['tea']}]
+    assert len(generations) == 2
+    assert ambient not in json.dumps(dialogue_memory.get_recent_turns_with_tools())
+    tool.entries.add('tea')
+    tool.calls.clear()
+    generations.clear()
+    fresh = type(dialogue_memory)()
+    assert 'Which reminder' in engine.run_reply_engine(db, mock_config, None, query, fresh)
+    assert tool.entries == {'tea', 'soup'}
+    assert tool.calls == []

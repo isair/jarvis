@@ -663,3 +663,12 @@ operation and retains its complete distinctive source-topic span. Collection
 classifications require null target fields in the same output schema. This
 refines the existing generation; its call count, 512-token output, 8,192-token
 context, aggregate input budget and deadline are unchanged.
+
+The declared first-generation view also receives the captured redacted
+`SpeechContext.render()` data used by ordinary reply generation. Its fenced,
+timestamped, TTS/processed-aware text shares the existing `reference_context`
+packet with dialogue/resource data, within the same complete 6,000-byte budget
+and request fingerprint. Current operations retain priority; references can
+supply missing subjects/topic spans but cannot authorise additional actions.
+This restores an existing input edge, without adding inference or changing caps.
+Raw reference speech is not written into tool carryover.

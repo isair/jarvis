@@ -1355,6 +1355,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
     action_plan: list[str] = []
     _declared_records = declares_record_catalogue(_planner_schema or [])
+    _record_reference_context = '\n\n'.join(
+        part for part in (_dialogue_ctx, transcript_context) if part
+    ) if _declared_records else ''
 
     # Fast-path: skip the planner when the tool router found no real tools
     # AND the query is short. The planner's main job is decomposing multi-step
@@ -2548,7 +2551,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         _chat_model = cfg.llm_chat_model
         _record_request = prepare_record_request(
             redacted, tools_json_schema or [], coverage_evidence, _prior_identities,
-            reference_context=_dialogue_ctx,
+            reference_context=_record_reference_context,
         ) if _declared_records else None
         _record_compiled_call = None
         if _declared_records and _record_request is None and not _record_blocker_reported:
