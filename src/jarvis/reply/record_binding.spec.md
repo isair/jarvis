@@ -28,8 +28,7 @@ and existing reply turn budget bound execution. Each actual tool call consumes
 an ordinary reply slot. Cancellation gates inference and every dispatch.
 
 The model selects declared action purposes and describes targets in the source
-language. Target classification and source fields precede the English paraphrase
-in the same bounded structured output. It cannot generate operation variants or choose a stored identifier.
+language. It cannot generate operation variants or choose a stored identifier.
 Code copies fixed arguments, validates source attribution for literal names,
 and resolves descriptive topics using Unicode word sets against observed
 identifiers or display names in the tool's own namespace. A unique match copies
