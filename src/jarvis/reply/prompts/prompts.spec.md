@@ -144,7 +144,7 @@ After a successful partial information lookup identifies a dependent subject, th
 
 `record_binding.py` presents purposes derived from canonical schema metadata.
 Its static examples distinguish explicit literal names from descriptive topics
-and preserve source language. The model emits an ordered purpose/description
+and preserve source language. The model emits an ordered purpose/topic
 plan, not operation arguments, stored-identifier choices or completion claims.
 Code verifies naming attribution and resolves actual records. The main reply
 format also admits ordinary reply/question/blocker envelopes and canonical

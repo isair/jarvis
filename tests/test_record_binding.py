@@ -18,7 +18,7 @@ def declared_tool():
 
 def intent(*, kind='C', literal=None, marker=None, topic='tea', action=2):
     return {'english': 'Delete the requested entry.', 'kind': kind, 'literal_target': literal,
-            'naming_marker': marker, 'description': topic, 'action_index': action}
+            'naming_marker': marker, 'topic': topic, 'action_index': action}
 
 
 def resolve(query, tools, decision, current=(), prior=()):

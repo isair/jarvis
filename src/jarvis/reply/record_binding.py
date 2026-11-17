@@ -390,11 +390,11 @@ def resolve_record_plan(request, decision):
         selector = declaration['selector']
         literal = intent['literal_target']
         supplied = intent['kind'] == 'B' and _literal_supplied(literal, intent['naming_marker'], request.query)
-        topic = intent['description']
+        topic = intent['topic']
         if selector is not None and not supplied:
             context = request.query + '\n' + request.reference_context
             if not isinstance(topic, str) or not topic or topic.casefold() not in context.casefold():
-                return RecordResolution('blocked', reason='The target description has no request evidence.')
+                return RecordResolution('blocked', reason='The target topic has no request evidence.')
         # Current successful operations can complete an effect even after a later
         # full snapshot has removed its identifier. Prior actions cannot do so.
         for position in range(cursor, len(request.current)):
