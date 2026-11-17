@@ -459,12 +459,12 @@ def test_initial_record_packet_overflow_cannot_admit_raw_mutation(mock_config, d
 
 
 @pytest.mark.parametrize('model', ['gemma4:e2b', 'gpt-oss:20b'])
-@pytest.mark.parametrize('source', ['result', 'result_metadata'])
+@pytest.mark.parametrize('source', ['result', 'result_metadata', 'result_metadata_only'])
 def test_real_engine_carryover_keeps_known_record_identity(mock_config, db, dialogue_memory, monkeypatch, model, source):
     from jarvis.reply import engine
     from jarvis.tools import registry
     tool, _ = declared_tool()
-    if source == 'result_metadata':
+    if source.startswith('result_metadata'):
         from dataclasses import replace
         tool.inputSchema = deepcopy(tool.inputSchema)
         contract = tool.inputSchema[RECORD_CONTRACT]
@@ -474,7 +474,7 @@ def test_real_engine_carryover_keeps_known_record_identity(mock_config, db, dial
 
         def run(args, context):
             effect = execute(args, context)
-            return replace(effect, reply_text='The current entries are available.', result_metadata={
+            return replace(effect, reply_text=None if source.endswith('_only') else 'The current entries are available.', result_metadata={
                 'records': [{'key': value, 'title': value} for value in sorted(tool.entries)],
                 'unrelated_private_text': 'This is not identity data.',
             })
@@ -541,3 +541,46 @@ def test_redaction_never_turns_a_private_identifier_into_an_admitted_name():
     stored = memory.get_recent_turns_with_tools()
     assert secret not in json.dumps(stored)
     assert observed_tool_identities(stored) == [], 'Scrubbed text cannot supply a substitute identifier'
+
+
+@pytest.mark.parametrize('complete', [False, True])
+def test_oversized_collection_is_rejected_before_projection(complete):
+    from jarvis.reply.record_binding import capture_record_observation
+    from jarvis.reply.tool_identity import IDENTITY_CONTEXT_BYTE_LIMIT
+    from jarvis.tools.types import ToolExecutionResult
+    tool, tools = declared_tool()
+    schema = tools[0]['function']['parameters']
+    schema[RECORD_CONTRACT]['collection'] = {'source': 'result_metadata', 'path': '/records', 'complete': complete}
+
+    class ProjectionReached(BaseException):
+        pass
+
+    class OversizedCollection(list):
+        def __iter__(self):
+            raise ProjectionReached('Over-budget collection must not be projected')
+
+    values = OversizedCollection(['tea'] * (IDENTITY_CONTEXT_BYTE_LIMIT + 1))
+    result = ToolExecutionResult(True, None, result_metadata={'records': values})
+    assert capture_record_observation(tool.name, schema, result) is None
+
+
+def test_oversized_raw_result_is_rejected_before_json_decoding(monkeypatch):
+    from jarvis.reply import record_binding
+    from jarvis.reply.compound_query import COVERAGE_INPUT_BYTE_LIMIT
+    from jarvis.tools.types import ToolExecutionResult
+    tool, tools = declared_tool()
+    raw = '{"remaining_entries":["' + 'x' * COVERAGE_INPUT_BYTE_LIMIT + '"]}'
+
+    class UnboundedDecode(BaseException):
+        pass
+
+    original = record_binding.json.loads
+
+    def decode(value, *args, **kwargs):
+        if value is raw:
+            raise UnboundedDecode('Over-budget result must not be decoded')
+        return original(value, *args, **kwargs)
+
+    monkeypatch.setattr(record_binding.json, 'loads', decode)
+    assert record_binding.capture_record_observation(tool.name, tools[0]['function']['parameters'],
+        ToolExecutionResult(True, raw)) is None

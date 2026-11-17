@@ -71,3 +71,12 @@ identifiers. The configured per-entry carryover budget drops oversized
 projections atomically. A complete projection can survive prose-only truncation;
 partial prose cannot supply additional names. Qualified request/result matching,
 source names, schema identity and the shared aggregate packet limits still apply.
+
+Projection producers enforce the existing 6,000-byte raw JSON input bound before
+decoding. Metadata collections and resource-reference counts are rejected before
+iteration when they cannot fit the 2,000-byte projection budget. Individual
+identifier/display strings and aggregate encoded pairs are checked incrementally;
+all action projections share the complete receipt cap. Overflow discards the
+whole projection. Deduplication is linear in the admitted record count.
+Successful metadata-only results retain their success, factual presentation and
+identity projection through both ordinary and planned result producers.

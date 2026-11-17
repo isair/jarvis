@@ -555,3 +555,7 @@ warm profile and bounded dialogue/resource references remain available. Both
 planned and ordinary results retain scrubbed, atomically bounded identity
 projections for follow-ups. A requested post-mutation discovery read is a new
 read effect, not a retry of its prerequisite snapshot.
+
+Successful tool results can supply metadata or resource references without prose.
+Their raw data is presented without treating an absent `reply_text` as failure.
+Both result producers retain the same bounded declared identity projection.

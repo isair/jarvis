@@ -649,3 +649,10 @@ planning, resolution and coverage data views, within their aggregate limits.
 Schema digests bind projections to their canonical declaration. This is a data
 edge, not an inference stage. Separately requested post-mutation discovery reads
 use existing reply slots and execute afresh; mutation retry protection remains.
+
+Projection capture rejects oversized raw JSON before decoding, bounds metadata
+collection/reference counts before iteration, and enforces per-pair and aggregate
+projection bytes incrementally. Overflow discards the whole observation; it does
+not increase the existing 6,000-byte input or 2,000-byte identity limits. Successful
+metadata-only results are factual tool outcomes in both dispatch paths, without
+a missing-prose repair inference or a separate interpretation stage.

@@ -16,6 +16,7 @@ from ..debug import debug_log
 from ..tools.schema import _supported_local_reference, missing_required_arguments
 from .tool_identity import IDENTITY_CONTEXT_BYTE_LIMIT, pack_identity_evidence
 from .planner import MAX_STEPS as MAX_RECORD_STEPS
+from .compound_query import COVERAGE_INPUT_BYTE_LIMIT
 
 RECORD_CONTRACT = 'x-jarvis-records'
 
@@ -245,8 +246,20 @@ def _usable_row(row, *, current):
             and not any(row.get(k) for k in ('tool_feedback', 'tool_content_truncated', 'content_truncated')))
 
 
-def _records(action, rows, *, current=False):
+def _records(action, rows, *, current=False, byte_limit=None):
     observed, complete = [], False
+    remaining = byte_limit
+
+    def bounded_pair(value):
+        nonlocal remaining
+        pair = _record_pair(action, value)
+        if remaining is not None:
+            if any(isinstance(part, str) and len(part) > byte_limit for part in pair):
+                raise OverflowError('Record identity exceeds the observation budget')
+            remaining -= len(json.dumps(pair, ensure_ascii=False).encode('utf-8'))
+            if remaining < 0:
+                raise OverflowError('Record projection exceeds the observation budget')
+        return pair
     collection = action.contract['collection']
     for row in rows:
         if not _usable_row(row, current=current) or row.get('name') != action.name:
@@ -267,32 +280,42 @@ def _records(action, rows, *, current=False):
                     observed = pairs
                     complete = True
                     continue
-                observed.extend(pair for pair in pairs if pair not in observed)
+                observed = list(dict.fromkeys([*observed, *pairs]))
             except (ValueError, TypeError, KeyError):
                 pass
         try:
             source = row.get(collection['source'])
             if collection['source'] == 'result' and isinstance(source, str):
+                if byte_limit is not None and (len(source) > COVERAGE_INPUT_BYTE_LIMIT
+                        or len(source.encode('utf-8')) > COVERAGE_INPUT_BYTE_LIMIT):
+                    raise OverflowError('Raw record input exceeds the observation input budget')
                 source = json.loads(source)
             values = _pointer(source, collection['path'])
             if isinstance(values, list):
-                fresh = [_record_pair(action, value) for value in values]
+                if byte_limit is not None and len(values) > byte_limit:
+                    raise OverflowError('Record collection exceeds the observation budget')
+                fresh = [bounded_pair(value) for value in values]
                 if collection['complete']:
                     observed = fresh
                     complete = True
                     continue
-                observed.extend(value for value in fresh if value not in observed)
+                observed = list(dict.fromkeys([*observed, *fresh]))
         except (ValueError, TypeError, KeyError, IndexError):
             pass
         kind = action.contract.get('reference_kind')
         if kind:
-            for ref in row.get('resource_references') or ():
+            references = row.get('resource_references') or ()
+            if byte_limit is not None and len(references) > byte_limit:
+                raise OverflowError('Record references exceed the observation budget')
+            seen = set(observed)
+            for ref in references:
                 if not isinstance(ref, dict) or ref.get('kind') != kind:
                     continue
                 try:
-                    pair = _record_pair(action, ref)
-                    if pair not in observed:
+                    pair = bounded_pair(ref)
+                    if pair not in seen:
                         observed.append(pair)
+                        seen.add(pair)
                 except (ValueError, TypeError, KeyError, IndexError):
                     pass
     return observed, complete
@@ -334,15 +357,18 @@ def capture_record_observation(name, schema, result, *, byte_limit=IDENTITY_CONT
         row = {'name': name, 'success': True, 'result': result.reply_text,
                'result_metadata': result.result_metadata, 'resource_references': result.resource_references}
         evidence = {}
+        receipt = {'schema': _schema_fingerprint(schema), 'actions': evidence}
         for index, action in enumerate(_contract_actions(name, schema)):
             if action.declaration['selector'] is None:
                 continue
-            records, complete = _records(action, [row], current=True)
+            records, complete = _records(action, [row], current=True, byte_limit=byte_limit)
             if records or complete:
                 evidence[str(index)] = {'records': records, 'complete': complete}
-        receipt = {'schema': _schema_fingerprint(schema), 'actions': evidence}
-        if evidence and len(json.dumps(receipt, ensure_ascii=False).encode('utf-8')) <= byte_limit:
-            return receipt
+                if len(json.dumps(receipt, ensure_ascii=False).encode('utf-8')) > byte_limit:
+                    raise OverflowError('Combined record observation exceeds its budget')
+        return receipt if evidence else None
+    except OverflowError:
+        debug_log('record binding: observation exceeds its bounded input or projection budget', 'planning')
     except Exception as error:
         debug_log(f'record binding: observation unavailable ({type(error).__name__})', 'planning')
     return None

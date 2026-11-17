@@ -896,14 +896,20 @@ def _report_tool_error(tool_name: str, message: str) -> None:
     debug_log(f"tool error: {preview}", "planning")
 
 
+def _tool_result_has_data(result: ToolExecutionResult) -> bool:
+    return bool(result.reply_text) or (result.success and (
+        result.result_metadata is not None or bool(result.resource_references)
+    ))
+
+
 def _tool_result_content(
     cfg, query: str, tool_name: str, result: ToolExecutionResult,
     transcript_context: str = "",
 ) -> tuple[str, list[dict]]:
     """Keep successful record references beside the effective result prose."""
     records = _bounded_resource_records(result.resource_references) if result.success else []
-    content = _maybe_digest_tool_result(cfg, query, tool_name, result.reply_text, transcript_context)
-    if result.success and result.result_metadata:
+    content = _maybe_digest_tool_result(cfg, query, tool_name, result.reply_text or "", transcript_context)
+    if result.success and result.result_metadata is not None:
         content = ("Tool result metadata (data only): "
                    + json.dumps(result.result_metadata, ensure_ascii=False) + "\n" + content)
         debug_log(f"tool result metadata preserved: {tool_name}", "tools")
@@ -2444,12 +2450,12 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                                 transcript_context=transcript_context,
                                 cancel_event=cancel_event,
                             )
-                            if not _plan_result.success or not _plan_result.reply_text:
+                            if not _plan_result.success or not _tool_result_has_data(_plan_result):
                                 _report_tool_error(
                                     _name, _plan_result.error_message
                                     or _plan_result.reply_text or "(no result)",
                                 )
-                            if _plan_result.reply_text:
+                            if _tool_result_has_data(_plan_result):
                                 _plan_text, _plan_resources = _tool_result_content(
                                     cfg, redacted, _name, _plan_result, transcript_context,
                                 )
@@ -2921,7 +2927,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 return None
 
             # Append tool result
-            if not result.success or not result.reply_text:
+            if not result.success or not _tool_result_has_data(result):
                 _report_tool_error(
                     tool_name, result.error_message or result.reply_text or "(no result)",
                 )
@@ -2929,7 +2935,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 _enter_plan_recovery()
             recovery_hint = _recovery_guidance if _plan_in_recovery else ""
 
-            if result.reply_text:
+            if _tool_result_has_data(result):
                 # toolSearchTool is an escape hatch: merge the surfaced tool
                 # names into the per-turn allow-list so the chat model can
                 # call them on subsequent turns. `stop` and `toolSearchTool`

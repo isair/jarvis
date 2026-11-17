@@ -320,3 +320,44 @@ def test_literal_numeric_record_identifier_uses_the_declared_local_reference(mon
         assert tool.entries == {99}
     finally:
         db.close()
+
+
+class OwnedMetadataRecordManager(OwnedEntryManager):
+    name = 'ownedMetadataRecordManager'
+    inputSchema = deepcopy(OwnedEntryManager.inputSchema)
+    inputSchema['x-jarvis-records']['collection'] = {
+        'source': 'result_metadata', 'path': '/records', 'display': '/title', 'complete': True,
+    }
+    inputSchema['x-jarvis-records']['actions'][2]['identity'] = '/key'
+
+    def run(self, args, context):
+        effect = super().run(args, context)
+        return replace(effect, reply_text=None, result_metadata={
+            'records': [{'key': value, 'title': value} for value in sorted(self.entries)],
+        })
+
+
+@pytest.mark.parametrize('spoken_output', [False, True])
+def test_metadata_only_observation_supplies_a_followup_identity(monkeypatch, record_property, spoken_output):
+    tool = OwnedMetadataRecordManager()
+    monkeypatch.setitem(registry.BUILTIN_TOOLS, tool.name, tool)
+    monkeypatch.setattr(engine, 'select_tools', lambda *args, **kwargs: [tool.name, 'stop'])
+    cfg = replace(isolated_voice_settings(), location_enabled=False, mcps={}, planner_enabled=False,
+                  llm_chat_timeout_sec=60, planner_timeout_sec=15)
+    db = Database(':memory:')
+    try:
+        dialogue = DialogueMemory()
+        assert engine.run_reply_engine(db, cfg, None, 'List all my reminder entries.',
+            dialogue, language='en', spoken_output=spoken_output)
+        assert tool.calls == [{'operation': 'enumerate_entries', 'scope': 'whole_collection'}]
+        tool.calls.clear()
+        reply = engine.run_reply_engine(db, cfg, None, 'Delete only the tea reminder and keep the soup reminder.',
+            dialogue, language='en', spoken_output=spoken_output)
+        record_property('reply', reply)
+        record_property('tool_calls', json.dumps(tool.calls))
+        assert reply
+        assert_not_fallback_reply(reply, 'metadata-only prior record identity')
+        assert tool.calls == [{'operation': 'discard_entries', 'scope': 'matching_labels', 'labels': ['tea']}]
+        assert tool.entries == {'soup'}
+    finally:
+        db.close()
