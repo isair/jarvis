@@ -615,6 +615,8 @@ canonical tool schema. A fully declared routed catalogue skips ordinary planning
 profile and bounded dialogue/resource references remain available. The existing first main reply generation (#1) uses
 `prompts.record_binding.RECORD_INTENT_PROMPT` with static interpretation examples,
 the redacted request, bounded dialogue/resource reference and declared purposes.
+Subject references occupy a separate fenced user message before the current
+request; both message bodies share the interpretation input byte cap.
 It emits at most five ordered intents. Normal replies, questions, blockers and
 canonical stop/toolSearchTool calls share the format. This replacement uses CHAT,
 thinking disabled, zero temperature, 8,192 context tokens, 512 output tokens and

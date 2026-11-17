@@ -90,7 +90,9 @@ and separates distinctive topic spans from generic record-category nouns.
 
 Voice interpretation receives the same captured, redacted and fenced
 `SpeechContext` as ordinary reply generation, alongside dialogue/resource
-references in its existing reference packet. Relevant speech can resolve a
+references in its existing reference packet. Subject references occupy a separate
+fenced user message before the current request; both message bodies share the
+existing interpretation input cap. Relevant speech can resolve a
 subject or pronoun; only the current request authorises operations. Topics may
 copy an exact span from that reference, while literal naming claims remain
 anchored to the current request. The complete packet retains its 6,000-byte cap

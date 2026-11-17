@@ -175,7 +175,7 @@ def prepare_record_request(query, tools, results, prior_results, *, byte_limit=6
         fingerprint = hashlib.sha256(json.dumps({'request': query, 'reference_context': reference_context, 'tools': tools}, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
         from .prompts.record_binding import record_messages, record_output_schema
         messages = record_messages(query, choices, reference_context)
-        if len(messages[-1]['content'].encode('utf-8')) > byte_limit:
+        if sum(len(message['content'].encode('utf-8')) for message in messages[-(2 if reference_context else 1):]) > byte_limit:
             debug_log('record binding: interpretation input exceeds its budget', 'planning')
             return None
         output_schema = record_output_schema(actions)
