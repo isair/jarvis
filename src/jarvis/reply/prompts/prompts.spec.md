@@ -150,3 +150,10 @@ Code verifies naming attribution and resolves actual records. The main reply
 format also admits ordinary reply/question/blocker envelopes and canonical
 control calls. Coverage uses the same bounded interpretation prompt in its
 existing inference. `../record_binding.spec.md` owns the execution and limits.
+
+Each declared intent paraphrases one operation. Ordered examples retain an
+explicit post-mutation read and distinguish it from a preservation constraint.
+Descriptive targets contain complete distinctive topics, excluding generic kind
+nouns; explicit literal identifiers retain their complete supplied names. The
+structured format requires null target fields for an untargeted collection
+classification, so contradictory individual-target data cannot admit a bulk call.

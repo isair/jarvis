@@ -656,3 +656,10 @@ projection bytes incrementally. Overflow discards the whole observation; it does
 not increase the existing 6,000-byte input or 2,000-byte identity limits. Successful
 metadata-only results are factual tool outcomes in both dispatch paths, without
 a missing-prose repair inference or a separate interpretation stage.
+
+The declared interpretation's ordered examples distinguish separately requested
+post-mutation reads from preservation constraints. Each intent paraphrases one
+operation and retains its complete distinctive source-topic span. Collection
+classifications require null target fields in the same output schema. This
+refines the existing generation; its call count, 512-token output, 8,192-token
+context, aggregate input budget and deadline are unchanged.

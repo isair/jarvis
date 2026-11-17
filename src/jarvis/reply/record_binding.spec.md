@@ -80,3 +80,8 @@ all action projections share the complete receipt cap. Overflow discards the
 whole projection. Deduplication is linear in the admitted record count.
 Successful metadata-only results retain their success, factual presentation and
 identity projection through both ordinary and planned result producers.
+
+An untargeted collection classification has null literal, naming-marker and topic
+fields. Contradictory target data makes the plan invalid before dispatch. The
+same existing interpretation retains each explicitly requested operation in order
+and separates distinctive topic spans from generic record-category nouns.

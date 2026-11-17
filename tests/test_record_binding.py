@@ -584,3 +584,14 @@ def test_oversized_raw_result_is_rejected_before_json_decoding(monkeypatch):
     monkeypatch.setattr(record_binding.json, 'loads', decode)
     assert record_binding.capture_record_observation(tool.name, tools[0]['function']['parameters'],
         ToolExecutionResult(True, raw)) is None
+
+
+def test_collection_intent_cannot_carry_an_individual_target_into_a_bulk_mutation():
+    tool, tools = declared_tool()
+    proposed = resolve('Delete only the tea reminder and keep soup.', tools,
+                       intent(kind='A', topic='tea', action=1))
+    if proposed.call:
+        tool.run(proposed.call['arguments'], None)
+    assert proposed.status == 'blocked'
+    assert tool.entries == {'tea', 'soup'}
+    assert tool.calls == []
