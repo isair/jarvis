@@ -370,3 +370,174 @@ def test_selector_constraints_validate_observed_values_without_inventing_a_sampl
            'result': '{"remaining_entries":[{"key":"tea-0001","title":"tea reminder"}]}'}
     proposed = resolve('Delete the tea reminder.', tools, intent(), [row])
     assert proposed.call['arguments']['labels'] == ['tea-0001']
+
+
+def test_literal_numeric_identifier_obeys_its_local_reference():
+    _, tools = declared_tool()
+    schema = tools[0]['function']['parameters']
+    schema['properties']['labels']['items'] = {'$ref': '#/$defs/identifier'}
+    schema['$defs'] = {'identifier': {'type': 'integer'}}
+    call = resolve('Delete the record with ID 47.', tools,
+                   intent(kind='B', literal='47', marker='ID', topic='47')).call
+    assert call['arguments']['labels'] == [47]
+
+
+@pytest.mark.parametrize('source', ['diary', 'graph', 'all'])
+def test_declared_record_request_needs_no_query_memory_inference(
+        mock_config, db, dialogue_memory, monkeypatch, source):
+    from jarvis.reply import engine
+    from jarvis.tools import registry
+    tool, _ = declared_tool()
+    monkeypatch.setitem(registry.BUILTIN_TOOLS, tool.name, tool)
+    mock_config.llm_chat_model = 'gemma4:e2b'
+    mock_config.planner_enabled = False
+    mock_config.memory_enrichment_source = source
+    db.upsert_conversation_summary('2020-01-01', 'A real owned saved fact.', '', source_app='fixture')
+    responses = iter([{'message': {'content': json.dumps({'plan': [intent()]})}},
+                      {'message': {'content': 'Tea is removed.'}}])
+
+    class UnrelatedInference(BaseException):
+        pass
+
+    def forbidden(*args, **kwargs):
+        raise UnrelatedInference('A record action must not infer unused memory keywords or digest')
+
+    monkeypatch.setattr(engine, 'extract_search_params_for_memory', forbidden)
+    monkeypatch.setattr(engine, 'digest_memory_for_query', forbidden)
+    monkeypatch.setattr(engine, 'select_tools', lambda *args, **kwargs: [tool.name, 'stop'])
+    monkeypatch.setattr(engine, 'chat_with_messages', lambda **kwargs: next(responses))
+    monkeypatch.setattr(engine, 'run_tool_with_retries', lambda **kwargs: tool.run(kwargs['tool_args'], None))
+    assert engine.run_reply_engine(db, mock_config, None, 'Delete the tea reminder.', dialogue_memory) == 'Tea is removed.'
+    assert tool.entries == {'soup'}
+    assert len(tool.calls) == 2
+
+
+def test_engine_executes_a_fresh_requested_read_after_mutation(mock_config, db, dialogue_memory, monkeypatch):
+    from jarvis.reply import engine
+    from jarvis.tools import registry
+    tool, _ = declared_tool()
+    monkeypatch.setitem(registry.BUILTIN_TOOLS, tool.name, tool)
+    mock_config.llm_chat_model = 'gemma4:e2b'
+    mock_config.planner_enabled = False
+    mock_config.agentic_max_turns = 5
+    proposals = {'plan': [intent(), intent(kind='A', topic=None, action=0)]}
+    responses = iter([{'message': {'content': json.dumps(proposals)}}, {'message': {'content': 'Only soup remains.'}}])
+    monkeypatch.setattr(engine, 'select_tools', lambda *args, **kwargs: [tool.name, 'stop'])
+    monkeypatch.setattr(engine, 'chat_with_messages', lambda **kwargs: next(responses))
+    monkeypatch.setattr(engine, 'run_tool_with_retries', lambda **kwargs: tool.run(kwargs['tool_args'], None))
+    monkeypatch.setattr(engine, 'digest_loop_for_max_turns', lambda **kwargs: 'The tool sequence is incomplete.')
+    reply = engine.run_reply_engine(db, mock_config, None, 'Delete the tea reminder, then list the remaining entries.', dialogue_memory)
+    assert reply == 'Only soup remains.'
+    assert tool.entries == {'soup'}
+    assert tool.calls == [{'operation': 'enumerate_entries', 'scope': 'whole_collection'},
+                          {'operation': 'discard_entries', 'scope': 'matching_labels', 'labels': ['tea']},
+                          {'operation': 'enumerate_entries', 'scope': 'whole_collection'}]
+
+
+@pytest.mark.parametrize('overflow', ['query', 'catalogue'])
+def test_initial_record_packet_overflow_cannot_admit_raw_mutation(mock_config, db, dialogue_memory, monkeypatch, overflow):
+    from jarvis.reply import engine
+    from jarvis.tools import registry
+    tool, _ = declared_tool()
+    monkeypatch.setitem(registry.BUILTIN_TOOLS, tool.name, tool)
+    mock_config.llm_chat_model = 'gemma4:e2b'
+    mock_config.planner_enabled = False
+    query = 'Delete only the tea reminder.'
+    if overflow == 'query':
+        query += ' ' + 'x' * 6000
+    else:
+        tool.description += 'x' * 6000
+    responses = iter([{'message': {'content': json.dumps({'tool_calls': [{'function': {'name': tool.name,
+        'arguments': {'operation': 'discard_entries', 'scope': 'whole_collection'}}}]})}},
+                      {'message': {'content': 'The request exceeds the supported input budget.'}}])
+    monkeypatch.setattr(engine, 'select_tools', lambda *args, **kwargs: [tool.name, 'stop'])
+    monkeypatch.setattr(engine, 'chat_with_messages', lambda **kwargs: next(responses))
+    monkeypatch.setattr(engine, 'run_tool_with_retries', lambda **kwargs: tool.run(kwargs['tool_args'], None))
+    engine.run_reply_engine(db, mock_config, None, query, dialogue_memory)
+    assert tool.entries == {'tea', 'soup'}
+    assert tool.calls == []
+
+
+@pytest.mark.parametrize('model', ['gemma4:e2b', 'gpt-oss:20b'])
+@pytest.mark.parametrize('source', ['result', 'result_metadata'])
+def test_real_engine_carryover_keeps_known_record_identity(mock_config, db, dialogue_memory, monkeypatch, model, source):
+    from jarvis.reply import engine
+    from jarvis.tools import registry
+    tool, _ = declared_tool()
+    if source == 'result_metadata':
+        from dataclasses import replace
+        tool.inputSchema = deepcopy(tool.inputSchema)
+        contract = tool.inputSchema[RECORD_CONTRACT]
+        contract['collection'] = {'source': 'result_metadata', 'path': '/records', 'display': '/title', 'complete': True}
+        contract['actions'][2]['identity'] = '/key'
+        execute = tool.run
+
+        def run(args, context):
+            effect = execute(args, context)
+            return replace(effect, reply_text='The current entries are available.', result_metadata={
+                'records': [{'key': value, 'title': value} for value in sorted(tool.entries)],
+                'unrelated_private_text': 'This is not identity data.',
+            })
+
+        tool.run = run
+    monkeypatch.setitem(registry.BUILTIN_TOOLS, tool.name, tool)
+    mock_config.llm_chat_model = model
+    mock_config.planner_enabled = False
+    responses = iter([{'message': {'content': json.dumps({'plan': [intent(kind='A', topic=None, action=0)]})}},
+                      {'message': {'content': 'The current entries are listed.'}},
+                      {'message': {'content': json.dumps({'plan': [intent()]})}},
+                      {'message': {'content': 'Tea is removed.'}}])
+    monkeypatch.setattr(engine, 'select_tools', lambda *args, **kwargs: [tool.name, 'stop'])
+    monkeypatch.setattr(engine, 'chat_with_messages', lambda **kwargs: next(responses))
+    monkeypatch.setattr(engine, 'run_tool_with_retries', lambda **kwargs: tool.run(kwargs['tool_args'], None))
+    assert engine.run_reply_engine(db, mock_config, None, 'List all entries.', dialogue_memory)
+    tool.calls.clear()
+    assert engine.run_reply_engine(db, mock_config, None, 'Delete the tea reminder.', dialogue_memory) == 'Tea is removed.'
+    assert tool.entries == {'soup'}
+    assert tool.calls == [{'operation': 'discard_entries', 'scope': 'matching_labels', 'labels': ['tea']}]
+
+
+def test_projected_identity_survives_prose_truncation_but_is_never_partially_retained():
+    from jarvis.reply.record_binding import capture_record_observation
+    from jarvis.reply.tool_identity import observed_tool_identities
+    from jarvis.memory.conversation import DialogueMemory
+    from jarvis.tools.types import ToolExecutionResult
+    tool, tools = declared_tool()
+    schema = tools[0]['function']['parameters']
+    effect = ToolExecutionResult(True, '{"remaining_entries":["tea","soup"],"private_extra":"not an identifier"}')
+    receipt = capture_record_observation(tool.name, schema, effect)
+    assert receipt is not None
+    assert 'private_extra' not in json.dumps(receipt)
+    memory = DialogueMemory()
+    memory.record_tool_turn([
+        {'role': 'assistant', 'tool_calls': [{'id': 'owned-read', 'function': {'name': tool.name, 'arguments': {}}}]},
+        {'role': 'tool', 'tool_name': tool.name, 'tool_call_id': 'owned-read', 'tool_failed': False,
+         'content': 'Rendered result and guidance ' * 100, 'record_evidence': receipt},
+    ])
+    limit = len(json.dumps(receipt, ensure_ascii=False)) + 1
+    messages = memory.get_recent_turns_with_tools(per_entry_chars=limit)
+    prior = observed_tool_identities(messages)
+    assert resolve('Delete the tea reminder.', tools, intent(), prior=prior).call['arguments']['labels'] == ['tea']
+    assert observed_tool_identities(memory.get_recent_turns_with_tools(per_entry_chars=1)) == []
+    again = memory.get_recent_turns_with_tools(per_entry_chars=limit)
+    assert observed_tool_identities(again) == prior, 'A shorter read must not truncate stored identifiers'
+
+
+def test_redaction_never_turns_a_private_identifier_into_an_admitted_name():
+    from jarvis.reply.record_binding import capture_record_observation
+    from jarvis.reply.tool_identity import observed_tool_identities
+    from jarvis.memory.conversation import DialogueMemory
+    from jarvis.tools.types import ToolExecutionResult
+    tool, tools = declared_tool()
+    secret = 'ab' * 32
+    receipt = capture_record_observation(tool.name, tools[0]['function']['parameters'],
+        ToolExecutionResult(True, json.dumps({'remaining_entries': [secret]})))
+    memory = DialogueMemory()
+    memory.record_tool_turn([
+        {'role': 'assistant', 'tool_calls': [{'id': 'owned-secret-read', 'function': {'name': tool.name, 'arguments': {}}}]},
+        {'role': 'tool', 'tool_name': tool.name, 'tool_call_id': 'owned-secret-read', 'tool_failed': False,
+         'content': json.dumps({'remaining_entries': [secret]}), 'record_evidence': receipt},
+    ])
+    stored = memory.get_recent_turns_with_tools()
+    assert secret not in json.dumps(stored)
+    assert observed_tool_identities(stored) == [], 'Scrubbed text cannot supply a substitute identifier'

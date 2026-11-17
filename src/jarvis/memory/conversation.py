@@ -933,6 +933,13 @@ class DialogueMemory:
                 # API responses, scraped pages). Scrub before persisting
                 # so re-injection on the next turn can't leak them.
                 mm["content"] = scrub_secrets(c)
+            if "record_evidence" in mm:
+                evidence = _scrub_args(mm["record_evidence"])
+                if evidence != mm["record_evidence"]:
+                    mm.pop("record_evidence", None)
+                    mm["record_evidence_redacted"] = True
+                else:
+                    mm["record_evidence"] = evidence
             if "resource_references" in mm:
                 mm["resource_references"] = _scrub_args(mm["resource_references"])
             # Native tool-call arguments can also carry sensitive query
@@ -1063,6 +1070,9 @@ class DialogueMemory:
                 truncated: list[dict] = []
                 for m in msgs:
                     mm = dict(m)
+                    evidence = mm.get('record_evidence')
+                    if evidence is not None and len(json.dumps(evidence, ensure_ascii=False).encode('utf-8')) > per_entry_chars:
+                        mm.pop('record_evidence', None)
                     c = mm.get("content")
                     if isinstance(c, str) and len(c) > per_entry_chars:
                         cut = c[:per_entry_chars].rstrip() + "…"

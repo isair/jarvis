@@ -611,7 +611,8 @@ Coverage recovery distinguishes facts requested in call arguments from facts act
 
 `reply.record_binding` reads optional `x-jarvis-records` relationships from the
 canonical tool schema. A fully declared routed catalogue skips ordinary planning
-(#12). The existing first main reply generation (#1) uses
+(#12) and query-driven memory extraction, retrieval and digest contexts. The warm
+profile and bounded dialogue/resource references remain available. The existing first main reply generation (#1) uses
 `prompts.record_binding.RECORD_INTENT_PROMPT` with static interpretation examples,
 the redacted request, bounded dialogue/resource reference and declared purposes.
 It emits at most five ordered intents. Normal replies, questions, blockers and
@@ -630,8 +631,21 @@ effects determine completion. Final generation and language delivery use their
 existing contexts and caps. Cancellation gates all subsequent work.
 
 Coverage (#16) uses this same declared interpretation/compiler in place of its
-ordinary inference, with the same 512/8,192/20-second limits. Metadata-free,
-mixed or unsupported initial catalogues retain the generic path and its separate
-opaque-tool diagnostics. This does not establish deterministic natural-language
+ordinary inference, with the same 512/8,192/20-second limits. Metadata-free and
+mixed initial catalogues retain the generic path and its separate opaque-tool
+diagnostics. Fully declared admission is reserved independently of packet size;
+invalid, unsupported or oversized declared inputs cannot admit raw replacement
+record calls. This does not establish deterministic natural-language
 classification or unrestricted semantic matching. See
 `../src/jarvis/reply/record_binding.spec.md` for the exact supported contract.
+
+Declared result producers derive identity/display projections from raw result or
+result_metadata arrays. Planned and ordinary request/result history retain these
+beside rendered prose, under the existing 2,000-byte identity budget. History
+scrubs projections and drops altered or over-budget values atomically. A whole
+projection can survive prose-only truncation without treating clipped prose as
+an identifier. Qualified carryover matching supplies it to the same existing
+planning, resolution and coverage data views, within their aggregate limits.
+Schema digests bind projections to their canonical declaration. This is a data
+edge, not an inference stage. Separately requested post-mutation discovery reads
+use existing reply slots and execute afresh; mutation retry protection remains.

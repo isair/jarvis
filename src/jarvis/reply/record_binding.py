@@ -14,7 +14,7 @@ from referencing.jsonschema import DRAFT202012
 
 from ..debug import debug_log
 from ..tools.schema import _supported_local_reference, missing_required_arguments
-from .tool_identity import pack_identity_evidence
+from .tool_identity import IDENTITY_CONTEXT_BYTE_LIMIT, pack_identity_evidence
 from .planner import MAX_STEPS as MAX_RECORD_STEPS
 
 RECORD_CONTRACT = 'x-jarvis-records'
@@ -138,11 +138,23 @@ def _contract_actions(name, schema):
     return result
 
 
+def declares_record_catalogue(tools):
+    """Recognise the opted-in catalogue independently of request admission."""
+    real = [tool['function'] for tool in tools
+            if tool['function']['name'] not in {'stop', 'toolSearchTool'}]
+    return bool(real) and all(isinstance(tool.get('parameters'), dict)
+                              and RECORD_CONTRACT in tool['parameters'] for tool in real)
+
+
+def _schema_fingerprint(schema):
+    return list(hashlib.sha256(json.dumps(schema, sort_keys=True, ensure_ascii=False).encode()).digest())
+
+
 def prepare_record_request(query, tools, results, prior_results, *, byte_limit=6000, reference_context=''):
     """Prepare one replacement generation, keeping its complete input budget."""
     try:
         real = [t['function'] for t in tools if t['function']['name'] not in {'stop', 'toolSearchTool'}]
-        if not real or any(RECORD_CONTRACT not in t.get('parameters', {}) for t in real):
+        if not declares_record_catalogue(tools):
             return None
         packet = pack_identity_evidence(
             {'request': query, 'tools': tools, 'results': results, 'reference_context': reference_context},
@@ -239,6 +251,25 @@ def _records(action, rows, *, current=False):
     for row in rows:
         if not _usable_row(row, current=current) or row.get('name') != action.name:
             continue
+        receipt = row.get('record_evidence')
+        if isinstance(receipt, dict) and receipt.get('schema') == _schema_fingerprint(action.schema):
+            try:
+                index = str(action.contract['actions'].index(action.declaration))
+                projection = receipt['actions'][index]
+                pairs = projection['records']
+                if (type(projection['complete']) is not bool or not isinstance(pairs, list)
+                        or not all(isinstance(pair, (list, tuple)) and len(pair) == 2
+                            and isinstance(pair[0], (str, int)) and not isinstance(pair[0], bool)
+                            and isinstance(pair[1], str) and pair[1] for pair in pairs)):
+                    raise ValueError('Invalid record projection')
+                pairs = [tuple(pair) for pair in pairs]
+                if projection['complete']:
+                    observed = pairs
+                    complete = True
+                    continue
+                observed.extend(pair for pair in pairs if pair not in observed)
+            except (ValueError, TypeError, KeyError):
+                pass
         try:
             source = row.get(collection['source'])
             if collection['source'] == 'result' and isinstance(source, str):
@@ -277,11 +308,44 @@ def _observed_matches(action, request, topic, current):
     return matches, complete, attempted
 
 
-def _literal_identity(value, prop):
+def _literal_identity(value, action, selector):
+    prop = action.schema['properties'][selector]
     item = prop.get('items', {}) if prop.get('type') == 'array' else prop
-    if item.get('type') == 'integer' and isinstance(value, str) and re.fullmatch(r'-?(0|[1-9][0-9]*)', value):
+    validator = _validator(action.schema)
+    if (isinstance(value, str) and re.fullmatch(r'-?(0|[1-9][0-9]*)', value)
+            and next(validator.descend(value, item), None) is not None
+            and next(validator.descend(int(value), item), None) is None):
         return int(value)
     return value
+
+
+def is_declared_discovery(request, call):
+    return request is not None and call is not None and any(
+        call == {'name': action.name, 'arguments': action.contract['actions'][action.contract['discovery']]['arguments']}
+        for action in request.actions
+    )
+
+
+def capture_record_observation(name, schema, result, *, byte_limit=IDENTITY_CONTEXT_BYTE_LIMIT):
+    """Retain only complete identity projections, never unrelated result fields."""
+    if not result.success or not isinstance(schema, dict) or RECORD_CONTRACT not in schema:
+        return None
+    try:
+        row = {'name': name, 'success': True, 'result': result.reply_text,
+               'result_metadata': result.result_metadata, 'resource_references': result.resource_references}
+        evidence = {}
+        for index, action in enumerate(_contract_actions(name, schema)):
+            if action.declaration['selector'] is None:
+                continue
+            records, complete = _records(action, [row], current=True)
+            if records or complete:
+                evidence[str(index)] = {'records': records, 'complete': complete}
+        receipt = {'schema': _schema_fingerprint(schema), 'actions': evidence}
+        if evidence and len(json.dumps(receipt, ensure_ascii=False).encode('utf-8')) <= byte_limit:
+            return receipt
+    except Exception as error:
+        debug_log(f'record binding: observation unavailable ({type(error).__name__})', 'planning')
+    return None
 
 
 def resolve_record_plan(request, decision):
@@ -318,7 +382,7 @@ def resolve_record_plan(request, decision):
                 values = actual.get(selector)
                 values = values if isinstance(values, list) else [values]
                 if supplied:
-                    identities = [_literal_identity(literal, action.schema['properties'][selector])]
+                    identities = [_literal_identity(literal, action, selector)]
                 else:
                     identities, _, _ = _observed_matches(action, request, topic, request.current[:position])
                 matches = (set(actual) == set(args) | {selector}
@@ -330,7 +394,7 @@ def resolve_record_plan(request, decision):
         else:
             if selector is not None:
                 if supplied:
-                    identity = _literal_identity(literal, action.schema['properties'][selector])
+                    identity = _literal_identity(literal, action, selector)
                 else:
                     matches, complete, attempted = _observed_matches(action, request, topic, request.current)
                     if len(matches) != 1:

@@ -7,12 +7,16 @@ The tool registry spec defines the declaration; owners must verify its truth
 against their backend effects. This contract does not prove arbitrary natural
 language meaning or the safety of a dishonest tool declaration.
 
-When every routed non-control tool declares a valid supported contract, the
-existing first reply generation interprets an ordered request plan instead of
-raw API arguments. The ordinary planner is skipped. The same generation can
+When every routed non-control tool declares record metadata, the engine reserves
+the declared path. Valid supported contracts use the existing first reply
+generation to interpret an ordered request plan instead of
+raw API arguments. The ordinary planner and query-driven memory enrichment are skipped; bounded
+dialogue/resource references and the warm profile remain available. The same generation can
 answer, ask a question, report a blocker, dismiss the conversation or request
-capability discovery through the canonical control tools. Other routed
-catalogues use their ordinary generation path. Metadata-free tools have no
+capability discovery through the canonical control tools. Mixed and metadata-free routed
+catalogues use their ordinary generation path. Invalid, unsupported or oversized
+fully declared inputs block unadmitted record calls instead of falling back to
+raw argument generation. Metadata-free tools have no
 claimed deterministic identity guarantee.
 
 Interpretation uses CHAT with thinking disabled, zero temperature, 8,192 context
@@ -40,7 +44,8 @@ blocks mutation and repeated discovery. Partial snapshots can supply positive
 identity but cannot establish absence. Prior observations cannot complete a new
 request. Completion consumes successful current actions in order, using the
 identity evidence available before each effect. A prerequisite lookup cannot
-complete a later requested read.
+complete a later requested read. A separately requested discovery read executes
+afresh after preceding effects, without bypassing mutation retry protection.
 
 A reply-local plan is bound to its request, reference context and exact catalogue.
 Code recompiles it after each result without another interpretation call.
@@ -51,6 +56,18 @@ capabilities; the original bound record tools still require admitted calls.
 
 Coverage recovery uses the same interpretation and compiler as a replacement
 for its existing inference, under its existing deadline and caps. Invalid
-contracts or unsupported schema scopes use the ordinary generic path. The
+contracts, unsupported schema scopes and exceeded input budgets admit no
+coverage call from a fully declared catalogue. The
 metadata-free diagnostic retains its original effect assertions and is distinct
 from declared-contract qualification.
+
+Successful declared results retain a derived identity projection beside rendered
+conversation history. It contains only per-action identifier/display pairs,
+completeness and a canonical schema digest, not unrelated result fields or request
+arguments. Its complete JSON is capped by the existing 2,000-byte identity budget.
+Both planned and ordinary dispatch produce it from the same declaration. History
+scrubs it; any altered projection is discarded and cannot supply substitute
+identifiers. The configured per-entry carryover budget drops oversized
+projections atomically. A complete projection can survive prose-only truncation;
+partial prose cannot supply additional names. Qualified request/result matching,
+source names, schema identity and the shared aggregate packet limits still apply.

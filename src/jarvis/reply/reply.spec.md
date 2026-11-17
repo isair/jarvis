@@ -547,3 +547,11 @@ the plan locally and recompiles after raw results without another model stage.
 Ordinary controls, cancellation, turn limits and final delivery remain active.
 Mixed and metadata-free catalogues retain ordinary generation. Opaque-tool
 diagnostics do not establish the declared-contract qualification precondition.
+
+Declared routing reserves admission independently of packet size. A fully declared
+request with invalid metadata or an oversized packet cannot fall through to raw
+record calls. Query-driven recall is skipped for this route, while the existing
+warm profile and bounded dialogue/resource references remain available. Both
+planned and ordinary results retain scrubbed, atomically bounded identity
+projections for follow-ups. A requested post-mutation discovery read is a new
+read effect, not a retry of its prerequisite snapshot.

@@ -208,7 +208,7 @@ _COVERAGE_PROMPT = (
 def resolve_uncovered_request(cfg, query: str, results: list, tools: list, *, prior_results: list) -> Optional[dict]:
     """Propose one permitted call for an unresolved outcome, without executing it."""
     try:
-        from .record_binding import prepare_record_request, resolve_record_plan
+        from .record_binding import declares_record_catalogue, prepare_record_request, resolve_record_plan
         record_request = prepare_record_request(query, tools, results, prior_results,
                                                 byte_limit=COVERAGE_INPUT_BYTE_LIMIT)
         if record_request is not None:
@@ -220,6 +220,8 @@ def resolve_uncovered_request(cfg, query: str, results: list, tools: list, *, pr
             ))
             resolution = resolve_record_plan(record_request, response)
             return resolution.call
+        if declares_record_catalogue(tools):
+            return None
         packet = pack_identity_evidence(
             {'request': query, 'results': results, 'tools': tools}, prior_results, COVERAGE_INPUT_BYTE_LIMIT,
         )

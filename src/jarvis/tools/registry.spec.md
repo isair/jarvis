@@ -62,8 +62,9 @@ Every action has a non-empty purpose, fixed public argument variant and a
 nullable selector property. Selectors declare an inline `string`, `integer` or `array` type; item constraints
 and local definition references still apply to the copied identifiers.
 Actions with free generated parameters are unsupported. Declarations and
-compiled calls must satisfy the canonical public schema; unsupported reference
-scopes decline this path. The owner declares the complete applicable capability
+compiled calls must satisfy the canonical public schema. Unsupported reference
+scopes in a fully declared catalogue block unadmitted record calls. Item schemas
+retain local reference scopes when validating literal numeric representations. The owner declares the complete applicable capability
 set and tests discovery and mutation effects. Code cannot infer these
 relationships safely from operation names or prose.
 

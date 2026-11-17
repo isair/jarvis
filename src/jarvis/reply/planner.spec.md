@@ -380,8 +380,9 @@ Planning and step resolution receive a separate bounded identity view of earlier
 
 ### Declared record catalogue
 
-When every routed non-control tool supplies the supported canonical record
-contract, the ordinary planner is skipped. The first reply generation owns the
+When every routed non-control tool declares canonical record metadata, the
+ordinary planner and query-driven memory enrichment are skipped. Unsupported or
+oversized declared requests retain fail-closed record admission. The first reply generation owns the
 bounded request interpretation, and code resolves subsequent prerequisites and
 effects from the cached plan. This uses no plan-step classifier or resolver
 inference. See `record_binding.spec.md` for the shared dispatch/evidence contract.

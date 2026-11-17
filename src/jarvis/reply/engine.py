@@ -61,7 +61,10 @@ from .prompt_dump import dump_reply_turn, is_enabled as _prompt_dump_enabled, ne
 from .prompts import ModelSize, detect_model_size, get_system_prompts
 from .compound_query import split_compound_query, resolve_uncovered_request
 from .tool_identity import observed_tool_identities, render_identity_context
-from .record_binding import prepare_record_request, decode_record_plan, resolve_record_plan
+from .record_binding import (
+    declares_record_catalogue, prepare_record_request, decode_record_plan, resolve_record_plan,
+    capture_record_observation, is_declared_discovery,
+)
 from .planner import (
     plan_query,
     format_plan_block,
@@ -1345,11 +1348,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 _planner_tool_catalog.append((str(_nm), _first[:120]))
 
     action_plan: list[str] = []
-    _declared_records = prepare_record_request(
-        redacted, generate_tools_json_schema(
-            list(dict.fromkeys([*routed_tools, 'stop', 'toolSearchTool'])), mcp_tools,
-        ), [], _prior_identities, reference_context=_dialogue_ctx,
-    ) is not None
+    _declared_records = declares_record_catalogue(_planner_schema or [])
 
     # Fast-path: skip the planner when the tool router found no real tools
     # AND the query is short. The planner's main job is decomposing multi-step
@@ -1420,7 +1419,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     # - Plan without it → skip memory work entirely (no keyword LLM,
     #   no diary search, no graph search, no digest LLM).
     plan_demands_memory = bool(action_plan) and plan_requires_memory(action_plan)
-    needs_memory = (not action_plan) or plan_demands_memory
+    needs_memory = not _declared_records and ((not action_plan) or plan_demands_memory)
 
     # Recall gate: if the hot-window already carries a fresh tool result
     # covering the query topic, skip diary/graph enrichment for this turn.
@@ -2483,7 +2482,11 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                                 planned_message['_planner_text_request'] = True
                             messages.append(planned_message)
                             debug_log("planner execution retained with its request/result identity", "planning")
+                            _plan_observation = capture_record_observation(
+                                _name, _get_tool_input_schema(_name, mcp_tools), _plan_result,
+                            )
                             messages.append({
+                                **({'record_evidence': _plan_observation} if _plan_observation else {}),
                                 "role": "user",
                                 "tool_call_id": _plan_call_id,
                                 "content": (
@@ -2542,6 +2545,11 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             reference_context=_dialogue_ctx,
         ) if _declared_records else None
         _record_compiled_call = None
+        if _declared_records and _record_request is None and not _record_blocker_reported:
+            messages.append({'role': 'user', 'content': (
+                '[Execution status: The declared record input or contract cannot be admitted within its limits. '
+                'No unadmitted record call may be executed.]'), 'tool_feedback': True})
+            _record_blocker_reported = True
         _record_interpret_now = _record_request is not None and not _record_interpreted
         if _record_plan is not None:
             _resolution = resolve_record_plan(_record_request, _record_plan) if _record_request else None
@@ -2663,6 +2671,11 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         # Always show thinking if present, regardless of content
         if thinking:
             debug_log(f"  💭 LLM thinking: '{thinking[:300]}{'...' if len(thinking) > 300 else ''}'", "planning")
+
+        _record_fresh_read = bool(
+            _record_compiled_call is not None and not _resolution.prerequisite
+            and is_declared_discovery(_record_request, _record_compiled_call)
+        )
 
         # Extract tool call if present
         tool_requests, text_tool_request, retained_calls = _extract_structured_tool_calls(llm_resp)
@@ -2829,7 +2842,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     and requested_timer_count is not None and len(created_timer_records) < requested_timer_count
                 ))
             )
-            if matched is not None and not distinct_batch_action:
+            if matched is not None and not distinct_batch_action and not _record_fresh_read:
                 previous_success = recent_tool_outcomes[matched]
                 if bound != matched:
                     recent_tool_outcomes.pop(matched)
@@ -3002,6 +3015,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 if not _declared_records:
                     coverage_record['result'] = effective_result
 
+                record_observation = capture_record_observation(
+                    tool_name, _get_tool_input_schema(tool_name, mcp_tools), result,
+                )
                 if use_text_tools:
                     # Plan-aware remainder nudge. When a pre-loop plan exists,
                     # prefer it over the legacy compound_query split: the plan
@@ -3045,6 +3061,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     messages.append({
                         "role": "user",
                         "content": f"[Tool result: {tool_name}]\n{effective_result}{remainder_hint}",
+                        **({'record_evidence': record_observation} if record_observation else {}),
                         "tool_call_id": tool_call_id,
                         "tool_name": tool_name,  # kept for duplicate detection
                         "tool_failed": not result.success,
@@ -3056,6 +3073,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                         "tool_call_id": tool_call_id,
                         "tool_name": tool_name,  # Include tool_name for duplicate detection
                         "content": effective_result + recovery_hint,
+                        **({'record_evidence': record_observation} if record_observation else {}),
                         "tool_failed": not result.success,
                         "resource_references": resource_records,
                     })

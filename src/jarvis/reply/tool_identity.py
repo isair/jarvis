@@ -28,14 +28,17 @@ def observed_tool_identities(messages):
     for message in messages:
         name, identity = message.get('tool_name'), message.get('tool_call_id')
         if (message.get('role') not in {'tool', 'user'} or message.get('tool_failed') is not False
-                or message.get('tool_feedback') or message.get('tool_content_truncated')
+                or message.get('tool_feedback') or message.get('record_evidence_redacted')
+                or message.get('tool_content_truncated') and not isinstance(message.get('record_evidence'), dict)
                 or not isinstance(identity, str)
                 or identity in ambiguous or not isinstance(name, str) or requests.get(identity) != name
                 or not isinstance(message.get('content'), str)):
             continue
         references = message.get('resource_references', ())
         observations.append({
-            'name': name, 'tool_call_id': identity, 'result': message['content'],
+            'name': name, 'tool_call_id': identity,
+            'result': '' if isinstance(message.get('record_evidence'), dict) else message['content'],
+            **({'record_evidence': message['record_evidence']} if isinstance(message.get('record_evidence'), dict) else {}),
             'resource_references': list(references) if isinstance(references, (list, tuple)) else [],
         })
     return observations
