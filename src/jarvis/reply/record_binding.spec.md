@@ -82,7 +82,9 @@ Successful metadata-only results retain their success, factual presentation and
 identity projection through both ordinary and planned result producers.
 
 An untargeted collection classification has null literal, naming-marker and topic
-fields. Contradictory target data makes the plan invalid before dispatch. The
+fields. Literal classifications require a non-empty literal target. Descriptive
+classifications require a non-empty topic and null literal/naming-marker fields.
+Contradictory or missing target data makes the plan invalid before dispatch. The
 same existing interpretation retains each explicitly requested operation in order
 and separates distinctive topic spans from generic record-category nouns.
 

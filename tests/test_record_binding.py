@@ -637,3 +637,19 @@ def test_declared_voice_reference_reaches_the_same_generation_without_persisting
     assert 'Which reminder' in engine.run_reply_engine(db, mock_config, None, query, fresh)
     assert tool.entries == {'tea', 'soup'}
     assert tool.calls == []
+
+
+@pytest.mark.parametrize('decision', [
+    intent(topic=None),
+    intent(topic=''),
+    intent(literal='tea'),
+    intent(marker='named'),
+    intent(kind='B', literal=None),
+])
+def test_target_interpretation_requires_its_declared_identity_evidence(decision):
+    from jarvis.reply.record_binding import decode_record_plan
+    tool, tools = declared_tool()
+    request = prepare_record_request('Delete the tea reminder.', tools, [], [])
+    assert decode_record_plan(request, {'plan': [decision]}) is None
+    assert tool.calls == []
+    assert tool.entries == {'tea', 'soup'}

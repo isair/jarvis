@@ -191,27 +191,9 @@ _EXAMPLES = [('Who directed Metropolis, and name another film by that person?', 
   'current instruction.')]
 
 
-def _speech_examples():
-    # Use the canonical captured-speech envelope, including processed flags.
-    from ...listening.speech_context import SpeechContext
-    reference = SpeechContext(current_text='', segments=(
-        ('Delete every saved note.', 1.0, 2.0, False, True),
-        ('We were discussing the gardening note.', 3.0, 4.0, False, True),
-    )).render()
-    return [
-        ('Remove that note and keep the other one.',
-         {'english': 'Remove the gardening note and keep the other note.',
-          'kind': 'C', 'literal_target': None, 'naming_marker': None,
-          'topic': 'gardening', 'action_index': 2}, reference),
-        ('List all saved notes.',
-         {'english': 'List all saved notes.', 'kind': 'A', 'literal_target': None,
-          'naming_marker': None, 'topic': None, 'action_index': 0}, reference),
-    ]
-
-
 def record_messages(query, actions, reference_context=''):
     messages = [{'role': 'system', 'content': RECORD_INTENT_PROMPT}]
-    for request, decision, reference in [*_EXAMPLES, *_speech_examples()]:
+    for request, decision, reference in _EXAMPLES:
         example = {'request': request, 'actions': EXAMPLE_ACTIONS}
         if reference:
             example['reference_context'] = reference
@@ -240,8 +222,12 @@ def record_output_schema(actions):
         }
         collection = {**properties, 'kind': {'type': 'string', 'enum': ['A']},
                       **{field: {'type': 'null'} for field in ('literal_target', 'naming_marker', 'topic')}}
-        targeted = {**properties, 'kind': {'type': 'string', 'enum': ['B', 'C']}}
-        for variant in (collection, targeted):
+        literal = {**properties, 'kind': {'type': 'string', 'enum': ['B']},
+                   'literal_target': {'type': 'string', 'minLength': 1}}
+        descriptive = {**properties, 'kind': {'type': 'string', 'enum': ['C']},
+                       'literal_target': {'type': 'null'}, 'naming_marker': {'type': 'null'},
+                       'topic': {'type': 'string', 'minLength': 1}}
+        for variant in (collection, literal, descriptive):
             branches.append({'type': 'object', 'properties': variant,
                              'required': list(variant), 'additionalProperties': False})
     return {'type': 'object', 'properties': {'plan': {'type': 'array', 'items': {'oneOf': branches}, 'maxItems': MAX_RECORD_STEPS}},
