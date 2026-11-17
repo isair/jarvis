@@ -627,8 +627,12 @@ identifiers from namespaced observations and selects declared discovery before
 mutation. The reply-local plan is fingerprinted to its request and catalogue.
 Each compiled call consumes an existing reply slot and uses normal dispatch;
 lookup results trigger recompilation without inference. Current successful
-effects determine completion. Final generation and language delivery use their
-existing contexts and caps. Cancellation gates all subsequent work.
+effects determine completion. Known unresolved declared plans and rejected
+unadmitted record attempts cannot invoke a recovery or max-turn digest inference
+to supply a completion claim. They accept an explicit question/blocker or the
+existing execution blocker. Completed plans and ordinary replies without a
+rejected attempt retain normal delivery. Final generation and language delivery
+use their existing contexts and caps. Cancellation gates all subsequent work.
 
 Coverage (#16) uses this same declared interpretation/compiler in place of its
 ordinary inference, with the same 512/8,192/20-second limits. Metadata-free and

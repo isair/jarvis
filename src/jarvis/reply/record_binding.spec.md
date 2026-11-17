@@ -53,7 +53,11 @@ The normal dispatcher retains permissions, retries, cancellation and paired
 request/result history. Final delivery checks the complete declared plan against
 actual current effects, including the last available execution slot. An unresolved
 plan accepts an explicit question/blocker or uses the existing execution blocker;
-it cannot deliver a completion claim or invoke a recovery/digest inference. Raw model record calls cannot bypass the compiler in
+it cannot deliver a completion claim or invoke a recovery/digest inference.
+A rejected unadmitted record attempt retains the same non-completion requirement
+when no valid non-empty plan exists. A genuinely completed cached plan remains
+complete after an unadmitted repeat; ordinary replies and empty plans without a
+rejected attempt retain their normal delivery. Raw model record calls cannot bypass the compiler in
 this mode. Catalogue expansion retains ordinary access to newly discovered
 capabilities; the original bound record tools still require admitted calls.
 

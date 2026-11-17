@@ -2305,6 +2305,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     _record_plan = None
     _record_interpreted = False
     _record_blocker_reported = False
+    _record_rejected_attempt = False
 
     # Per-reply session id used to group prompt dumps on disk when
     # JARVIS_DUMP_PROMPTS=1 is set. Generated unconditionally so the
@@ -2329,7 +2330,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
     def _record_completion_missing() -> bool:
         if _record_plan is None or not _record_plan.intents:
-            return False
+            return _record_rejected_attempt
         request = prepare_record_request(
             redacted, tools_json_schema or [], coverage_evidence, _prior_identities,
             reference_context=_record_reference_context,
@@ -2798,6 +2799,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
             if (tool_name in _record_bound_names
                     and {'name': tool_name, 'arguments': tool_args} != _record_compiled_call):
+                _record_rejected_attempt = True
                 debug_log('record binding: unadmitted record call rejected before dispatch', 'planning')
                 _append_tool_feedback(tool_name, tool_call_id,
                     'This record operation has no admitted source-bound action. No tool was executed.', failed=True)

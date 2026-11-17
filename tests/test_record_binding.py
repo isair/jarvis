@@ -687,3 +687,85 @@ def test_unresolved_record_effect_cannot_be_reported_as_completed(
     assert tool.calls == [{'operation': 'enumerate_entries', 'scope': 'whole_collection'}]
     assert len(generations) <= 2
     assert not digests
+
+
+@pytest.mark.parametrize('model', ['gemma4:e2b', 'gpt-oss:20b'])
+@pytest.mark.parametrize('scenario', ['valid_input', 'oversized_input', 'empty_plan'])
+@pytest.mark.parametrize('budget', ['at_rejection', 'after_reply', 'configured'])
+def test_rejected_record_attempt_cannot_confirm_an_unexecuted_effect(
+        mock_config, db, dialogue_memory, monkeypatch, model, scenario, budget):
+    from jarvis.reply import engine
+    from jarvis.tools import registry
+    tool, _ = declared_tool()
+    monkeypatch.setitem(registry.BUILTIN_TOOLS, tool.name, tool)
+    mock_config.llm_chat_model = model
+    mock_config.planner_enabled = False
+    initial_empty = scenario == 'empty_plan'
+    configured = mock_config.agentic_max_turns
+    limit = {'at_rejection': 1 + initial_empty, 'after_reply': 2 + initial_empty,
+             'configured': configured}[budget]
+    assert limit <= configured
+    mock_config.agentic_max_turns = limit
+    query = 'Delete only the tea reminder and keep the soup reminder.'
+    if scenario == 'oversized_input':
+        from jarvis.reply.compound_query import COVERAGE_INPUT_BYTE_LIMIT
+        query += ' ' + 'x' * COVERAGE_INPUT_BYTE_LIMIT
+    generations, digests = [], []
+
+    def chat(**kwargs):
+        generations.append(kwargs['messages'])
+        if initial_empty and len(generations) == 1:
+            value = {'plan': []}
+        elif len(generations) == 1 + initial_empty:
+            value = {'tool_calls': [{'function': {'name': tool.name,
+                'arguments': {'operation': 'discard_entries', 'scope': 'whole_collection'}}}]}
+        else:
+            value = {'reply': 'The tea reminder was deleted successfully.'}
+        return {'message': {'content': json.dumps(value)}}
+
+    monkeypatch.setattr(engine, 'select_tools', lambda *a, **kw: [tool.name, 'stop'])
+    monkeypatch.setattr(engine, 'chat_with_messages', chat)
+    monkeypatch.setattr(engine, 'run_tool_with_retries', lambda **kw: tool.run(kw['tool_args'], None))
+    monkeypatch.setattr(engine, 'digest_loop_for_max_turns',
+                        lambda **kw: digests.append(kw) or 'The tea reminder was deleted successfully.')
+    reply = engine.run_reply_engine(db, mock_config, None, query, dialogue_memory)
+    assert reply == engine._UNEXECUTED_ACTION_REPLY
+    assert tool.calls == []
+    assert tool.entries == {'tea', 'soup'}
+    assert len(generations) <= 2 + initial_empty
+    assert not digests
+
+
+@pytest.mark.parametrize('model', ['gemma4:e2b', 'gpt-oss:20b'])
+def test_rejected_repeat_does_not_erase_a_genuine_completed_record_effect(
+        mock_config, db, dialogue_memory, monkeypatch, model):
+    from jarvis.reply import engine
+    from jarvis.tools import registry
+    tool, _ = declared_tool()
+    monkeypatch.setitem(registry.BUILTIN_TOOLS, tool.name, tool)
+    mock_config.llm_chat_model = model
+    mock_config.planner_enabled = False
+    generations = []
+    completed = 'The tea reminder was deleted and soup remains.'
+
+    def chat(**kwargs):
+        generations.append(kwargs['messages'])
+        if len(generations) == 1:
+            value = {'plan': [intent()]}
+        elif len(generations) == 2:
+            value = {'tool_calls': [{'function': {'name': tool.name, 'arguments': {
+                'operation': 'discard_entries', 'scope': 'matching_labels', 'labels': ['tea']}}}]}
+        else:
+            value = {'reply': completed}
+        return {'message': {'content': json.dumps(value)}}
+
+    monkeypatch.setattr(engine, 'select_tools', lambda *a, **kw: [tool.name, 'stop'])
+    monkeypatch.setattr(engine, 'chat_with_messages', chat)
+    monkeypatch.setattr(engine, 'run_tool_with_retries', lambda **kw: tool.run(kw['tool_args'], None))
+    reply = engine.run_reply_engine(db, mock_config, None,
+        'Delete only the tea reminder and keep the soup reminder.', dialogue_memory)
+    assert reply == completed
+    assert tool.entries == {'soup'}
+    assert tool.calls == [{'operation': 'enumerate_entries', 'scope': 'whole_collection'},
+                          {'operation': 'discard_entries', 'scope': 'matching_labels', 'labels': ['tea']}]
+    assert len(generations) == 3
