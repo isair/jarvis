@@ -50,7 +50,10 @@ afresh after preceding effects, without bypassing mutation retry protection.
 A reply-local plan is bound to its request, reference context and exact catalogue.
 Code recompiles it after each result without another interpretation call.
 The normal dispatcher retains permissions, retries, cancellation and paired
-request/result history. Raw model record calls cannot bypass the compiler in
+request/result history. Final delivery checks the complete declared plan against
+actual current effects, including the last available execution slot. An unresolved
+plan accepts an explicit question/blocker or uses the existing execution blocker;
+it cannot deliver a completion claim or invoke a recovery/digest inference. Raw model record calls cannot bypass the compiler in
 this mode. Catalogue expansion retains ordinary access to newly discovered
 capabilities; the original bound record tools still require admitted calls.
 
@@ -90,9 +93,7 @@ and separates distinctive topic spans from generic record-category nouns.
 
 Voice interpretation receives the same captured, redacted and fenced
 `SpeechContext` as ordinary reply generation, alongside dialogue/resource
-references in its existing reference packet. Subject references occupy a separate
-fenced user message before the current request; both message bodies share the
-existing interpretation input cap. Relevant speech can resolve a
+references in its existing reference packet. Relevant speech can resolve a
 subject or pronoun; only the current request authorises operations. Topics may
 copy an exact span from that reference, while literal naming claims remain
 anchored to the current request. The complete packet retains its 6,000-byte cap

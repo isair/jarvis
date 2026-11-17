@@ -2327,6 +2327,15 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     _plan_steps_baseline = sum(1 for m in messages if _is_executed_tool_result(m))
     _unexecuted_reply_retried = False
 
+    def _record_completion_missing() -> bool:
+        if _record_plan is None or not _record_plan.intents:
+            return False
+        request = prepare_record_request(
+            redacted, tools_json_schema or [], coverage_evidence, _prior_identities,
+            reference_context=_record_reference_context,
+        )
+        return request is None or resolve_record_plan(request, _record_plan).status != 'complete'
+
     def _completion_evidence_missing() -> bool:
         current_results = messages[user_msg_index + 1:]
         plan_without_outcome = use_text_tools and _plan_in_recovery and not any(
@@ -2342,7 +2351,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             and message.get("tool_failed") is False
             for message in current_results
         )
-        return plan_without_outcome or followup_without_result
+        return plan_without_outcome or followup_without_result or _record_completion_missing()
 
     def _enter_plan_recovery() -> None:
         nonlocal _plan_in_recovery, _plan_recovery_record
@@ -3144,6 +3153,9 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             non_completion_reply = _handoff_non_completion_reply(content)
             if non_completion_reply is not None:
                 content = non_completion_reply
+            elif _record_completion_missing():
+                content = _UNEXECUTED_ACTION_REPLY
+                debug_log("record binding: unresolved effects cannot confirm completion", "planning")
             elif not _unexecuted_reply_retried and turn < max_turns:
                 _unexecuted_reply_retried = True
                 hint = _FAILED_TOOL_FOLLOWUP_HINT if _selected_failed_followup else _UNEXECUTED_ACTION_HINT

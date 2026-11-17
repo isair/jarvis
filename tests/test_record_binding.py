@@ -653,3 +653,37 @@ def test_target_interpretation_requires_its_declared_identity_evidence(decision)
     assert decode_record_plan(request, {'plan': [decision]}) is None
     assert tool.calls == []
     assert tool.entries == {'tea', 'soup'}
+
+
+@pytest.mark.parametrize('model', ['gemma4:e2b', 'gpt-oss:20b'])
+@pytest.mark.parametrize('max_turns', [1, 2, 8])
+def test_unresolved_record_effect_cannot_be_reported_as_completed(
+        mock_config, db, dialogue_memory, monkeypatch, model, max_turns):
+    from jarvis.reply import engine
+    from jarvis.tools import registry
+    tool, _ = declared_tool()
+    monkeypatch.setitem(registry.BUILTIN_TOOLS, tool.name, tool)
+    mock_config.llm_chat_model = model
+    mock_config.planner_enabled = False
+    mock_config.agentic_max_turns = max_turns
+    generations = []
+    digests = []
+
+    def chat(**kwargs):
+        generations.append(kwargs['messages'])
+        value = {'plan': [intent(topic='cocoa')]} if len(generations) == 1 else {
+            'reply': 'The cocoa reminder was deleted successfully.'}
+        return {'message': {'content': json.dumps(value)}}
+
+    monkeypatch.setattr(engine, 'digest_loop_for_max_turns',
+                        lambda **kw: digests.append(kw) or 'The cocoa reminder was deleted successfully.')
+    monkeypatch.setattr(engine, 'select_tools', lambda *a, **kw: [tool.name, 'stop'])
+    monkeypatch.setattr(engine, 'chat_with_messages', chat)
+    monkeypatch.setattr(engine, 'run_tool_with_retries', lambda **kw: tool.run(kw['tool_args'], None))
+    reply = engine.run_reply_engine(db, mock_config, None,
+                                   'Delete the cocoa reminder and keep the other entries.', dialogue_memory)
+    assert reply == engine._UNEXECUTED_ACTION_REPLY
+    assert tool.entries == {'tea', 'soup'}
+    assert tool.calls == [{'operation': 'enumerate_entries', 'scope': 'whole_collection'}]
+    assert len(generations) <= 2
+    assert not digests
