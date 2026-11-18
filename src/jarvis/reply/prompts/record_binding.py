@@ -219,9 +219,18 @@ def record_messages(query, actions, reference_context=''):
             {'role': 'user', 'content': json.dumps(example, ensure_ascii=False)},
             {'role': 'assistant', 'content': json.dumps({'plan': decision if isinstance(decision, list) else [decision] if decision else []}, ensure_ascii=False)},
         ])
-    if reference_context:
+    namespaces = {action['tool_name'] for action in actions}
+    if reference_context and len(namespaces) == 1:
+        # Demonstrate the wire shape for one namespace. These illustrative
+        # purposes never enter the current request's action list.
+        namespace = next(iter(namespaces))
+        example_actions = [
+            {'index': action['index'], 'tool_name': namespace, 'purpose': action['purpose'],
+             'requires_existing_identifier': action['requires_existing_identifier']}
+            for action in EXAMPLE_ACTIONS
+        ]
         for request, reference, steps in _REFERENCE_EXAMPLES:
-            example = {'request': request, 'actions': EXAMPLE_ACTIONS, 'reference_context': reference}
+            example = {'request': request, 'actions': example_actions, 'reference_context': reference}
             plan = [
                 {'english': english, 'kind': kind, 'literal_target': None,
                  'naming_marker': None, 'topic': topic, 'action_index': index}
