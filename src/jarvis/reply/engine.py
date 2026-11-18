@@ -1373,7 +1373,12 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 _planner_tool_catalog.append((str(_nm), _first[:120]))
 
     action_plan: list[str] = []
-    _declared_records = declares_record_catalogue(_planner_schema or [])
+    def _record_action_tools(schemas):
+        # Skill discovery and loading are preparation rather than record actions.
+        return [schema for schema in schemas or ()
+                if schema['function']['name'] not in SKILL_TOOLS]
+
+    _declared_records = declares_record_catalogue(_record_action_tools(_planner_schema))
     _record_reference_context = '\n\n'.join(
         part for part in (_dialogue_ctx, transcript_context) if part
     ) if _declared_records else ''
@@ -2337,7 +2342,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     empty_response_retry_used = False
     compound_coverage_checks = 0
     coverage_evidence: list[dict] = []
-    _record_bound_names = {tool['function']['name'] for tool in tools_json_schema or []
+    _record_bound_names = {tool['function']['name'] for tool in _record_action_tools(tools_json_schema)
                            if tool['function']['name'] not in {'stop', 'toolSearchTool'}} if _declared_records else set()
     _record_plan = None
     _record_interpreted = False
@@ -2369,7 +2374,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         if _record_plan is None or not _record_plan.intents:
             return _record_rejected_attempt
         request = prepare_record_request(
-            redacted, tools_json_schema or [], coverage_evidence, _prior_identities,
+            redacted, _record_action_tools(tools_json_schema), coverage_evidence, _prior_identities,
             reference_context=_record_reference_context,
         )
         return request is None or resolve_record_plan(request, _record_plan).status != 'complete'
@@ -2597,7 +2602,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         _dump_tools_schema = None if use_text_tools else tools_json_schema
         _chat_model = cfg.llm_chat_model
         _record_request = prepare_record_request(
-            redacted, tools_json_schema or [], coverage_evidence, _prior_identities,
+            redacted, _record_action_tools(tools_json_schema), coverage_evidence, _prior_identities,
             reference_context=_record_reference_context,
         ) if _declared_records else None
         _record_compiled_call = None
@@ -2736,8 +2741,13 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         # Extract tool call if present
         tool_requests, text_tool_request, retained_calls = _extract_structured_tool_calls(llm_resp)
 
-        if (use_text_tools and _compound_sub_questions and not action_plan and not _declared_records
-                and not tool_requests and content and compound_coverage_checks < 2):
+        skill_read_needs_coverage = bool(
+            coverage_evidence and coverage_evidence[-1]['name'] == 'readSkill'
+            and coverage_evidence[-1]['success']
+        )
+        if (use_text_tools and (_compound_sub_questions or skill_read_needs_coverage)
+                and not action_plan and not _declared_records and not tool_requests
+                and content and compound_coverage_checks < 2):
             compound_coverage_checks += 1
             proposed = resolve_uncovered_request(
                 cfg, redacted, coverage_evidence, tools_json_schema or [], prior_results=_prior_identities,
@@ -2939,7 +2949,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             if _declared_records:
                 coverage_record.update(result_metadata=result.result_metadata,
                                        resource_references=list(result.resource_references or ()))
-            coverage_evidence.append(coverage_record)
+            if not _declared_records or tool_name not in SKILL_TOOLS:
+                coverage_evidence.append(coverage_record)
 
             # Handle stop tool - end conversation without response
             if result.reply_text == STOP_SIGNAL:

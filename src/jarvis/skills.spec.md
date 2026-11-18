@@ -54,3 +54,10 @@ metadata-driven Features controls.
 Skill discovery and instruction preparation are not evidence of executing the
 user's requested action. Both completion and failed-follow-up guards retain this
 distinction.
+
+
+The declared-record compiler ignores preparatory skill schemas and results when
+checking record admission and completion. Skill tools remain available in the
+ordinary reply loop. For text tool calls, a successful skill read can trigger the
+existing reply-coverage check before accepting an answer, even when the request
+is a single question. The existing coverage limit and tool allow-list apply.

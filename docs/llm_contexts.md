@@ -1,7 +1,7 @@
 # LLM Contexts Map
 
-Optional local skills (`skills_enabled`, false by default) add no inference
-context or model call of their own. A reply-owned local lexical index searches
+Optional local skills (`skills_enabled`, false by default) use the existing reply and
+coverage contexts. A reply-owned local lexical index searches
 only configured `skills_paths` and places at most five metadata matches in the
 reply system prompt. All metadata disclosure is capped at 4 KiB per reply,
 independent of the number of installed skills. `searchSkills` supports refined
@@ -16,6 +16,12 @@ removed. Skill preparation does not establish action-completion evidence.
 The router and planner see two optional tool definitions, never the installed
 skill catalogue. Both tools are always exposed to enabled reply loops, and
 absent from disabled routing. Models, deadlines and turn limits are unchanged.
+
+In the text tool protocol, a successful `readSkill` result can trigger the
+existing coverage-recovery inference for a single question before the candidate
+answer is delivered. This uses the same per-reply coverage limit and the current
+scoped schemas, request and observed results. Skill tool schemas and results do
+not enter the declared-record compiler's admission or completion evidence.
 
 Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it is gated. This is the reference for optimising the app's main bottleneck (LLM latency). Keep it in sync with the code — see the note at the bottom.
 
