@@ -581,3 +581,7 @@ local alarm sound. Countdown ownership and speech remain in the core daemon.
 Alarm dispatch requires a column-zero event with the process capability shared
 with its owned daemon. Other log text, including multi-line conversational
 data, cannot supply an alarm action.
+
+## Local memory import
+
+The shared tray/face menu opens a lazy `MemoryImportWindow`. It reviews selected Claude Code or Codex instruction files, or pasted/chosen ChatGPT and Claude text, without reading private app caches or contacting those providers. Source and editable entry pages scroll, with navigation outside the viewport. Discovery, reads and atomic persistence use `KeepAliveWorker`; queued completion slots are generation-scoped. Closing hides the window without destroying an authorised writer. The memory viewer displays import quotations and dates alongside current node data. See `src/jarvis/memory/imports.spec.md`.

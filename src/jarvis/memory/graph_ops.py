@@ -1255,6 +1255,8 @@ def _collect_branch_text(
     store: GraphMemoryStore, branch_root_id: str, max_chars: int,
 ) -> str:
     """Collect bounded node text breadth-first in sibling decayed-access order."""
+    from .imports import render_streamed_memory_context
+
     parts: list[str] = []
     remaining = max_chars
     queue = deque([branch_root_id])
@@ -1267,7 +1269,13 @@ def _collect_branch_text(
         with store.open_node_text(node_id) as chunks:
             if chunks is None:
                 continue
-            snippet = _profile_text_prefix(chunks, remaining)
+            records = store.get_context_sources(node_id)
+            if records:
+                snippet = render_streamed_memory_context(
+                    chunks, branch_root_id, records, max_chars=remaining,
+                )
+            else:
+                snippet = _profile_text_prefix(chunks, remaining)
         if snippet:
             parts.append(snippet)
             remaining -= len(snippet) + 1
@@ -1318,7 +1326,12 @@ def format_warm_profile_block(profile: dict[str, str]) -> str:
     CLAUDE.md note on denial-template mirroring.
     """
     user = (profile.get("user") or "").strip()
-    directives = (profile.get("directives") or "").strip()
+    from .imports import IMPORT_CONTEXT_BEGIN, IMPORT_CONTEXT_GUIDANCE
+    if IMPORT_CONTEXT_BEGIN in user:
+        user = IMPORT_CONTEXT_GUIDANCE+'\n'+user
+    directives = profile.get("directives") or ""
+    if not directives.strip():
+        directives = ""
     if not user and not directives:
         return ""
 
