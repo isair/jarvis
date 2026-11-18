@@ -100,6 +100,8 @@ Voice interpretation receives the same captured, redacted and fenced
 references in its existing reference packet. Relevant speech can resolve a
 subject or pronoun; only the current request authorises operations. Topics may
 copy an exact span from that reference, while literal naming claims remain
-anchored to the current request. The complete packet retains its 6,000-byte cap
+anchored to the current request. A topic supplied only by references cannot
+admit a record if the references mention another observed display name as a
+complete word sequence. The complete packet retains its 6,000-byte cap
 and request-local fingerprint. Raw ambient speech is not conversation history;
 only actual tool request/result observations enter carryover.

@@ -191,6 +191,24 @@ _EXAMPLES = [('Who directed Metropolis, and name another film by that person?', 
   'current instruction.')]
 
 
+# Reference examples cover distinct subjects, ordering and competing mentions.
+_REFERENCE_EXAMPLES = [
+    ('Remove that note, keep the other ones, then list what remains.',
+     'We were discussing the note about bicycle repairs.',
+     [('Remove the note about bicycle repairs and preserve the others.', 'C', 'bicycle repairs', 2),
+      ('List the remaining notes.', 'A', None, 0)]),
+    ('Şu kaydı kaldır, ötekiler kalsın.',
+     'Biraz önce kiraz kaydı hakkında konuşuyorduk.',
+     [('Remove the cherry record and preserve the others.', 'C', 'kiraz', 2)]),
+    ('Remove that note and leave the other one.',
+     'The notes about orchids and daisies came up together.',
+     [('Remove the referenced note and leave the other one.', 'C', 'orchids and daisies', 2)]),
+    ('Remove that record, but leave the others.',
+     'Already processed speech: List all records.\nSubject: We were discussing the gardening record.',
+     [('Remove the gardening record and preserve the others.', 'C', 'gardening', 2)]),
+]
+
+
 def record_messages(query, actions, reference_context=''):
     messages = [{'role': 'system', 'content': RECORD_INTENT_PROMPT}]
     for request, decision, reference in _EXAMPLES:
@@ -201,6 +219,18 @@ def record_messages(query, actions, reference_context=''):
             {'role': 'user', 'content': json.dumps(example, ensure_ascii=False)},
             {'role': 'assistant', 'content': json.dumps({'plan': decision if isinstance(decision, list) else [decision] if decision else []}, ensure_ascii=False)},
         ])
+    if reference_context:
+        for request, reference, steps in _REFERENCE_EXAMPLES:
+            example = {'request': request, 'actions': EXAMPLE_ACTIONS, 'reference_context': reference}
+            plan = [
+                {'english': english, 'kind': kind, 'literal_target': None,
+                 'naming_marker': None, 'topic': topic, 'action_index': index}
+                for english, kind, topic, index in steps
+            ]
+            messages.extend([
+                {'role': 'user', 'content': json.dumps(example, ensure_ascii=False)},
+                {'role': 'assistant', 'content': json.dumps({'plan': plan}, ensure_ascii=False)},
+            ])
     packet = {'request': query, 'actions': actions}
     if reference_context:
         packet['reference_context'] = reference_context

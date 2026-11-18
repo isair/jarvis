@@ -213,7 +213,7 @@ def _literal_supplied(value, marker, query):
     return False
 
 
-def _words(value):
+def _word_tokens(value):
     words, current = [], []
     for char in unicodedata.normalize('NFC', value.casefold()):
         if char == '_' or unicodedata.category(char)[0] in {'L', 'M', 'N'}:
@@ -222,11 +222,11 @@ def _words(value):
             words.append(''.join(current)); current = []
     if current:
         words.append(''.join(current))
-    return set(words)
+    return words
 
 
 def _topic_matches(topic, display):
-    desired, actual = _words(topic), _words(display)
+    desired, actual = set(_word_tokens(topic)), set(_word_tokens(display))
     return bool(desired and actual and (desired <= actual or actual <= desired))
 
 
@@ -328,6 +328,16 @@ def _observed_matches(action, request, topic, current):
     attempted = any(row.get('name') == action.name and row.get('arguments') == lookup for row in current)
     records = fresh if complete or attempted else old + [value for value in fresh if value not in old]
     matches = list(dict.fromkeys(identity for identity, display in records if _topic_matches(topic, display)))
+    if len(matches) == 1 and topic.casefold() not in request.query.casefold():
+        # Historical references cannot by themselves distinguish between several
+        # explicitly mentioned records. A current topic still takes precedence.
+        reference = ' ' + ' '.join(_word_tokens(request.reference_context)) + ' '
+        for identity, display in records:
+            if identity == matches[0]:
+                continue
+            phrase = ' '.join(_word_tokens(display))
+            if phrase and f' {phrase} ' in reference:
+                return [], complete, attempted
     return matches, complete, attempted
 
 

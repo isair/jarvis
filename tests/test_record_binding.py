@@ -769,3 +769,30 @@ def test_rejected_repeat_does_not_erase_a_genuine_completed_record_effect(
     assert tool.calls == [{'operation': 'enumerate_entries', 'scope': 'whole_collection'},
                           {'operation': 'discard_entries', 'scope': 'matching_labels', 'labels': ['tea']}]
     assert len(generations) == 3
+
+
+@pytest.mark.parametrize('query, expected', [
+    ('Remove that note.', None),
+    ('Remove the tea note.', 'tea'),
+])
+def test_a_topic_found_only_in_ambiguous_reference_data_cannot_select_a_record(query, expected):
+    tool, tools = declared_tool()
+    reference = 'Earlier we discussed the tea and soup notes together.'
+    request = prepare_record_request(query, tools, [], [], reference_context=reference)
+    decision = {'plan': [intent()]}
+    lookup = resolve_record_plan(request, decision)
+    assert lookup.prerequisite
+    result = tool.run(lookup.call['arguments'], None)
+    rows = [{'name': tool.name, 'arguments': lookup.call['arguments'],
+             'result': result.reply_text, 'success': result.success}]
+    request = prepare_record_request(query, tools, rows, [], reference_context=reference)
+    resolution = resolve_record_plan(request, decision)
+    if expected is None:
+        assert resolution.status == 'blocked'
+        assert resolution.call is None
+        assert tool.entries == {'tea', 'soup'}
+        assert len(tool.calls) == 1
+    else:
+        assert resolution.call['arguments']['labels'] == [expected]
+        assert tool.run(resolution.call['arguments'], None).success
+        assert tool.entries == {'soup'}
