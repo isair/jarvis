@@ -20,7 +20,8 @@ absent from disabled routing. Models, deadlines and turn limits are unchanged.
 In the text tool protocol, a successful `readSkill` result can trigger the
 existing coverage-recovery inference for a single question before the candidate
 answer is delivered. This uses the same per-reply coverage limit and the current
-scoped schemas, request and observed results. Skill tool schemas and results do
+scoped schemas, request and observed results. A single-question skill check
+can propose only an already-allowed `readSkill` call. Skill schemas and results do
 not enter the declared-record compiler's admission or completion evidence.
 
 Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it is gated. This is the reference for optimising the app's main bottleneck (LLM latency). Keep it in sync with the code — see the note at the bottom.

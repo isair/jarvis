@@ -2749,8 +2749,14 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 and not action_plan and not _declared_records and not tool_requests
                 and content and compound_coverage_checks < 2):
             compound_coverage_checks += 1
+            coverage_tools = tools_json_schema or []
+            if not _compound_sub_questions:
+                # The single-question recovery reads from the selected skill package.
+                coverage_tools = [schema for schema in coverage_tools
+                                  if schema['function']['name'] == 'readSkill']
+                debug_log('skill reference coverage: checking package reads', 'planning')
             proposed = resolve_uncovered_request(
-                cfg, redacted, coverage_evidence, tools_json_schema or [], prior_results=_prior_identities,
+                cfg, redacted, coverage_evidence, coverage_tools, prior_results=_prior_identities,
             )
             if cancel_event is not None and cancel_event.is_set():
                 return None

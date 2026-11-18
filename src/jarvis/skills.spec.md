@@ -60,4 +60,5 @@ The declared-record compiler ignores preparatory skill schemas and results when
 checking record admission and completion. Skill tools remain available in the
 ordinary reply loop. For text tool calls, a successful skill read can trigger the
 existing reply-coverage check before accepting an answer, even when the request
-is a single question. The existing coverage limit and tool allow-list apply.
+is a single question. Single-question skill recovery can only propose an
+already-allowed `readSkill` call within the existing coverage limit.
