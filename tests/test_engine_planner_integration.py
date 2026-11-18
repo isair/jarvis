@@ -219,7 +219,7 @@ def test_empty_plan_falls_through_to_existing_behaviour(
     )
 
 
-@pytest.mark.parametrize("resolution", ["missing", "error", "disallowed"])
+@pytest.mark.parametrize("resolution", ["missing", "error", "disallowed", "stop"])
 def test_resolver_failure_on_tool_step_falls_back_to_chat(
     mock_config, db, dialogue_memory, resolution
 ):
@@ -265,6 +265,8 @@ def test_resolver_failure_on_tool_step_falls_back_to_chat(
     def resolve(**kwargs):
         if resolution == "error":
             raise RuntimeError("Resolver unavailable")
+        if resolution == "stop":
+            return 'stop', {}
         return ("not_registered", {}) if resolution == "disallowed" else None
 
     with patch.object(engine_mod, "run_tool_with_retries", side_effect=fake_tool_runner), \
@@ -291,6 +293,7 @@ def test_resolver_failure_on_tool_step_falls_back_to_chat(
     assert "webSearch" in invoked_tools, (
         "Chat model's own tool call should still be dispatched after resolver failure"
     )
+    assert 'stop' not in invoked_tools, 'A planned step cannot dismiss the conversation'
 
 
 def test_paraphrased_plan_falls_back_to_tool_router(
@@ -866,3 +869,47 @@ def test_exhausted_recovery_without_execution_cannot_deliver_digest_completion(m
     monkeypatch.setattr(engine, 'digest_loop_for_max_turns', lambda **kwargs: 'I deleted the meal.')
     reply = engine.run_reply_engine(db, mock_config, None, 'Delete the recorded meal.', dialogue_memory)
     assert reply == "I couldn't execute the requested action. Please try again or provide the missing details."
+
+
+@pytest.mark.parametrize('requested', [1, 2])
+def test_planned_actions_are_reported_as_completed_calls_without_losing_repeated_requests(
+        monkeypatch, mock_config, db, dialogue_memory, requested):
+    import json
+    from jarvis.reply import engine
+    from jarvis.tools.types import ToolExecutionResult
+    mock_config.llm_chat_model = mock_config.ollama_chat_model = 'gemma4:e2b'
+    mock_config.planner_enabled = True
+    actions = []
+    monkeypatch.setattr(engine, 'select_tools', lambda *a, **k: ['timer', 'stop'])
+    monkeypatch.setattr(engine, 'extract_search_params_for_memory', lambda *a, **k: {'keywords': []})
+    monkeypatch.setattr(engine, 'plan_query', lambda *a, **k: ['timer set tea'] * requested + ['Reply to the user.'])
+    args = {'action': 'set', 'minutes': 5, 'label': 'tea', 'expiry_announcement': 'Tea is ready'}
+    monkeypatch.setattr(engine, '_resolve_plan_step', lambda **kw: ('timer', dict(args)))
+    def execute(**kw):
+        actions.append(dict(kw['tool_args']))
+        return ToolExecutionResult(success=True, reply_text='Countdown state: running\nElapsed: false')
+    monkeypatch.setattr(engine, 'run_tool_with_retries', execute)
+    def backend(*a, **kw):
+        messages = kw.get('messages') or a[2]
+        assert not any(m.get('tool_calls') for m in messages), 'Planner-owned text requests retain the text protocol'
+        calls = {c['id'] for m in messages
+                 for c in (json.loads(m['content']).get('tool_calls', [])
+                           if m.get('role') == 'assistant' and (m.get('content') or '').startswith('{')
+                           else m.get('tool_calls', []))
+                 if c.get('function', {}).get('name') == 'timer'}
+        completed = {m.get('tool_call_id') for m in messages if m.get('tool_name') == 'timer'}
+        if len(calls & completed) >= requested:
+            return _assistant_content('The requested timers are running.')
+        return _assistant_content('tool_calls: '+json.dumps([{'id': 'retry', 'type': 'function',
+            'function': {'name': 'timer', 'arguments': {**args, 'expiry_announcement': 'Your tea is ready'}}}]))
+    monkeypatch.setattr(engine, 'chat_with_messages', backend)
+    result = engine.run_reply_engine(db, mock_config, None, 'Start the requested tea timers.', dialogue_memory)
+    assert result == 'The requested timers are running.'
+    assert len(actions) == requested
+    recorded = dialogue_memory.get_recent_turns_with_tools()
+    saved_calls = [call for message in recorded for call in message.get('tool_calls', [])
+                   if call.get('function', {}).get('name') == 'timer']
+    assert len(saved_calls) == requested
+    assert all(call['function']['arguments'] == args for call in saved_calls)
+    saved_results = {message.get('tool_call_id') for message in recorded if message.get('tool_name') == 'timer'}
+    assert {call['id'] for call in saved_calls} == saved_results

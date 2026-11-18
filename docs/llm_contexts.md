@@ -67,12 +67,12 @@ requests do not supply this event.
   - **Warm profile block** (query-agnostic User + Directives excerpt from the knowledge graph, composed by `build_warm_profile()` / `format_warm_profile_block()` in [src/jarvis/memory/graph_ops.py](src/jarvis/memory/graph_ops.py) at Step 3.5 of `reply()`; no LLM call, pure SQLite read; injected unconditionally so personalisation is the default; result cached in `DialogueMemory._hot_cache` under `DialogueMemory.WARM_PROFILE_CACHE_KEY` with its database path and persisted warm-profile revision. Each turn checks that signature before reuse. When revision metadata is absent, the reader discards any prior cache and rebuilds from existing nodes without caching or schema writes. SQLite triggers track User/Directives inserts, deletes and content/parent edits, including external writes and moves into/out of those branches. World-only writes and access-only touches preserve the signature. Profile reads use one read-only transaction for the revision and traversal, without schema/bootstrap writes. Node text streams through bounded decoded chunks, child ordering reads identifiers without note payloads, and exhausted output budgets stop descendant reads. Unicode, whitespace and truncation produce the same profile text. Temporary stores are closed after the check/load; unavailable rebuilds do not supply stale cached data. `stop`, new-conversation entry and in-process User/Directives mutation listeners also invalidate the cache)
   - Query-driven graph recall attempts access-score updates without waiting for another writer. Saved facts remain available when optional tracking writes fail; actual graph-read errors retain their normal failure behaviour. Scoped connection ownership closes its store after retrieval, skipped searches and errors.
   - Digested memory enrichment (optional, see #4)
-  - Failed-task continuation: raw narrowed router names intersect previous failed-tool flags before carry-over exposure. Without a successful current action result, final prose is withheld; its undelivered draft is removed and one execution-status feedback turn requests a grounded call or explicit clarification/blocker. This applies to native/text protocols and empty-plan fallback, excludes stop/discovery receipts, and stays within the existing reply budget and model/deadline settings. No additional inference context is created.
+  - Failed-task continuation: raw narrowed router names intersect previous failed-tool flags before carry-over exposure. Without a successful current action result, final prose is withheld; its undelivered draft is removed and one execution-status feedback turn requests a grounded call or explicit clarification/blocker. This applies to native/text protocols and empty-plan fallback, excludes stop/discovery receipts, and stays within the existing reply budget and model/deadline settings. Planned conversation dismissal cannot dispatch directly; unresolved termination returns pending work to this loop. No additional inference context is created.
   - Request-scoped `SpeechContext`: immutable ambient transcript snapshot captured before the shared query lock, with segment timing, TTS overlap, processed markers and last assistant speech. Redacted and fenced as reference data, never persisted as ambient dialogue. The original recognised speech is the current user message.
   - Time + location context includes the selected local clock and ISO dates labelled `Today` and `Tomorrow` derived from that same clock. Calendar guidance requires saved event dates to match the requested calendar date. Current dates do not supply a missing historical statement date. This context is computed once per reply and placed at the END of the system message's dynamic region — never the head — so every in-loop call sends a byte-identical system message and the server's KV/prefix cache can reuse the whole prompt head; in text-tools mode it sits just before the tool-call syntax guidance so the instruction block stays final.
   - Text tool-call syntax (`_text_tool_call_guidance` in `engine.py`) prefers argument objects without double encoding, using declared tool input fields in concrete examples. Undecodable argument objects produce correction feedback and no execution, within the existing turn budget; valid JSON-encoded objects remain accepted.
   - Tool schema: native via `generate_tools_json_schema()` ([src/jarvis/tools/registry.py](src/jarvis/tools/registry.py)) or text fallback via `_text_tool_call_guidance()` ([engine.py:68](src/jarvis/reply/engine.py:68))
-  - Model-size tool constraints (`model_variants.py`) preserve explicitly supplied arguments ahead of profile/current-context defaults; optional default inputs are preferably resolved by the tool, and supplied values must be grounded in the request or known context. Defaults supply inputs, not fresh tool results.
+  - Model-size tool constraints (`model_variants.py`) preserve explicitly supplied arguments ahead of profile/current-context defaults; optional default inputs are preferably resolved by the tool, and supplied values must be grounded in the request or known context. Defaults supply inputs, not fresh tool results. Main replies, argument-bearing plans, step resolution and coverage recovery share `prompts/tool_arguments.py`: exact supplied or observed identifiers stay literal, unknown existing-record identity requires discovery before mutation, filesystem paths preserve supplied notation without translated descriptive words, and free-form queries resolve their subject. Shared argument guidance preserves literal names and identifiers, including multiword names, while resolving free-form search/query intent from dialogue; surrounding category/action prose does not expand an identifier. Selection covers only requested action targets; preservation constraints exclude items from those targets, and a whole-collection operation cannot satisfy a request restricted to named items. Coverage constrains the existing single inference with the canonical scoped tool schemas plus a completion alternative, enforces required fields and triggered dependencies, and retains its 512-token, 8,192-context and 20-second/configured caps. Unsupported schema scopes retain unconstrained generation.
   - Weather tool description/schema (`weather.py`) require an explicitly named place in `location`, ahead of detected or remembered user location. Without a named place, empty arguments let the tool resolve location before clarification; date/time phrases are excluded from place arguments.
   - Weather results supply the service-local observation timestamp/timezone and computed weekdays beside each ISO daily date, so the reply model receives calendar labels with the recorded readings.
   - Web search result titles and destinations come from structural result anchors, preserving short multilingual titles and excluding navigation. Redirect destinations are decoded once; fetched content retains the untrusted-data fence. The single DDG HTML request uses a matched local Chrome TLS/HTTP profile with a 512 KiB decoded-byte cap and the remaining chain deadline (maximum 10 seconds); overflow is discarded before parsing. No browser profile, cookies or JavaScript is imported.
@@ -121,6 +121,7 @@ limits.
 
 - **File**: [src/jarvis/reply/enrichment.py](src/jarvis/reply/enrichment.py) — `extract_search_params_for_memory()` (~line 71).
 - **Trigger**: once per reply, **only when the pre-flight planner (#12) emitted a `searchMemory` directive or returned an empty plan (fail-open)**. Pure reply-only plans skip this entirely — saves one LLM call per greeting / small-talk turn.
+- **Diary availability gate**: diary-only enrichment first checks for any saved summary with a bounded local query. A confirmed empty diary skips extraction and retrieval; availability is read again on each reply. Read failures preserve recall. Graph and combined-source enrichment retain their preparation gates.
 - **Model / gating**: FAST tier — `resolve_model(cfg, Tier.FAST)`. Factory-dispatched. Small classification task; rides the same small/warm model as the router. Silent empty-dict on failure (early-return when no chat model is configured — no wasted LLM round-trip).
 - **Inputs**: user query (with the planner's `topic` hint appended when present), optional context hint (live-context compact summary plus redacted speech reference) or UTC-now anchor, both carried in the USER message.
 - **System prompt**: inline at [enrichment.py:60](src/jarvis/reply/enrichment.py:60). Byte-static — no hint block, no timestamp — so the system prompt is identical across every extractor call and stays cacheable; the per-call hint / UTC anchor rides at the end of the user content.
@@ -155,7 +156,7 @@ limits.
 ## 5. Tool-Result Digest (optional, opt-in)
 
 - **File**: [src/jarvis/reply/enrichment.py](src/jarvis/reply/enrichment.py) — `digest_tool_result_for_query()` + `_distil_tool_batch()`.
-- **Trigger**: after each tool result in the loop, if `tool_result_digest_enabled` (default `null` = auto-ON for SMALL ≤7.5B, OFF for LARGE). Primary motivation on small models: prevents `fetch_web_page`'s 50k-char payloads from filling the 8192 num_ctx window. Skipped if raw < 400 chars (`_TOOL_DIGEST_MIN_CHARS`); batched if > 2500 (`_TOOL_DIGEST_BATCH_MAX_CHARS`).
+- **Trigger**: after each tool result in the loop, if `tool_result_digest_enabled` (default `null` = auto-ON for SMALL ≤7.5B, OFF for LARGE). Primary motivation on small models: prevents `fetch_web_page`'s 50k-char payloads from filling the 8192 num_ctx window. Skipped if raw < 400 chars (`_TOOL_DIGEST_MIN_CHARS`); batched if > 2500 (`_TOOL_DIGEST_BATCH_MAX_CHARS`). Tools in `_DIGEST_SKIP_TOOLS` (`getWeather`, `getTime` and `timer`) bypass this context so structured results, timer identifiers and ETAs remain available verbatim.
 - **Model / gating**: `cfg.llm_chat_model` via `get_llm_backend(cfg)`. Gated by `tool_result_digest_enabled` — auto-on for SMALL via `detect_model_size(cfg.llm_chat_model)`.
 - **Inputs**: original user query, separate redacted transcript reference, tool name, raw tool result (e.g. webSearch payload inside UNTRUSTED WEB EXTRACT fence).
 - **System prompt**: `_TOOL_DIGEST_SYSTEM_PROMPT`. Teaches attributed fact extraction, `NONE` sentinel, no inference.
@@ -294,7 +295,7 @@ LLM routing strategy and its prompts are independent of this cache.
 - **Model / gating**: CHAT tier — `resolve_model(cfg, Tier.CHAT)`. Factory-dispatched. The planner tracks the active chat model so upgrading it (via setup wizard, config, or provider switch) automatically upgrades plan quality.
 - **Inputs**: stable tool catalogue followed by original user query, separate redacted speech snapshot in user content, the latest six non-empty user/assistant dialogue messages (200 characters each, chronological; tool-result rows, other roles and empty messages do not consume this budget), plus a separate chronological data block containing at most eight successful recorded resource references (kind, exact ID and bounded label), **router-narrowed** tool catalogue (names + one-line descriptions) — not the full 30+ list. When the carry-over guard from #7 fires, the previous turn's failed tool name is unioned into this catalogue before the planner sees it, so the planner can plan a re-call without `toolSearchTool` round-tripping. **No** memory context: the planner decides *whether* memory is needed. `_build_user_message()` reports an empty external catalogue without choosing the plan; the same private-history rules apply with or without external tools. Recorded identity takes precedence over label-based operations; unresolved destructive referents require retrieval or clarification.
 - **System prompt**: `_PROMPT_TEMPLATE` in `planner.py`. Teaches the `searchMemory topic='...'` directive for prior-conversation lookups and personalised recommendations. Private user history is distinguished from public facts about named entities and utility requests. Also teaches short imperative tool steps, angle-bracket entity placeholders, final synthesis step, same-language output, no numbering.
-- **Output**: list of plan steps (max `MAX_STEPS` = 5). Tool references match exact registered names and protocol boundaries, including namespace punctuation and non-ASCII characters; prefixes of other names are not authorised. Gates memory enrichment (#3 / #4) and augments the tool router (#7 — planner's picks are unioned in, not replacing). Single-step `["Reply to the user."]` plans are the planner's positive "no memory, no tools" signal. An empty list is fail-open — the engine reverts to running #3 unconditionally. A **stop-only plan** (every step is `stop`) is also rejected by a deterministic post-plan guard and returns `[]` — same fail-open path as an LLM failure — so the engine falls through to the tool router and chat model rather than silently dismissing the conversation. Consumed further by the engine to build the `ACTION PLAN:` system-message block and drive the direct-exec loop (#13) for small models.
+- **Output**: list of plan steps (max `MAX_STEPS` = 5). Tool references match exact registered names and protocol boundaries, including namespace punctuation and non-ASCII characters; prefixes of other names are not authorised. Gates memory enrichment (#3 / #4) and augments the tool router (#7 — planner's picks are unioned in, not replacing). Single-step `["Reply to the user."]` plans are the planner's positive "no memory, no tools" signal. An empty list is fail-open — the engine reverts to running #3 unconditionally. A **stop-only plan**, or a stop directive preceding pending registered-tool work, is rejected by a deterministic post-plan guard and returns `[]` — same fail-open path as an LLM failure — so the engine falls through to the tool router and chat model rather than silently dismissing the conversation. Consumed further by the engine to build the `ACTION PLAN:` system-message block and drive the direct-exec loop (#13) for small models.
 - **Limits**: `planner_timeout_sec` (3s). `max_tokens: 1024` (shared `_PLANNER_TOKEN_BUDGET`, including reasoning and answer), `temperature: 0.0`. Fail-open → `[]`.
 
 ## 13. Plan Step Resolver (per direct-exec turn, small models)
@@ -351,7 +352,7 @@ LLM routing strategy and its prompts are independent of this cache.
 |---|---------|-----------|-----------|------------|
 | 1 | Main chat loop | 1-8 | No | LARGE |
 | 2 | Intent judge | 1 (voice only) | fallback available | SMALL |
-| 3 | Memory enrichment extract | 0-1 | gated by planner | SMALL (FAST tier) |
+| 3 | Memory enrichment extract | 0-1 | planner and diary availability | SMALL (FAST tier) |
 | 4 | Memory digest | 0-N | auto by size | SMALL (uses chat model) |
 | 5 | Tool-result digest | 0-N | auto by size | SMALL (uses chat model) |
 | 6 | Max-turn digest | 0-1 | No | SMALL |
@@ -525,3 +526,157 @@ This graph is the reference for LLM-latency optimisation. Treat it as authoritat
 - **Input and prompt**: dictated text and the static inline cleanup prompt. Meaning and language must remain intact; output contains only the cleaned text.
 - **Limits**: five-second timeout; generation cap `max(64, len(text) // 2)` including reasoning. No assistant tools or conversation memory are involved.
 - **Output**: cleaned text for the clipboard/history path. Errors, empty answers and explicit generation-limit or unfinished completion metadata preserve the full original transcription through the caller's fallback.
+
+## Countdown timer tool
+
+The `timer` tool returns factual running/elapsed state, identifiers, durations
+and ETAs without a digest call. The reply model selects duration, label and a
+localised expiry announcement through the canonical tool schema. Expiry submits
+that text to local shared speech without another LLM call or conversational
+follow-up. Cancellation retains ownership through speech termination.
+
+The shared system prompt asks for expiry text with countdown creation, treats
+running state as completed creation and distinguishes later expiry from the
+current confirmation. Known-language requests missing expiry text return a
+tool error before any timer is started. Alarm IPC capabilities stay outside
+LLM context and tool payloads.
+
+### Planner execution and written reply rendering
+
+Direct planner execution contributes an assistant-call identity and matching
+result before the next model turn. Distinct planned ordinals retain explicitly
+repeated actions, including identical argument objects.
+
+Completed written replies after current-request tool execution use
+`delivery.render_written_reply`, two bounded CHAT-tier contexts sharing one chat deadline. `WRITTEN_LANGUAGE_PROMPT`
+classifies the redacted current request, respecting explicit language overrides
+and ignoring quoted material/proper names. It returns a two- or three-letter ASCII ISO 639 language code
+(8 output tokens). The local ISO catalogue resolves it to a canonical language name; unknown codes retain the original reply. `REPLY_RENDER_PROMPT` then translates only the completed
+reply into that language, without receiving the request or execution authority. It preserves facts and quoted literals. Tool-free written replies
+avoid this call. Shared rendering caps each complete raw/protected JSON packet
+at 4,096 UTF-8 bytes, uses 8,192 context tokens and 2,048 output tokens, and
+honours `llm_chat_timeout_sec`. Unavailable or invalid rendering keeps the
+original reply. Output, dialogue and caller delivery share the rendered text;
+cancellation suppresses publication. English spoken output retains its separate
+English-language policy through the same implementation.
+
+The written-language selector receives only the redacted request JSON and
+returns a two- or three-letter ASCII ISO 639 language code. Translation receives completed text alone
+under the explicit-target `REPLY_RENDER_PROMPT`. Selection is capped at
+8 generated tokens, translation at 2,048, and both share one configured chat
+deadline. Cancellation between the contexts suppresses translation. The timer
+schema names its future speech `expiry_announcement`, separating it from the
+immediate completion reply.
+
+Planner and dispatch share required-field/dependency checks. A concrete duration
+without its required expiry text reaches schema-aware CHAT resolution before
+execution. Planner output guidance keeps exact registered names and distinct
+action ordinals, while under-specified plans retain router fallback.
+
+The step resolver explicitly applies `dependentRequired` alongside root required fields, using property descriptions and the original request for omitted labels and language constraints. Delivery translation receives inline literal-token instructions only for packets containing protected literals. The prompt does not enumerate a separate marker list; exact-once/order/token validation remains unchanged.
+
+Reply model contexts project write-only tool inputs out of completed assistant requests, retaining call IDs and matching results. Full arguments remain available to execution, retry identity and recorded history. Timer expiry speech is write-only.
+
+Write-only projection covers native object and JSON-string argument shapes and the max-turn digest input, as well as ordinary reply inference.
+
+### Recorded-evidence evaluation (development only)
+
+`evals.helpers.judge_pass_fail` uses a static examiner prompt and a JSON packet containing separate `criteria` and `recorded_evidence` fields. Criteria apply only to the original evidence, including its actual language; grading cannot translate or repair it. The verifier is `EVAL_VERIFIER_MODEL` when configured, otherwise `EVAL_JUDGE_MODEL`. It retains the configured local endpoint,120-second request deadline,4,096-token Ollama context, zero temperature and deterministic Ollama seed. Output requires a non-empty assessment followed by a strict PASS/FAIL verdict; malformed or duplicate fields remain unknown. A set/started countdown denotes an immediate running countdown unless the evidence explicitly gives a pending start, pause, cancellation or expiry. Before-action facts, action results and remaining/resulting state stay distinct. An empty post-action set is consistent with complete cancellation but does not independently prove an effect or an empty pre-action set. Explicit zero-effect results and still-running records reject false completion claims. This context has no application execution authority.
+
+### Timer expiry-text preparation
+
+Before admitting a timer set action, the reply runner uses `delivery.render_timer_announcement` to translate its proposed future expiry phrase. A captured ISO639 language signal selects the target directly. The local pycountry ISO catalogue resolves two- or three-letter codes, including bibliographic aliases, to canonical language names before translation; unknown codes retain the original phrase. Otherwise `REQUEST_LANGUAGE_PROMPT` classifies only the redacted request prose, ignoring written-reply overrides (8 output tokens). Translation receives only the phrase, with no tools or execution authority. Both stages use CHAT, zero temperature, thinking disabled and8,192 context tokens; translation allows2,048 output tokens. Complete raw/protected packets retain the shared4,096-byte cap and literal guards. Classification and translation share one chat deadline; known-language expiry translation uses one call. Failure retains the original phrase; cancellation prevents subsequent admission. Model proposals remain recorded while dispatch receives a localised copy. No inference occurs at timer expiry.
+
+### Request-bound timer arguments and record-derived confirmations
+
+`timer_delivery.prepare_timer_arguments` compiles one ordered countdown list before the first creation. Its fixed JSON packet contains the redacted current request and the same bounded fenced dialogue/resource context used by planning, for explicit follow-ups. It contains no proposed-label hints or ordinal-selection task. The 512-token response supplies every entry's literal purpose; list length supplies the admission count. Only explicit new creations in the current request receive entries. Cancellation, listing, inspection and preservation of existing running timers create no admission budget; historical creation requests remain reference data. Mixed requests include only their new creations. Duration stays owned by the actor/resolver action and the canonical admission parser. Compilation cannot invent or replace duration components. Complete JSON input is capped at 4,096 bytes and context at 8,192 tokens. The complete array validates atomically and is cached, including explicit unknown compilation; empty and unknown remain distinct. Only successful admissions consume matched purposes. Named calls can arrive in any order without swapping their durations; ambiguous or already consumed purposes require recovery before effects. Captured speech language wins over inferred language. First compilation and isolated expiry translation share one chat deadline; subsequent preparation reuses the list.
+
+For creation-only timer turns, `timer_confirmation` constructs the acknowledgement directly from admitted records. `timer_reply_source` uses an isolated structured CHAT context to extract verbatim non-timer request clauses, excluding output-language and style instructions. Empty goals prevent supplementary extraction. For mixed requests a second structured context copies exact verbatim draft spans answering those goals, validated as ordered non-overlapping substrings, without rewriting text. Both contexts allow 512 output tokens and share the complete 4,096-byte input cap. It receives no tool execution authority or internal IDs. Supplementary extraction, written-language selection and translation share one final chat deadline. Numeric literals and quoted names are protected during translation. Failed supplementary rendering retains the verified acknowledgement. Mixed timer listing/cancellation turns retain their ordinary result rendering.
+
+Text-mode agent inference requests `reply_output_schema`: a complete bounded tool-call batch or a reply/question/blocker object. Step resolution requests a nullable structured call with allowed names. Both formats discriminate exact tool names and use their canonical input schemas, including complete timer action variants requiring future expiry text and at least one duration field for creation. Complete schemas are hoisted into namespaced root definitions with rebased root self-references and direct root `$defs` pointers, including nullable resolution. URI-fragment decoding, JSON-Pointer escaping and definition existence are checked; literal data remains unchanged. Explicit dialects, other local pointers, identifiers, anchors, dynamic or external-reference scopes omit the entire format constraint and retain ordinary parser/runtime/server validation. Both use the existing CHAT model, context and deadline. Ollama maps the common schema option to `format`; compatible servers map it to `response_format` and can fall back once after HTTP400 without resetting the deadline. Input validation and strict native assertions remain independent of server grammar support. Timer resource references also feed step resolution separately from captured speech data.
+
+### Complete structured timer arguments
+
+`Tool.prepare_generation_schema` prepares an owned copy before structured reply/step reference scoping. Its default preserves the supplied canonical contract. Timer generation derives one set branch requiring every declared duration component, expiry text and label. Unused components are zero and an unnamed label is empty. Field guidance preserves additive parts and converts fractional remainders to smaller integral units. This adds no inference, context or deadline; public declarations, direct admission and deterministic fast parsing retain optional unused components.
+
+### Prior tool identity observations
+
+`tool_identity.observed_tool_identities` qualifies earlier successful native/tagged-text tool results against unique matching assistant call IDs and source tool names. Feedback, failures, orphaned/mismatched results, truncated carryover and assistant claims supply no identity evidence. Recorded resource references remain namespaced; request arguments, including write-only expiry speech, are absent.
+
+The engine supplies a whole-observation identity view to CHAT planning and step resolution, capped at 2,000 UTF-8 bytes including its header and escaped JSON. Coverage receives the same qualified observations as `prior_results`, distinct from current `results`; its existing complete 6,000-byte JSON budget includes current data and whole prior items selected newest-first. Omitted items are marked unknown, never partially trimmed into new names. Prior identities and historical facts do not prove current execution or fresh measurements. These are input edges to existing contexts; tiers, inference count, context/output caps, deadlines and the two-check coverage limit remain unchanged. The timer purpose/count compiler keeps its separate dialogue/resource packet.
+
+Coverage recovery distinguishes facts requested in call arguments from facts actually returned. A partial informational lookup grounds the next query in its discovered subject and missing evidence. Initial compound queries and distinct repeated actions remain valid. Existing inference and packet/output/deadline limits apply.
+
+### Declared record view of existing reply and coverage contexts
+
+`reply.record_binding` reads optional `x-jarvis-records` relationships from the
+canonical tool schema. A fully declared routed catalogue skips ordinary planning
+(#12) and query-driven memory extraction, retrieval and digest contexts. The warm
+profile and bounded dialogue/resource references remain available. The existing first main reply generation (#1) uses
+`prompts.record_binding.RECORD_INTENT_PROMPT` with static interpretation examples,
+the redacted request, bounded dialogue/resource reference and declared purposes.
+Reference-bearing requests in a single tool namespace also receive examples for spoken follow-ups,
+multilingual subjects, ordered effects and competing mentions. The compiler
+blocks reference-only selection when the same evidence mentions another
+observed display name.
+It emits at most five ordered intents. Normal replies, questions, blockers and
+canonical stop/toolSearchTool calls share the format. This replacement uses CHAT,
+thinking disabled, zero temperature, 8,192 context tokens, 512 output tokens and
+`min(20, llm_chat_timeout_sec)` seconds. It adds no classifier stage.
+
+The complete request, tools, reference context and current raw results share
+coverage's 6,000-byte packet budget with whole prior observations. Tool schemas
+and observations stay separate from request interpretation; code binds actual
+identifiers from namespaced observations and selects declared discovery before
+mutation. The reply-local plan is fingerprinted to its request and catalogue.
+Each compiled call consumes an existing reply slot and uses normal dispatch;
+lookup results trigger recompilation without inference. Current successful
+effects determine completion. Known unresolved declared plans and rejected
+unadmitted record attempts cannot invoke a recovery or max-turn digest inference
+to supply a completion claim. They accept an explicit question/blocker or the
+existing execution blocker. Completed plans and ordinary replies without a
+rejected attempt retain normal delivery. Final generation and language delivery
+use their existing contexts and caps. Cancellation gates all subsequent work.
+
+Coverage (#16) uses this same declared interpretation/compiler in place of its
+ordinary inference, with the same 512/8,192/20-second limits. Metadata-free and
+mixed initial catalogues retain the generic path and its separate opaque-tool
+diagnostics. Fully declared admission is reserved independently of packet size;
+invalid, unsupported or oversized declared inputs cannot admit raw replacement
+record calls. This does not establish deterministic natural-language
+classification or unrestricted semantic matching. See
+`../src/jarvis/reply/record_binding.spec.md` for the exact supported contract.
+
+Declared result producers derive identity/display projections from raw result or
+result_metadata arrays. Planned and ordinary request/result history retain these
+beside rendered prose, under the existing 2,000-byte identity budget. History
+scrubs projections and drops altered or over-budget values atomically. A whole
+projection can survive prose-only truncation without treating clipped prose as
+an identifier. Qualified carryover matching supplies it to the same existing
+planning, resolution and coverage data views, within their aggregate limits.
+Schema digests bind projections to their canonical declaration. This is a data
+edge, not an inference stage. Separately requested post-mutation discovery reads
+use existing reply slots and execute afresh; mutation retry protection remains.
+
+Projection capture rejects oversized raw JSON before decoding, bounds metadata
+collection/reference counts before iteration, and enforces per-pair and aggregate
+projection bytes incrementally. Overflow discards the whole observation; it does
+not increase the existing 6,000-byte input or 2,000-byte identity limits. Successful
+metadata-only results are factual tool outcomes in both dispatch paths, without
+a missing-prose repair inference or a separate interpretation stage.
+
+The declared interpretation's ordered examples distinguish separately requested
+post-mutation reads from preservation constraints. Each intent paraphrases one
+operation and retains its complete distinctive source-topic span. Collection
+classifications require null target fields in the same output schema. This
+refines the existing generation; its call count, 512-token output, 8,192-token
+context, aggregate input budget and deadline are unchanged.
+
+The declared first-generation view also receives the captured redacted
+`SpeechContext.render()` data used by ordinary reply generation. Its fenced,
+timestamped, TTS/processed-aware text shares the existing `reference_context`
+packet with dialogue/resource data, within the same complete 6,000-byte budget
+and request fingerprint. Current operations retain priority; references can
+supply missing subjects/topic spans but cannot authorise additional actions.
+This restores an existing input edge, without adding inference or changing caps.
+Raw reference speech is not written into tool carryover.

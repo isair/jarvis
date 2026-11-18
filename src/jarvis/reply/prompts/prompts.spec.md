@@ -28,6 +28,7 @@ src/jarvis/reply/prompts/
 ├── __init__.py           # Public exports
 ├── system.py             # Base constants (ASR_NOTE, VOICE_STYLE, etc.)
 ├── model_variants.py     # Model detection + size-specific prompts
+├── tool_arguments.py     # Shared literal identity and query contract
 └── prompts.spec.md       # This file
 ```
 
@@ -78,7 +79,7 @@ Sections (both sizes — small repeats twice):
 - **USER INSTRUCTIONS** — behavioural instructions (units, brevity, language, tone) are acknowledged directly.
 - **UNKNOWN NAMED ENTITIES** — any information request about a specific named entity calls webSearch in the SAME turn, silently; the enumeration of request phrasings ("tell me about X", "have you heard of X", etc. — in any language) is framed as a semantic category, not as blacklisted English tokens.
 - **ARGUMENTS THE TOOL CAN AUTO-DERIVE** — if a tool's description says it has a default for an argument (e.g. getWeather → user's location), call the tool without asking the user for that argument. A default supplies input, not a tool result; data is obtained by executing the tool. The shared `_AUTO_DERIVED_ARGUMENT_GUIDANCE` supplies the same default-input contract to both model sizes. Prefer leaving defaulted optional inputs to the tool when the user has not requested a specific value; supplied values must be grounded in the request or known context. Resolved references count as supplied values. Defaults fill missing values only; explicitly supplied arguments take precedence over profile and current-context defaults. Weather calls preserve named geographic destinations and obtain actual readings for the requested or known default place.
-- **SELF-CONTAINED TOOL ARGUMENTS** — free-form text arguments passed to any tool (search queries, lookup strings, etc.) must be a self-contained restatement of intent with pronouns and ellipsis resolved from conversation history. Tools don't see prior turns. This applies to every tool, including MCP tools we don't own — the rule lives in the system prompt rather than each tool's schema so it generalises.
+- **SELF-CONTAINED TOOL ARGUMENTS**: the canonical contract in `tool_arguments.py` is shared by main replies, argument-bearing plans, step resolution and coverage recovery. Exact names/IDs come from explicit user identification, declared tool choices or observed data in the expected namespace. A descriptive reference does not establish a stored identifier. Targeted existing-record mutations use read-only discovery when identity is unknown, followed by the requested mutation; they do not guess a name from category prose. Explicitly quoted or named multiword values remain complete and need no redundant lookup. Whole-collection requests and new record creation follow their tool prerequisites without unnecessary identity reads. Discovery can inspect a collection, while mutation still preserves every unrequested record. Free-form lookup/search questions resolve dialogue references into self-contained intent. Earlier observations supply identity or historical facts, not proof of current execution or fresh measurements. Filesystem path arguments preserve supplied notation and punctuation literally, including relative and home-directory notation. Descriptive file/directory words are not part of the path.
 
 **Design Rationale:**
 - Constraints are narrowly scoped to specific problematic cases
@@ -136,3 +137,28 @@ Text tool help uses the registry's complete canonical JSON input schemas, includ
 parameter descriptions, allowed values, nesting and constraints. It shares
 selection and schema construction with native function calling. The presentation
 contract is defined in `../../tools/registry.spec.md`.
+
+After a successful partial information lookup identifies a dependent subject, the next query uses that actual subject and requests the missing information. Earlier query wording does not establish returned facts.
+
+### Declared record interpretation
+
+`record_binding.py` presents purposes derived from canonical schema metadata.
+Its static examples distinguish explicit literal names from descriptive topics
+and preserve source language. The model emits an ordered purpose/topic
+plan, not operation arguments, stored-identifier choices or completion claims.
+Code verifies naming attribution and resolves actual records. The main reply
+format also admits ordinary reply/question/blocker envelopes and canonical
+control calls. Coverage uses the same bounded interpretation prompt in its
+existing inference. `../record_binding.spec.md` owns the execution and limits.
+
+Each declared intent paraphrases one operation. Ordered examples retain an
+explicit post-mutation read and distinguish it from a preservation constraint.
+Descriptive targets contain complete distinctive topics, excluding generic kind
+nouns; explicit literal identifiers retain their complete supplied names. The
+structured format requires null target fields for an untargeted collection
+classification, so contradictory individual-target data cannot admit a bulk call.
+
+Declared follow-up examples use reference data to resolve a subject without
+executing historical instructions. Reference-supplied names use the descriptive
+precondition, preserving namespace discovery when no qualified identity exists.
+An explicit current request takes priority over earlier speech and TTS data.

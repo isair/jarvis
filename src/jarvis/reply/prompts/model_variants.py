@@ -9,6 +9,7 @@ import re
 from enum import Enum
 from typing import Optional
 
+from .tool_arguments import TOOL_ARGUMENT_GUIDANCE
 from .system import (
     PromptComponents,
     ASR_NOTE,
@@ -142,6 +143,8 @@ _AUTO_DERIVED_ARGUMENT_GUIDANCE = (
 )
 
 
+
+
 # Large models also confabulate on named entities — e.g. qwen3.8:27b produces a
 # confident but wrong cast list for the film "Possessor" without calling
 # webSearch. The anti-confabulation rule is therefore not a small-model-only
@@ -173,17 +176,7 @@ TOOL_CONSTRAINTS_LARGE = (
     "\"have you heard of X\", and equivalents in any language) is a search trigger, "
     "not a capability question about yourself.\n\n"
     + _AUTO_DERIVED_ARGUMENT_GUIDANCE
-    + "SELF-CONTAINED TOOL ARGUMENTS:\n"
-    "When you call any tool with a free-form text argument (search queries, lookup "
-    "strings, question fields — whatever the tool calls them), the string you pass "
-    "must be a self-contained version of the user's intent. Resolve pronouns, "
-    "ellipsis, and implicit references from the conversation so far — the tool does "
-    "NOT see prior turns. If turn 1 was about Harry Styles and turn 2 asks \"what "
-    "are his most famous songs?\", the argument must name Harry Styles explicitly, "
-    "not echo the literal utterance. Prefer a compact keyword phrasing over a "
-    "conversational sentence: \"Harry Styles most famous songs\" beats \"what are "
-    "his most famous songs\". This applies to every tool you call, not just "
-    "webSearch."
+    + TOOL_ARGUMENT_GUIDANCE
 )
 
 
@@ -269,8 +262,7 @@ Only skip the lookup if you can state concrete facts about the exact entity (tit
 
 """
     + _AUTO_DERIVED_ARGUMENT_GUIDANCE
-    + """SELF-CONTAINED TOOL ARGUMENTS:
-Whenever you call any tool with a free-form text argument (a search query, lookup string, question field — whatever the tool names it), the string you pass MUST be a self-contained restatement of the user's intent. Resolve pronouns, ellipsis, and implicit references from earlier turns yourself — the tool does NOT see the conversation history, it only sees the argument you pass. If the previous turn was about "Harry Styles" and the user now asks "what are his most famous songs?", the argument must be something like "Harry Styles most famous songs", NOT "what are his most famous songs". Prefer a compact keyword phrase over a conversational sentence. Never pass the user's literal utterance through when it contains unresolved pronouns, "that", "those", "it", "his", "her", "their", or similar references. This applies to every tool — webSearch, Wikipedia, MCP tools, all of them.""")
+    + TOOL_ARGUMENT_GUIDANCE)
 
 
 # Repeat the constraints twice for better instruction-following in small models

@@ -94,7 +94,8 @@ def test_identical_router_inputs_reuse_result_if_router_is_unavailable(monkeypat
 
 
 @pytest.fixture
-def memory_reply_context(monkeypatch, reply_context):
+def memory_reply_context(monkeypatch, reply_context, db):
+    db.upsert_conversation_summary('2020-01-01', 'Weather and meal log notes.', 'weather, food')
     monkeypatch.setattr(engine, 'select_tools', lambda **kwargs: ['webSearch', 'stop'])
     monkeypatch.setattr(engine, 'plan_query', lambda **kwargs: [])
     monkeypatch.setattr('jarvis.memory.conversation.search_conversation_memory_by_keywords',

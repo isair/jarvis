@@ -36,25 +36,38 @@ Contract:
 from __future__ import annotations
 
 import json
+from ..tools.schema import missing_required_arguments, tool_call_output_schema
 import math
 import re
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Sequence, Tuple
 
+from .prompts.tool_arguments import TOOL_ARGUMENT_GUIDANCE
 from ..debug import debug_log
-from ..llm import get_llm_backend, resolve_model, Tier
+from ..llm import get_llm_backend, resolve_model, Tier, extract_text_from_response
 
 
 def call_llm_direct(*, cfg, chat_model, system_prompt, user_content,
                     timeout_sec=10.0, thinking=False, num_ctx=4096,
-                    temperature=None, max_tokens=None):
+                    temperature=None, max_tokens=None, response_schema=None):
     """Local indirection: route the planner's chat call through the
     backend configured by ``cfg.llm_provider``.
 
     Kept module-level so tests can patch this single symbol to intercept
     every planner LLM call without reaching into the backend ABC.
     """
-    return get_llm_backend(cfg).direct(
+    backend = get_llm_backend(cfg)
+    if response_schema is not None:
+        options = {'response_schema': response_schema, 'num_ctx': num_ctx}
+        if temperature is not None:
+            options['temperature'] = temperature
+        if max_tokens is not None:
+            options['max_tokens'] = max_tokens
+        return extract_text_from_response(backend.chat(
+            chat_model, [{'role': 'system', 'content': system_prompt}, {'role': 'user', 'content': user_content}],
+            timeout_sec=timeout_sec, thinking=thinking, extra_options=options,
+        ))
+    return backend.direct(
         chat_model, system_prompt, user_content,
         timeout_sec=timeout_sec, thinking=thinking,
         num_ctx=num_ctx, temperature=temperature,
@@ -149,7 +162,9 @@ _PROMPT_TEMPLATE = (
     "what order. Decompose the user's query into a short ordered list "
     "of concrete sub-tasks, one per line.\n\n"
     "Rules:\n"
-    "1. Each step is a single short imperative sentence (under 15 words).\n"
+    "1. A tool step starts with its exact registered tool name followed by arguments, "
+    "not a prose imperative. Preserve separately requested actions as separate steps, "
+    "including actions with identical arguments. Keep each step under 15 words.\n"
     "2. searchMemory is the user's prior-conversation memory, NOT an "
     "encyclopaedia or a web search. PERSONALISED queries ALWAYS need "
     "memory FIRST. A query is "
@@ -269,7 +284,9 @@ def _build_user_message(
     else:
         parts.append("DIALOGUE CONTEXT: (empty)")
     parts.append(f"USER QUERY: {query.strip()}")
-    parts.append("\nEmit the plan now, one step per line, no numbering.")
+    parts.append("\nEmit the executable plan now, one step per line, no numbering. "
+                 "Each external tool step MUST begin with its exact registered name from AVAILABLE TOOLS, "
+                 "not a prose verb or a paraphrase. Finish with Reply to the user.")
     return "\n\n".join(parts)
 
 
@@ -477,7 +494,9 @@ def plan_query(
         else getattr(cfg, "planner_timeout_sec", 3.0)
     )
 
-    system_prompt = _PROMPT_TEMPLATE.format(max_steps=MAX_STEPS)
+    system_prompt = _PROMPT_TEMPLATE.format(max_steps=MAX_STEPS) + (
+        "\n\nFor names and argument values included in planned steps:\n" + TOOL_ARGUMENT_GUIDANCE
+    )
     user_content = _build_user_message(query, dialogue_context, tools, transcript_context)
 
     try:
@@ -503,16 +522,18 @@ def plan_query(
     steps = _parse_plan(raw)
     if not steps:
         return []
-    # Post-plan guard: reject plans where every step is "stop".
-    # The planner prompt forbids emitting "stop" (rule 13), but small
-    # models occasionally ignore instruction. A stop-only plan would
-    # produce a silent dismissal for any non-trivial query, which is
-    # never the right behaviour — the engine always adds "stop" to
-    # the allow-list separately. Return empty so the engine falls
-    # through to the tool router + chat model.
-    if steps and all(_is_stop_step(s) for s in steps):
+    # Conversation termination cannot precede pending tool work. Runtime
+    # dismissal belongs to the main assistant, independently of its plan.
+    action_steps = tool_steps_of(steps) if len(steps) > 1 else steps
+    real_tools = [name for name, _ in tools if name != 'stop']
+    interrupts_work = any(
+        _is_stop_step(step)
+        and any(tool_names_in_plan([following], real_tools) for following in steps[index + 1:])
+        for index, step in enumerate(steps)
+    )
+    if interrupts_work or (action_steps and all(_is_stop_step(s) for s in action_steps)):
         debug_log(
-            "planner: rejecting stop-only plan (forbidden by rule 13)",
+            "planner: returning conversation termination to the main assistant",
             "planning",
         )
         return []
@@ -563,9 +584,8 @@ def progress_nudge(steps: Sequence[str], tool_results_so_far: int) -> str:
             "When composing the tool arguments, substitute any entities that "
             "were unknown at plan time with the concrete values you discovered "
             "from prior tool results above (e.g. a director's name, a city, a "
-            "product name). Do NOT repeat arguments identical to a previous "
-            "call — the tool-call dedup guard will reject duplicates and your "
-            "progress will stall. Emit another tool_calls block now to execute "
+            "product name). Each separately requested action is a distinct step, "
+            "even when its arguments match an earlier step. Emit another tool_calls block to execute "
             "this step. Do NOT reply in text yet — the plan is not complete."
         )
     return (
@@ -584,15 +604,21 @@ _STEP_RESOLVER_SYSTEM = (
     "Your job: emit ONE JSON object, and nothing else, of the shape "
     "`{\"name\": \"<tool_name>\", \"arguments\": {...}}`. The `name` MUST "
     "be one of the allowed tool names. The `arguments` MUST match the "
-    "tool's JSON schema.\n"
+    "tool's JSON schema. Include required fields AND dependentRequired fields: "
+    "if an argument is present, every field in its dependency list must also be present. "
+    "Compose their values using each property's description and the original user request, "
+    "including explicit labels and language constraints that the shortened plan omits.\n"
+    "For a follow-up identifying a specific recorded resource, copy its recorded ID into the "
+    "tool's ID field when available. Descriptive command words are not stored labels. "
+    "Use an actual recorded label only when label-based scope is requested.\n"
     "Compose concrete arguments using entities discovered in the prior "
     "tool results — substitute any `<placeholder>` in the step text with "
-    "the actual value from the results. Do NOT re-issue arguments "
-    "identical to a prior call; those are already answered. If the next "
+    "the actual value from the results. The NEXT PLANNED STEP is a distinct "
+    "requested action, even when its arguments match a completed earlier step. If the next "
     "step is a synthesis / reply step (e.g. `Reply to the user ...`), "
     "return the JSON literal `null`.\n"
     "Output ONLY the JSON — no prose, no markdown fences, no comments."
-)
+) + "\n\n" + TOOL_ARGUMENT_GUIDANCE
 
 
 _TEMPORAL_RESOLUTION_GUIDANCE = (
@@ -887,9 +913,9 @@ def _parse_plan_step_concrete(
     return name, args
 
 
-def _has_required_arguments(name: str, args: dict, required_props: dict[str, set[str]]) -> bool:
+def _has_required_arguments(name: str, args: dict, parameter_schemas: dict[str, dict]) -> bool:
     """Only complete argument objects can leave the resolver for dispatch."""
-    missing = required_props.get(name, set()) - args.keys()
+    missing = missing_required_arguments(parameter_schemas.get(name, {}), args)
     if missing:
         debug_log(
             f"planner.resolve_next_tool_call: missing required args {sorted(missing)!r} for {name!r}",
@@ -908,6 +934,7 @@ def resolve_next_tool_call(
     original_query: str,
     timeout_sec: Optional[float] = None,
     transcript_context: str = "",
+    resource_context: str = "",
 ) -> Optional[Tuple[str, dict]]:
     """Turn a planned step + prior results into a concrete tool call.
 
@@ -932,7 +959,6 @@ def resolve_next_tool_call(
     allowed_names: list[str] = []
     tool_catalogue: list[dict] = []
     allowed_props: dict[str, set[str]] = {}
-    required_props: dict[str, set[str]] = {}
     property_schemas: dict[str, dict] = {}
     for entry in tools_schema:
         fn = entry.get("function", {}) if isinstance(entry, dict) else {}
@@ -945,10 +971,6 @@ def resolve_next_tool_call(
         prop_keys = set(props) if isinstance(props, dict) else set()
         allowed_props[str(name)] = prop_keys
         property_schemas[str(name)] = props if isinstance(props, dict) else {}
-        required = params.get("required") if isinstance(params, dict) else None
-        required_props[str(name)] = {
-            key for key in required if isinstance(key, str)
-        } if isinstance(required, list) else set()
         desc = (fn.get("description") or "").strip().splitlines()
         first = desc[0] if desc else ""
         tool_catalogue.append({
@@ -960,7 +982,7 @@ def resolve_next_tool_call(
     fast = _parse_plan_step_concrete(
         next_step_text, allowed_names, parameter_schemas,
     )
-    if fast is not None and _has_required_arguments(fast[0], fast[1], required_props):
+    if fast is not None and _has_required_arguments(fast[0], fast[1], parameter_schemas):
         debug_log(
             f"planner.resolve_next_tool_call: fast-parsed "
             f"{fast[0]}({fast[1]!r}) without LLM",
@@ -994,11 +1016,13 @@ def resolve_next_tool_call(
     user_content = (
         clock_context + f"ALLOWED TOOLS:\n{json.dumps(tool_catalogue, ensure_ascii=False, separators=(',', ':'))}\n\n"
         + (f"{transcript_context}\n\n" if transcript_context else "")
+        + (f"{resource_context}\n\n" if resource_context else "")
         + f"ORIGINAL CURRENT USER REQUEST:\n{json.dumps(original_query, ensure_ascii=False)}\n\n"
         f"PRIOR TOOL CALLS IN THIS SESSION:\n"
         f"{_format_prior_results(prior_results)}\n\n"
         f"NEXT PLANNED STEP: {next_step_text.strip()}\n\n"
-        "Emit the JSON tool call now (or `null` if this is a synthesis step)."
+        "Emit ONE complete JSON tool call for this step (or `null` for synthesis). "
+        "Check required and dependentRequired fields before returning it."
     )
 
     try:
@@ -1011,6 +1035,7 @@ def resolve_next_tool_call(
             thinking=False,
             num_ctx=8192,
             max_tokens=_PLANNER_TOKEN_BUDGET,
+            response_schema=tool_call_output_schema({name: parameter_schemas[name] for name in (referenced_names or allowed_names)}, nullable=True),
         )
     except Exception as exc:  # pragma: no cover — defensive
         debug_log(f"planner.resolve_next_tool_call: LLM failed — {exc}", "planning")
@@ -1078,7 +1103,7 @@ def resolve_next_tool_call(
                 "planning",
             )
         args = filtered
-    if not _has_required_arguments(name, args, required_props):
+    if not _has_required_arguments(name, args, parameter_schemas):
         return None
     try:
         parameters = parameter_schemas[name]

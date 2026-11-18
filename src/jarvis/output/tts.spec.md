@@ -21,8 +21,10 @@ The terminal callback receives exactly one outcome: `completed`, `cancelled`,
 `interrupted`, `failed` or `rejected`. Disabled or empty submissions release
 ownership as rejected; synthesis and playback errors do not report success.
 Cancelling pending work prevents its playback and releases it immediately.
-Cancelling active work interrupts it and releases ownership after the worker
-finishes that request. Terminal callback failures cannot prevent later work.
+Cancelling active work signals abandonment without waiting for native audio
+locks or device calls. The worker cooperatively interrupts playback and releases
+ownership after finishing that request. Explicit interruption retains the
+identity-bound native interruption hook. Terminal callback failures cannot prevent later work.
 Success callbacks run before terminal release only for completed playback.
 Piper requires a normal final-buffer drain, rather than stream inactivity alone,
 and treats unexpected native callback failures as failed playback. Created
@@ -35,6 +37,12 @@ reports its exact duration to that utterance's listener, and completion reports
 only that utterance's completion. An interrupted utterance does not report
 successful completion. Callback failures remain isolated from later work. The
 worker releases the completed request and its callback references before waiting for more speech.
+
+A submission can link an external cancellation event to its request. Admission,
+post-synthesis checks and playback polling observe that event without a watcher
+thread. Linked cancellation reports `cancelled`, suppresses success callbacks and
+cannot cancel unrelated queued requests. Model preparation and synthesis finish
+cooperatively; their requests retain ownership until terminal cleanup.
 
 ## Playback observers and activity
 

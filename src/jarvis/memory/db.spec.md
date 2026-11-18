@@ -5,6 +5,10 @@ including local vector-index construction and schema setup, closes the handle
 and releases any pending transaction before propagating the original failure.
 Committed diary records remain intact.
 
+`has_conversation_summaries` checks for any saved summary under the connection
+owner's lock with a bounded existence query. It includes every date and source
+application, reads current rows on each call and propagates read failures.
+
 Meal description deletion uses one parameterised SQL statement. It deletes a
 record only when exactly one stored description matches literally, including
 case. Duplicate descriptions preserve all records and require a meal ID.

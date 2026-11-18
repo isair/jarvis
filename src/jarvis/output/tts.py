@@ -405,7 +405,8 @@ class SpeechRequest:
     completion_callback: Optional[Callable[[], None]] = None
     duration_callback: Optional[Callable[[float], None]] = None
     terminal_callback: Optional[Callable[[str], None]] = None
-    _cancel_callback: Optional[Callable[['SpeechRequest'], None]] = None
+    _interrupt_callback: Optional[Callable[['SpeechRequest'], None]] = None
+    cancellation_event: Optional[threading.Event] = field(default=None, repr=False, kw_only=True)
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
     _active: bool = field(default=False, init=False)
     _cancelled: bool = field(default=False, init=False)
@@ -416,9 +417,12 @@ class SpeechRequest:
     _playback_callbacks: tuple[Optional[_PlaybackStart], Optional[_PlaybackEnd]] = field(default=(None, None), init=False, repr=False)
     _activity_release: Optional[Callable[[], None]] = field(default=None, init=False, repr=False)
 
+    def _cancel_requested(self) -> bool:
+        return self._cancelled or bool(self.cancellation_event and self.cancellation_event.is_set())
+
     def _claim(self) -> bool:
         with self._lock:
-            if self._finished or self._cancelled:
+            if self._finished or self._cancel_requested():
                 return False
             self._active = True
             return True
@@ -426,7 +430,7 @@ class SpeechRequest:
     @property
     def abandoned(self) -> bool:
         with self._lock:
-            return self._cancelled or self._interrupted
+            return self._cancel_requested() or self._interrupted
 
     def _interrupt(self) -> None:
         with self._lock:
@@ -447,9 +451,9 @@ class SpeechRequest:
                 self._cancelled = True
             else:
                 self._interrupted = True
-            active, interrupt = self._active, self._cancel_callback
+            active, interrupt = self._active, self._interrupt_callback
         try:
-            if active and interrupt is not None:
+            if active and outcome == 'interrupted' and interrupt is not None:
                 interrupt(self)
         finally:
             if not active:
@@ -460,7 +464,8 @@ class SpeechRequest:
             if self._finished:
                 return
             self._finished = True
-            if self._cancelled:
+            if self._cancel_requested():
+                self._cancelled = True
                 outcome = 'cancelled'
             elif self._interrupted:
                 outcome = 'interrupted'
@@ -474,8 +479,9 @@ class SpeechRequest:
             if self.terminal_callback is not None:
                 callbacks.append((self.terminal_callback, (outcome,), 'terminal'))
             self.completion_callback = self.duration_callback = self.terminal_callback = None
-            self._cancel_callback = self._activity_release = None
+            self._interrupt_callback = self._activity_release = None
             self._playback_callbacks = (None, None)
+            self.cancellation_event = None
         for callback, arguments, label in callbacks:
             _call_speech_callback(callback, arguments, label)
 
@@ -600,20 +606,25 @@ class _QueuedSpeech:
 
     def speak(self, text: str, completion_callback: Optional[Callable[[], None]] = None,
               duration_callback: Optional[Callable[[float], None]] = None, *,
-              terminal_callback: Optional[Callable[[str], None]] = None) -> SpeechRequest:
+              terminal_callback: Optional[Callable[[str], None]] = None,
+              cancellation_event: Optional[threading.Event] = None) -> SpeechRequest:
         request = SpeechRequest(text, completion_callback, duration_callback,
-                                terminal_callback, self._cancel_request)
+                                terminal_callback, self._interrupt_request,
+                                cancellation_event=cancellation_event)
         admitted = False
         outcome = 'rejected'
         try:
             if not self.enabled or not text.strip():
+                return request
+            if request.abandoned:
+                outcome = 'cancelled'
                 return request
             with self._lifecycle_lock:
                 generation = self._lifecycle_generation
             outcome = 'failed'
             self._start_if_current(generation)
             with self._lifecycle_lock:
-                if generation != self._lifecycle_generation or self._stop.is_set():
+                if generation != self._lifecycle_generation or self._stop.is_set() or request.abandoned:
                     outcome = 'cancelled'
                     return request
                 if not self.enabled:
@@ -633,7 +644,7 @@ class _QueuedSpeech:
                 self._active_request._interrupt()
             self._should_interrupt.set()
 
-    def _cancel_request(self, request: SpeechRequest) -> None:
+    def _interrupt_request(self, request: SpeechRequest) -> None:
         with self._lifecycle_lock:
             if self._active_request is request:
                 self.interrupt()
@@ -788,7 +799,7 @@ class ChatterboxTTS(_QueuedSpeech):
                 cfg_weight=self.cfg_weight
             )
 
-            if self._stop.is_set() or self._should_interrupt.is_set():
+            if self._stop.is_set() or self._should_interrupt.is_set() or request.abandoned:
                 return False
 
             # Calculate exact duration from audio samples
@@ -814,13 +825,13 @@ class ChatterboxTTS(_QueuedSpeech):
                 if not self._begin_playback(request, exact_duration):
                     return False
                 with self._lifecycle_lock:
-                    if self._stop.is_set() or self._should_interrupt.is_set():
+                    if self._stop.is_set() or self._should_interrupt.is_set() or request.abandoned:
                         return False
                     pygame.mixer.music.play()
 
                 # Wait for playback to complete or interruption
                 while pygame.mixer.music.get_busy():
-                    if self._should_interrupt.is_set():
+                    if self._should_interrupt.is_set() or request.abandoned:
                         pygame.mixer.music.stop()
                         break
                     pygame.time.wait(100)  # Check every 100ms
@@ -1014,7 +1025,7 @@ class PiperTTS(_QueuedSpeech):
             debug_log(f"Piper TTS starting synthesis: {len(text.split())} words", "tts")
 
             # Check for interruption before synthesis
-            if self._should_interrupt.is_set():
+            if self._should_interrupt.is_set() or request.abandoned:
                 debug_log("Piper TTS interrupted before synthesis", "tts")
                 return False
 
@@ -1028,13 +1039,13 @@ class PiperTTS(_QueuedSpeech):
             )
             audio_chunks = []
             for chunk in self._voice.synthesize(text, syn_config):
-                if self._should_interrupt.is_set():
+                if self._should_interrupt.is_set() or request.abandoned:
                     debug_log("Piper TTS interrupted during synthesis", "tts")
                     return False
                 audio_chunks.append(chunk.audio_int16_array)
 
             # Check for interruption after synthesis
-            if self._should_interrupt.is_set():
+            if self._should_interrupt.is_set() or request.abandoned:
                 debug_log("Piper TTS interrupted after synthesis", "tts")
                 return False
 
@@ -1066,7 +1077,7 @@ class PiperTTS(_QueuedSpeech):
 
             def audio_callback(outdata, frames, time_info, status):
                 try:
-                    if self._should_interrupt.is_set():
+                    if self._should_interrupt.is_set() or request.abandoned:
                         raise sd.CallbackAbort()
 
                     start = play_position[0]
@@ -1108,7 +1119,7 @@ class PiperTTS(_QueuedSpeech):
                         stream.start()
 
                 while stream.active:
-                    if self._should_interrupt.is_set():
+                    if self._should_interrupt.is_set() or request.abandoned:
                         with portaudio_lock:
                             stream.abort()
                         break

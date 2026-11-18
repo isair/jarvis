@@ -165,14 +165,35 @@ class TestRecordingStateMachine:
             whisper_backend_ref=lambda: "mlx",
             mlx_repo_ref=lambda: "mlx-community/whisper-small-mlx",
         )
+        real_thread = threading.Thread
+        workers = []
+
+        def owned_worker(*args, **kwargs):
+            worker = real_thread(*args, **kwargs)
+            workers.append(worker)
+            return worker
+
         with patch("jarvis.dictation.dictation_engine.sd") as mock_sd, \
-             patch("jarvis.dictation.dictation_engine._play_beep"):
+             patch("jarvis.dictation.dictation_engine._play_beep"), \
+             patch("jarvis.dictation.dictation_engine.threading.Thread", side_effect=owned_worker):
             mock_stream = MagicMock()
             mock_sd.InputStream.return_value = mock_stream
-            engine._start_recording()
-            assert engine._recording is True
-            # Cleanup
-            engine._stop_recording(discard=True)
+            mock_sd.query_devices.return_value = {
+                'index': 0, 'name': 'Owned microphone', 'max_input_channels': 1,
+                'default_samplerate': engine._target_sample_rate,
+            }
+            try:
+                engine._start_recording()
+                for worker in workers:
+                    worker.join(2)
+                    assert not worker.is_alive(), 'Owned capture worker did not finish'
+                assert engine._recording is True
+                assert engine._stream is mock_stream
+            finally:
+                engine._stop_recording(discard=True)
+                for worker in workers:
+                    worker.join(2)
+                    assert not worker.is_alive(), 'Owned capture worker survived cleanup'
 
     def test_named_stereo_headset_records_both_channels(self):
         """Dictation uses the selected headset even when mono capture is rejected."""
