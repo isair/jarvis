@@ -172,6 +172,10 @@ class Settings:
     wake_fuzzy_ratio: float
     stop_commands: list[str]
     stop_command_fuzzy_ratio: float
+    shush_detection_enabled: bool
+    shush_high_low_ratio: float
+    shush_energy_floor: float
+    shush_consecutive_frames: int
 
     # Whisper Speech Recognition
     whisper_model: str
@@ -976,6 +980,10 @@ def load_settings() -> Settings:
         wake_fuzzy_ratio=wake_fuzzy_ratio,
         stop_commands=_ensure_list(merged["stop_commands"]),
         stop_command_fuzzy_ratio=float(merged["stop_command_fuzzy_ratio"]),
+        shush_detection_enabled=bool(merged["shush_detection_enabled"]),
+        shush_high_low_ratio=float(merged["shush_high_low_ratio"]),
+        shush_energy_floor=float(merged["shush_energy_floor"]),
+        shush_consecutive_frames=int(merged["shush_consecutive_frames"]),
 
         # Whisper Speech Recognition
         whisper_model=whisper_model,

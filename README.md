@@ -136,6 +136,8 @@ Jarvis is developed primarily on macOS. Windows and Linux behaviour may differ. 
 
 Most people can use **Settings** from the tray. Advanced setups can edit `~/.config/jarvis/config.json`.
 
+Make a sustained “shhh” sound to interrupt a spoken reply. Set `shush_detection_enabled` to `false` to turn off this shortcut. Spoken stop commands remain available.
+
 Local skills are experimental and off by default. Models can skip required
 reference reads. In Settings → Features, enable **Local Skills**
 and add **Skill Library Folders** containing skill directories, each with a

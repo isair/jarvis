@@ -20,6 +20,7 @@ import time
 from unittest.mock import patch, MagicMock
 
 from evals.helpers import is_judge_llm_available, voice_config
+from jarvis.config import get_default_config
 from tests.test_hot_window_input import _process_transcript
 
 import pytest
@@ -111,6 +112,7 @@ def _create_listener(**kwargs):
     mock_cfg.wake_aliases = []
     mock_cfg.wake_fuzzy_ratio = 0.78
     mock_cfg.stop_commands = ["stop", "quiet"]
+    mock_cfg.stop_command_fuzzy_ratio = get_default_config()["stop_command_fuzzy_ratio"]
     mock_cfg.tts_rate = 200
     mock_cfg.transcript_buffer_duration_sec = 120.0
     # Real intent judge config

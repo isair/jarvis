@@ -1,15 +1,4 @@
-"""Acoustic shush detector using spectral analysis.
-
-Detects sustained fricative sounds ("shhh") by analysing the spectral
-profile of audio frames.  A deliberate shush has a distinctive signature:
-high-frequency energy (2-8 kHz) with very little low-frequency content
-(< 500 Hz) and no harmonic structure.  By requiring the pattern to persist
-across several consecutive frames we avoid false positives from brief
-sibilants in normal speech or TTS output.
-
-This runs directly on raw audio frames in the audio loop — no Whisper
-transcription needed — giving sub-200 ms detection latency.
-"""
+"""Detect sustained broadband frication in microphone audio frames."""
 
 from __future__ import annotations
 
@@ -26,6 +15,7 @@ _DEFAULT_ENERGY_FLOOR = 0.002          # min RMS to ignore silence
 _DEFAULT_CONSECUTIVE_FRAMES = 15       # ~300 ms at 20 ms frames
 _DEFAULT_LOW_BAND_HZ = (0, 500)
 _DEFAULT_HIGH_BAND_HZ = (2_000, 8_000)
+_MIN_HIGH_BAND_OCCUPANCY = 0.12
 
 
 class ShushDetector:
@@ -60,23 +50,22 @@ class ShushDetector:
     # Public API
     # ------------------------------------------------------------------
 
-    def feed(self, frame: np.ndarray) -> bool:
+    def feed(self, frame: np.ndarray, *, sample_rate: int | None = None) -> bool:
         """Process one audio frame and return ``True`` if shush detected.
 
         Args:
-            frame: 1-D float32 array (mono, 16 kHz, typically 320 samples
-                   for a 20 ms frame).
+            frame: Mono audio samples from one capture frame.
+            sample_rate: Actual capture rate when it differs from the configured rate.
 
         Returns:
             ``True`` once the shush pattern has persisted for
             *consecutive_frames* frames in a row; ``False`` otherwise.
         """
-        if self._is_shush_frame(frame):
+        if self._is_shush_frame(frame, sample_rate=sample_rate):
             self._streak += 1
             if self._streak >= self._consecutive_frames:
                 debug_log(
-                    f"shush detected after {self._streak} consecutive frames "
-                    f"({self._streak * 20}ms)",
+                    f"shush detected after {self._streak} consecutive frames",
                     "voice",
                 )
                 return True
@@ -93,32 +82,23 @@ class ShushDetector:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _is_shush_frame(self, frame: np.ndarray) -> bool:
+    def _is_shush_frame(self, frame: np.ndarray, *, sample_rate: int | None = None) -> bool:
         """Return ``True`` if a single frame looks like a fricative."""
-        flat = frame.flatten()
-
-        # --- Energy gate: ignore silence ---
-        rms = float(np.sqrt(np.mean(flat ** 2)))
-        if rms < self._energy_floor:
+        samples = frame.reshape(-1)
+        if samples.size < 2 or np.sqrt(np.mean(samples ** 2)) < self._energy_floor:
             return False
 
-        # --- Spectral analysis ---
-        n = len(flat)
-        if n < 2:
+        spectrum = np.abs(np.fft.rfft(samples)) ** 2
+        freqs = np.fft.rfftfreq(samples.size, d=1.0 / (sample_rate or self._sample_rate))
+        low_band = spectrum[(freqs >= self._low_band_hz[0]) & (freqs <= self._low_band_hz[1])]
+        high_band = spectrum[(freqs >= self._high_band_hz[0]) & (freqs <= self._high_band_hz[1])]
+        high_power = float(high_band.sum())
+        if not high_power:
             return False
 
-        spectrum = np.abs(np.fft.rfft(flat))
-        freqs = np.fft.rfftfreq(n, d=1.0 / self._sample_rate)
-
-        low_mask = (freqs >= self._low_band_hz[0]) & (freqs <= self._low_band_hz[1])
-        high_mask = (freqs >= self._high_band_hz[0]) & (freqs <= self._high_band_hz[1])
-
-        low_energy = float(np.mean(spectrum[low_mask] ** 2)) if np.any(low_mask) else 0.0
-        high_energy = float(np.mean(spectrum[high_mask] ** 2)) if np.any(high_mask) else 0.0
-
-        # Avoid division by zero — if low band is near-silent, any
-        # meaningful high-band energy counts.
-        if low_energy < 1e-12:
-            return high_energy > 0
-        ratio = high_energy / low_energy
-        return ratio >= self._high_low_ratio
+        # Frication distributes power across frequencies. Tones can have a
+        # large high/low ratio while concentrating energy in only a few bins.
+        occupancy = high_power ** 2 / (high_band.size * float(high_band @ high_band))
+        if occupancy < _MIN_HIGH_BAND_OCCUPANCY:
+            return False
+        return high_power / high_band.size >= self._high_low_ratio * float(low_band.mean())

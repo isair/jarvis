@@ -28,6 +28,7 @@ def listener(rate=48000):
     obj._recent_audio_energy = deque(maxlen=20)
     obj._vad_error_logged = False
     obj._vad = None
+    obj._shush_detector = None
     obj._should_stop = False
     from jarvis.listening.state_manager import StateManager
     obj.state_manager = StateManager()

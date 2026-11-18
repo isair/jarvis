@@ -34,7 +34,6 @@ from .intent_judge import (
     create_intent_judge,
     warm_up_chat_model,
 )
-from .shush_detector import ShushDetector
 from ..debug import debug_log
 from ..llm import get_embedding_backend
 from ..utils.location import is_location_available
@@ -42,6 +41,7 @@ from ..utils.location import is_location_available
 if TYPE_CHECKING:
     from ..memory.db import Database
     from ..memory.conversation import DialogueMemory
+    from ..output.tts import SpeechRequest
 
 
 @dataclass(frozen=True)
@@ -69,6 +69,8 @@ def is_whisper_hallucination(no_speech_prob: float, threshold: float) -> bool:
 class _CapturedAudio:
     audio: Any
     generation: int
+    playback: SpeechRequest | None = None
+    sequence: int = 0
 
 
 @dataclass(frozen=True)
@@ -503,19 +505,17 @@ class VoiceListener(threading.Thread):
             energy_spike_threshold=float(getattr(self.cfg, "echo_energy_threshold", 2.0))
         )
 
-        # Acoustic shush detector — runs on raw frames during TTS for
-        # sub-200 ms "shhh" detection without waiting for Whisper.
-        shush_enabled = bool(getattr(self.cfg, "shush_detection_enabled", True))
-        if shush_enabled:
-            self._shush_detector: ShushDetector | None = ShushDetector(
-                sample_rate=int(getattr(self.cfg, "sample_rate", 16000)),
-                high_low_ratio=float(getattr(self.cfg, "shush_high_low_ratio", 3.0)),
-                energy_floor=float(getattr(self.cfg, "shush_energy_floor", 0.002)),
-                consecutive_frames=int(getattr(self.cfg, "shush_consecutive_frames", 15)),
+        self._shush_detector = None
+        if np is not None and getattr(self.cfg, "shush_detection_enabled", False) is True:
+            from .shush_detector import ShushDetector
+
+            self._shush_detector = ShushDetector(
+                sample_rate=self._samplerate,
+                high_low_ratio=self.cfg.shush_high_low_ratio,
+                energy_floor=self.cfg.shush_energy_floor,
+                consecutive_frames=self.cfg.shush_consecutive_frames,
             )
             debug_log("shush detector enabled", "voice")
-        else:
-            self._shush_detector = None
 
         self.state_manager = StateManager(
             hot_window_seconds=float(getattr(self.cfg, "hot_window_seconds", 3.0)),
@@ -1584,15 +1584,17 @@ class VoiceListener(threading.Thread):
         """Audio callback from sounddevice."""
         try:
             generation = self._audio_generation
+            playback = self._active_playback if self._shush_detector is not None else None
             self._last_audio_callback = time.monotonic()
             self._callback_count += 1
+            sequence = self._callback_count
             if status:
                 self._callback_status = str(status)
             if self._should_stop or self.capture_paused:
                 return
             chunk = (indata.copy() if hasattr(indata, "copy") else indata)
             try:
-                self._audio_q.put_nowait(_CapturedAudio(chunk, generation))
+                self._audio_q.put_nowait(_CapturedAudio(chunk, generation, playback, sequence))
             except queue.Full:
                 self._audio_dropped += 1
         except Exception as exc:
@@ -2425,6 +2427,11 @@ class VoiceListener(threading.Thread):
         endpoint_silence_frames = max(1, int(endpoint_silence_ms / frame_ms))
         normal_max_utt_frames = max(1, int(max_utt_ms / frame_ms))
         tts_max_utt_frames = max(1, int(tts_max_utt_ms / frame_ms))
+        detector = self._shush_detector
+        previous_capture = None
+        # Preserve ordinary speech framing while excluding mixed blocks from acoustic stops.
+        mixed_frame = False
+        stream_rate = getattr(self, "_stream_samplerate", self._samplerate)
         while not self._should_stop:
             if self.capture_paused:
                 self._check_audio_health()
@@ -2448,6 +2455,7 @@ class VoiceListener(threading.Thread):
                     self._silence_frames = 0
                     self._utterance_frames = []
                     self._pre_roll.clear()
+                    previous_capture = None
                     continue
 
                 if np is None:
@@ -2455,42 +2463,36 @@ class VoiceListener(threading.Thread):
 
                 if item.generation != self._audio_generation:
                     continue
+                if detector is not None:
+                    if previous_capture != (item.generation, item.playback, item.sequence - 1):
+                        detector.reset()
+                        mixed_frame = self._pending_audio is not None and len(self._pending_audio) > 0
+                    previous_capture = (item.generation, item.playback, item.sequence)
                 frames = self._audio_frames(item.audio)
                 audio_generation = item.generation
-            for frame in frames:
+                skip_first_shush_frame = mixed_frame
+                if frames:
+                    mixed_frame = False
+            interrupted = None
+            for index, frame in enumerate(frames):
                 with self._audio_state_lock:
                     if (self._should_stop or self.capture_paused
                             or audio_generation != self._audio_generation):
                         break
+                    if (
+                        detector is not None
+                        and item.playback is not None
+                        and item.playback is self._active_playback
+                        and not (index == 0 and skip_first_shush_frame)
+                        and detector.feed(frame, sample_rate=stream_rate)
+                    ):
+                        interrupted = item.playback
+                        self._clear_audio_buffers()
+                        break
+
                     # VAD decision
                     is_voice = self._is_speech_frame(frame)
                     self._speech_frames_seen += int(is_voice)
-
-                    # Acoustic shush detection — runs on every frame during
-                    # TTS for near-instant "shhh" interruption without
-                    # waiting for Whisper transcription.
-                    tts_active = self.tts and self.tts.is_speaking()
-                    if tts_active and self._shush_detector is not None:
-                        if self._shush_detector.feed(frame):
-                            debug_log("acoustic shush detected — interrupting TTS", "voice")
-                            print("  🤫 Shush detected — stopping speech", flush=True)
-                            self.tts.interrupt()
-                            self._shush_detector.reset()
-                            # Discard accumulated utterance frames (they're just the shush)
-                            self.is_speech_active = False
-                            self._silence_frames = 0
-                            self._utterance_frames = []
-                            try:
-                                while not self._audio_q.empty():
-                                    self._audio_q.get_nowait()
-                            except Exception:
-                                pass
-                            break  # Exit frame loop, start fresh
-                    elif not tts_active and self._shush_detector is not None:
-                        # Reset streak when TTS is not playing so stale
-                        # counts don't carry across TTS sessions.
-                        if self._shush_detector._streak > 0:
-                            self._shush_detector.reset()
 
                     if not self.is_speech_active:
                         if is_voice:
@@ -2532,6 +2534,10 @@ class VoiceListener(threading.Thread):
                             self._finalize_utterance()
                             self._pre_roll.clear()
 
+            if interrupted is not None:
+                debug_log("acoustic shush detected; interrupting captured playback request", "voice")
+                print("  🤫 Shush detected, stopping speech", flush=True)
+                interrupted.interrupt()
 
     def _finalize_utterance(self) -> None:
         """Queue a completed utterance for serial transcription."""

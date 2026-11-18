@@ -16,6 +16,8 @@ Every declared default is represented in typed runtime Settings. Saved values ta
 
 `stop_commands` supplies the listener's text interruption phrases. An empty list disables text interruption phrases; intent judgement retains its stop decisions. `stop_command_fuzzy_ratio` supplies the same threshold to short-control matching and standalone-control priority during TTS echo handling. List normalisation follows the shared configuration list parser.
 
+`shush_detection_enabled` controls the acoustic interruption shortcut independently of text stop phrases. The listener reads the spectral ratio, energy floor and consecutive frame count from the same selected configuration file.
+
 ## Local document permissions
 
 `document_search_enabled` defaults to false and `document_search_paths` to an

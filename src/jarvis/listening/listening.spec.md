@@ -135,7 +135,7 @@ playback cannot reclassify an older utterance.
 │ (speech gate) │  │(during TTS)   │  │   Tracking    │
 └───────┬───────┘  └───────┬───────┘  └───────────────┘
         │                  │
-        │                  ▼ (instant TTS interrupt)
+        │                  ▼ (interrupt captured playback)
         ▼
 ┌───────────────┐
 │    Whisper    │
@@ -315,7 +315,7 @@ While TTS is playing, echo rejection and stop commands are handled with fast tex
 
 **Stop detection:**
 - Text-based: Read `stop_commands` and `stop_command_fuzzy_ratio` from loaded settings. An empty phrase list disables this text-based interruption path. Apply the same configured fuzzy threshold to short-control detection and standalone-control echo priority. Check configured phrases such as "stop", "quiet" and "shut up". Ignore empty or whitespace-only entries; normalise Unicode composition, casing, punctuation and whitespace before comparison. Exact configured phrases match complete whitespace or punctuation-delimited tokens, including phrases inside longer speech. Approximation compares the complete short utterance with a configured phrase, never a single word inside unrelated speech. Combining marks remain part of their token; phrases in scripts without word separators remain eligible as standalone controls.
-- **Acoustic shush detection:** During TTS, the audio worker checks for sustained high-frequency frication. At a 20 ms frame size the default 15-frame streak spans 300 ms of captured audio. This path does not wait for transcription.
+- **Acoustic shush detection:** During TTS, the audio worker checks for sustained broadband high-frequency frication at the actual microphone rate. Sustained narrowband tones cannot qualify. At a 20 ms frame size the default 15-frame streak spans 300 ms of captured audio. The check runs before transcription. Callbacks snapshot the active playback request at entry. The streak requires consecutive blocks for the same capture generation and playback, and excludes partial frames that cross a playback boundary or capture gap. The worker interrupts only that request while it is still eligible. Disabling acoustic detection preserves the spoken stop controls.
 - Intent judge can also detect stop commands
 - During active TTS, a standalone configured stop phrase (including a fuzzy transcription) retains immediate interruption priority. Longer literal echoes of the current TTS text are rejected even when they contain a configured stop phrase. Unicode punctuation and casing are normalised without language-specific patterns; an appended user command remains eligible for interruption.
 
@@ -483,7 +483,7 @@ Main Loop: Get Frames → VAD Check
     │                 Shush Detector
     │                 (spectral check per frame)
     │                      ↓ sustained?
-    │                 Interrupt TTS immediately
+    │                 Interrupt captured playback
     ↓
 Speech Detected → Accumulate Frames
     ↓
