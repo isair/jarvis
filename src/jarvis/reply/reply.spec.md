@@ -16,6 +16,14 @@ Design principles enforced by the engine:
 - Language-Agnostic Design: Prompts and ASR guidance avoid language-specific phrasing.
 - Data Privacy: Inputs are redacted and logging is concise and purposeful via `debug_log`.
 
+Optional local skills use the same reply engine for voice and text. When
+explicitly enabled, a reply-owned metadata index supplies a bounded lexical
+shortlist and exposes `searchSkills` and `readSkill`. Loaded instructions and
+references enter current tool results exactly once, within aggregate byte
+budgets; the full library never enters model context. Skill guidance cannot
+expand tool permissions. Skill tool traffic is excluded from persisted tool
+carryover. See `../skills.spec.md` for package and filesystem contracts.
+
 The caller-owned cancellation event is forwarded through planned and model-issued
 tool dispatch into `ToolContext`. The registry rejects already cancelled calls;
 cooperative tools can stop between bounded work units. Document indexing checks

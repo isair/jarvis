@@ -24,6 +24,7 @@ class ToolContext:
         language: Optional[str] = None,
         transcript_context: str = "",
         cancel_event=None,
+        skill_session=None,
     ):
         self.db = db
         self.cfg = cfg
@@ -40,6 +41,7 @@ class ToolContext:
         self.language = language
         self.transcript_context = transcript_context
         self.cancel_event = cancel_event
+        self.skill_session = skill_session
 
 
 class Tool(ABC):
@@ -122,6 +124,7 @@ class Tool(ABC):
         language: Optional[str] = None,
         transcript_context: str = "",
         cancel_event=None,
+        skill_session=None,
     ) -> ToolExecutionResult:
         """Execute the tool (internal method used by registry).
 
@@ -139,5 +142,6 @@ class Tool(ABC):
             language=language,
             transcript_context=transcript_context,
             cancel_event=cancel_event,
+            skill_session=skill_session,
         )
         return self.run(tool_args, context)

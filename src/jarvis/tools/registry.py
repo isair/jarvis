@@ -12,6 +12,8 @@ from .builtin.screenshot import ScreenshotTool
 from .builtin.web_search import WebSearchTool
 from .builtin.local_files import LocalFilesTool
 from .builtin.document_search import DocumentSearchTool
+from .builtin.skills import SearchSkillsTool, ReadSkillTool
+from ..skills import SKILL_TOOLS
 from .builtin.fetch_web_page import FetchWebPageTool
 from .builtin.nutrition.log_meal import LogMealTool
 from .builtin.nutrition.fetch_meals import FetchMealsTool
@@ -34,6 +36,8 @@ BUILTIN_TOOLS = {
     "webSearch": WebSearchTool(),
     "localFiles": LocalFilesTool(),
     "documentSearch": DocumentSearchTool(),
+    "searchSkills": SearchSkillsTool(),
+    "readSkill": ReadSkillTool(),
     "fetchWebPage": FetchWebPageTool(),
     "logMeal": LogMealTool(),
     "fetchMeals": FetchMealsTool(),
@@ -45,6 +49,12 @@ BUILTIN_TOOLS = {
     "stop": StopTool(),
     "toolSearchTool": ToolSearchTool(),
 }
+
+
+def available_builtin_tools(cfg):
+    """Expose optional skill tools only for an explicitly enabled configuration."""
+    return {name: tool for name, tool in BUILTIN_TOOLS.items()
+            if name not in SKILL_TOOLS or getattr(cfg, 'skills_enabled', False) is True}
 
 # Global MCP tools cache
 _mcp_tools_cache: Dict[str, "ToolSpec"] = {}
@@ -277,6 +287,7 @@ def run_tool_with_retries(
     language: Optional[str] = None,
     transcript_context: str = "",
     cancel_event=None,
+    skill_session=None,
 ) -> ToolExecutionResult:
     if cancel_event is not None and cancel_event.is_set():
         return ToolExecutionResult(False, None, error_message="Tool execution was cancelled.")
@@ -315,6 +326,8 @@ def run_tool_with_retries(
 
     # Check builtin tools first
     if name in BUILTIN_TOOLS:
+        if name in SKILL_TOOLS and getattr(cfg, 'skills_enabled', False) is not True:
+            return ToolExecutionResult(False, None, error_message='Local skills are disabled')
         tool = BUILTIN_TOOLS[name]
         return tool.execute(
             db=db,
@@ -328,6 +341,7 @@ def run_tool_with_retries(
             language=language,
             transcript_context=transcript_context,
             cancel_event=cancel_event,
+            **({'skill_session': skill_session} if name in SKILL_TOOLS else {}),
         )
 
     # Unknown tool

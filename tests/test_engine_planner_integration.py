@@ -832,23 +832,27 @@ def test_unexecuted_action_does_not_deliver_repeated_completion_claims(monkeypat
     assert reply == "I couldn't execute the requested action. Please try again or provide the missing details."
 
 
-def test_discovery_without_execution_cannot_confirm_a_planned_action(monkeypatch, mock_config, db, dialogue_memory):
+@pytest.mark.parametrize('discovery_tool', ['toolSearchTool', 'searchSkills', 'readSkill'])
+def test_discovery_without_execution_cannot_confirm_a_planned_action(monkeypatch, mock_config, db, dialogue_memory, discovery_tool):
     from jarvis.reply import engine
     from jarvis.tools.types import ToolExecutionResult
+    import json
 
+    mock_config.skills_enabled = discovery_tool != 'toolSearchTool'
     mock_config.llm_chat_model = mock_config.ollama_chat_model = 'gemma4:e2b'
     mock_config.agentic_max_turns = 4
     monkeypatch.setattr(engine, 'select_tools', lambda **kwargs: ['deleteMeal', 'stop'])
     monkeypatch.setattr(engine, 'plan_query', lambda **kwargs: ['deleteMeal the specified meal', 'Reply to the user.'])
     monkeypatch.setattr(engine, '_resolve_plan_step', lambda **kwargs: None)
     replies = iter([
-        _assistant_content('tool_calls: [{"function":{"name":"toolSearchTool","arguments":{"query":"delete meal"}}}]'),
+        _assistant_content('tool_calls: ' + json.dumps([{'function': {
+            'name': discovery_tool, 'arguments': {'path': 'test/SKILL.md'} if discovery_tool == 'readSkill' else {'query': 'delete meal'}}}])),
         _assistant_content('I deleted the meal.'),
         _assistant_content('I deleted the meal.'),
     ])
     monkeypatch.setattr(engine, 'chat_with_messages', lambda **kwargs: next(replies))
     monkeypatch.setattr(engine, 'run_tool_with_retries', lambda *args, **kwargs: ToolExecutionResult(
-        success=True, reply_text='The deletion tool is available.'))
+        success=True, reply_text=json.dumps({'already_loaded': True}) if discovery_tool == 'readSkill' else 'The deletion tool is available.'))
     reply = engine.run_reply_engine(db, mock_config, None, 'Delete the recorded meal.', dialogue_memory)
     assert reply == "I couldn't execute the requested action. Please try again or provide the missing details."
 

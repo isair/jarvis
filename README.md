@@ -72,6 +72,7 @@ For an experimental 27B alternative, see the [Bonsai 2 local setup guide](docs/B
 - **Remember beyond one session.** Ask about past conversations, preferences and plans. Browse your local diary and knowledge graph in the Memory Viewer.
 - **Get things done.** Built-in tools cover web search, weather, time, screenshot OCR, file access, optional search across your text and Markdown folders, nutrition tracking, countdown timers (until Jarvis restarts) and optional location awareness.
 - **Unlimited MCP tools, focused context.** Connect browser automation, smart-home controls and other integrations. Jarvis selects relevant tools for each request and can discover more mid-conversation, keeping unused tools out of the reply context as your toolset grows.
+- **Experimental local skills.** Reuse instructions from local `SKILL.md` packages in voice and text chat. Add a library of any size; Jarvis searches descriptions and loads relevant instructions and references within a bounded reply context.
 - **Dictate into other apps.** Hold a hotkey, speak, then release to paste locally transcribed text. See the [platform limitations](#known-limitations) first.
 - **Type when you need to.** The companion chat shares your voice conversation and memory. Text replies are silent, and you can rewind a sent message to regenerate from that point.
 - **Optional background work.** Enable Background Tasks in Settings to queue work locally, follow results and cancel requests. Off by default.
@@ -134,6 +135,14 @@ Jarvis is developed primarily on macOS. Windows and Linux behaviour may differ. 
 ## Configuration
 
 Most people can use **Settings** from the tray. Advanced setups can edit `~/.config/jarvis/config.json`.
+
+Local skills are experimental and off by default. Models can skip required
+reference reads. In Settings → Features, enable **Local Skills**
+and add **Skill Library Folders** containing skill directories, each with a
+`SKILL.md` file. Only add instructions you trust. Search matches names and
+description words; it does not translate between languages. Large instructions
+need smaller reference files (12 KiB per file, 16 KiB loaded per reply). Skills
+do not run scripts automatically or grant extra tool permissions.
 
 [**Open the configuration guide →**](docs/CONFIGURATION.md)
 

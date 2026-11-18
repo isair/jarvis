@@ -356,6 +356,12 @@ def _build_field_metadata() -> List[FieldMeta]:
     f("document_search_enabled", "Local Document Search",
       "Search the text and Markdown folders you choose",
       "features", "bool")
+    f("skills_enabled", "Local Skills",
+      "Use instructions from local SKILL.md packages in the folders you choose",
+      "features", "bool")
+    f("skills_paths", "Skill Library Folders",
+      "Folders containing skill directories. Only add instructions you trust. Scripts are not run automatically.",
+      "features", "list")
     f("document_search_paths", "Document Search Folders",
       "Folders Jarvis may read for document search (.txt and .md files only)",
       "features", "list")

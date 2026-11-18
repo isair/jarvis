@@ -46,6 +46,20 @@ def test_settings_save_only_the_selected_config(config_files):
     assert load_settings().wake_word == saved["wake_word"]
 
 
+def test_local_skills_use_existing_settings_and_runtime_config(config_files):
+    from PyQt6.QtWidgets import QListWidget
+    _, selected = config_files
+    window = settings_ui.SettingsWindow()
+    assert not window._widgets['skills_enabled'].isChecked()
+    window._widgets['skills_enabled'].setChecked(True)
+    window._widgets['skills_paths'].findChild(QListWidget).addItem('/owned/local-skills')
+    window._on_save()
+    cfg = load_settings()
+    assert cfg.skills_enabled is True
+    assert cfg.skills_paths == ['/owned/local-skills']
+    assert json.loads(selected.read_text())['opaque'] == {'text': 'İstanbul, 東京'}
+
+
 def test_empty_history_explains_the_selected_dictation_setting(config_files, tmp_path):
     from PyQt6.QtWidgets import QLabel
     from desktop_app.dictation_history import DictationHistoryWindow

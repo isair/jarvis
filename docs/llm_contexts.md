@@ -1,5 +1,29 @@
 # LLM Contexts Map
 
+Optional local skills (`skills_enabled`, false by default) use the existing reply and
+coverage contexts. A reply-owned local lexical index searches
+only configured `skills_paths` and places at most five metadata matches in the
+reply system prompt. All metadata disclosure is capped at 4 KiB per reply,
+independent of the number of installed skills. `searchSkills` supports refined
+queries; `readSkill` loads complete instructions or relative UTF-8 references
+into that reply's tool results (12 KiB per file, 16 KiB aggregate JSON payload).
+These files are subordinate to user intent, privacy and existing tool authority.
+Skill results bypass tool-result digestion. Duplicate reads return acknowledgements
+without repeating instruction bodies. Skill requests/results
+are excluded from tool carryover; the index and guidance expire with the reply.
+Native assistant prose and reasoning in a skill-using reply's tool carryover are
+removed. Skill preparation does not establish action-completion evidence.
+The router and planner see two optional tool definitions, never the installed
+skill catalogue. Both tools are always exposed to enabled reply loops, and
+absent from disabled routing. Models, deadlines and turn limits are unchanged.
+
+In the text tool protocol, a successful `readSkill` result can trigger the
+existing coverage-recovery inference for a single question before the candidate
+answer is delivered. This uses the same per-reply coverage limit and the current
+scoped schemas, request and observed results. A single-question skill check
+can propose only an already-allowed `readSkill` call. Skill schemas and results do
+not enter the declared-record compiler's admission or completion evidence.
+
 Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it is gated. This is the reference for optimising the app's main bottleneck (LLM latency). Keep it in sync with the code — see the note at the bottom.
 
 **Configuration source.** Runtime settings and desktop configuration share [one file selection](../src/jarvis/config.spec.md). An explicit `JARVIS_CONFIG_PATH` applies to settings and wizard writes as well as runtime loading. Model tiers, prompts, deadlines and context gates resolve from that selected configuration.

@@ -23,6 +23,8 @@ def run(mock_config,db,memory,tool,responses,*,route=None,success=True,max_turns
             seen.append([dict(message) for message in kwargs["messages"]])
         return next(outputs)
     def execute(db,cfg,tool_name,tool_args,**kwargs):
+        if tool_name == 'readSkill':
+            return ToolExecutionResult(success=True, reply_text='{"already_loaded":true}')
         return ToolExecutionResult(success=success,reply_text='Confirmed result: 14 units.' if success else 'Lookup still unavailable.')
     with patch.object(engine,'select_tools',return_value=route if route is not None else [tool,'stop']), \
          patch.object(engine,'plan_query',return_value=[]), \
@@ -38,7 +40,7 @@ def prose(text):
 
 def call(tool):
     return {'message':{'role':'assistant','content':'','tool_calls':[{'id':'followup',
-                     'function':{'name':tool,'arguments':{'query':'supplied input'}}}]}}
+                     'function':{'name':tool,'arguments':{'path':'test/SKILL.md'} if tool == 'readSkill' else {'query':'supplied input'}}}]}}
 
 
 @pytest.mark.parametrize('model',['gemma4:e2b','gpt-oss:20b'])
@@ -96,10 +98,12 @@ def test_full_catalogue_exposure_does_not_establish_continuation_intent(mock_con
     assert reply=='I will keep replies brief.'
 
 
-def test_tool_discovery_is_not_a_current_lookup_result(mock_config,db,dialogue_memory):
+@pytest.mark.parametrize('discovery_tool', ['toolSearchTool', 'searchSkills', 'readSkill'])
+def test_tool_discovery_is_not_a_current_lookup_result(mock_config,db,dialogue_memory,discovery_tool):
+    mock_config.skills_enabled = discovery_tool != 'toolSearchTool'
     prior_failure(dialogue_memory,'getWeather')
     reply=run(mock_config,db,dialogue_memory,'getWeather',
-              [call('toolSearchTool'),prose('Invented result: 18 units.'),
+              [call(discovery_tool),prose('Invented result: 18 units.'),
                prose('{"blocker":"No lookup result is available."}')])
     assert reply=='No lookup result is available.'
 

@@ -42,6 +42,8 @@ class MockConfig:
     # ``__post_init__`` — same shape ``load_settings()`` produces.
     llm_chat_model: str = ""
     background_tasks_enabled: bool = field(default_factory=lambda: get_default_config()['background_tasks_enabled'])
+    skills_enabled: bool = field(default_factory=lambda: get_default_config()['skills_enabled'])
+    skills_paths: list = field(default_factory=lambda: get_default_config()['skills_paths'].copy())
     wake_word: str = "jarvis"
     wake_aliases: list = field(default_factory=list)
     whisper_model: str = "small"

@@ -24,6 +24,13 @@ malformed list grants no folders. Settings exposes these options through its
 shared metadata and preserves unrelated configuration. A task cancellation
 signal reaches the document tool through the canonical tool context.
 
+## Local skills
+
+`skills_enabled` defaults to false and accepts only JSON boolean `true`.
+`skills_paths` defaults to an empty list; loading retains only non-empty strings
+from a list. A malformed value grants no folders. Features exposes the shared
+switch and folder list. See `skills.spec.md` for discovery and loading boundaries.
+
 ## Background tasks
 
 `background_tasks_enabled` defaults to false. Only the JSON boolean `true`
