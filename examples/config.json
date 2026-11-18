@@ -98,6 +98,10 @@
     "shut up"
   ],
   "stop_command_fuzzy_ratio": 0.8,
+  "shush_detection_enabled": true,
+  "shush_high_low_ratio": 3.0,
+  "shush_energy_floor": 0.002,
+  "shush_consecutive_frames": 15,
   "location_enabled": true,
   "location_cache_minutes": 60,
   "location_ip_address": null,

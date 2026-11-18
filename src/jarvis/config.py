@@ -172,6 +172,10 @@ class Settings:
     wake_fuzzy_ratio: float
     stop_commands: list[str]
     stop_command_fuzzy_ratio: float
+    shush_detection_enabled: bool
+    shush_high_low_ratio: float
+    shush_energy_floor: float
+    shush_consecutive_frames: int
 
     # Whisper Speech Recognition
     whisper_model: str
@@ -660,6 +664,12 @@ def get_default_config() -> Dict[str, Any]:
         "stop_commands": ["stop", "quiet", "shush", "silence", "enough", "shut up"],
         "stop_command_fuzzy_ratio": 0.8,
 
+        # Acoustic Shush Detection (spectral fricative detector)
+        "shush_detection_enabled": True,
+        "shush_high_low_ratio": 3.0,
+        "shush_energy_floor": 0.002,
+        "shush_consecutive_frames": 15,
+
         # Location Services
         "location_enabled": True,
         "location_cache_minutes": 60,
@@ -970,6 +980,10 @@ def load_settings() -> Settings:
         wake_fuzzy_ratio=wake_fuzzy_ratio,
         stop_commands=_ensure_list(merged["stop_commands"]),
         stop_command_fuzzy_ratio=float(merged["stop_command_fuzzy_ratio"]),
+        shush_detection_enabled=bool(merged["shush_detection_enabled"]),
+        shush_high_low_ratio=float(merged["shush_high_low_ratio"]),
+        shush_energy_floor=float(merged["shush_energy_floor"]),
+        shush_consecutive_frames=int(merged["shush_consecutive_frames"]),
 
         # Whisper Speech Recognition
         whisper_model=whisper_model,
