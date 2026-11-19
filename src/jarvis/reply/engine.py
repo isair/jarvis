@@ -1652,15 +1652,22 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     # or already fully answerable from live context — no reason to crawl the
     # knowledge graph.
     graph_context = ""
+    imported_graph_context = ""
+    graph_heading = (
+        "Information the user has shared with you in prior conversations "
+        "(you have access to this — it is part of what the user has told "
+        "you, just not in the current session):\n"
+    )
     if enrichment_source in ("all", "graph"):
         if not questions:
             debug_log("skipping graph enrichment: no implicit questions to answer", "memory")
         else:
             try:
                 from ..memory.graph import GraphMemoryStore
-                with closing(GraphMemoryStore(cfg.db_path)) as graph_store:
+                from ..memory.imports import IMPORT_CONTEXT_BEGIN, IMPORT_CONTEXT_GUIDANCE
 
-                    graph_parts: list[str] = []
+                with closing(GraphMemoryStore(cfg.db_path)) as graph_store:
+                    imported_parts: list[str] = []
                     # Track node name + matched question for user-facing logs
                     node_annotations: list[tuple[str, str]] = []  # (node_name, matched_question)
 
@@ -1684,22 +1691,21 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                         for node in graph_nodes:
                             ancestors = graph_store.get_ancestors(node.id)
                             path = " > ".join(a.name for a in ancestors)
-                            data_preview = node.data[:300] if node.data else ""
+                            data_preview = graph_store.get_context_data(node, max_chars=300, include_archive=False) if node.data else ""
                             if data_preview:
-                                graph_parts.append(f"[{path}] {data_preview}")
+                                parts = imported_parts if data_preview.startswith(IMPORT_CONTEXT_BEGIN) else raw_graph_parts
+                                parts.append(f"[{path}] {data_preview}")
                                 matched_q = _match_question(data_preview, questions)
                                 node_annotations.append((node.name or path.split(" > ")[-1], matched_q))
                                 debug_log(f"graph hit: [{path}] ({node.data_token_count} tokens)", "memory")
 
-                    if graph_parts:
-                        raw_graph_parts = list(graph_parts)
-                        graph_context = (
-                            "Information the user has shared with you in prior conversations "
-                            "(you have access to this — it is part of what the user has told "
-                            "you, just not in the current session):\n" + "\n".join(graph_parts)
-                        )
+                    if raw_graph_parts:
+                        graph_context = graph_heading + "\n".join(raw_graph_parts)
+                    if imported_parts:
+                        imported_graph_context = graph_heading + "\n".join([IMPORT_CONTEXT_GUIDANCE, *imported_parts])
+                    if node_annotations:
                         names_str = ", ".join(name for name, _ in node_annotations[:4] if name)
-                        print(f"  🧠 Knowledge: {len(graph_parts)} nodes — {names_str}", flush=True)
+                        print(f"  🧠 Knowledge: {len(node_annotations)} nodes — {names_str}", flush=True)
                         for name, reason in node_annotations[:4]:
                             if reason:
                                 print(f"     · {name} → {reason}", flush=True)
@@ -1940,6 +1946,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
         if graph_context:
             guidance.append("\n" + graph_context)
+        if imported_graph_context:
+            guidance.append("\n" + imported_graph_context)
 
         if memory_digest_text:
             # Distilled, relevance-filtered note used in place of raw

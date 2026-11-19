@@ -69,7 +69,7 @@ For an experimental 27B alternative, see the [Bonsai 2 local setup guide](docs/B
 ## What you can do
 
 - **A third person in the room.** Bring Jarvis into an ongoing conversation with friends, talk through a problem aloud, or ask it to weigh in on a decision. “Jarvis, what do you think?” draws on the recent discussion, not just that one sentence.
-- **Remember beyond one session.** Ask about past conversations, preferences and plans. Browse your local diary and knowledge graph in the Memory Viewer.
+- **Remember beyond one session.** Ask about past conversations, preferences and plans. Browse your local diary and knowledge graph in the Memory Viewer. Import memories or instructions from ChatGPT and Claude text, or local Claude Code and Codex instructions, with a review before saving.
 - **Get things done.** Built-in tools cover web search, weather, time, screenshot OCR, file access, optional search across your text and Markdown folders, nutrition tracking, countdown timers (until Jarvis restarts) and optional location awareness.
 - **Unlimited MCP tools, focused context.** Connect browser automation, smart-home controls and other integrations. Jarvis selects relevant tools for each request and can discover more mid-conversation, keeping unused tools out of the reply context as your toolset grows.
 - **Experimental local skills.** Reuse instructions from local `SKILL.md` packages in voice and text chat. Add a library of any size; Jarvis searches descriptions and loads relevant instructions and references within a bounded reply context.

@@ -305,31 +305,23 @@ class TestGraphContextReachesSystemMessage:
     about you" even though 🧠 Knowledge logs showed nodes surfaced.
     """
 
-    def test_graph_context_appears_in_system_prompt(self):
+    @pytest.mark.parametrize('imported', [False, True])
+    def test_graph_context_appears_in_system_prompt(self, imported):
         from jarvis.reply.engine import run_reply_engine
 
-        class _Node:
-            def __init__(self):
-                self.id = "n1"
-                self.name = "Food Preferences"
-                self.data = "User loves sushi and spicy ramen."
-                self.data_token_count = 10
+        from jarvis.memory.graph import GraphMemoryStore
+        from jarvis.memory import imports
 
-        class _Ancestor:
-            name = "Root"
-
-        class _FakeStore:
-            def __init__(self, *a, **kw):
-                pass
-
-            def close(self):
-                pass
-
-            def search_nodes(self, query, limit=5):
-                return [_Node()]
-
-            def get_ancestors(self, node_id):
-                return [_Ancestor()]
+        class _FixtureStore(GraphMemoryStore):
+            def __init__(self, *args, **kwargs):
+                super().__init__(":memory:")
+                if imported:
+                    preview = imports.preview_text('Claude', 'User enjoys sushi and spicy ramen cuisine.', label='Owned export')
+                    item = preview.items[0]
+                    imports.commit_import(self, preview, [imports.ImportChoice(item.id, item.text, 'world', '2020-01-01')])
+                else:
+                    self.create_node("Food Preferences", "Cuisine the user enjoys", parent_id="world",
+                                     data="User loves sushi and spicy ramen.")
 
         class _DM:
             def has_recent_messages(self):
@@ -361,6 +353,7 @@ class TestGraphContextReachesSystemMessage:
             location_cgnat_resolve_public_ip=True,
             db_path=":memory:",
             tts_engine="piper",
+            memory_digest_enabled=imported,
         )
 
         captured_messages: list = []
@@ -372,7 +365,8 @@ class TestGraphContextReachesSystemMessage:
         with patch(
             "jarvis.reply.engine.extract_search_params_for_memory",
             return_value={"keywords": ["food"], "questions": ["what cuisine does the user enjoy?"]},
-        ), patch("jarvis.memory.graph.GraphMemoryStore", _FakeStore), \
+        ), patch("jarvis.reply.engine.digest_memory_for_query", return_value="Unstructured memory digest"), \
+             patch("jarvis.memory.graph.GraphMemoryStore", _FixtureStore), \
              patch("jarvis.reply.engine.chat_with_messages", side_effect=fake_chat), \
              patch("jarvis.tools.selection.select_tools", return_value=[]):
             run_reply_engine(db=None, cfg=cfg, tts=None, text="what do you know about me?", dialogue_memory=_DM())
@@ -384,6 +378,10 @@ class TestGraphContextReachesSystemMessage:
             f"Graph context missing from system prompt. Got:\n{joined[:500]}"
         assert "sushi" in joined, \
             f"Graph node data missing from system prompt. Got:\n{joined[:500]}"
+        if imported:
+            assert imports.IMPORT_CONTEXT_BEGIN in joined
+            assert '"date":"2020-01-01"' in joined
+            assert 'Unstructured memory digest' not in joined
 
 
 # ── Memory digest ──────────────────────────────────────────────────────
