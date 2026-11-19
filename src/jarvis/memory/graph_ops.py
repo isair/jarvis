@@ -1272,7 +1272,7 @@ def _collect_branch_text(
             records = store.get_context_sources(node_id)
             if records:
                 snippet = render_streamed_memory_context(
-                    chunks, branch_root_id, records, max_chars=remaining,
+                    chunks, branch_root_id, records, max_chars=remaining, include_archive=False,
                 )
             else:
                 snippet = _profile_text_prefix(chunks, remaining)
@@ -1327,8 +1327,7 @@ def format_warm_profile_block(profile: dict[str, str]) -> str:
     """
     user = (profile.get("user") or "").strip()
     from .imports import IMPORT_CONTEXT_BEGIN, IMPORT_CONTEXT_GUIDANCE
-    if IMPORT_CONTEXT_BEGIN in user:
-        user = IMPORT_CONTEXT_GUIDANCE+'\n'+user
+    has_imports = IMPORT_CONTEXT_BEGIN in user
     directives = profile.get("directives") or ""
     if not directives.strip():
         directives = ""
@@ -1344,11 +1343,20 @@ def format_warm_profile_block(profile: dict[str, str]) -> str:
             "as new information you need to ask about):\n"
             f"{user}"
         )
+        if has_imports:
+            sections.append(IMPORT_CONTEXT_GUIDANCE)
     if directives:
         sections.append(
             "STANDING INSTRUCTIONS FROM THE USER\n"
             "(rules the user has told you to follow — obey these "
             "verbatim, in every reply, without being reminded):\n"
             f"{directives}"
+        )
+    if has_imports and directives:
+        sections.append(
+            "Saved preferences include the standing instructions above. "
+            "If asked what preference the user expressed, read those instructions "
+            "as direct evidence. An incomplete personal note does not invalidate "
+            "a separate complete instruction."
         )
     return "\n\n".join(sections)

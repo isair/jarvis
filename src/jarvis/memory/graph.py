@@ -668,14 +668,15 @@ class GraphMemoryStore:
                     raise
                 return []
 
-    def get_context_data(self, node: MemoryNode, *, max_chars: int, suffix: str = '') -> str:
+    def get_context_data(self, node: MemoryNode, *, max_chars: int, suffix: str = '',
+                         include_archive: bool = True) -> str:
         """Render bounded recall data with its original source dates."""
         from .imports import render_streamed_memory_context
         records = self.get_context_sources(node.id)
         if records:
             return render_streamed_memory_context(
                 (node.data,), self._resolve_branch(node.id) or BRANCH_WORLD,
-                records, max_chars=max_chars,
+                records, max_chars=max_chars, include_archive=include_archive,
             )
         text = node.data.strip()
         return text if len(text) <= max_chars else text[:max(0, max_chars-len(suffix))].rstrip()+suffix

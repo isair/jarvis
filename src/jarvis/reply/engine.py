@@ -1691,7 +1691,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                         for node in graph_nodes:
                             ancestors = graph_store.get_ancestors(node.id)
                             path = " > ".join(a.name for a in ancestors)
-                            data_preview = graph_store.get_context_data(node, max_chars=300) if node.data else ""
+                            data_preview = graph_store.get_context_data(node, max_chars=300, include_archive=False) if node.data else ""
                             if data_preview:
                                 parts = imported_parts if data_preview.startswith(IMPORT_CONTEXT_BEGIN) else raw_graph_parts
                                 parts.append(f"[{path}] {data_preview}")

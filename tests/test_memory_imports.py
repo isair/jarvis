@@ -619,3 +619,18 @@ def test_query_recall_omits_incomplete_oversized_import_line(tmp_path):
         context = store.get_context_data(store.get_node(result.node_ids[0]), max_chars=300)
         assert 'Keep this line.' in context
         assert 'Omit this incomplete line' not in context
+
+
+def test_warm_profile_excludes_superseded_quotes_from_automatic_recall(tmp_path):
+    from jarvis.memory.graph_ops import build_warm_profile, format_warm_profile_block
+
+    preview = imports.preview_text('Claude', 'I live in London.', label='Owned source')
+    with closing(GraphMemoryStore(str(tmp_path / 'graph.db'))) as store:
+        item = preview.items[0]
+        result = imports.commit_import(store, preview, [imports.ImportChoice(item.id, item.text, 'user', None)])
+        node_id = result.node_ids[0]
+        store.update_node(node_id, data='I live in Oxford.')
+        context = format_warm_profile_block(build_warm_profile(store))
+        assert 'I live in Oxford.' in context
+        assert 'I live in London.' not in context
+        assert store.get_import_provenance(node_id)[0]['original_text'] == item.text

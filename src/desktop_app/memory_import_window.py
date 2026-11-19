@@ -128,8 +128,8 @@ class MemoryImportWindow(QWidget):
                       'standing instructions guide replies; reference is for project notes. '
                       'Replace words such as “tomorrow” with an exact date when known. '
                       'File dates and import time do not establish when an event happened. '
-                      'Jarvis retains a scrubbed copy of the original selected entries for source history. '
-                      'Replies can include saved memory and archived excerpts in requests to your configured model server.')
+                      'Jarvis retains a scrubbed copy of the original selected entries in Memory Viewer. '
+                      'Replies can include current saved memory in requests to your configured model server.')
         hint.setWordWrap(True)
         review_layout.addWidget(hint)
         self.entries = QWidget()
