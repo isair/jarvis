@@ -631,7 +631,9 @@ class GraphMemoryStore:
                      record.source_digest, record.source_label, record.source_scope,
                      record.source_date, record.source_metadata, record.original_text, record.reviewed_text, imported_at))
                 if node_id is not None:
-                    self.conn.execute('INSERT INTO memory_import_node_sources VALUES (?, ?, 1)', (identity, node_id))
+                    self.conn.execute('''INSERT INTO memory_import_node_sources
+                        SELECT ?, id, data COLLATE BINARY = ? FROM memory_nodes WHERE id = ?''',
+                        (identity, record.reviewed_text, node_id))
                     if self._resolve_branch(node_id) in (BRANCH_USER, BRANCH_DIRECTIVES):
                         self.conn.execute("UPDATE memory_graph_revisions SET revision = revision + 1 WHERE name = 'warm_profile'")
                 node_ids.append(node_id)
@@ -668,11 +670,13 @@ class GraphMemoryStore:
 
     def get_context_data(self, node: MemoryNode, *, max_chars: int, suffix: str = '') -> str:
         """Render bounded recall data with its original source dates."""
-        from .imports import render_memory_context
+        from .imports import render_streamed_memory_context
         records = self.get_context_sources(node.id)
         if records:
-            return render_memory_context(node.data, self._resolve_branch(node.id) or BRANCH_WORLD,
-                                         records, max_chars=max_chars, source_complete=True)
+            return render_streamed_memory_context(
+                (node.data,), self._resolve_branch(node.id) or BRANCH_WORLD,
+                records, max_chars=max_chars,
+            )
         text = node.data.strip()
         return text if len(text) <= max_chars else text[:max(0, max_chars-len(suffix))].rstrip()+suffix
 
@@ -692,8 +696,10 @@ class GraphMemoryStore:
                        for name, description, data in children]
             for child in created:
                 self.conn.execute('''INSERT INTO memory_import_node_sources
-                    SELECT import_id, ?, current_binding FROM memory_import_node_sources
-                    WHERE node_id = ?''', (child.id, source.id))
+                    SELECT link.import_id, ?, link.current_binding AND source.reviewed_text COLLATE BINARY = ?
+                    FROM memory_import_node_sources link
+                    JOIN memory_imports source ON source.id = link.import_id
+                    WHERE link.node_id = ?''', (child.id, child.data, source.id))
             current.data = ""
             current.data_token_count = 0
             current.description = summary[:SUMMARY_MAX_LENGTH]

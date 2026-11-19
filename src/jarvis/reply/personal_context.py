@@ -160,17 +160,34 @@ def _collect_evidence(db, cfg, text: str, recent_messages: list[dict], now: date
         try:
             # Reads the existing User subtree only; no bootstrap, touch or mutation.
             with db._lock:
+                has_imports = db.conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='memory_import_node_sources'"
+                ).fetchone()
+                evidence_date = "m.updated_at"
+                params = (MAX_GRAPH_NODES, MAX_SOURCE_CHARS)
+                if has_imports:
+                    # A graph write date is not a statement date for an imported entry.
+                    evidence_date = '''CASE WHEN EXISTS (
+                        SELECT 1 FROM memory_import_node_sources WHERE node_id=m.id
+                    ) THEN (
+                        SELECT CASE WHEN COUNT(DISTINCT COALESCE(source.source_date, ''))=1
+                                    THEN MAX(source.source_date) END
+                        FROM memory_import_node_sources link
+                        JOIN memory_imports source ON source.id=link.import_id
+                        WHERE link.node_id=m.id AND link.current_binding=1
+                          AND length(m.data)<=? AND source.reviewed_text COLLATE BINARY=m.data
+                    ) ELSE m.updated_at END'''
+                    params += (MAX_SOURCE_CHARS,)
                 rows = db.conn.execute(
                     "WITH RECURSIVE nodes(id, depth) AS ("
                     " SELECT id, 0 FROM memory_nodes WHERE id='user'"
                     " UNION ALL SELECT m.id, n.depth+1 FROM memory_nodes m"
                     " JOIN nodes n ON m.parent_id=n.id WHERE n.depth<8"
-                    " LIMIT ?) SELECT m.id, substr(m.data, 1, ?) AS data, m.updated_at"
-                    " FROM memory_nodes m JOIN nodes n ON m.id=n.id",
-                    (MAX_GRAPH_NODES, MAX_SOURCE_CHARS),
+                    f" LIMIT ?) SELECT m.id, substr(m.data, 1, ?) AS data, {evidence_date} AS evidence_date"
+                    " FROM memory_nodes m JOIN nodes n ON m.id=n.id", params,
                 ).fetchall()
             for row in rows:
-                add(f"graph:{row['id']}", row['data'], row['updated_at'])
+                add(f"graph:{row['id']}", row['data'], row['evidence_date'])
         except Exception as exc:
             debug_log(f'personal context: graph unavailable ({type(exc).__name__})', 'memory')
     return records

@@ -2341,12 +2341,15 @@ class JarvisSystemTray:
 
     def show_memory_import(self) -> None:
         """Show the local memory review window."""
+        from jarvis.config import load_settings
+
+        db_path = load_settings().db_path
         if self.memory_import_window is None:
             from desktop_app.memory_import_window import MemoryImportWindow
-            from jarvis.config import load_settings
-            self.memory_import_window = MemoryImportWindow(
-                db_path=load_settings().db_path, home=Path.home(),
-            )
+
+            self.memory_import_window = MemoryImportWindow(db_path=db_path, home=Path.home())
+        else:
+            self.memory_import_window.db_path = db_path
         self.memory_import_window.show()
         self.memory_import_window.raise_()
         self.memory_import_window.activateWindow()

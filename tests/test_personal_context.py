@@ -269,3 +269,28 @@ def test_ineligible_task_candidate_does_not_discard_grounded_home(db, monkeypatc
     _answer(monkeypatch, [_candidate(), _candidate(kind='requested')])
     result = resolve_missing_context('location', db, _cfg(), 'weather tomorrow', [])
     assert result and result.value == 'London' and result.kind == 'home'
+
+
+@pytest.mark.parametrize('age,edit,expected', [
+    (None, False, None), (365, False, None), (1, True, None), (1, False, 'London'),
+])
+def test_imported_home_uses_the_current_statement_date(tmp_path, monkeypatch, age, edit, expected):
+    from contextlib import closing
+    from jarvis.memory import imports
+    from jarvis.memory.db import Database
+    from jarvis.memory.graph import GraphMemoryStore
+    from jarvis.reply import personal_context
+
+    path = str(tmp_path / 'context.db')
+    date = None if age is None else (datetime.now(timezone.utc) - timedelta(days=age)).date().isoformat()
+    preview = imports.preview_text('Claude', 'The user lives in London.', label='Owned export')
+    item = preview.items[0]
+    with closing(GraphMemoryStore(path)) as store:
+        result = imports.commit_import(store, preview, [imports.ImportChoice(item.id, item.text, 'user', date)])
+        node_id = result.node_ids[0]
+        if edit:
+            store.update_node(node_id, data='London is the home city of the user.')
+    _answer(monkeypatch, [_candidate(source=f'graph:{node_id}')])
+    with closing(Database(path)) as database:
+        result = personal_context.resolve_missing_context('location', database, _cfg(), 'weather tomorrow', [])
+    assert (result.value if result else None) == expected

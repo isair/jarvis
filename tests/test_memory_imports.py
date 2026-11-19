@@ -584,3 +584,38 @@ def test_incomplete_line_cannot_supply_credentials_or_archival_recall(tmp_path):
         store.update_node(result.node_ids[0], data='https://user:'+('p'*imports.MAX_ENTRY_CHARS*2)+'@example.com')
         store.create_node('Current fact', 'A complete fact', 'I live in Oxford.', 'user')
         assert build_warm_profile(store)['user'] == 'I live in Oxford.'
+
+
+def test_long_markdown_fence_keeps_shorter_examples_in_one_entry():
+    block = '\n'.join(('\x60\x60\x60\x60markdown', '\x60\x60\x60python',
+                       'first = 1', '', 'second = 2', '\x60\x60\x60', '\x60\x60\x60\x60'))
+    preview = imports.preview_text('Claude', block + '\n\nSeparate entry.', label='Example')
+    assert [item.text for item in preview.items] == [block, 'Separate entry.']
+
+
+def test_new_provenance_of_edited_duplicate_is_archival(tmp_path):
+    original = 'I live in London.'
+    with closing(GraphMemoryStore(str(tmp_path / 'graph.db'))) as store:
+        def save(provider):
+            preview = imports.preview_text(provider, original, label='Memory export')
+            item = preview.items[0]
+            return imports.commit_import(store, preview, [imports.ImportChoice(item.id, item.text, 'user', None)])
+        node_id = save('Claude').node_ids[0]
+        store.update_node(node_id, data='I live in Oxford.')
+        assert save('ChatGPT').node_ids == (node_id,)
+        assert store.get_node(node_id).data == 'I live in Oxford.'
+        assert {row['provider']: row['current_binding'] for row in store.get_import_provenance(node_id)} == {
+            'Claude': 0, 'ChatGPT': 0,
+        }
+
+
+def test_query_recall_omits_incomplete_oversized_import_line(tmp_path):
+    preview = imports.preview_text('Claude', 'Original reference.', label='Notes')
+    with closing(GraphMemoryStore(str(tmp_path / 'graph.db'))) as store:
+        item = preview.items[0]
+        result = imports.commit_import(store, preview, [imports.ImportChoice(item.id, item.text, 'world', None)])
+        text = 'Keep this line.\nOmit this incomplete line ' + 'x' * imports.MAX_ENTRY_CHARS
+        store.update_node(result.node_ids[0], data=text)
+        context = store.get_context_data(store.get_node(result.node_ids[0]), max_chars=300)
+        assert 'Keep this line.' in context
+        assert 'Omit this incomplete line' not in context

@@ -115,6 +115,32 @@ def test_real_menu_action_opens_the_import_window_with_configured_database(tmp_p
         assert tray.memory_import_window is not None
         assert tray.memory_import_window.db_path==db_path
         assert tray.memory_import_window.isVisible()
+        tray.memory_import_window.close()
+        old_path = db_path
+        db_path = str(tmp_path / 'new-configured.db')
+        tray.memory_import_action.trigger()
+        app.processEvents()
+        window = tray.memory_import_window
+        window.pasted.setPlainText('An entry for the active graph.')
+        window.review_paste()
+        wait(app, lambda: len(window.rows) == 1)
+        window.import_selected()
+        wait(app, lambda: not window.busy)
+        with closing(GraphMemoryStore(db_path)) as store:
+            assert [node.data for node in store.get_children('world')] == ['An entry for the active graph.']
+        with closing(GraphMemoryStore(old_path)) as store:
+            assert not store.get_import_provenance()
     finally:
         if tray.memory_import_window is not None:tray.memory_import_window.close()
         tray._voice_pause_timer.stop();tray.menu.close();tray.menu.deleteLater()
+
+
+def test_paste_and_review_preserve_nonbreaking_spaces(window):
+    text = 'Keep the exact spacing A\u00a0B.\nKeep this next line.'
+    window.pasted.setPlainText(text)
+    window.review_paste()
+    wait(QApplication.instance(), lambda: len(window.rows) == 1)
+    window.import_selected()
+    wait(QApplication.instance(), lambda: not window.busy)
+    with closing(GraphMemoryStore(window.db_path)) as store:
+        assert store.get_children('world')[0].data == text

@@ -14,6 +14,11 @@ from jarvis.memory.imports import (DESTINATIONS, PROVIDERS, ImportChoice, Memory
     MemorySource, commit_import, discover_codex_sources, discover_sources, preview_text, read_source)
 
 
+def _review_text(editor: QPlainTextEdit) -> str:
+    """Read literal text, converting Qt paragraph boundaries to newlines."""
+    return editor.document().toRawText().replace('\u2029', '\n')
+
+
 class ImportWorker(KeepAliveWorker):
     completed = pyqtSignal(int, object, str)
 
@@ -80,7 +85,7 @@ class MemoryImportWindow(QWidget):
         source = QWidget()
         source_layout = QVBoxLayout(source)
         info = QLabel('Choose a local file or paste memory text from ChatGPT or Claude. '
-                      'Everything stays on this computer. You review each entry before saving.')
+                      'Import runs locally. You review each entry before saving.')
         info.setWordWrap(True)
         source_layout.addWidget(info)
         self.provider = QComboBox()
@@ -122,7 +127,9 @@ class MemoryImportWindow(QWidget):
         hint = QLabel('Select and edit what Jarvis should keep. Personal memory is for facts about you; '
                       'standing instructions guide replies; reference is for project notes. '
                       'Replace words such as “tomorrow” with an exact date when known. '
-                      'File dates and import time do not establish when an event happened.')
+                      'File dates and import time do not establish when an event happened. '
+                      'Jarvis retains a scrubbed copy of the original selected entries for source history. '
+                      'Replies can include saved memory and archived excerpts in requests to your configured model server.')
         hint.setWordWrap(True)
         review_layout.addWidget(hint)
         self.entries = QWidget()
@@ -230,7 +237,7 @@ class MemoryImportWindow(QWidget):
             self._run(lambda: read_source(source), self.show_preview)
 
     def review_paste(self):
-        text, provider = self.pasted.toPlainText(), self.provider.currentText()
+        text, provider = _review_text(self.pasted), self.provider.currentText()
         self._run(lambda: preview_text(provider, text, label='Pasted memories'), self.show_preview)
 
     def show_preview(self, preview):
@@ -257,7 +264,7 @@ class MemoryImportWindow(QWidget):
         if self.preview is None or self.busy:
             return
         preview = self.preview
-        choices = [ImportChoice(row.item_id, row.text.toPlainText(), row.destination.currentData(),
+        choices = [ImportChoice(row.item_id, _review_text(row.text), row.destination.currentData(),
                                 row.source_date.text().strip() or None)
                    for row in self.rows if row.selected.isChecked()]
         db_path = self.db_path

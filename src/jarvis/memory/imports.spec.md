@@ -29,6 +29,9 @@ Jarvis without contacting another service or running model inference.
 The desktop provides source, scope, editable plain-text entries and an explicit
 import action. Nothing is saved before that action. Imported secrets are scrubbed
 before preview and persistence; source text cannot introduce rich content.
+Before saving, the review explains that selected entries retain original scrubbed
+quotations for provenance and that later replies may include saved memory and
+source excerpts in requests to the configured model server.
 
 Each selected entry has an explicit destination:
 
@@ -41,6 +44,8 @@ profile automatically. The user can select, edit or omit entries. Blank entries,
 unsupported destinations and oversized batches/entries are rejected before any
 write. Each entry has an optional original statement date supplied by the user; absent dates stay unknown.
 Neither file modification time nor import time becomes the date of an event.
+Location recovery uses the same exact statement-date binding for imported
+evidence, including its existing freshness limit.
 
 ## Persistence
 
@@ -67,9 +72,9 @@ Provenance retains provider, source identity/label/scope, source-content digest,
 original scrubbed quote, reviewed text, optional source date and the import's
 local timestamp. These records remain available when graph data is edited or
 split. Node deletion preserves the source record with no live node association.
-Provenance is available in the memory viewer's node detail, with the current binding distinguished from edited text. Memory context carries source dates and fenced current text within the existing character limits. Current text is budgeted before optional archived quotes. Warm-profile reads retain at most the import entry character limit plus one lookahead character. Oversized edited entries contribute only complete newline-delimited prefixes before that limit, so clipped credential tokens do not enter redaction or context. Such prefixes remain explicitly incomplete and undated; incomplete standing instructions are omitted. Complete entries preserve literal whitespace and source dates. Blank current text supplies no recall block. Partial excerpts have no statement date. Standing instructions are included only when the complete entry fits. Source records are archival quotations, not fresh tool results. Existing graph
+Provenance is available in the memory viewer's node detail, with the current binding distinguished from edited text. Memory context carries source dates and fenced current text within the existing character limits. Current text is budgeted before optional archived quotes. Warm-profile and query-driven context formatting retain at most the import entry character limit plus one lookahead character. Oversized edited entries contribute only complete newline-delimited prefixes before that limit, so clipped credential tokens do not enter redaction or context. Such prefixes remain explicitly incomplete and undated; incomplete standing instructions are omitted. Complete entries preserve literal whitespace and source dates. Blank current text supplies no recall block. Partial excerpts have no statement date. Standing instructions are included only when the complete entry fits. Source records are archival quotations, not fresh tool results. Existing graph
 search and the User/Directives warm profile make saved entries usable without a
-new inference context. Import does not claim to repair source or temporal
+new inference context. Framed import records keep their provenance through the reply and bypass free-form memory distillation. Import does not claim to repair source or temporal
 uncertainty in existing memories.
 
 ## Desktop lifecycle
@@ -79,7 +84,9 @@ shared keep-alive contract. Late results cannot replace a newer preview. Closing
 the window preserves an already authorised import and does not destroy a running
 worker. Both source and review pages scroll while navigation stays reachable.
 The action is available from the shared tray/face menu and works without a running
-daemon. Errors preserve editable review text and permit retry.
+daemon. Opening the window resolves the active graph. A save already authorised
+retains the destination captured at confirmation. Errors preserve editable review
+text and permit retry.
 
 ## Checks
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import stat
 from dataclasses import dataclass
 from datetime import date
@@ -237,9 +238,13 @@ def _paragraphs(text: str) -> list[str]:
     blocks, current = [], []
     fence = ''
     for line in text.splitlines():
-        marker = line.lstrip()[:3]
-        if marker in ('```', '~~~'):
-            fence = '' if fence == marker else marker if not fence else fence
+        marker = re.match(r' {0,3}(`{3,}|~{3,})(.*)', line)
+        if marker:
+            run, rest = marker.groups()
+            if fence and run[0] == fence[0] and len(run) >= len(fence) and not rest.strip():
+                fence = ''
+            elif not fence and (run[0] == '~' or '`' not in rest):
+                fence = run
         if not line.strip() and not fence:
             if current:
                 blocks.append('\n'.join(current))
