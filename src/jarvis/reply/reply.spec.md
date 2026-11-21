@@ -12,7 +12,7 @@ This specification documents only the reply flow that begins when a valid user q
 
 Design principles enforced by the engine:
 - Unified System Prompt: A single prompt with adaptive guidance handles all topics; no per-profile routing.
-- Tool Response Flow: Tools return raw data; formatting/personality is handled by the LLM through the engine's loop. The system prompt explicitly instructs the model to use tool results to fulfill the user's original request, not to describe the structure or format of the tool response.
+- Tool Response Flow: Tools return raw data; formatting/personality is handled by the LLM through the engine's loop. The system prompt explicitly instructs the model to use tool results to fulfill the user's original request, not to describe the structure or format of the tool response. After a confirmed MCP action executes, one tool-free synthesis call reports its result; untrusted tool output is data, never instructions.
 - Language-Agnostic Design: Prompts and ASR guidance avoid language-specific phrasing.
 - Data Privacy: Inputs are redacted and logging is concise and purposeful via `debug_log`.
 
@@ -345,6 +345,15 @@ Turn 4: LLM → {content: "Here's a comprehensive comparison of the iPhone 15 mo
   - `tool_result_digest_enabled` (default `null` = auto-on for SMALL models ≤7B) distils raw tool-result payloads (especially webSearch UNTRUSTED WEB EXTRACT blocks and fetch_web_page responses) into a short attributed fact note before appending as a tool-role message. Auto-on for small models mitigates large payloads (fetch_web_page truncates at 50,000 chars) blowing the 8192 num_ctx window. Set to `true` to force on, `false` to force off. See **Tool-Result Digest for Small Models** below.
 - Tools and MCP:
   - All builtin tools are always available; MCP servers added from `cfg.mcps`.
+  - Only exact tool names in a server's locally configured `read_only_tools`
+    list bypass action confirmation; MCP server annotations do not grant
+    permission. All other MCP tools require exact action confirmation before
+    invocation. The reply engine stops at the confirmation prompt and handles
+    `CONFIRM <nonce>` or `CANCEL <nonce>` before any planner or model turn. A
+    successfully executed confirmation receives one tool-free synthesis call
+    with the action result as untrusted data. Invalid, expired and cancelled
+    confirmations do not invoke the model. This gate applies to voice and text
+    chat.
 - Agentic loop:
   - `agentic_max_turns` maximum turns in the agentic loop (default 8)
   - `tool_search_max_calls` (default 3) caps `toolSearchTool` invocations per reply. Extra calls return a tool-error nudging the model to decide with what is already available.

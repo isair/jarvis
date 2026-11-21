@@ -4,6 +4,9 @@ from typing import Optional, Dict, Any, Tuple, List
 import threading
 import json
 import sys
+import re
+import secrets
+import time
 
 if sys.version_info < (3, 11):
     from exceptiongroup import BaseExceptionGroup
@@ -60,6 +63,20 @@ def available_builtin_tools(cfg):
 _mcp_tools_cache: Dict[str, "ToolSpec"] = {}
 _mcp_tools_cache_lock = threading.Lock()
 _mcp_config_cache: Dict[str, Any] = {}
+_pending_mcp_actions: Dict[int, "_PendingMCPAction"] = {}
+_pending_mcp_actions_lock = threading.Lock()
+_MCP_ACTION_CONFIRMATION_TTL_SEC = 600
+
+
+@dataclass(frozen=True)
+class _PendingMCPAction:
+    nonce: str
+    created_at: float
+    server_name: str
+    tool_name: str
+    arguments: Dict[str, Any]
+    mcps_config: Dict[str, Any]
+    summary: str
 
 
 def initialize_mcp_tools(mcps_config: Dict[str, Any], verbose: bool = True) -> Tuple[Dict[str, "ToolSpec"], Dict[str, str]]:
@@ -181,7 +198,7 @@ def discover_mcp_tools(mcps_config: Dict[str, Any]) -> Tuple[Dict[str, ToolSpec]
                     discovered_tools[full_tool_name] = ToolSpec(
                         name=full_tool_name,
                         description=description,
-                        inputSchema=input_schema
+                        inputSchema=input_schema,
                     )
 
             except Exception as e:
@@ -262,6 +279,12 @@ def generate_tools_description(allowed_tools: Optional[List[str]] = None, mcp_to
     lines: List[str] = []
     lines.append("Tool-use protocol: Use the tool_calls field in your response:")
     lines.append('{"tool_calls": [{"function": {"name": "<toolName>", "arguments": {"<argument_name>": "<value>"}}}]}')
+    lines.append(
+        "MCP safety: only locally configured MCP servers are available. "
+        "Use read-only tools for discovery. Draft reply text but do not send or "
+        "change external state until Jarvis shows an exact confirmation code "
+        "and the user confirms it."
+    )
     lines.append("\nAvailable tools and when to use them:")
 
     for definition in generate_tools_json_schema(allowed_tools, mcp_tools):
@@ -273,6 +296,79 @@ def generate_tools_description(allowed_tools: Optional[List[str]] = None, mcp_to
         lines.append(f"Input schema: {schema}")
 
     return "\n".join(lines)
+
+
+def clear_pending_mcp_actions(db=None) -> None:
+    """Clear pending MCP confirmations, optionally only for one conversation store."""
+    with _pending_mcp_actions_lock:
+        if db is None:
+            _pending_mcp_actions.clear()
+        else:
+            key = id(db)
+            _pending_mcp_actions.pop(key, None)
+
+
+def _mcp_action_summary(server_name: str, tool_name: str, arguments: Dict[str, Any]) -> str:
+    raw = json.dumps(arguments or {}, ensure_ascii=False, sort_keys=True)
+    return f"{server_name}/{tool_name} with arguments {raw}"
+
+
+def handle_mcp_confirmation(db, text: str, cancel_event=None) -> Tuple[bool, Optional[ToolExecutionResult]]:
+    """Execute or cancel a pending MCP action only for an exact confirmation command."""
+    match = re.fullmatch(r"\s*(CONFIRM|CANCEL)\s+([A-Z0-9]{8})\s*", text or "", re.IGNORECASE)
+    if not match:
+        return False, None
+    command = match.group(1).upper()
+    nonce = match.group(2).upper()
+    key = id(db)
+    with _pending_mcp_actions_lock:
+        pending = _pending_mcp_actions.get(key)
+        if pending is None or pending.nonce != nonce:
+            return True, ToolExecutionResult(
+                success=False,
+                reply_text="That confirmation code is not pending. No action was performed.",
+                error_message="Unknown MCP confirmation code.",
+            )
+        if time.monotonic() - pending.created_at >= _MCP_ACTION_CONFIRMATION_TTL_SEC:
+            _pending_mcp_actions.pop(key, None)
+            return True, ToolExecutionResult(
+                success=False,
+                reply_text="That confirmation code has expired. No action was performed.",
+                error_message="MCP confirmation expired.",
+            )
+        if command == "CANCEL":
+            _pending_mcp_actions.pop(key, None)
+            return True, ToolExecutionResult(success=True, reply_text="Cancelled. No action was performed.")
+        _pending_mcp_actions.pop(key, None)
+
+    if cancel_event is not None and cancel_event.is_set():
+        return True, ToolExecutionResult(success=False, reply_text="Tool execution was cancelled.", error_message="Tool execution was cancelled.")
+
+    action_metadata = {"confirmed_mcp_action": pending.summary}
+    try:
+        client = MCPClient(pending.mcps_config)
+        result = client.invoke_tool(
+            server_name=pending.server_name,
+            tool_name=pending.tool_name,
+            arguments=pending.arguments,
+        )
+        is_error = bool(result.get("isError", False))
+        response_text = result.get("text") or None
+        return True, ToolExecutionResult(
+            success=not is_error,
+            reply_text=response_text,
+            error_message=response_text if is_error else None,
+            result_metadata=action_metadata,
+        )
+    except Exception as exc:
+        detail = _mcp_error_detail(exc)
+        debug_log(f"Confirmed MCP tool '{pending.server_name}__{pending.tool_name}' error: {detail}", "mcp")
+        return True, ToolExecutionResult(
+            success=False,
+            reply_text=None,
+            error_message=f"MCP tool '{pending.server_name}__{pending.tool_name}' error: {detail}",
+            result_metadata=action_metadata,
+        )
 
 
 def run_tool_with_retries(
@@ -303,6 +399,48 @@ def run_tool_with_retries(
             try:
                 if MCPClient is None:
                     return ToolExecutionResult(success=False, reply_text=None, error_message="MCP client not available. Install 'mcp' package.")
+
+                server_config = mcps_config.get(server_name)
+                read_only_tools = (
+                    server_config.get("read_only_tools", [])
+                    if isinstance(server_config, dict)
+                    else []
+                )
+                # MCP annotations are server-provided hints, not user approval.
+                read_only = (
+                    isinstance(read_only_tools, list)
+                    and mcp_tool_name in read_only_tools
+                )
+                if not read_only:
+                    nonce = secrets.token_hex(4).upper()
+                    arguments = tool_args or {}
+                    summary = _mcp_action_summary(server_name, mcp_tool_name, arguments)
+                    key = id(db)
+                    with _pending_mcp_actions_lock:
+                        _pending_mcp_actions[key] = _PendingMCPAction(
+                            nonce=nonce,
+                            created_at=time.monotonic(),
+                            server_name=server_name,
+                            tool_name=mcp_tool_name,
+                            arguments=dict(arguments),
+                            mcps_config=dict(mcps_config),
+                            summary=summary,
+                        )
+                    prompt = (
+                        f"⚠️ Consequential MCP action requires confirmation:\n"
+                        f"{summary}\n\n"
+                        f"Reply exactly `CONFIRM {nonce}` to execute it, or "
+                        f"`CANCEL {nonce}` to cancel."
+                    )
+                    debug_log(
+                        f"MCP action held for explicit confirmation: {server_name}__{mcp_tool_name}",
+                        "mcp",
+                    )
+                    return ToolExecutionResult(
+                        success=False,
+                        reply_text=prompt,
+                        confirmation_required=nonce,
+                    )
 
                 client = MCPClient(mcps_config)
                 result = client.invoke_tool(server_name=server_name, tool_name=mcp_tool_name, arguments=tool_args or {})

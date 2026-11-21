@@ -55,6 +55,16 @@ resident for the daemon's lifetime.
   replacement fails as a session error until that instance has drained.
 - A stale failure retires only its own worker identity, preserving a newer
   persistent session and its state.
+- Only exact tool names in a server's locally configured `read_only_tools`
+  list bypass confirmation. Server-provided MCP `annotations`, including
+  `readOnlyHint`, never grant permission. All other MCP tools are held behind
+  an exact `CONFIRM <nonce>` command issued to the user. `CANCEL <nonce>`
+  cancels it.
+- A held action records the server, tool and arguments in memory only and never
+  calls the MCP server. The reply engine intercepts confirmation commands before
+  planner/model execution and performs the action once. Confirmation codes
+  expire after ten minutes. Repeated codes do not retry a completed or
+  cancelled action.
 - Shutdown closes admission before collecting workers, including pending
   startup. A stopped worker cannot schedule late setup. Concurrent stop
   callers join the same teardown and retain the bounded cleanup policy.

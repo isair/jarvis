@@ -162,7 +162,7 @@ Hold to record and release to paste. Double-tap for hands-free recording. Option
 
 ### Bring your own tools
 
-Connect MCP servers for browser automation, Home Assistant, GitHub, databases and more. Credentials and network access depend on the tools you choose. Review a server's permissions before enabling it.
+Connect user-owned MCP servers for browser automation, Home Assistant, email, IndiaMART, WhatsApp, calls, SMS and more. Jarvis has no built-in provider credentials or clients. Review setup and permissions before enabling a connector. MCP tools require an explicit confirmation unless you locally allowlist a verified read-only tool.
 
 [Integration examples and server settings →](docs/CONFIGURATION.md#mcp-integrations)
 
