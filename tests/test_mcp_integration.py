@@ -299,6 +299,10 @@ def test_mcp_exact_confirmation_executes_pending_action_once():
     assert matched is True
     assert executed.success is True
     assert executed.reply_text == "Message sent"
+    assert executed.result_metadata == {
+        "confirmed_mcp_action": "test-server/send_message with arguments "
+        '{"message": "Hello", "recipient": "Asha"}'
+    }
     assert TrackingMCPClient.calls == [
         ("test-server", "send_message", {"recipient": "Asha", "message": "Hello"})
     ]
@@ -481,6 +485,97 @@ def test_reply_engine_intercepts_confirmation_before_planner(monkeypatch):
         dialogue_memory=None,
     )
     assert result == "Message sent"
+
+
+@pytest.mark.integration
+def test_confirmed_mcp_result_is_formatted_without_dispatching_more_tools(monkeypatch):
+    from jarvis.reply import engine
+    from jarvis.tools.types import ToolExecutionResult
+
+    class MockDB:
+        pass
+
+    class MockConfig:
+        wake_word = "Jarvis"
+        llm_chat_timeout_sec = 2
+        llm_thinking_enabled = False
+        tts_engine = "piper"
+
+    action_result = ToolExecutionResult(
+        success=True,
+        reply_text='{"message":"Email sent to Priya"}',
+        result_metadata={
+            "confirmed_mcp_action": (
+                "gmail/send_email with arguments "
+                '{"message":"Hello","recipient":"Priya"}'
+            )
+        },
+    )
+    captured_messages = []
+
+    monkeypatch.setattr(
+        engine,
+        "handle_mcp_confirmation",
+        lambda db, text, cancel_event=None: (True, action_result),
+    )
+
+    def format_reply(cfg, messages, *, timeout_sec, extra_options=None,
+                     tools=None, thinking=False):
+        captured_messages.extend(messages)
+        assert tools is None
+        return {"message": {"content": "The email was sent to Priya."}}
+
+    monkeypatch.setattr(engine, "chat_with_messages", format_reply)
+    monkeypatch.setattr(
+        engine,
+        "run_tool_with_retries",
+        lambda **kwargs: pytest.fail("a confirmed action reply must not dispatch tools"),
+    )
+
+    result = engine.run_reply_engine(
+        MockDB(), MockConfig(), None, "CONFIRM 12345678", dialogue_memory=None,
+        language="en",
+    )
+
+    assert result == "The email was sent to Priya."
+    assert "Email sent to Priya" in captured_messages[-1]["content"]
+    assert "gmail/send_email" in captured_messages[-1]["content"]
+
+
+@pytest.mark.integration
+def test_confirmed_mcp_result_uses_status_fallback_when_formatting_fails(monkeypatch):
+    from jarvis.reply import engine
+    from jarvis.tools.types import ToolExecutionResult
+
+    class MockDB:
+        pass
+
+    class MockConfig:
+        wake_word = "Jarvis"
+        llm_chat_timeout_sec = 2
+        llm_thinking_enabled = False
+        tts_engine = "piper"
+
+    action_result = ToolExecutionResult(
+        success=True,
+        reply_text='{"message":"Email sent to Priya"}',
+        result_metadata={"confirmed_mcp_action": "gmail/send_email"},
+    )
+    monkeypatch.setattr(
+        engine,
+        "handle_mcp_confirmation",
+        lambda db, text, cancel_event=None: (True, action_result),
+    )
+
+    def failed_format(*args, **kwargs):
+        raise TimeoutError("local model did not respond")
+
+    monkeypatch.setattr(engine, "chat_with_messages", failed_format)
+    result = engine.run_reply_engine(
+        MockDB(), MockConfig(), None, "CONFIRM 12345678", dialogue_memory=None,
+    )
+
+    assert result == "The confirmed action completed."
 
 
 @pytest.mark.integration

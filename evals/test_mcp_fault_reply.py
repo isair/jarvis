@@ -6,10 +6,11 @@ if sys.version_info < (3, 11):
     from exceptiongroup import ExceptionGroup
 
 import pytest
-from evals.helpers import voice_config, judge_pass_fail
+from evals.helpers import voice_config
 from evals.tool_routing import requires_judge_llm
 from jarvis.reply import engine
 from jarvis.tools import registry
+from jarvis.tools.types import ToolExecutionResult
 
 pytestmark = [pytest.mark.eval, requires_judge_llm]
 
@@ -40,3 +41,31 @@ def test_mcp_failure_produces_an_honest_action_reply(eval_db, eval_dialogue_memo
     assert reply
     assert 'CONFIRM ' in reply
     assert 'CANCEL ' in reply
+
+
+def test_confirmed_mcp_result_is_reported_as_natural_language(monkeypatch):
+    cfg = voice_config()
+    cfg.llm_chat_timeout_sec = 180
+    result = ToolExecutionResult(
+        success=True,
+        reply_text='{"message":"Email sent to Priya"}',
+        result_metadata={
+            "confirmed_mcp_action": (
+                "gmail/send_email with arguments "
+                '{"message":"Hello","recipient":"Priya"}'
+            )
+        },
+    )
+    monkeypatch.setattr(
+        engine,
+        "handle_mcp_confirmation",
+        lambda db, text, cancel_event=None: (True, result),
+    )
+
+    reply = engine.run_reply_engine(
+        None, cfg, None, "CONFIRM 12345678", dialogue_memory=None, language="en",
+    )
+
+    assert reply
+    assert "{" not in reply
+    assert "sent" in reply.lower()

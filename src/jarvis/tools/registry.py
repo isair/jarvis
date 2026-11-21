@@ -344,6 +344,7 @@ def handle_mcp_confirmation(db, text: str, cancel_event=None) -> Tuple[bool, Opt
     if cancel_event is not None and cancel_event.is_set():
         return True, ToolExecutionResult(success=False, reply_text="Tool execution was cancelled.", error_message="Tool execution was cancelled.")
 
+    action_metadata = {"confirmed_mcp_action": pending.summary}
     try:
         client = MCPClient(pending.mcps_config)
         result = client.invoke_tool(
@@ -357,6 +358,7 @@ def handle_mcp_confirmation(db, text: str, cancel_event=None) -> Tuple[bool, Opt
             success=not is_error,
             reply_text=response_text,
             error_message=response_text if is_error else None,
+            result_metadata=action_metadata,
         )
     except Exception as exc:
         detail = _mcp_error_detail(exc)
@@ -365,6 +367,7 @@ def handle_mcp_confirmation(db, text: str, cancel_event=None) -> Tuple[bool, Opt
             success=False,
             reply_text=None,
             error_message=f"MCP tool '{pending.server_name}__{pending.tool_name}' error: {detail}",
+            result_metadata=action_metadata,
         )
 
 
