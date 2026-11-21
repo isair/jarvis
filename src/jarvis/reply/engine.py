@@ -15,7 +15,13 @@ from ..memory.conversation import DialogueMemory, is_tool_message
 
 from ..utils.redact import redact
 from ..system_prompt import build_system_prompt
-from ..tools.registry import run_tool_with_retries, generate_tools_description, generate_tools_json_schema, BUILTIN_TOOLS
+from ..tools.registry import (
+    run_tool_with_retries,
+    generate_tools_description,
+    generate_tools_json_schema,
+    BUILTIN_TOOLS,
+    handle_mcp_confirmation,
+)
 from ..tools.builtin.stop import STOP_SIGNAL
 from ..debug import debug_log
 from ..llm import (
@@ -1019,6 +1025,24 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
     # Step 1: Redact sensitive information
     redacted = redact(text)
+
+    # MCP actions that can send messages, make calls or change external state
+    # require an exact confirmation command. Handle it before the model/planner
+    # runs, so untrusted model output cannot transform a confirmation prompt
+    # into an executed external action.
+    confirmation_matched, confirmation_result = handle_mcp_confirmation(
+        db, redacted, cancel_event=cancel_event,
+    )
+    if confirmation_matched and confirmation_result is not None:
+        if confirmation_result.success:
+            debug_log("confirmed MCP action executed", "mcp")
+        else:
+            debug_log(
+                confirmation_result.error_message or "MCP confirmation was not completed",
+                "mcp",
+            )
+        return confirmation_result.reply_text or confirmation_result.error_message
+
     transcript_context = speech_context.render() if speech_context else ""
     context_signature = sha256(transcript_context.encode()).hexdigest() if transcript_context else ""
 
@@ -1720,6 +1744,13 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         guidance = [_persona_prompt.strip()]
         # Add model-size-appropriate prompt components
         guidance.extend(prompts.to_list())
+        if not getattr(cfg, "mcps", {}) or not mcp_tools:
+            guidance.append(
+                "MCP connector status: no relevant MCP connector tools are currently "
+                "available. Do not claim that email, IndiaMART, WhatsApp, calls or "
+                "SMS are configured. If the user asks for one of these services, "
+                "state that a local user-configured MCP connector is required."
+            )
 
         # Both current TTS engines (Piper, Chatterbox) only support English.
         # Responding in another language would produce garbled audio.
@@ -2589,6 +2620,13 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 transcript_context=transcript_context,
                 cancel_event=cancel_event,
             )
+
+            if result.confirmation_required:
+                debug_log(
+                    f"MCP consequential action awaiting exact confirmation {result.confirmation_required}",
+                    "mcp",
+                )
+                return result.reply_text
 
             # Handle stop tool - end conversation without response
             if result.reply_text == STOP_SIGNAL:

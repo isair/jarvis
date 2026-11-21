@@ -13,3 +13,4 @@ class ToolExecutionResult:
     missing_context: Optional[str] = None
     resource_references: tuple[dict[str, Any], ...] = ()
     result_metadata: Optional[dict[str, Any]] = None
+    confirmation_required: Optional[str] = None

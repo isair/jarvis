@@ -288,6 +288,17 @@ See [full MCP setup guide](#mcp-integrations) below.
 
 ## MCP Integrations
 
+Jarvis does not include built-in email, IndiaMART, WhatsApp, telephony or SMS
+providers. Those services are available only when you configure and launch your
+own local MCP connector for them. Jarvis will not assume credentials or service
+access, and setup/discovery errors are reported rather than guessed.
+
+Discovery and drafting are separate from execution. Read-only connector tools
+can search and prepare drafts. Sending a message, making a call, changing an
+account or any other consequential connector tool requires an exact
+`CONFIRM <code>` reply. `CANCEL <code>` cancels it. Review recipient, content
+and other arguments before confirming.
+
 > **Session persistence:** each MCP server is launched once and its stdio session is kept open across tool calls. Stateful servers (e.g. browser automation, where the server owns a long-running Chrome process) work correctly. If you have a server you'd rather not keep resident, set `"idle_timeout_sec": 300` on its config entry and Jarvis will free it after that long without activity. If a server's tools legitimately run long (e.g. delegating a task to an external CLI agent), set `"timeout_sec": 600` to raise its 120-second default call timeout.
 
 <details>
