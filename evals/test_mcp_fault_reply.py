@@ -19,7 +19,8 @@ pytestmark = [pytest.mark.eval, requires_judge_llm]
 def test_mcp_failure_produces_an_honest_action_reply(eval_db, eval_dialogue_memory, configure_mcp_tools, query):
     cfg = voice_config()
     cfg.location_enabled = False
-    cfg.llm_chat_timeout_sec = cfg.planner_timeout_sec = 60
+    # Local CPU models need longer to process the full reply context.
+    cfg.llm_chat_timeout_sec = cfg.planner_timeout_sec = 180
     catalogue = configure_mcp_tools(registry.ToolSpec(
         name='chrome-devtools__navigate_page', description='Navigate the browser to a supplied URL.',
         inputSchema={'type': 'object', 'properties': {'url': {'type': 'string'}}, 'required': ['url']},

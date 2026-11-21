@@ -499,7 +499,7 @@ def test_confirmed_action_with_empty_result_still_returns_a_reply(monkeypatch):
         "handle_mcp_confirmation",
         lambda db, text, cancel_event=None: (
             True,
-            ToolExecutionResult(success=True),
+            ToolExecutionResult(success=True, reply_text=None),
         ),
     )
     result = engine.run_reply_engine(
