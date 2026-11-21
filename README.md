@@ -70,8 +70,9 @@ For an experimental 27B alternative, see the [Bonsai 2 local setup guide](docs/B
 
 - **A third person in the room.** Bring Jarvis into an ongoing conversation with friends, talk through a problem aloud, or ask it to weigh in on a decision. “Jarvis, what do you think?” draws on the recent discussion, not just that one sentence.
 - **Remember beyond one session.** Ask about past conversations, preferences and plans. Browse your local diary and knowledge graph in the Memory Viewer.
-- **Get things done.** Built-in tools cover web search, weather, time, screenshot OCR, file access, optional search across your text and Markdown folders, nutrition tracking and optional location awareness.
-- **Connect your own tools.** MCP servers add browser automation, smart-home controls and other integrations.
+- **Get things done.** Built-in tools cover web search, weather, time, screenshot OCR, file access, optional search across your text and Markdown folders, nutrition tracking, countdown timers (until Jarvis restarts) and optional location awareness.
+- **Unlimited MCP tools, focused context.** Connect browser automation, smart-home controls and other integrations. Jarvis selects relevant tools for each request and can discover more mid-conversation, keeping unused tools out of the reply context as your toolset grows.
+- **Experimental local skills.** Reuse instructions from local `SKILL.md` packages in voice and text chat. Add a library of any size; Jarvis searches descriptions and loads relevant instructions and references within a bounded reply context.
 - **Dictate into other apps.** Hold a hotkey, speak, then release to paste locally transcribed text. See the [platform limitations](#known-limitations) first.
 - **Type when you need to.** The companion chat shares your voice conversation and memory. Text replies are silent, and you can rewind a sent message to regenerate from that point.
 - **Optional background work.** Enable Background Tasks in Settings to queue work locally, follow results and cancel requests. Off by default.
@@ -135,6 +136,16 @@ Jarvis is developed primarily on macOS. Windows and Linux behaviour may differ. 
 
 Most people can use **Settings** from the tray. Advanced setups can edit `~/.config/jarvis/config.json`.
 
+Make a sustained “shhh” sound to interrupt a spoken reply. Set `shush_detection_enabled` to `false` to turn off this shortcut. Spoken stop commands remain available.
+
+Local skills are experimental and off by default. Models can skip required
+reference reads. In Settings → Features, enable **Local Skills**
+and add **Skill Library Folders** containing skill directories, each with a
+`SKILL.md` file. Only add instructions you trust. Search matches names and
+description words; it does not translate between languages. Large instructions
+need smaller reference files (12 KiB per file, 16 KiB loaded per reply). Skills
+do not run scripts automatically or grant extra tool permissions.
+
 [**Open the configuration guide →**](docs/CONFIGURATION.md)
 
 The guide covers local model servers, speech recognition, Low Power Mode, voices, dictation, location, MCP integrations and troubleshooting.
@@ -175,6 +186,13 @@ Select an available microphone in Jarvis Settings, or set a default recording in
 <summary><strong>Bluetooth microphone will not start</strong></summary>
 
 Select the headset's microphone/input profile in Settings, not its playback device. Jarvis uses the selected input for listening and dictation, tries compatible mono, stereo and device-native capture formats, then converts multichannel input to mono for speech recognition. If that input is unavailable, select another microphone in Settings. If capture still fails, check that the microphone works in your system's recorder and share the error from Logs; Bluetooth driver/profile limitations can still prevent capture.
+
+</details>
+
+<details>
+<summary><strong>Listening, but speech is not recognised</strong></summary>
+
+Settings shows each microphone's audio API so you can distinguish same-named inputs. Check that the selected microphone works in your system's recorder. When reporting a problem, include the selected device, Capture format and Input signal lines from Logs after trying a spoken request. These show signal levels and counts without recording audio; enable voice debug for continuous diagnostics.
 
 </details>
 

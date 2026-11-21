@@ -24,6 +24,7 @@ class ToolContext:
         language: Optional[str] = None,
         transcript_context: str = "",
         cancel_event=None,
+        skill_session=None,
     ):
         self.db = db
         self.cfg = cfg
@@ -40,6 +41,7 @@ class ToolContext:
         self.language = language
         self.transcript_context = transcript_context
         self.cancel_event = cancel_event
+        self.skill_session = skill_session
 
 
 class Tool(ABC):
@@ -55,6 +57,25 @@ class Tool(ABC):
         - `run` receives validated args (per schema) and a `ToolContext` giving access to db, cfg,
             prompts, redacted_text, retry allowance, and a user_print callable.
     """
+
+    def prepare_generation_schema(self, schema: dict) -> dict:
+        """Prepare an owned model-facing copy, preserving the public input contract."""
+        return schema
+
+    def retry_arguments(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Arguments identifying the effect when a model retries a call."""
+        return args
+
+    def bind_retry_identity(self, current: dict, previous: dict) -> Optional[dict]:
+        """Bind non-identical identities when they describe the same prior effect."""
+        return None
+
+    def allows_repeated_action(self, args: Dict[str, Any]) -> bool:
+        """Whether distinct matching calls in one batch are separate actions.
+
+        Later model turns still use whole-request retry protection.
+        """
+        return False
 
     @property
     @abstractmethod
@@ -103,6 +124,7 @@ class Tool(ABC):
         language: Optional[str] = None,
         transcript_context: str = "",
         cancel_event=None,
+        skill_session=None,
     ) -> ToolExecutionResult:
         """Execute the tool (internal method used by registry).
 
@@ -120,5 +142,6 @@ class Tool(ABC):
             language=language,
             transcript_context=transcript_context,
             cancel_event=cancel_event,
+            skill_session=skill_session,
         )
         return self.run(tool_args, context)

@@ -111,17 +111,14 @@ class TestQueryCollection:
         collection_clock(sm.voice_collect_seconds * 1.25)
         assert sm.check_collection_timeout() is True
 
-    def test_max_duration_timeout(self, collection_clock):
-        """Collection times out after max duration."""
-        sm = StateManager(max_collect_seconds=0.05)  # 50ms max
+    @pytest.mark.parametrize("fraction,expired", [(0.8, False), (1.2, True)])
+    def test_max_duration_timeout(self, collection_clock, fraction, expired):
+        """Fresh speech cannot extend the maximum collection duration."""
+        sm = StateManager(max_collect_seconds=0.05)
         sm.start_collection("test", language=None)
-
-        # Keep adding to prevent silence timeout
-        for _ in range(3):
-            collection_clock(sm.max_collect_seconds / 2)
-            sm.add_to_collection("more", language=None)
-
-        assert sm.check_collection_timeout() is True
+        collection_clock(sm.max_collect_seconds * fraction)
+        sm.add_to_collection("more", language=None)
+        assert sm.check_collection_timeout() is expired
 
 
 @pytest.fixture
@@ -157,6 +154,13 @@ def hot_clock(monkeypatch):
                 timer.callback()
         clock.now = target
 
+    def deliver_cancelled_callbacks():
+        for timer in list(pending):
+            if timer.cancelled:
+                pending.remove(timer)
+                timer.callback()
+
+    clock.deliver_cancelled_callbacks = deliver_cancelled_callbacks
     clock.advance = advance
     monkeypatch.setattr(state_manager, "time", SimpleNamespace(time=lambda: clock.now))
     monkeypatch.setattr(state_manager, "threading", SimpleNamespace(RLock=threading.RLock, Timer=Timer))
@@ -193,6 +197,8 @@ class TestHotWindowActivation:
             # Cancel before activation
             hot_clock.advance(0.02)
             sm.cancel_hot_window_activation()
+            hot_clock.deliver_cancelled_callbacks()
+            assert sm.is_hot_window_active() is False
 
             # Wait past activation time
             hot_clock.advance(0.15)
@@ -253,6 +259,7 @@ class TestHotWindowExpiry:
 
             sm.expire_hot_window()
             assert sm.is_hot_window_active() is False
+            assert sm.get_state() == ListeningState.WAKE_WORD
 
         sm.stop()
 

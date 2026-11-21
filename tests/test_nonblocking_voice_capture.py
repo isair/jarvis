@@ -429,3 +429,27 @@ def test_whole_alias_gate_keeps_ambient_words_out_of_reply_collection(synthetic_
     obj._process_transcript(text, captured_during_tts=False,
                             captured_tts_start_time=0., generation=obj._capture_generation, language=None)
     assert bool(obj.state_manager.get_pending_query()) is accepted
+
+
+def test_startup_reports_selected_api_and_accepted_capture_format(synthetic_listener, monkeypatch, capsys):
+    obj = synthetic_listener
+    factory = capture.sd.InputStream
+    attempts = []
+    def devices(device=None, **kwargs):
+        info = {'index': 4, 'name': 'Microphone Array (Owned)', 'max_input_channels': 2,
+                'default_samplerate': 48000, 'hostapi': 11}
+        return info if device is not None or kwargs else [info]
+    def stream(**kwargs):
+        attempts.append((kwargs['device'], kwargs['samplerate'], kwargs['channels']))
+        if kwargs['samplerate'] != 48000 or kwargs['channels'] != 2:
+            raise RuntimeError('Invalid number of channels', -9998)
+        return factory(**kwargs)
+    monkeypatch.setattr(capture.sd, 'query_devices', devices)
+    monkeypatch.setattr(capture.sd, 'query_hostapis', lambda index: {'name': 'Windows WASAPI'}, raising=False)
+    monkeypatch.setattr(capture.sd, 'InputStream', stream)
+    obj._check_query_timeout = obj.stop
+    obj.run()
+    output = capsys.readouterr().out
+    assert 'Microphone Array (Owned) [Windows WASAPI] (index 4)' in output
+    assert 'Capture format: 48000 Hz, 2 input channel(s)' in output
+    assert attempts and all(device == 4 for device, _, _ in attempts)

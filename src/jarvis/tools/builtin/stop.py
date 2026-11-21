@@ -43,6 +43,16 @@ class StopTool(Tool):
         """Execute the stop tool - signals conversation end."""
         debug_log("stop tool invoked - ending conversation", "tools")
 
+        # "Stop" is also the universal voice path for silencing a ringing
+        # timer alarm; mirror what cancelling a timer does so the user
+        # can quiet the alarm without naming the timer or opening the
+        # dialogue.
+        try:
+            from .timer import stop_all_alarms
+            stop_all_alarms()
+        except Exception as e:
+            debug_log(f"stop tool: alarm silence failed: {e}", "tools")
+
         # Return the special stop signal that the reply engine will recognize
         return ToolExecutionResult(
             success=True,

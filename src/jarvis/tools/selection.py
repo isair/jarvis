@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import json
 import re
+import weakref
+from threading import Lock
 from enum import Enum
 from typing import Dict, List, Optional, TYPE_CHECKING
 
@@ -77,6 +79,12 @@ _STOP_WORDS = frozenset({
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 _CAMEL_RE = re.compile(r"(?<=[a-z])(?=[A-Z])")
+
+# Backends own at most one complete catalogue. The factory retains only its
+# latest configured embedding backend; other callers own their own lifetimes.
+_TOOL_EMBEDDING_CACHE: "weakref.WeakKeyDictionary[object, tuple]" = weakref.WeakKeyDictionary()
+_TOOL_EMBEDDING_CACHE_LOCK = Lock()
+_TOOL_EMBEDDING_CACHE_MAX_BYTES = 4 * 1024 * 1024
 
 
 # ---------------------------------------------------------------------------
@@ -194,14 +202,52 @@ def _select_embedding(
     for name, spec in mcp_tools.items():
         all_tools[name] = _tool_summary(name, spec.description)
 
-    for name, summary in all_tools.items():
-        tool_vec = embedding_backend.embed(summary, embed_model, timeout_sec=embed_timeout_sec)
-        if tool_vec is None:
-            continue
-        tool_arr = np.array(tool_vec, dtype=np.float32)
-        t_norm = np.linalg.norm(tool_arr)
-        if t_norm > 0:
-            tool_arr = tool_arr / t_norm
+    catalogue_key = (embed_model, query_arr.size, tuple(all_tools.items()))
+    cached_vectors = None
+    with _TOOL_EMBEDDING_CACHE_LOCK:
+        try:
+            cached = _TOOL_EMBEDDING_CACHE.get(embedding_backend)
+            if cached is not None and cached[0] == catalogue_key:
+                cached_vectors = cached[1]
+            else:
+                _TOOL_EMBEDDING_CACHE.pop(embedding_backend, None)
+        except TypeError:
+            # External backends without weak-reference support work uncached.
+            pass
+    if cached_vectors is None:
+        cached_vectors = []
+        cacheable = True
+        cache_bytes = len(embed_model.encode("utf-8"))
+        for name, summary in all_tools.items():
+            tool_vec = embedding_backend.embed(
+                summary, embed_model, timeout_sec=embed_timeout_sec,
+            )
+            if tool_vec is None:
+                cacheable = False
+                continue
+            tool_arr = np.array(tool_vec, dtype=np.float32)
+            if tool_arr.shape != query_arr.shape or not np.isfinite(tool_arr).all():
+                cacheable = False
+                continue
+            t_norm = np.linalg.norm(tool_arr)
+            if t_norm > 0:
+                tool_arr = tool_arr / t_norm
+            cache_bytes += (
+                tool_arr.nbytes + len(name.encode("utf-8"))
+                + len(summary.encode("utf-8"))
+            )
+            cached_vectors.append((name, tool_arr))
+        if cacheable and cache_bytes <= _TOOL_EMBEDDING_CACHE_MAX_BYTES:
+            with _TOOL_EMBEDDING_CACHE_LOCK:
+                try:
+                    _TOOL_EMBEDDING_CACHE[embedding_backend] = (catalogue_key, cached_vectors)
+                except TypeError:
+                    pass
+        debug_log("Embedding tool catalogue rebuilt", "planning")
+    else:
+        debug_log("Embedding tool catalogue served from cache", "planning")
+
+    for name, tool_arr in cached_vectors:
         sim = float(np.dot(query_arr, tool_arr))
         similarities.append((name, sim))
 

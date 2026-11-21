@@ -210,15 +210,28 @@ class TestSubmitTextQueryContract:
         assert events[-1] == ("complete", None)
 
     def test_callbacks_are_optional(self, monkeypatch):
-        """With no callbacks registered, submit_text_query still runs the
-        engine and returns without error."""
-        monkeypatch.setattr(
-            "jarvis.reply.engine.run_reply_engine", lambda *a, **k: "ok"
-        )
+        """A query with no callbacks completes and releases shared admission."""
+        from types import SimpleNamespace
+
+        workers = []
+        called = []
+
+        def thread(*args, **kwargs):
+            worker = threading.Thread(*args, **kwargs)
+            workers.append(worker)
+            return worker
+
+        monkeypatch.setattr(daemon, "threading", SimpleNamespace(**{
+            **vars(threading), "Thread": thread,
+        }))
+        monkeypatch.setattr("jarvis.reply.engine.run_reply_engine",
+                            lambda **kwargs: called.append(kwargs["text"]) or "ok")
         _install_dialogue_memory(cfg=object(), db=object())
-        daemon.submit_text_query("hi")
-        time.sleep(0.5)
-        # No assertion needed — reaching here without hanging means it worked.
+        for text in ("first", "second"):
+            daemon.submit_text_query(text)
+            workers[-1].join(timeout=2)
+            assert not workers[-1].is_alive()
+        assert called == ["first", "second"]
 
     def test_daemon_not_initialised_fires_complete_none(self, monkeypatch):
         """When the daemon globals are None (daemon not booted), submit_text_query
@@ -266,9 +279,18 @@ class TestSubmitTextQueryContract:
         finally:
             daemon._global_stop_requested = False
 
-    def test_empty_or_whitespace_does_not_run_engine(self, monkeypatch):
+    @pytest.mark.parametrize("text", ["", "   "])
+    def test_empty_or_whitespace_does_not_run_engine(self, monkeypatch, text):
         """Empty / whitespace input is dropped before the worker spawns; no
         callbacks fire and the engine is never called."""
+        from types import SimpleNamespace
+
+        def unexpected_worker(*args, **kwargs):
+            pytest.fail("Blank input must not start a worker")
+
+        monkeypatch.setattr(daemon, "threading", SimpleNamespace(**{
+            **vars(threading), "Thread": unexpected_worker,
+        }))
         called = []
         monkeypatch.setattr(
             "jarvis.reply.engine.run_reply_engine",
@@ -277,10 +299,9 @@ class TestSubmitTextQueryContract:
         _install_dialogue_memory(cfg=object(), db=object())
         events = []
         daemon.submit_text_query(
-            "   ", on_start=lambda q: events.append(("start", q)),
+            text, on_start=lambda q: events.append(("start", q)),
             on_complete=lambda r: events.append(("complete", r)),
         )
-        time.sleep(0.3)
         assert events == []
         assert called == []
 
@@ -289,10 +310,11 @@ class TestSubmitTextQueryContract:
         the reply (complete(None)) instead of displaying it."""
         _install_dialogue_memory(cfg=object(), db=object())
         started = threading.Event()
+        release_engine = threading.Event()
 
         def slow_engine(*a, **k):
             started.set()
-            time.sleep(0.3)  # let cancel fire mid-run
+            assert release_engine.wait(timeout=2)
             return "the reply that should be dropped"
 
         monkeypatch.setattr("jarvis.reply.engine.run_reply_engine", slow_engine)
@@ -302,6 +324,7 @@ class TestSubmitTextQueryContract:
         )
         assert started.wait(timeout=2)
         daemon.cancel_active_chat_query()
+        release_engine.set()
         _wait_for_complete(events)
         assert events[-1] == ("complete", None)
 
@@ -372,11 +395,13 @@ class TestSubmitTextQueryConcurrency:
         does NOT call the reply engine a second time."""
         _install_dialogue_memory(cfg=object(), db=object())
         call_count = {"n": 0}
+        first_started = threading.Event()
         slow_done = threading.Event()
 
         def slow_engine(*a, **k):
             call_count["n"] += 1
-            slow_done.wait(timeout=5)
+            first_started.set()
+            assert slow_done.wait(timeout=5)
             return "first reply"
 
         monkeypatch.setattr("jarvis.reply.engine.run_reply_engine", slow_engine)
@@ -386,8 +411,7 @@ class TestSubmitTextQueryConcurrency:
         on_busy = lambda: events.append(("busy", None))  # noqa: E731
 
         daemon.submit_text_query("first", on_complete=on_complete, on_busy=on_busy)
-        # Give the worker a moment to acquire the lock.
-        time.sleep(0.1)
+        assert first_started.wait(timeout=2)
         daemon.submit_text_query("second", on_complete=on_complete, on_busy=on_busy)
 
         assert ("busy", None) in events
@@ -609,14 +633,17 @@ class TestGetHotWindowMessages:
         assert messages[0]["content"] == "what is the weather"
         assert messages[1]["content"] == "It is sunny."
 
-    def test_empty_when_hot_window_has_aged_out(self):
+    def test_empty_when_hot_window_has_aged_out(self, monkeypatch):
         """Turns older than the recent window are not replayed."""
-        import time as _time
+        from types import SimpleNamespace
+        from jarvis.memory import conversation
+
+        clock = [1000.0]
+        monkeypatch.setattr(conversation, "time", SimpleNamespace(time=lambda: clock[0]))
         dm = _install_dialogue_memory()
-        # A 1-second recent window makes anything added now age out after sleep.
         dm.RECENT_WINDOW_SEC = 1
         dm.add_message("user", "old turn")
-        _time.sleep(1.2)
+        clock[0] += dm.RECENT_WINDOW_SEC + 0.2
 
         assert daemon.get_hot_window_messages() == []
 
@@ -650,8 +677,7 @@ class TestChatSessionControls:
         assert daemon.get_hot_window_messages() == []
 
     def test_new_chat_session_noops_when_daemon_not_booted(self):
-        # Globals are None; must not raise.
-        daemon.new_chat_session()
+        assert daemon.new_chat_session() is False
 
     def test_rewind_chat_to_user_truncates_shared_memory(self):
         dm = self._seeded_memory()

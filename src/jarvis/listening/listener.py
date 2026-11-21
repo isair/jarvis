@@ -25,6 +25,7 @@ from .model_download import ModelDownloadError
 from .state_manager import StateManager, ListeningState
 from ..utils.audio_lock import portaudio_lock
 from ..utils.audio_capture import mono_capture, open_input_stream, resolve_input_device
+from ..utils.audio_diagnostics import InputSignalLevels, input_device_label
 from .wake_detection import is_wake_word_detected, is_stop_command, is_stop_command_echo
 from .transcript_buffer import TranscriptBuffer
 from .intent_judge import (
@@ -40,6 +41,7 @@ from ..utils.location import is_location_available
 if TYPE_CHECKING:
     from ..memory.db import Database
     from ..memory.conversation import DialogueMemory
+    from ..output.tts import SpeechRequest
 
 
 @dataclass(frozen=True)
@@ -67,6 +69,8 @@ def is_whisper_hallucination(no_speech_prob: float, threshold: float) -> bool:
 class _CapturedAudio:
     audio: Any
     generation: int
+    playback: SpeechRequest | None = None
+    sequence: int = 0
 
 
 @dataclass(frozen=True)
@@ -501,6 +505,18 @@ class VoiceListener(threading.Thread):
             energy_spike_threshold=float(getattr(self.cfg, "echo_energy_threshold", 2.0))
         )
 
+        self._shush_detector = None
+        if np is not None and getattr(self.cfg, "shush_detection_enabled", False) is True:
+            from .shush_detector import ShushDetector
+
+            self._shush_detector = ShushDetector(
+                sample_rate=self._samplerate,
+                high_low_ratio=self.cfg.shush_high_low_ratio,
+                energy_floor=self.cfg.shush_energy_floor,
+                consecutive_frames=self.cfg.shush_consecutive_frames,
+            )
+            debug_log("shush detector enabled", "voice")
+
         self.state_manager = StateManager(
             hot_window_seconds=float(getattr(self.cfg, "hot_window_seconds", 3.0)),
             echo_tolerance=float(getattr(self.cfg, "echo_tolerance", 0.3)),
@@ -768,6 +784,8 @@ class VoiceListener(threading.Thread):
                     print(f'  🔇 Heard (echo): "{text_lower[:50]}"', flush=True)
                     return
                 debug_log(f"stop command detected during TTS: {text_lower} (energy: {utterance_energy:.4f})", "voice")
+                from ..tools.builtin.timer import stop_all_alarms
+                stop_all_alarms()
                 if active_tts_overlapped:
                     self.tts.interrupt()
                 else:
@@ -777,6 +795,21 @@ class VoiceListener(threading.Thread):
                         self._audio_q.get_nowait()
                 except Exception:
                     pass
+                return
+
+        if (not active_tts_overlapped
+                and is_stop_command(text_lower, self.cfg.stop_commands,
+                                    self.cfg.stop_command_fuzzy_ratio)):
+            from ..tools.builtin.timer import get_alarm_registry, stop_all_alarms
+            if get_alarm_registry().active_at(utterance_end_time):
+                if (received_during_tts and same_tts_context
+                        and is_stop_command_echo(text_lower, self.echo_detector._last_tts_text,
+                                                 self.cfg.stop_commands, self.cfg.stop_command_fuzzy_ratio)):
+                    debug_log("ignored delayed timer speech containing a literal stop echo", "echo")
+                    return
+                debug_log("configured stop dismisses a captured timer alarm", "voice")
+                stop_all_alarms()
+                self._stop_thinking_tune()
                 return
 
         if self.tts and self.tts.enabled and active_tts_overlapped:
@@ -950,6 +983,8 @@ class VoiceListener(threading.Thread):
                 # If judge says stop command, interrupt TTS
                 if intent_judgment.stop and active_tts_overlapped:
                     debug_log(f"🛑 Intent judge detected stop command", "voice")
+                    from ..tools.builtin.timer import stop_all_alarms
+                    stop_all_alarms()
                     self.tts.interrupt()
                     return
 
@@ -1091,6 +1126,7 @@ class VoiceListener(threading.Thread):
                     reply = run_reply_engine(
                         self.db, self.cfg, None, query, self.dialogue_memory,
                         language=language, speech_context=speech_context,
+                        spoken_output=bool(self.tts and self.tts.enabled),
                     )
             except Exception as exc:
                 print(f"\n  ❌ Reply engine error: {exc}", flush=True)
@@ -1331,7 +1367,9 @@ class VoiceListener(threading.Thread):
         self._audio_started = now
         self._last_audio_callback = now
         self._last_health_check = now
-        self._audio_peak = 0.0
+        self._input_levels = InputSignalLevels()
+        self._input_health_generation = self._capture_generation
+        self._input_level_state = None
         self._audio_frames_seen = 0
         self._speech_frames_seen = 0
         self._audio_dropped = 0
@@ -1342,7 +1380,7 @@ class VoiceListener(threading.Thread):
     def _check_audio_health(self, now=None):
         """Report capture failures outside the real-time callback, without recording audio."""
         now = time.monotonic() if now is None else now
-        if self.capture_paused:
+        if self.capture_paused or self._input_health_generation != self._capture_generation:
             self._reset_audio_health(now)
             return
         if now - self._last_health_check < 5:
@@ -1351,14 +1389,23 @@ class VoiceListener(threading.Thread):
         warning = None
         if now - self._last_audio_callback >= 5:
             warning = 'No microphone callbacks in the last 5 seconds'
-        elif self._audio_peak <= 1e-7 and now - self._audio_started >= 10:
-            warning = 'Microphone is delivering silent samples'
+        elif not self._input_levels.samples:
+            warning = 'Microphone callbacks are arriving, but no samples were processed'
+        elif self._input_levels.mono_peak <= 1e-7 and now - self._audio_started >= 10:
+            warning = ('Input channels have signal but mono is silent'
+                       if self._input_levels.max_channel_peak > 1e-7
+                       else 'Microphone is delivering silent samples')
         if warning and warning != self._audio_health_warning:
             print(f"  ⚠️  {warning}. Check the selected input, mute and recording permissions.", flush=True)
             if sys.platform.startswith('linux'):
                 print("     🎤 Check PipeWire/PulseAudio recording-source routing (pavucontrol or wpctl status); avoid monitor/output sources.", flush=True)
         elif not warning and self._audio_health_warning:
             print("  ✅ Microphone audio is arriving again.", flush=True)
+        level_state = (warning, bool(self._input_levels.samples))
+        details = self._input_levels.describe()
+        if level_state != self._input_level_state:
+            print(f"  🎤 Input signal: callbacks_total={self._callback_count}, {details}", flush=True)
+        self._input_level_state = level_state
         self._audio_health_warning = warning
         if self._callback_status or self._audio_callback_error or self._audio_dropped:
             print(f"  ⚠️  Audio capture: {self._callback_status or self._audio_callback_error or 'queue full'}; {self._audio_dropped} blocks dropped.", flush=True)
@@ -1367,10 +1414,10 @@ class VoiceListener(threading.Thread):
         if self.cfg.voice_debug:
             debug_log(
                 f"Audio capture: callbacks={self._callback_count}, frames={self._audio_frames_seen}, "
-                f"speech_frames={self._speech_frames_seen}, peak={self._audio_peak:.6f}, "
+                f"speech_frames={self._speech_frames_seen}, {details}, "
                 f"rate={self._stream_samplerate} Hz", "voice",
             )
-        self._audio_peak = 0.0
+        self._input_levels = InputSignalLevels()
 
     def _start_transcription_worker(self) -> None:
         if self._should_stop or self._transcription_worker_thread is not None:
@@ -1521,9 +1568,10 @@ class VoiceListener(threading.Thread):
 
     def _audio_frames(self, buf):
         """Keep native-rate frame boundaries across arbitrary callback block sizes."""
+        if self._input_health_generation != self._capture_generation:
+            self._reset_audio_health()
         mono = mono_capture(buf)
-        if mono.size:
-            self._audio_peak = max(self._audio_peak, float(np.max(np.abs(mono))))
+        self._input_levels.observe(buf, mono)
         if self._pending_audio is not None:
             mono = np.concatenate((self._pending_audio, mono))
         count = len(mono) // self._frame_samples
@@ -1536,15 +1584,17 @@ class VoiceListener(threading.Thread):
         """Audio callback from sounddevice."""
         try:
             generation = self._audio_generation
+            playback = self._active_playback if self._shush_detector is not None else None
             self._last_audio_callback = time.monotonic()
             self._callback_count += 1
+            sequence = self._callback_count
             if status:
                 self._callback_status = str(status)
             if self._should_stop or self.capture_paused:
                 return
             chunk = (indata.copy() if hasattr(indata, "copy") else indata)
             try:
-                self._audio_q.put_nowait(_CapturedAudio(chunk, generation))
+                self._audio_q.put_nowait(_CapturedAudio(chunk, generation, playback, sequence))
             except queue.Full:
                 self._audio_dropped += 1
         except Exception as exc:
@@ -1880,7 +1930,7 @@ class VoiceListener(threading.Thread):
                         print("", flush=True)
                     return
                 elif mic_ok.is_set():
-                    print("  ✅ Microphone permission OK", flush=True)
+                    print("  ✅ Microphone stream startup OK (signal levels checked after capture starts)", flush=True)
                 else:
                     print("  ⚠️  Microphone returned empty audio", flush=True)
             except Exception as e:
@@ -2206,9 +2256,9 @@ class VoiceListener(threading.Thread):
         # Log the resolved input used by both capture phases.
         try:
             dev = sd.query_devices(stream_kwargs["device"])
-            device_name = dev.get('name', 'Unknown')
+            device_name = input_device_label(sd, dev)
             debug_log(f"using input device: {device_name} (index {stream_kwargs['device']})", "voice")
-            print(f"  🎤 Using audio device: {device_name}", flush=True)
+            print(f"  🎤 Using audio device: {device_name} (index {stream_kwargs['device']})", flush=True)
         except Exception:
             pass
 
@@ -2219,6 +2269,7 @@ class VoiceListener(threading.Thread):
                 sd, self._samplerate, frame_ms, stream_kwargs, callback=self._on_audio,
             )
             self._frame_samples = max(1, int(self._stream_samplerate * frame_ms / 1000))
+            print(f"  🎤 Capture format: {self._stream_samplerate} Hz, {channels} input channel(s)", flush=True)
             if self._stream_samplerate != self._samplerate or channels != 1:
                 print(f"  🎤 Using {self._stream_samplerate} Hz, {channels} input channel(s); "
                       "converting to mono and resampling for speech recognition", flush=True)
@@ -2376,6 +2427,11 @@ class VoiceListener(threading.Thread):
         endpoint_silence_frames = max(1, int(endpoint_silence_ms / frame_ms))
         normal_max_utt_frames = max(1, int(max_utt_ms / frame_ms))
         tts_max_utt_frames = max(1, int(tts_max_utt_ms / frame_ms))
+        detector = self._shush_detector
+        previous_capture = None
+        # Preserve ordinary speech framing while excluding mixed blocks from acoustic stops.
+        mixed_frame = False
+        stream_rate = getattr(self, "_stream_samplerate", self._samplerate)
         while not self._should_stop:
             if self.capture_paused:
                 self._check_audio_health()
@@ -2399,6 +2455,7 @@ class VoiceListener(threading.Thread):
                     self._silence_frames = 0
                     self._utterance_frames = []
                     self._pre_roll.clear()
+                    previous_capture = None
                     continue
 
                 if np is None:
@@ -2406,13 +2463,33 @@ class VoiceListener(threading.Thread):
 
                 if item.generation != self._audio_generation:
                     continue
+                if detector is not None:
+                    if previous_capture != (item.generation, item.playback, item.sequence - 1):
+                        detector.reset()
+                        mixed_frame = self._pending_audio is not None and len(self._pending_audio) > 0
+                    previous_capture = (item.generation, item.playback, item.sequence)
                 frames = self._audio_frames(item.audio)
                 audio_generation = item.generation
-            for frame in frames:
+                skip_first_shush_frame = mixed_frame
+                if frames:
+                    mixed_frame = False
+            interrupted = None
+            for index, frame in enumerate(frames):
                 with self._audio_state_lock:
                     if (self._should_stop or self.capture_paused
                             or audio_generation != self._audio_generation):
                         break
+                    if (
+                        detector is not None
+                        and item.playback is not None
+                        and item.playback is self._active_playback
+                        and not (index == 0 and skip_first_shush_frame)
+                        and detector.feed(frame, sample_rate=stream_rate)
+                    ):
+                        interrupted = item.playback
+                        self._clear_audio_buffers()
+                        break
+
                     # VAD decision
                     is_voice = self._is_speech_frame(frame)
                     self._speech_frames_seen += int(is_voice)
@@ -2457,6 +2534,10 @@ class VoiceListener(threading.Thread):
                             self._finalize_utterance()
                             self._pre_roll.clear()
 
+            if interrupted is not None:
+                debug_log("acoustic shush detected; interrupting captured playback request", "voice")
+                print("  🤫 Shush detected, stopping speech", flush=True)
+                interrupted.interrupt()
 
     def _finalize_utterance(self) -> None:
         """Queue a completed utterance for serial transcription."""

@@ -18,6 +18,10 @@ allow-list = <router's picks> + stop + toolSearchTool
 
 When the model invokes `toolSearchTool(query=...)`, the tool re-runs the same routing logic (`select_tools` from `src/jarvis/tools/selection.py`) against the new query, and the returned tool names are merged into the loop's allow-list for subsequent turns. `stop` and `toolSearchTool` itself always remain in the allow-list.
 
+The catalogue excludes local skill tools when `skills_enabled` is false. Enabled
+replies expose `searchSkills` and `readSkill` independently of tool routing;
+skill metadata is retrieved separately without expanding this router's input.
+
 ### Contract
 
 - **Name**: `toolSearchTool`

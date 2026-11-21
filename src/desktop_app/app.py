@@ -71,6 +71,8 @@ from desktop_app.diary_dialog import DiaryUpdateDialog
 from desktop_app.themes import JARVIS_THEME_STYLESHEET, COLORS, apply_theme
 from desktop_app.log_output import LogStream, clean_log, parse_progress
 from desktop_app.face_widget import FaceWindow
+from jarvis.timer_events import TIMER_ALARM_IPC_PREFIX, parse_alarm_event, alarm_event_token
+from desktop_app.timer_alarm_dialog import TimerAlarmDialog
 
 
 _LOG_SEPARATOR = "─" * 50
@@ -1816,6 +1818,12 @@ class JarvisSystemTray:
         self.log_signals.new_log.connect(self.log_viewer.append_log)
         self.log_signals.voice_status.connect(self._on_voice_pause_status)
 
+        # Timer-alarm dialogue (singleton, created lazily on the GUI
+        # thread). Driven by `__TIMER_ALARM__:` IPC events that the
+        # daemon emits over stdout when a timer elapses.
+        self.timer_alarm_dialog: Optional[TimerAlarmDialog] = None
+        self.log_signals.new_log.connect(self._handle_timer_alarm_line)
+
         # Create memory viewer window (hidden by default)
         self.memory_viewer = MemoryViewerWindow()
 
@@ -2662,6 +2670,7 @@ class JarvisSystemTray:
                 else:
                     env["PYTHONPATH"] = str(src_path)
                 env["JARVIS_TASK_IPC"] = "1"
+                env["JARVIS_TIMER_ALARM_TOKEN"] = alarm_event_token()
                 # Signal the daemon that we own its stdin (chat query-in IPC)
                 # so it starts the stdin monitor. Without this the daemon would
                 # treat a non-TTY stdin as "no monitor" on non-Windows, and a
@@ -2809,6 +2818,29 @@ class JarvisSystemTray:
             self.update_icon()
             self._set_chat_daemon_status("crashed")
             self._set_face_asleep()
+
+    def _handle_timer_alarm_line(self, line: str) -> None:
+        """Intercept TIMER_ALARM IPC lines from the daemon stdout stream.
+
+        Cheap fast-path prefix check before touching the JSON parser;
+        the signal fires for every log line, so reject anything that
+        doesn't START with the IPC marker. ``parse_alarm_event`` does
+        the same prefix check, but doing it here avoids the .strip()
+        and the function call on the millions of unrelated log lines.
+        """
+        if not line.startswith(TIMER_ALARM_IPC_PREFIX):
+            return
+        event = parse_alarm_event(line)
+        if not event:
+            return
+        event_type = event.get("type")
+        data = event.get("data") or {}
+        if event_type == "start":
+            if self.timer_alarm_dialog is None:
+                self.timer_alarm_dialog = TimerAlarmDialog()
+            self.timer_alarm_dialog.handle_start(data)
+        elif event_type == "stop" and self.timer_alarm_dialog is not None:
+            self.timer_alarm_dialog.handle_stop(data)
 
     def _read_daemon_logs(self) -> None:
         """Read logs from daemon subprocess in a background thread."""

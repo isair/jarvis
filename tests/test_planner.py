@@ -784,6 +784,22 @@ class TestPlanHasUnresolvedToolSteps:
 class TestStopOnlyPlanGuard:
     """Post-plan guard in plan_query rejects stop-only plans."""
 
+    def test_stop_followed_only_by_synthesis_returns_to_normal_routing(self):
+        with patch.object(planner_mod, "call_llm_direct", return_value="stop\nReply to the user."):
+            assert plan_query(_cfg(), "Cancel only the tea timer.", "", [("timer", "Countdowns"), ("stop", "End conversation")]) == []
+
+    @pytest.mark.parametrize('steps', [
+        "stop\ntimer action='list'\nReply to the user.",
+        "webSearch query='weather'\nstop\ntimer action='list'\nReply to the user.",
+        "STOP!\ntimer action='cancel' timer_id='recorded-id'\nReply to the user.",
+    ])
+    def test_stop_before_pending_tool_work_returns_to_normal_routing(self, steps):
+        with patch.object(planner_mod, 'call_llm_direct', return_value=steps):
+            assert plan_query(
+                _cfg(), 'Cancel only the tea timer and preserve the soup timer.', '',
+                [('timer', 'Countdowns'), ('webSearch', 'Web search'), ('stop', 'End conversation')],
+            ) == []
+
     def test_stop_only_plan_returns_empty(self):
         cfg = _cfg()
         with patch.object(planner_mod, "call_llm_direct", return_value="stop"):

@@ -521,6 +521,8 @@ class TestPiperTTSThreadSafety:
         for _ in range(10):
             tts.interrupt()
 
+        assert not tts.is_speaking()
+
     def test_start_stop_cycle(self):
         """Start and stop should be safe to call multiple times."""
         from jarvis.output.tts import PiperTTS
@@ -532,25 +534,32 @@ class TestPiperTTSThreadSafety:
             tts.start()
             tts.stop()
 
-    def test_concurrent_speaks(self):
-        """Multiple threads calling speak should not crash."""
+        assert not tts.is_speaking()
+
+    def test_concurrent_speaks(self, make_speech_backend):
+        """Concurrent producers retain every utterance and its completion."""
+        from collections import Counter
         from jarvis.output.tts import PiperTTS
 
-        tts = PiperTTS(enabled=True, model_path="/fake/model.onnx")
+        tts = make_speech_backend(PiperTTS)
+        completed = []
+        inputs = [[f"Producer {producer} utterance {index}" for index in range(10)]
+                  for producer in range(3)]
 
-        # Don't start the actual worker thread
-        def speak_text():
-            for _ in range(10):
-                tts.speak("Hello world")
+        def enqueue(texts):
+            for text in texts:
+                tts.speak(text, completion_callback=lambda text=text: completed.append(text))
 
-        threads = [threading.Thread(target=speak_text) for _ in range(3)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
+        producers = [threading.Thread(target=enqueue, args=(texts,)) for texts in inputs]
+        for producer in producers:
+            producer.start()
+        for producer in producers:
+            producer.join(timeout=3)
+            assert not producer.is_alive()
+        tts._run()
 
-        # Should not crash, queue should have items
-        # (actual number depends on timing)
+        assert Counter(completed) == Counter(text for texts in inputs for text in texts)
+        assert not tts.is_speaking()
 
 
 @pytest.mark.usefixtures("no_network")

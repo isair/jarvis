@@ -156,7 +156,7 @@ class TestTextToolCallGuidancePrompt:
     explicitly name and forbid the shapes we know gemma leaks when confused.
 
     Gemma is not a natively tool-calling model — we bolt tool calling on via
-    a prompt that teaches the `tool_calls: [...]` literal shape. Gemma's
+    a prompt that teaches a complete JSON tool-call object. Gemma's
     pre-training includes a different protocol (Google's code-interpreter
     `tool_code` / `tool_output` fenced blocks and `<unusedNN>` sentinel
     tokens), and when confused the model falls back to emitting those
@@ -179,10 +179,16 @@ class TestTextToolCallGuidancePrompt:
 
     def test_guidance_teaches_tool_calls_array_shape(self):
         text = self._guidance()
-        assert "tool_calls:" in text, (
-            "Guidance must teach the `tool_calls: [...]` literal shape "
-            "the parser expects."
-        )
+        import json
+        envelope = json.loads(next(line for line in text.splitlines() if line.startswith('{"tool_calls":')))
+        assert set(envelope) == {'tool_calls'}
+        assert isinstance(envelope['tool_calls'], list) and envelope['tool_calls']
+        for call in envelope['tool_calls']:
+            function = call['function']
+            assert set(function) == {'name', 'arguments'}
+            assert function['name'] in {'webSearch', 'stop', 'toolSearchTool'}
+            assert isinstance(function['arguments'], dict)
+
 
     def test_guidance_lists_allowed_tool_names(self):
         text = self._guidance(["webSearch", "stop", "openApp"])
@@ -256,3 +262,25 @@ def test_simplified_calls_preserve_exact_registered_names(tool_name, call_format
 ])
 def test_simplified_calls_reject_unregistered_names_and_prose(content):
     assert _extract(content, "tool+name__run") == (None, None, None)
+
+
+@pytest.mark.parametrize('arguments', [
+    {'name': 'tea'},
+    {'name': 'tea, soup', 'options': {'keep': ['coffee', 'water']}},
+])
+@pytest.mark.parametrize('tail', ['', '\nThe requested action is complete.'])
+def test_colon_json_call_preserves_argument_fields(arguments, tail):
+    import json
+    from jarvis.reply import engine
+    content = 'ownedTool: ' + json.dumps(arguments) + tail
+    name, parsed, identity = engine._extract_text_tool_call(content, {'ownedTool'})
+    assert name == 'ownedTool' and identity
+    assert parsed == arguments
+
+
+@pytest.mark.parametrize('arguments', ['{"name":', '["tea"]'])
+def test_invalid_colon_json_cannot_execute_as_a_query(arguments):
+    from jarvis.reply import engine
+    name, parsed, identity = engine._extract_text_tool_call('ownedTool: ' + arguments, {'ownedTool'})
+    assert name == 'ownedTool' and identity
+    assert parsed is None

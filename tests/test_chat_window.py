@@ -398,6 +398,8 @@ class TestDesktopAppChatDispatch:
         # Must not raise; window is created lazily but no reply text lands.
         tray._on_chat_ipc_line(f"{CHAT_IPC_PREFIX}not json")
         qapp.processEvents()
+        assert tray.chat_window is not None
+        assert tray.chat_window.transcript_text() == ""
 
     def test_process_ipc_line_returns_false_for_non_chat(self, qapp):
         from desktop_app.chat_window import ChatWindow

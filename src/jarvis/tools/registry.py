@@ -2,8 +2,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, Tuple, List
 import threading
-import sys
 import json
+import sys
 import re
 import secrets
 import time
@@ -15,6 +15,8 @@ from .builtin.screenshot import ScreenshotTool
 from .builtin.web_search import WebSearchTool
 from .builtin.local_files import LocalFilesTool
 from .builtin.document_search import DocumentSearchTool
+from .builtin.skills import SearchSkillsTool, ReadSkillTool
+from ..skills import SKILL_TOOLS
 from .builtin.fetch_web_page import FetchWebPageTool
 from .builtin.nutrition.log_meal import LogMealTool
 from .builtin.nutrition.fetch_meals import FetchMealsTool
@@ -22,6 +24,7 @@ from .builtin.nutrition.delete_meal import DeleteMealTool
 from .builtin.refresh_mcp_tools import RefreshMCPToolsTool
 from .builtin.weather import WeatherTool
 from .builtin.time_tool import TimeTool
+from .builtin.timer import TimerTool
 from .builtin.stop import StopTool
 from .builtin.tool_search import ToolSearchTool
 from .types import ToolExecutionResult
@@ -36,6 +39,8 @@ BUILTIN_TOOLS = {
     "webSearch": WebSearchTool(),
     "localFiles": LocalFilesTool(),
     "documentSearch": DocumentSearchTool(),
+    "searchSkills": SearchSkillsTool(),
+    "readSkill": ReadSkillTool(),
     "fetchWebPage": FetchWebPageTool(),
     "logMeal": LogMealTool(),
     "fetchMeals": FetchMealsTool(),
@@ -43,9 +48,16 @@ BUILTIN_TOOLS = {
     "refreshMCPTools": RefreshMCPToolsTool(),
     "getWeather": WeatherTool(),
     "getTime": TimeTool(),
+    "timer": TimerTool(),
     "stop": StopTool(),
     "toolSearchTool": ToolSearchTool(),
 }
+
+
+def available_builtin_tools(cfg):
+    """Expose optional skill tools only for an explicitly enabled configuration."""
+    return {name: tool for name, tool in BUILTIN_TOOLS.items()
+            if name not in SKILL_TOOLS or getattr(cfg, 'skills_enabled', False) is True}
 
 # Global MCP tools cache
 _mcp_tools_cache: Dict[str, "ToolSpec"] = {}
@@ -264,10 +276,9 @@ def generate_tools_json_schema(allowed_tools: Optional[List[str]] = None, mcp_to
 
 def generate_tools_description(allowed_tools: Optional[List[str]] = None, mcp_tools: Optional[Dict[str, ToolSpec]] = None) -> str:
     """Produce a compact tool help string for the system prompt using OpenAI standard format."""
-    names = list(allowed_tools or list(BUILTIN_TOOLS.keys()))
     lines: List[str] = []
     lines.append("Tool-use protocol: Use the tool_calls field in your response:")
-    lines.append('tool_calls: [{"id": "call_<id>", "type": "function", "function": {"name": "<toolName>", "arguments": {"<argument_name>": "<value>"}}}]')
+    lines.append('{"tool_calls": [{"function": {"name": "<toolName>", "arguments": {"<argument_name>": "<value>"}}}]}')
     lines.append(
         "MCP safety: only locally configured MCP servers are available. "
         "Use read-only tools for discovery. Draft reply text but do not send or "
@@ -276,42 +287,13 @@ def generate_tools_description(allowed_tools: Optional[List[str]] = None, mcp_to
     )
     lines.append("\nAvailable tools and when to use them:")
 
-    # Add built-in tools
-    for tool_name in names:
-        tool = BUILTIN_TOOLS.get(tool_name)
-        if not tool:
-            continue
-        lines.append(f"\n{tool.name}: {tool.description}")
-        if tool.inputSchema:
-            # Extract a simple parameter summary from the JSON schema
-            props = tool.inputSchema.get("properties", {})
-            required = tool.inputSchema.get("required", [])
-            param_descriptions = []
-            for prop_name, prop_def in props.items():
-                prop_type = prop_def.get("type", "any")
-                is_required = prop_name in required
-                req_marker = " (required)" if is_required else ""
-                param_descriptions.append(f"{prop_name}: {prop_type}{req_marker}")
-            if param_descriptions:
-                lines.append(f"Input: {', '.join(param_descriptions)}")
-
-    # Add discovered MCP tools
-    if mcp_tools:
-        for tool_name, spec in mcp_tools.items():
-            if tool_name in names:  # Only include if allowed
-                lines.append(f"\n{spec.name}: {spec.description}")
-                if spec.inputSchema:
-                    # Extract a simple parameter summary from the JSON schema
-                    props = spec.inputSchema.get("properties", {})
-                    required = spec.inputSchema.get("required", [])
-                    param_descriptions = []
-                    for prop_name, prop_def in props.items():
-                        prop_type = prop_def.get("type", "any")
-                        is_required = prop_name in required
-                        req_marker = " (required)" if is_required else ""
-                        param_descriptions.append(f"{prop_name}: {prop_type}{req_marker}")
-                    if param_descriptions:
-                        lines.append(f"Input: {', '.join(param_descriptions)}")
+    for definition in generate_tools_json_schema(allowed_tools, mcp_tools):
+        function = definition['function']
+        lines.append(f"\n{function['name']}: {function['description']}")
+        schema = json.dumps(function['parameters'], ensure_ascii=False, separators=(',', ':')).translate({
+            0x85: r'\u0085', 0x2028: r'\u2028', 0x2029: r'\u2029',
+        })
+        lines.append(f"Input schema: {schema}")
 
     return "\n".join(lines)
 
@@ -398,6 +380,7 @@ def run_tool_with_retries(
     language: Optional[str] = None,
     transcript_context: str = "",
     cancel_event=None,
+    skill_session=None,
 ) -> ToolExecutionResult:
     if cancel_event is not None and cancel_event.is_set():
         return ToolExecutionResult(False, None, error_message="Tool execution was cancelled.")
@@ -478,6 +461,8 @@ def run_tool_with_retries(
 
     # Check builtin tools first
     if name in BUILTIN_TOOLS:
+        if name in SKILL_TOOLS and getattr(cfg, 'skills_enabled', False) is not True:
+            return ToolExecutionResult(False, None, error_message='Local skills are disabled')
         tool = BUILTIN_TOOLS[name]
         return tool.execute(
             db=db,
@@ -491,6 +476,7 @@ def run_tool_with_retries(
             language=language,
             transcript_context=transcript_context,
             cancel_event=cancel_event,
+            **({'skill_session': skill_session} if name in SKILL_TOOLS else {}),
         )
 
     # Unknown tool

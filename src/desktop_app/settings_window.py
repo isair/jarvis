@@ -29,6 +29,7 @@ from jarvis.config import (
     SUPPORTED_CHAT_MODELS,
 )
 from jarvis.debug import debug_log
+from jarvis.utils.audio_diagnostics import input_device_label
 from desktop_app.themes import apply_theme
 from desktop_app.mcp_catalogue import CATALOGUE, CATALOGUE_BY_NAME, MCPEntry
 from desktop_app.whisper_models import settings_model_choices
@@ -355,6 +356,12 @@ def _build_field_metadata() -> List[FieldMeta]:
     f("document_search_enabled", "Local Document Search",
       "Search the text and Markdown folders you choose",
       "features", "bool")
+    f("skills_enabled", "Local Skills",
+      "Use instructions from local SKILL.md packages in the folders you choose",
+      "features", "bool")
+    f("skills_paths", "Skill Library Folders",
+      "Folders containing skill directories. Only add instructions you trust. Scripts are not run automatically.",
+      "features", "list")
     f("document_search_paths", "Document Search Folders",
       "Folders Jarvis may read for document search (.txt and .md files only)",
       "features", "list")
@@ -412,8 +419,7 @@ def get_input_devices() -> List[tuple[str, str]]:
             except Exception:
                 max_in = 0
             if max_in > 0:
-                name = dev.get("name", f"Device {idx}")
-                devices.append((str(idx), f"🎤 {name}"))
+                devices.append((str(idx), f"🎤 {input_device_label(sd, dev)}"))
     except Exception as e:
         debug_log(f"could not enumerate audio devices: {e}", "settings")
     return devices

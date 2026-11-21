@@ -172,6 +172,10 @@ class Settings:
     wake_fuzzy_ratio: float
     stop_commands: list[str]
     stop_command_fuzzy_ratio: float
+    shush_detection_enabled: bool
+    shush_high_low_ratio: float
+    shush_energy_floor: float
+    shush_consecutive_frames: int
 
     # Whisper Speech Recognition
     whisper_model: str
@@ -284,6 +288,10 @@ class Settings:
     # Explicitly authorised local documents
     document_search_enabled: bool
     document_search_paths: list[str]
+
+    # Optional instructions from explicitly authorised local skill folders
+    skills_enabled: bool
+    skills_paths: list[str]
 
     # Dictation (hold-to-dictate)
     dictation_enabled: bool
@@ -656,6 +664,12 @@ def get_default_config() -> Dict[str, Any]:
         "stop_commands": ["stop", "quiet", "shush", "silence", "enough", "shut up"],
         "stop_command_fuzzy_ratio": 0.8,
 
+        # Acoustic Shush Detection (spectral fricative detector)
+        "shush_detection_enabled": True,
+        "shush_high_low_ratio": 3.0,
+        "shush_energy_floor": 0.002,
+        "shush_consecutive_frames": 15,
+
         # Location Services
         "location_enabled": True,
         "location_cache_minutes": 60,
@@ -672,6 +686,8 @@ def get_default_config() -> Dict[str, Any]:
         "background_tasks_enabled": False,
         "document_search_enabled": False,
         "document_search_paths": [],
+        "skills_enabled": False,
+        "skills_paths": [],
 
         # Dictation (hold-to-dictate, WisprFlow-like)
         "dictation_enabled": True,
@@ -882,6 +898,10 @@ def load_settings() -> Settings:
     brave_search_api_key = str(merged.get("brave_search_api_key", "") or "").strip()
     wikipedia_fallback_enabled = bool(merged.get("wikipedia_fallback_enabled", True))
     background_tasks_enabled = merged["background_tasks_enabled"] is True
+    skills_enabled = merged['skills_enabled'] is True
+    raw_skill_paths = merged['skills_paths']
+    skills_paths = [path.strip() for path in raw_skill_paths
+                    if isinstance(path, str) and path.strip()] if isinstance(raw_skill_paths, list) else []
     document_search_enabled = bool(merged.get("document_search_enabled", False))
     raw_document_paths = merged.get("document_search_paths", [])
     document_search_paths = [path.strip() for path in raw_document_paths
@@ -960,6 +980,10 @@ def load_settings() -> Settings:
         wake_fuzzy_ratio=wake_fuzzy_ratio,
         stop_commands=_ensure_list(merged["stop_commands"]),
         stop_command_fuzzy_ratio=float(merged["stop_command_fuzzy_ratio"]),
+        shush_detection_enabled=bool(merged["shush_detection_enabled"]),
+        shush_high_low_ratio=float(merged["shush_high_low_ratio"]),
+        shush_energy_floor=float(merged["shush_energy_floor"]),
+        shush_consecutive_frames=int(merged["shush_consecutive_frames"]),
 
         # Whisper Speech Recognition
         whisper_model=whisper_model,
@@ -1020,6 +1044,8 @@ def load_settings() -> Settings:
         brave_search_api_key=brave_search_api_key,
         wikipedia_fallback_enabled=wikipedia_fallback_enabled,
         background_tasks_enabled=background_tasks_enabled,
+        skills_enabled=skills_enabled,
+        skills_paths=skills_paths,
         document_search_enabled=document_search_enabled,
         document_search_paths=document_search_paths,
 

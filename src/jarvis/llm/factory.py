@@ -13,6 +13,7 @@ Two factories share one provider catalogue:
 """
 
 from __future__ import annotations
+from functools import lru_cache
 from typing import Any, Optional
 
 from .backend import LLMBackend
@@ -63,6 +64,12 @@ def get_llm_backend(settings: Any) -> LLMBackend:
     return _build(provider, base_url, api_key)
 
 
+@lru_cache(maxsize=1)
+def _embedding_backend(provider: str, base_url: str, api_key: Optional[str]) -> LLMBackend:
+    """Own the latest stateless embedding transport across requests."""
+    return _build(provider, base_url, api_key)
+
+
 def get_embedding_backend(settings: Any) -> LLMBackend:
     """Return the configured embedding backend.
 
@@ -89,4 +96,4 @@ def get_embedding_backend(settings: Any) -> LLMBackend:
     api_key = _str_attr(settings, "embedding_api_key") or _str_attr(
         settings, "llm_api_key"
     ) or None
-    return _build(provider, base_url, api_key)
+    return _embedding_backend(provider, base_url.rstrip("/"), api_key)

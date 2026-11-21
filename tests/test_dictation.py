@@ -165,14 +165,35 @@ class TestRecordingStateMachine:
             whisper_backend_ref=lambda: "mlx",
             mlx_repo_ref=lambda: "mlx-community/whisper-small-mlx",
         )
+        real_thread = threading.Thread
+        workers = []
+
+        def owned_worker(*args, **kwargs):
+            worker = real_thread(*args, **kwargs)
+            workers.append(worker)
+            return worker
+
         with patch("jarvis.dictation.dictation_engine.sd") as mock_sd, \
-             patch("jarvis.dictation.dictation_engine._play_beep"):
+             patch("jarvis.dictation.dictation_engine._play_beep"), \
+             patch("jarvis.dictation.dictation_engine.threading.Thread", side_effect=owned_worker):
             mock_stream = MagicMock()
             mock_sd.InputStream.return_value = mock_stream
-            engine._start_recording()
-            assert engine._recording is True
-            # Cleanup
-            engine._stop_recording(discard=True)
+            mock_sd.query_devices.return_value = {
+                'index': 0, 'name': 'Owned microphone', 'max_input_channels': 1,
+                'default_samplerate': engine._target_sample_rate,
+            }
+            try:
+                engine._start_recording()
+                for worker in workers:
+                    worker.join(2)
+                    assert not worker.is_alive(), 'Owned capture worker did not finish'
+                assert engine._recording is True
+                assert engine._stream is mock_stream
+            finally:
+                engine._stop_recording(discard=True)
+                for worker in workers:
+                    worker.join(2)
+                    assert not worker.is_alive(), 'Owned capture worker survived cleanup'
 
     def test_named_stereo_headset_records_both_channels(self):
         """Dictation uses the selected headset even when mono capture is rejected."""
@@ -456,11 +477,20 @@ class TestClipboard:
         # window has focus and pop open System Settings.
         mock_cge.assert_called_once()
 
-    def test_clipboard_paste_empty_string_is_noop(self):
-        from jarvis.dictation.dictation_engine import _clipboard_paste
-        # Should return immediately without error
-        _clipboard_paste("")
-        _clipboard_paste(None)
+    def test_clipboard_paste_empty_string_is_noop(self, monkeypatch):
+        from jarvis.dictation import dictation_engine as de
+
+        def unexpected_delivery(*args, **kwargs):
+            pytest.fail("Empty dictation reached the clipboard or keyboard")
+
+        for boundary in ("_clipboard_linux", "_clipboard_macos", "_clipboard_windows"):
+            monkeypatch.setattr(de, boundary, unexpected_delivery)
+        from types import SimpleNamespace
+        monkeypatch.setattr(de, "pynput_keyboard", SimpleNamespace(Controller=unexpected_delivery))
+        monkeypatch.setattr(de, "_check_macos_accessibility", unexpected_delivery)
+        monkeypatch.setattr(de, "_paste_cgevent", unexpected_delivery)
+        de._clipboard_paste("")
+        de._clipboard_paste(None)
 
 
 # ---------------------------------------------------------------------------
@@ -681,16 +711,18 @@ class TestDictationProcessingCallback:
         assert events == ["processing", "end"]
 
     def test_processing_callback_optional(self):
-        """Engine must work when no processing callback is supplied."""
+        """An absent processing callback still permits dictation completion."""
         from jarvis.dictation import dictation_engine as de
 
-        engine = _make_engine(on_dictation_processing_start=None)
-
-        with patch.object(de, "_close_stream"), \
-             patch.object(de, "_play_beep"), \
-             patch.object(engine, "_transcribe_and_paste"):
-            # Should not raise
-            engine._finalise_and_transcribe(stream=MagicMock(), audio_frames=[], start_time=time.monotonic(), stream_sample_rate=engine._stream_sample_rate, token=engine._session)
+        completed = []
+        engine = _make_engine(on_dictation_processing_start=None,
+                              on_dictation_end=lambda: completed.append("end"))
+        with patch.object(de, "_close_stream"), patch.object(de, "_play_beep"):
+            engine._finalise_and_transcribe(
+                stream=MagicMock(), audio_frames=[], start_time=time.monotonic(),
+                stream_sample_rate=engine._stream_sample_rate, token=engine._session,
+            )
+        assert completed == ["end"]
 
 
 # ---------------------------------------------------------------------------

@@ -188,17 +188,12 @@ class TestReplyEngineDialogueMemory:
             for message in response_messages
         )
 
-        # Check that dialogue memory was updated
-        chunks = dialogue_memory.get_pending_chunks()
-        assert len(chunks) == 2  # User message and assistant response stored separately
+        assert result == "It's sunny in London today!"
+        assert dialogue_memory.get_pending_chunks() == [
+            "User: What's the weather in London?",
+            "Assistant: It's sunny in London today!",
+        ]
 
-        # Should include user input and final response
-        assert "User: What's the weather in London?" in chunks
-        assert "Assistant: It's sunny in London today!" in chunks
-
-        # Should NOT include the tool call
-        for chunk in chunks:
-            assert 'call_12345' not in chunk
 
 
 

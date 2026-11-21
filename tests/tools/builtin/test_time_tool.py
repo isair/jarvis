@@ -77,8 +77,18 @@ class TestTimeTool:
         mock_fmt.assert_called_once_with("Europe/Athens")
         mock_get.assert_not_called()
 
+    @pytest.mark.parametrize("zone", ["Etc/GMT+5", "Etc/GMT-12", "Etc/GMT0"])
+    @patch("requests.get", side_effect=AssertionError("Unexpected geocoding request"))
+    def test_run_iana_zone_with_digits_stays_offline(self, mock_get: Mock, zone: str) -> None:
+        result = self.tool.run({"location": zone}, self.context)
+
+        assert result.success is True
+        assert f"Current time in {zone}:" in result.reply_text
+        mock_get.assert_not_called()
+
+    @pytest.mark.parametrize("location", ["Not/A_Zone", "Etc/GMT+99"])
     @patch("requests.get")
-    def test_run_unknown_zone_shape_geocodes(self, mock_get):
+    def test_run_unknown_zone_shape_geocodes(self, mock_get: Mock, location: str) -> None:
         """A slash-y string that is NOT a valid zone must geocode, not error."""
         geo_response = Mock()
         geo_response.status_code = 200
@@ -92,7 +102,7 @@ class TestTimeTool:
         geo_response.raise_for_status = Mock()
         mock_get.return_value = geo_response
 
-        result = self.tool.run({"location": "Not/A_Zone"}, self.context)
+        result = self.tool.run({"location": location}, self.context)
 
         assert result.success is True
         assert "Atlantis" in result.reply_text

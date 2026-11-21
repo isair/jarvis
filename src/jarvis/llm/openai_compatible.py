@@ -312,7 +312,13 @@ class OpenAICompatibleBackend(LLMBackend):
             # servers. Sampling fields nested under ``options`` are lifted
             # to the payload root.
             for key, value in extra_options.items():
-                if key in {"keep_alive", "num_ctx", "num_predict", "think"}:
+                if key == 'response_schema':
+                    if value is not None:
+                        payload['response_format'] = {'type': 'json_schema', 'json_schema': {
+                            'name': 'jarvis_reply', 'strict': False, 'schema': value,
+                        }}
+                    continue
+                elif key in {"keep_alive", "num_ctx", "num_predict", "think"}:
                     continue
                 if key == "options" and isinstance(value, dict):
                     for inner_key, inner_value in value.items():
@@ -324,17 +330,28 @@ class OpenAICompatibleBackend(LLMBackend):
         if tools and isinstance(tools, list) and len(tools) > 0:
             payload["tools"] = tools
 
+        deadline = time.monotonic() + timeout_sec
         try:
-            with http.post(
-                f"{self._base_url}/chat/completions",
-                json=payload,
-                headers=self._headers(),
-                timeout=timeout_sec,
-            ) as resp:
-                resp.raise_for_status()
-                data = resp.json()
-            if isinstance(data, dict):
-                return _normalise_response(data)
+            for attempt in range(2):
+                remaining = timeout_sec if attempt == 0 else deadline - time.monotonic()
+                if remaining <= 0:
+                    return None
+                try:
+                    with http.post(
+                        f"{self._base_url}/chat/completions",
+                        json=payload, headers=self._headers(), timeout=remaining,
+                    ) as resp:
+                        resp.raise_for_status()
+                        data = resp.json()
+                    if isinstance(data, dict):
+                        return _normalise_response(data)
+                    return None
+                except requests.exceptions.HTTPError as exc:
+                    if attempt == 0 and 'response_format' in payload and exc.response is not None and exc.response.status_code == 400:
+                        payload.pop('response_format')
+                        debug_log('structured output unavailable; requesting validated text within the original deadline', 'llm')
+                        continue
+                    raise
         except requests.exceptions.Timeout:
             print(f"  ⏱️ LLM request timed out (configured timeout: {timeout_sec:g}s)", flush=True)
             return None

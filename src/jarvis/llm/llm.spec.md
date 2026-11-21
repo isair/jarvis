@@ -62,6 +62,14 @@ Each backend parses its own stream format internally (Ollama JSONL or OpenAI SSE
 
 `embed()` is part of the same backend interface so the same provider can serve both chat and embeddings when capable. The `embedding_provider` config key lets users on runtimes without embeddings (e.g. some oMLX builds) route embeddings through Ollama while keeping chat on their preferred runtime. Every embedding call site under `src/jarvis/` resolves through `get_embedding_backend(cfg)`.
 
+The embedding factory retains one latest stateless backend, keyed by the resolved
+provider, trailing-slash-normalised URL and effective API key. Repeated factory
+lookups with the same effective configuration share this transport. A different
+configuration evicts the retained backend; active callers may finish with their
+own references. The backend owns no model process or persistent HTTP session.
+Chat factories keep their independent construction contract. Model names remain
+per-request inputs, including the model key used by the tool catalogue cache.
+
 ## Configuration
 
 Provider-aware fields in `Settings` (see [src/jarvis/config.py](../config.py)):
@@ -182,3 +190,5 @@ Direct-request diagnostics identify timeout duration or the exception class with
 `chat()` recognises response-body read timeouts wrapped as `requests.ConnectionError(urllib3.ReadTimeoutError(...))`. These follow the normal timeout path: a safe message includes the configured timeout, `None` is returned, and intent detection does not enter connection-failure cooldown. Classification uses exception types and explicit causes/arguments, never message matching or raw exception text. Actual connection failures still propagate; URLs, headers and credentials are not printed.
 
 Backends fail soft for transient issues so the reply engine can degrade gracefully: timeouts and HTTP errors return `None` (or `[]` for `list_models`); HTTP 400 with `tools` set raises `ToolsNotSupportedError`; any other unexpected error is logged via `debug_log("...", "llm")` and returns `None`. The one exception is `requests.ConnectionError` (server unreachable), which `chat()` re-raises so callers like the intent judge can apply their own back-off — voice, for example, wants a 30s cooldown after a connection-refused error so it stops hammering an unresponsive Ollama between wake words.
+
+Chat `extra_options.response_schema` is a provider-neutral JSON output constraint. Ollama receives `format`; OpenAI-compatible servers receive `response_format.json_schema`. A server rejecting that format with HTTP400 gets one text-mode retry within the original request deadline. Callers validate returned data regardless of format support. No model, provider, endpoint or actor sampling setting changes when the schema is used.

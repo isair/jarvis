@@ -9,6 +9,7 @@ import re
 from enum import Enum
 from typing import Optional
 
+from .tool_arguments import TOOL_ARGUMENT_GUIDANCE
 from .system import (
     PromptComponents,
     ASR_NOTE,
@@ -142,6 +143,8 @@ _AUTO_DERIVED_ARGUMENT_GUIDANCE = (
 )
 
 
+
+
 # Large models also confabulate on named entities — e.g. qwen3.8:27b produces a
 # confident but wrong cast list for the film "Possessor" without calling
 # webSearch. The anti-confabulation rule is therefore not a small-model-only
@@ -173,17 +176,7 @@ TOOL_CONSTRAINTS_LARGE = (
     "\"have you heard of X\", and equivalents in any language) is a search trigger, "
     "not a capability question about yourself.\n\n"
     + _AUTO_DERIVED_ARGUMENT_GUIDANCE
-    + "SELF-CONTAINED TOOL ARGUMENTS:\n"
-    "When you call any tool with a free-form text argument (search queries, lookup "
-    "strings, question fields — whatever the tool calls them), the string you pass "
-    "must be a self-contained version of the user's intent. Resolve pronouns, "
-    "ellipsis, and implicit references from the conversation so far — the tool does "
-    "NOT see prior turns. If turn 1 was about Harry Styles and turn 2 asks \"what "
-    "are his most famous songs?\", the argument must name Harry Styles explicitly, "
-    "not echo the literal utterance. Prefer a compact keyword phrasing over a "
-    "conversational sentence: \"Harry Styles most famous songs\" beats \"what are "
-    "his most famous songs\". This applies to every tool you call, not just "
-    "webSearch."
+    + TOOL_ARGUMENT_GUIDANCE
 )
 
 
@@ -205,23 +198,28 @@ TOOL_INCENTIVES_SMALL = (
 
 TOOL_GUIDANCE_SMALL = (
     "You have access to tools - use them when the task requires external data or actions. "
-    "After receiving tool results, use the data to answer the user's question conversationally. "
+    "For an action request, call its tool before reporting completion. A sentence claiming "
+    "an action happened does not perform it. After a successful result, check the whole request: "
+    "obtain any missing requested facts with another tool call, using discovered facts as inputs. "
+    "Only then answer the user conversationally. "
     "Extract relevant information and present it naturally - never output raw JSON or data structures. "
     "Tool results are YOUR OWN DATA to use when answering — they are not a new message from the user "
     "and they are not a prompt for you to interpret. The user's question is in their earlier message "
     "above the tool result; the tool result is the material you use to answer it. Do NOT reply by "
     "describing the tool result back (\"the text is a collection of search results\", \"you have not "
     "asked a specific question\", \"the provided text does not contain a direct question\") — the user "
-    "already asked their question and the tool already answered it, you just need to state the answer. "
+    "already asked their question; check which requested outcomes the result actually covers. "
     "If the tool result contains facts that address the user's earlier question, synthesise those facts "
-    "into a direct answer. If it does not, say so briefly and offer to look further — never pretend no "
-    "question was asked. "
+    "into a direct answer once all requested outcomes are covered. If requested evidence is missing, "
+    "call an available tool to obtain it before answering. Do not stop with an offer to look further "
+    "while an available tool can complete the request; never pretend no question was asked. "
     "CRITICAL fidelity rule: when answering using a tool result, every specific fact in your reply "
     "(names, dates, cast, authors, places, plot details, numbers) must come from the tool result or "
     "from the user's own messages. Do NOT add cast, plot, release years, authors, or other specifics "
-    "from your prior knowledge — even if they feel plausible. If the tool returned only a short summary, "
-    "answer using only that summary. If the result doesn't contain what the user asked, say so rather "
-    "than filling the gap from memory. "
+    "from your prior knowledge, even if they feel plausible. A short summary supports only the "
+    "facts it contains. If other requested facts are missing, use an available tool to "
+    "obtain them before answering. Missing facts in one result do not establish that no such facts "
+    "exist. Never fill the gap from memory. "
     "When a tool result contains a section labelled '**Content from top result:**', pull the specific "
     "facts (names, dates, roles, plot, numbers) from that section and state them in your reply. Do NOT "
     "defer to the '**Other search results:**' link list by saying things like 'here are some links' or "
@@ -264,8 +262,7 @@ Only skip the lookup if you can state concrete facts about the exact entity (tit
 
 """
     + _AUTO_DERIVED_ARGUMENT_GUIDANCE
-    + """SELF-CONTAINED TOOL ARGUMENTS:
-Whenever you call any tool with a free-form text argument (a search query, lookup string, question field — whatever the tool names it), the string you pass MUST be a self-contained restatement of the user's intent. Resolve pronouns, ellipsis, and implicit references from earlier turns yourself — the tool does NOT see the conversation history, it only sees the argument you pass. If the previous turn was about "Harry Styles" and the user now asks "what are his most famous songs?", the argument must be something like "Harry Styles most famous songs", NOT "what are his most famous songs". Prefer a compact keyword phrase over a conversational sentence. Never pass the user's literal utterance through when it contains unresolved pronouns, "that", "those", "it", "his", "her", "their", or similar references. This applies to every tool — webSearch, Wikipedia, MCP tools, all of them.""")
+    + TOOL_ARGUMENT_GUIDANCE)
 
 
 # Repeat the constraints twice for better instruction-following in small models

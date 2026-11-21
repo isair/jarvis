@@ -42,6 +42,8 @@ class MockConfig:
     # ``__post_init__`` — same shape ``load_settings()`` produces.
     llm_chat_model: str = ""
     background_tasks_enabled: bool = field(default_factory=lambda: get_default_config()['background_tasks_enabled'])
+    skills_enabled: bool = field(default_factory=lambda: get_default_config()['skills_enabled'])
+    skills_paths: list = field(default_factory=lambda: get_default_config()['skills_paths'].copy())
     wake_word: str = "jarvis"
     wake_aliases: list = field(default_factory=list)
     whisper_model: str = "small"
@@ -115,8 +117,11 @@ def _isolate_user_config_path(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture
-def mock_config():
-    """Provide a mock configuration for unit tests."""
+def mock_config(monkeypatch):
+    """Provide offline configuration and isolate model-backed reply dependencies."""
+    from jarvis.reply import engine
+    monkeypatch.setattr(engine, 'resolve_uncovered_request', lambda *args, **kwargs: None)
+    monkeypatch.setattr(engine, 'render_english_speech', lambda cfg, text: text)
     return MockConfig()
 
 
@@ -464,3 +469,19 @@ def make_speech_backend(monkeypatch, tmp_path):
         if worker is not None:
             worker.join(timeout=3)
             assert not worker.is_alive(), 'Owned speech worker did not finish'
+
+
+@pytest.fixture(autouse=True)
+def owned_written_delivery_boundary(monkeypatch, request):
+    """Unit engine scenarios own an identity written renderer, never a model service.
+
+    Written-delivery tests restore the production adapter with an owned backend.
+    Native evals live outside this test tree and exercise actual rendering.
+    """
+    if 'mock_config' not in request.fixturenames and 'jarvis.reply.engine' not in sys.modules:
+        return
+    from jarvis.reply import engine
+    from jarvis.reply.timer_delivery import TimerPreparation, TimerRequest
+    monkeypatch.setattr(engine, 'render_written_reply', lambda cfg, request, text, cancel_event=None, protect_numbers=False, deadline=None: text)
+    monkeypatch.setattr(engine, 'prepare_timer_arguments', lambda cfg, request, args, **kw: TimerPreparation(dict(args), TimerRequest(None)))
+    monkeypatch.setattr(engine, 'timer_reply_source', lambda cfg, request, draft, records, deadline, cancel_event=None: draft)

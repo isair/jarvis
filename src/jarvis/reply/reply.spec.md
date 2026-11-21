@@ -16,6 +16,14 @@ Design principles enforced by the engine:
 - Language-Agnostic Design: Prompts and ASR guidance avoid language-specific phrasing.
 - Data Privacy: Inputs are redacted and logging is concise and purposeful via `debug_log`.
 
+Optional local skills use the same reply engine for voice and text. When
+explicitly enabled, a reply-owned metadata index supplies a bounded lexical
+shortlist and exposes `searchSkills` and `readSkill`. Loaded instructions and
+references enter current tool results exactly once, within aggregate byte
+budgets; the full library never enters model context. Skill guidance cannot
+expand tool permissions. Skill tool traffic is excluded from persisted tool
+carryover. See `../skills.spec.md` for package and filesystem contracts.
+
 The caller-owned cancellation event is forwarded through planned and model-issued
 tool dispatch into `ToolContext`. The registry rejects already cancelled calls;
 cooperative tools can stop between bounded work units. Document indexing checks
@@ -30,6 +38,13 @@ retain their own deadlines.
   - persistent store: a database-like service, optionally with vector search.
   - configuration: model endpoints, timeouts, feature flags, and tool settings.
   - speech synthesizer (optional): for spoken output and hot-window activation.
+  - spoken_output (boolean, default false): the caller owns spoken delivery of the returned reply. The voice listener supplies its enabled speech state; text chat and local tasks leave it false. An enabled synthesiser passed directly to the engine also declares spoken delivery.
+
+The main reply model receives delivery guidance snapshotted per request. Silent replies follow the language of the user's current request without inheriting speech-backend constraints. The configured Piper/Chatterbox English speech policy guides spoken replies from this model. The max-turn digest has its own request-language contract below. Shared delivery guidance is injected beside the cached clock/location context, before final text-tool syntax guidance. It is stable across every model turn and system-message rebuild of that reply.
+
+Completed replies for English spoken delivery pass through `delivery.render_english_speech` before output, TTS and dialogue storage. This is a translation-only call on the configured CHAT tier, with the shared `ENGLISH_SPEECH_RENDER_PROMPT`. It receives only the completed reply as JSON data, never the original request, tool catalogue or execution authority. Silent and speech-disabled replies bypass it. The original redacted request remains unchanged for routing, planning, tool arguments and saved dialogue. The max-turn digest retains its request-language generation contract; its completed text follows the same spoken delivery stage.
+
+Rendering uses temperature zero, thinking disabled, an 8,192-token context, a 2,048-token output cap and the configured chat timeout. JSON input above 4,096 UTF-8 bytes, before or after literal protection, bypasses rendering. Double-quoted, curly-double-quoted and guillemet-delimited literals are replaced by distinct markers and restored verbatim only when every marker returns exactly once and in order. Unavailable, incomplete, blank, malformed or invalid-literal output retains the original completed reply, rather than dropping facts or inventing completion. Canned error/blocker replies retain their English text. Cancellation after rendering suppresses output and conversation publication. Spoken delivery adds at most one translation call. Tool-based written delivery uses the language-selection and translation contexts below; tool-free written replies avoid them.
 
 ### Steps and Branches (Agentic Messages Loop)
 1. Redact
@@ -52,7 +67,7 @@ retain their own deadlines.
    - The planner emits an ordered list of short sub-tasks (max 5). Two of the tokens are structural for the engine:
      - `searchMemory topic='...'` as a leading step means "answering requires information from prior conversations"; the engine runs memory enrichment. Omitting it means "no memory needed".
      - Concrete tool steps (e.g. `webSearch search_query='...'`) name specific tools; the engine adds those names to the router's selection for the reply loop.
-   - An empty plan (disabled, LLM timeout, too short) is the fail-open state — the engine reverts to running the memory extractor and the `select_tools` router as before.
+   - An empty plan (disabled, LLM timeout, too short) is the fail-open state: the engine permits memory extraction subject to source availability and runs the `select_tools` router.
    - A single-step `["Reply to the user."]` plan is a positive "no memory, no tools" decision — the engine skips the memory extractor, the tool router, the diary / graph / digest LLM calls, and the direct-exec path entirely.
    - See `planner.spec.md` for the full prompt contract, helpers, and fail-open invariants.
 
@@ -61,6 +76,7 @@ retain their own deadlines.
      connection ownership closes its store after successful retrieval, skipped
      searches and failures.
    - Runs only when the planner emitted a `searchMemory` directive OR the planner returned an empty plan (fail-open). Skipped otherwise, along with the keyword-extractor LLM call, the diary and graph queries, and the memory-digest LLM call.
+   - With diary-only enrichment, a bounded local existence check skips extraction and retrieval when no saved summary exists. Availability is checked for each reply, so subsequently saved summaries are eligible immediately. An unavailable check preserves recall. Graph and combined-source enrichment retain their own preparation gates.
    - Extract search parameters via `extract_search_params_for_memory(query, cfg, router_model, ..., context_hint=...)`.
      - Runs on the fast tier (`resolve_model(cfg, Tier.FAST)`), not the big chat model. The extractor is a small classification-shaped task and rides the already-warm fast model instead of paging in the chat weights.
      - The planner's `topic` hint (when present) is appended to the query the extractor sees, so keyword selection anchors on what the planner actually wanted to look up.
@@ -99,6 +115,7 @@ retain their own deadlines.
        - Parse responses for `` ```tool_call ``` `` fences instead of `tool_calls` field
      - Parse response using standard OpenAI-compatible message format:
        - `tool_calls` field (native path): Execute recognisable requests serially in their listed order, then continue the loop. Every retained request has a unique identifier and a matching success or failure result before another model request. Missing or repeated identifiers are normalised in both request and result history. Malformed arguments and unavailable tools receive failed outcomes without execution; unnamed entries are omitted with a diagnostic. Discovery can expose tools to the next model turn, not grant permission to other requests already queued in the same batch. Cancellation and `stop` prevent later actions. Each request consumes a slot in `agentic_max_turns`; a batch larger than the remaining budget receives explicit failed outcomes without performing its actions. A valid `stop` request still dismisses the reply, including within an oversized batch.
+       - Text requests retain exact JSON argument objects in fences, literals, function notation and registered-name colon notation. Malformed colon JSON and non-object JSON receive failed outcomes without query-string coercion. Prose after a complete colon JSON object is not part of its arguments.
        - `` ```tool_call ``` `` fence (text path): Execute tools and continue loop
        - `thinking` field: Internal reasoning (not shown to user), continue loop
        - `content` field: Natural language response to user
@@ -119,11 +136,12 @@ retain their own deadlines.
    - If the planner returns an empty list (short query, disabled, LLM failure, trivial single-reply plan), the engine behaves exactly as it did pre-planner and falls through to the compound-query fallback below.
 
    Compound-query decomposition (fallback for small / text-based models when the planner emits no plan):
-   - When `use_text_tools` is True (i.e. the model is SMALL), the engine delegates to `split_compound_query(text, language=language)` in `src/jarvis/reply/compound_query.py`. The helper splits on a single conjunction boundary when each clause is at least `MIN_CLAUSE_CHARS` (= 9) characters long, returning an empty list otherwise. The 9-char minimum was tuned against `evals/test_complex_flows.py::TestMultiStepEntityQuery` — it excludes short idiomatic phrases (`"rock and roll"`, `"pros and cons"`, French `"va et vient"`) while retaining typical multi-part entity queries whose clauses usually exceed 15 characters each.
-   - Language awareness: the conjunction is per-language, not hardcoded English. Supported languages and their conjunctions live in `_CONJUNCTIONS` in `compound_query.py` (currently `en`, `es`, `fr`, `de`, `pt`, `it`, `nl`, `tr`). For any language outside this table — including languages Whisper can detect but which we haven't surveyed for false positives — the splitter returns `[]` and the query is processed as a single unit. This is graceful degradation: we prefer "no decomposition" over mis-applying English rules to Japanese, Korean, etc. Non-voice entrypoints (evals, text chat) pass `language=None` and default to English.
-   - After each tool result is appended in text-based mode, the engine counts how many tool results have already been received. If that count is less than `len(_compound_sub_questions)`, a targeted nudge is appended to the tool result message identifying the specific unanswered sub-question: `"⚠️ You have answered N of M parts. Still unanswered: '<sub_question>'. You MUST emit another tool_calls block now."` — this fires before the model's next turn so it has a concrete reminder of exactly what to search for next.
-   - When all sub-questions are covered (or the query is not compound), a generic completeness prompt is appended instead: `"[If the original query has sub-questions not yet answered by this result, call another tool now. Otherwise reply.]"`
-   - Compound decomposition fires on every tool result turn until coverage is complete.
+   - When `use_text_tools` is true, `split_compound_query(text, language=language)` supplies advisory parts. `_RULES` in `compound_query.py` defines language-specific conjunctions and minimum clause lengths, including separate thresholds for CJK scripts. A single qualifying boundary produces two parts; otherwise the helper returns an empty list. Short idiomatic phrases remain single requests.
+   - Non-voice entrypoints with `language=None` default to English. Unsupported language codes return no decomposition. Language-specific splitting does not assign semantic completion or require an action for each part.
+   - Without a plan, each text-mode tool result carries all advisory request parts. The model compares them with all actual results before deciding whether further work remains. Tool counts do not establish semantic coverage: one result can cover multiple parts and a preservation constraint can already be satisfied. The guidance never assigns completion or mandates another call from clause position.
+   - Text tool syntax guidance uses the same evidence-based contract. Further calls address unresolved outcomes, including independent information requests with missing evidence. Dependent requests use facts discovered in earlier results as inputs to further calls. Omission from one result does not establish that a tool cannot obtain a fact. Available tools obtain missing requested evidence before a final answer; an offer to continue does not replace this work. Actions require tool execution and confirmation before reporting completion. Completed actions are not repeated; failed actions are not treated as successful. The reply explains any outcome that cannot be completed. Non-compound requests retain the generic completeness reminder.
+   - Advisory request parts accompany every text-mode tool result when no plan exists.
+   - Before a prose reply to a compound text-mode request without a plan, a bounded CHAT-tier coverage check compares the original request and permitted schemas with current-request execution records. These retain effective result metadata and recorded identities. It can propose one unresolved tool call, which enters normal dispatch, cancellation, turn-budget and duplicate protection. Successful actions and preservation constraints do not require another action. At most two checks run per reply; requests larger than 6,000 serialised UTF-8 bytes, unavailable services and invalid decisions preserve the ordinary reply loop. Each check uses an 8,192-token context, at most 512 output tokens, temperature zero and a timeout capped at 20 seconds or the configured chat timeout. Input packets are untrusted evidence, not instructions. Proposed names and top-level argument fields must match the supplied schemas.
    - Native tool calling models are not affected; they manage multi-step reasoning through their own chain-of-thought without this scaffolding.
 
    Tool allow-list per turn:
@@ -137,7 +155,7 @@ retain their own deadlines.
    - `toolSearchTool` wraps the same routing logic (`select_tools`) but is invokable mid-loop. It takes a refined natural-language description of what the model is trying to accomplish and returns the expanded set of candidate tools. When invoked, the returned tools are merged into the allow-list for subsequent turns (still plus `stop` and `toolSearchTool` itself). This gives the agent a single-shot escape hatch when the initial routing was too narrow without widening the allow-list to "everything" by default.
    - `toolSearchTool` is a builtin; see `src/jarvis/tools/builtin/tool_search.spec.md`.
 
-   **Repeated tools**: distinct arguments may invoke the same allowed tool throughout the configured turn budget. Recent identical name/argument signatures reuse their recorded outcome, including error-only failures. Earlier-turn results do not consume a current-reply allowance. The independent `toolSearchTool` cap remains in force.
+   **Repeated tools**: distinct arguments may invoke the same allowed tool throughout the configured turn budget. Recent identical name/argument signatures reuse their recorded outcome, including error-only failures. Non-identical identities can bind only to successful outcomes; rejected attempts do not own a subsequently supplied identity. Earlier-turn results do not consume a current-reply allowance. The independent `toolSearchTool` cap remains in force.
 
    **Termination**: Natural-language content ends the reply unless text-tool recovery has no current-request action-tool outcome. That state accepts an explicit clarification or blocker, requests one correction for unsupported content, and otherwise delivers an honest execution blocker. The planner's task list is the termination contract: successful direct chains run their planned tools before synthesis. After a tool failure, the chat model can attempt a grounded alternative, request missing input or explain a blocker within the existing turn budget. Tool-call counts do not claim task completion during recovery. For plan-empty queries (short or trivial), the chat model's first content response is delivered directly.
    - Max-turn digest: when the loop exhausts `agentic_max_turns` without ever producing a content turn (e.g. a pure tool-call loop), the engine calls `digest_loop_for_max_turns` in `enrichment.py`. This runs a single cheap LLM pass over the loop's accumulated activity (tool calls, tool result excerpts, any prose) and produces a short reply that begins with a caveat sentence noting the request was not fully completed. The caveat and the summary are generated in the same language as the user's request, not hardcoded English. A 1024-token generation budget covers reasoning and the final partial reply; the configured digest timeout and 800-character reply cap (plus a truncation ellipsis) bound the call and its result. On digest failure the engine falls back to the last candidate reply (if any) or a generic error message.
@@ -486,3 +504,72 @@ fallback and before output or dialogue writes. A cancelled request returns no
 reply and starts no subsequent tool action. In-flight inference and tool calls
 finish under their existing deadlines; cancellation cannot undo completed actions.
 Voice and text chat do not supply a task cancellation event.
+
+Completed written replies after tool execution pass through
+`delivery.render_written_reply`. It first uses the configured CHAT tier with `WRITTEN_LANGUAGE_PROMPT` to classify and select
+the language of the redacted request, honouring explicit language overrides.
+A second CHAT call uses the shared `REPLY_RENDER_PROMPT` with that language
+to translate only the completed text. Both calls share one chat deadline.
+The request is language-reference data, not execution authority. The original
+request, plan, arguments and tool execution are unchanged. Tool-free written
+replies avoid this stage. Both delivery renderers share one bounded literal-
+preserving implementation: complete raw and protected JSON packets are capped
+at 4,096 UTF-8 bytes, with 8,192 context tokens, 2,048 output tokens and the
+configured chat deadline. Failure preserves the original truthful result.
+Cancellation after rendering suppresses output and dialogue publication.
+
+Written-language selection returns a two- or three-letter ASCII ISO 639 language code from the redacted
+request alone. A local ISO 639 catalogue resolves the code to its canonical language name, including three-letter bibliographic aliases. Unknown codes retain the input without translation. Translation then receives only completed text and that explicit target language name. Selection (8 output tokens) and translation share one chat
+deadline; cancellation between them prevents the second call. The renderer
+does not infer the language from tool output or future expiry speech.
+
+Literal-token instructions are included only when the translation packet contains protected literals. Tokens stay inline in the translated passage, with no separately enumerated marker list. Exact-once, original-order and unknown-token guards remain mandatory.
+
+Model-facing request copies exclude schema properties marked `writeOnly`, including timer expiry speech, while preserving call IDs and matching results. Planner-owned text requests use content protocol. Recognised model requests retain their existing structured identity metadata alongside text protocol content. Execution and recorded history retain the full arguments.
+
+The same projection applies to JSON-string native arguments and max-turn summary input.
+
+Timer argument binding compiles one ordered request list before the first creation, using the redacted current request and the planner's bounded fenced dialogue/resource context for explicit follow-ups. Every requested countdown owns a separate purpose entry, including identical repeats. Only explicit new creations in the current request receive entries. Cancellation, listing, inspection and preservation of existing running timers create no admission budget; historical creation requests remain reference data. Mixed requests include only their new creations. Duration components remain unchanged from the actor/resolver call, and the canonical timer parser validates them; compilation cannot invent or replace a duration. Compilation validates the complete array atomically and caches either that list or an explicit unknown result for the reply. An empty list means no requested creations; unknown retains model-proposed arguments under ordinary validation. Named calls match an unconsumed requested purpose, preserving the associated duration even when calls arrive in a different order. Identical purposes consume separate occurrences. Unlabelled calls with several distinct purposes, or repeats of an already consumed purpose, require recovery before any effect. Only successful admissions consume matched purposes; failure and cancellation do not. Captured language remains authoritative; otherwise an independent classifier identifies only the request prose language, ignoring reply-language overrides. Expiry translation receives only its phrase and shares the first compilation deadline. Raw proposals remain recorded while dispatch receives the bound copy. The list length owns the admission budget. An incomplete count cannot be replaced by an untagged premature confirmation; explicit questions and blockers remain available.
+
+For turns whose timer operations are all creations, final confirmation text is constructed from admitted records, including count, labels and original durations. An isolated structured context extracts verbatim clauses for other requested goals from the original request. A positively empty goal list prevents supplementary extraction. For mixed requests, a second bounded context copies exact verbatim draft spans answering those goals, validated as ordered non-overlapping substrings; it cannot rewrite or invent text. It cannot supply the timer acknowledgement. Final translation protects numeric literals and quoted names, and all final preparation contexts share one chat deadline. Unavailable supplementary rendering retains the record-derived acknowledgement. Listing or cancellation disables creation-only confirmation snapshots so they cannot override later state.
+
+Text-mode inference requests a provider-neutral JSON output schema using each selected tool's canonical argument schema and exact registered name: complete tool-call batches, final reply, explicit question or blocker. Every recognised call retains its own request/result identity. Provider constraints do not replace input validation; malformed arguments, incomplete JSON and unknown tools retain their existing rejection paths. External model text formats remain subject to the same parser checks.
+
+Structured formats hoist complete selected-tool schemas into separate root definitions and rebase root self-references and direct root `$defs` references without changing literal data. URI-fragment decoding, JSON-Pointer escaping and target existence are validated. Nullable resolution retains definitions at the actual root. Explicit dialects, other local pointers, identifiers, anchors, dynamic or external-reference scopes omit the whole format constraint for that context; ordinary parser, runtime and server validation remain authoritative.
+
+Before reference scoping, registered executable tools can prepare an owned generation-schema copy. The default preserves the canonical schema. Timer set generation requires all three additive duration components and a label, with zero/empty values for unused inputs. Public tool declarations, admission validation, deterministic parsing and recorded arguments remain independent of this stricter model normal form.
+
+### Existing-record identity
+
+Main replies, concrete planning steps, step resolution and coverage recovery share one argument contract. Literal names and IDs explicitly supplied by the user, declared by a tool, or established by actual observations can be used directly. Descriptive references require appropriate discovery when the selected namespace is unknown. Discovery precedes exactly the requested mutation, without guessed or repeated mutations; a missing match requires clarification or honest non-completion. Whole-collection actions and new record creation follow their declared prerequisites. Explicit multiword names stay intact.
+
+Earlier successful tool results may establish identity in their source namespace or an explicitly mapped resource namespace. They are never current execution evidence or fresh measurements. Identity observations require a unique matching assistant call ID and tool name, a successful native or tagged-text result and no synthetic feedback or content-truncation flag. Conversation-memory truncation marks the returned copy without altering the complete stored observation. Request arguments are absent from this identity view, including write-only fields. Source tool names, call IDs and recorded resource references remain attached to complete result values.
+
+Planning and step resolution receive at most 2,000 UTF-8 bytes of header and escaped identity JSON, using whole observations. Coverage takes a required prior-results argument separate from current results and packs whole prior items newest-first into its existing 6,000-byte complete JSON packet. Required current data remains mandatory; oversized or unusable prior items are omitted with an explicit omission flag. No label or ID is shortened to fit. Timer request compilation retains its separate dialogue/resource input. The existing model tiers, context/output caps, deadlines and coverage-check limit apply.
+
+Coverage selects the next prerequisite under the shared identity contract. Request arguments describe intended evidence, while actual results establish returned facts. Initial compound queries remain valid, but a successful partial information lookup identifying a dependent subject requires a new query about that subject and the missing fact, rather than replaying broad arguments. Separately requested repeated actions retain their execution identity.
+
+Coverage uses the canonical scoped tool-call output schema with a separate completion alternative. This constrains its existing single inference without adding a model context. Required fields and triggered dependencies remain mandatory before dispatch; unsupported reference scopes retain unconstrained generation and ordinary validation.
+
+### Declared record execution
+
+A fully declared routed record catalogue uses the existing first reply
+inference to interpret purposes and source descriptions, skipping the ordinary
+planner. `record_binding.spec.md` defines deterministic identifier binding,
+discovery, ordered effect completion and fail-closed dispatch. The reply caches
+the plan locally and recompiles after raw results without another model stage.
+Ordinary controls, cancellation, turn limits and final delivery remain active.
+Mixed and metadata-free catalogues retain ordinary generation. Opaque-tool
+diagnostics do not establish the declared-contract qualification precondition.
+
+Declared routing reserves admission independently of packet size. A fully declared
+request with invalid metadata or an oversized packet cannot fall through to raw
+record calls. Query-driven recall is skipped for this route, while the existing
+warm profile and bounded dialogue/resource references remain available. Both
+planned and ordinary results retain scrubbed, atomically bounded identity
+projections for follow-ups. A requested post-mutation discovery read is a new
+read effect, not a retry of its prerequisite snapshot.
+
+Successful tool results can supply metadata or resource references without prose.
+Their raw data is presented without treating an absent `reply_text` as failure.
+Both result producers retain the same bounded declared identity projection.

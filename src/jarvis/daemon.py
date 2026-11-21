@@ -903,6 +903,8 @@ def _run_daemon(smoke_test: bool = False) -> None:
     print(f"📦 Jarvis {version} ({release_channel})", flush=True)
 
     cfg = load_settings()
+    from .tools.builtin.timer import initialise_timer_manager
+    timer_manager = initialise_timer_manager()
     db = Database(cfg.db_path, cfg.sqlite_vss_path)
     # Expose cfg + db so the text-chat submission path shares the same store
     # and config as the voice listener (one conversation, one config).
@@ -1143,6 +1145,7 @@ def _run_daemon(smoke_test: bool = False) -> None:
 
     if smoke_test:
         request_stop()
+        timer_manager.shutdown(timeout_sec=0)
         print("SMOKE_TEST_INIT_OK", flush=True)
         debug_log("smoke test: all components initialised successfully", "jarvis")
 
@@ -1166,6 +1169,7 @@ def _run_daemon(smoke_test: bool = False) -> None:
             _global_task_manager = None
 
         with query_lock():
+            timer_manager.shutdown(timeout_sec=None)
             if tts is not None:
                 try:
                     tts.stop()
@@ -1279,6 +1283,7 @@ def _run_daemon(smoke_test: bool = False) -> None:
         debug_log("daemon received KeyboardInterrupt", "jarvis")
     finally:
         request_stop()
+        timer_manager.shutdown(timeout_sec=0)
         print("🔄 Daemon shutting down - saving memory...", flush=True)
         debug_log("daemon finally block starting - performing cleanup", "jarvis")
 
@@ -1306,6 +1311,7 @@ def _run_daemon(smoke_test: bool = False) -> None:
         wait_for_chat_worker(timeout_sec=5.0)
 
         with query_lock():
+            timer_manager.shutdown(timeout_sec=None)
             # Final diary update before shutdown
             debug_log("performing final diary update (force=True)...", "jarvis")
             print("📝 Updating diary before shutdown...", flush=True)

@@ -272,12 +272,14 @@ def test_different_voice_snapshots_preserve_static_guidance_prefix(mock_config, 
         for text in ('Copper lantern', 'Tokyo'):
             snapshot = SpeechContext.capture([TranscriptSegment('Earlier reference', 1, 2)], current_text=text)
             engine.run_reply_engine(db, mock_config, None, text, dialogue_memory,
-                                    quiet=True, speech_context=snapshot)
+                                    quiet=True, speech_context=snapshot, spoken_output=True)
     prefixes = [system.split('AMBIENT TRANSCRIPT CONTEXT:')[0] for system in systems]
     assert prefixes[0] == prefixes[1]
     for guidance in prompt_engine.get_system_prompts(prompt_engine.detect_model_size(mock_config.llm_chat_model)).to_list():
         assert guidance in prefixes[0]
-    assert 'Always respond in English' in prefixes[0]
+    for system in systems:
+        assert system.count(engine.ENGLISH_SPEECH_REPLY_GUIDANCE) == 1
+    assert engine.ENGLISH_SPEECH_REPLY_GUIDANCE not in prefixes[0]
 
 
 def test_salvaged_speech_is_dispatched_and_recorded_without_echo(mock_config, db, dialogue_memory):

@@ -144,8 +144,11 @@ The planner prompt instructs the model to emit:
   Instead, emit `Reply to the user.` for dismissive queries so
   the assistant handles tone and termination naturally.
   A deterministic post-plan guard in `plan_query` rejects any
-  plan where every step is `stop`, returning `[]` so the engine
+  plan whose only action steps are `stop` (including one followed by synthesis), returning `[]` so the engine
   falls through to the tool router and chat model.
+  A stop directive preceding another registered tool also rejects the plan.
+  Direct execution cannot dispatch `stop`; an unresolved termination step
+  returns pending work to the main assistant within the existing reply loop.
 - Trust the tool router: when the available-tools catalogue contains
   a tool relevant to the query, plan to use it even for seemingly
   trivial requests (jokes, opinions, creative content). The tool
@@ -167,8 +170,14 @@ The planner prompt instructs the model to emit:
   engine injects the ACTION PLAN block, and direct-exec runs the tool
   without waiting for the chat model. Only an **empty** list means
   "planner failed / disabled; fall open to legacy safe defaults"
-  (run memory enrichment + tool router). The two states must stay
+  (permit memory enrichment subject to source availability, and run the tool router). The two states must stay
   distinguishable.
+
+Diary-only enrichment checks for saved summaries before extracting search
+parameters. A confirmed empty diary needs no preparation inference; unavailable
+reads preserve recall. Graph and combined-source preparation keep their own
+gates. This availability check applies to both explicit recall directives and
+the empty-plan path.
 
 ### Engine integration
 
@@ -346,4 +355,34 @@ Concrete primitive arguments accept declared type unions. A valid non-string
 JSON primitive retains its type; otherwise an allowed string retains its literal
 value. Invalid values without a string alternative require model resolution.
 
-The step resolver receives the original redacted current request separately from the planned step and prior outcomes, so shortened plans retain the caller's explicit constraints during model resolution. Concrete typed calls retain their literal fast path.
+The step resolver receives the original redacted current request separately from the planned step and prior outcomes, so shortened plans retain the caller's explicit constraints during model resolution. Concrete typed calls retain their literal fast path. Planning applies the shared argument contract to concrete step values. The same contract guides model step resolution: exact known selectors are preserved, unknown existing-record identities require appropriate discovery before mutation, and query text resolves its subject from actual context. The guide is appended after planning-template formatting.
+
+Direct execution retains an assistant request with its unique call ID and a
+matching result before the model continues. Each planned ordinal owns its
+action, so explicitly repeated steps with identical arguments remain distinct.
+
+Tool steps begin with an exact registered name and retain explicitly requested
+repeated actions as distinct ordinals. Under-specified prose plans retain the
+existing router fallback and never gain direct-execution authority.
+
+Concrete and model-resolved calls satisfy declared field dependencies before
+dispatch. Missing dependent fields take the model resolver path rather than
+executing an incomplete call. Registered tool names remain explicit in plan
+output; unsupported prose retains router fallback.
+
+Each next planned ordinal represents a distinct requested action, including matching arguments from an earlier ordinal. Prior results supply discovered entities, rather than suppressing explicitly repeated actions.
+
+Step resolution requests a nullable JSON tool-call object through the backend's structured-output option, constrained by exact registered names and their canonical input schemas. Root self-references and direct root `$defs` references use isolated definitions; unsupported reference scopes omit the format constraint while retaining ordinary validation. Recorded resource references are supplied separately from speech reference data so a follow-up can copy an actual ID. The same required-field and dependency checks apply after parsing.
+
+Step-resolver constrained output uses the tool-owned generation view of its canonical schema. Timer set calls include every additive component and purpose, preserving compound and fractional remainders. The deterministic fast path continues to validate the public optional-component contract.
+
+Planning and step resolution receive a separate bounded identity view of earlier successful tool observations. That view preserves source tool/call identifiers and recorded resources, excludes request arguments, and does not establish completion of any current step. Its full header and escaped JSON fit within 2,000 UTF-8 bytes using whole observations; omitted history remains unknown. Timer request compilation uses its existing dialogue/resource view.
+
+### Declared record catalogue
+
+When every routed non-control tool declares canonical record metadata, the
+ordinary planner and query-driven memory enrichment are skipped. Unsupported or
+oversized declared requests retain fail-closed record admission. The first reply generation owns the
+bounded request interpretation, and code resolves subsequent prerequisites and
+effects from the cached plan. This uses no plan-step classifier or resolver
+inference. See `record_binding.spec.md` for the shared dispatch/evidence contract.

@@ -36,6 +36,25 @@ Warnings are transition-based; capture pauses suspend health checks. With
 peak level and capture rate, without saving microphone audio. Linux warnings
 point users to PipeWire/PulseAudio recording-source routing.
 
+The startup log identifies the resolved input name, host API and index, followed
+by the accepted capture sample rate and channel count, including mono at the
+configured rate. Successful Windows probing reports stream startup, not measured
+speech or signal quality.
+
+Five-second health windows accumulate sample-weighted RMS and peak levels for
+input channels and the actual mono downmix. These reductions run on the audio
+processing worker, never the real-time callback, and do not alter captured
+samples, framing, VAD thresholds or device selection. Only per-channel aggregates
+and sample counts are retained. Normal logs show the first health window and
+subsequent signal-state transitions; voice debug includes each window. At most
+eight channel values are displayed alongside the actual channel count and the
+maximum peak across all channels. No waveform or audio recording is stored.
+Callbacks without processed samples report unavailable levels and a distinct
+processing warning rather than silent audio or recovery. Channel activity with a silent mono downmix has a distinct warning; it
+does not assert a driver or phase-cancellation cause. Health windows reset on
+reporting and capture pauses, including pauses shorter than a health-check
+interval, with fresh statistics and a new startup grace period after resume.
+
 Audio capture (`sounddevice`), array processing (`numpy`) and optional WebRTC VAD
 have independent import boundaries. An unavailable VAD uses the configured
 energy threshold without disabling working capture or array processing. Native
@@ -111,11 +130,12 @@ playback cannot reclassify an older utterance.
                             │
             ┌───────────────┼───────────────┐
             ▼               ▼               ▼
-┌───────────────┐                  ┌───────────────┐
-│     VAD       │                  │   TTS Output  │
-│ (speech gate) │                  │   Tracking    │
-└───────┬───────┘                  └───────────────┘
-        │
+┌───────────────┐  ┌───────────────┐  ┌───────────────┐
+│     VAD       │  │Shush Detector │  │   TTS Output  │
+│ (speech gate) │  │(during TTS)   │  │   Tracking    │
+└───────┬───────┘  └───────┬───────┘  └───────────────┘
+        │                  │
+        │                  ▼ (interrupt captured playback)
         ▼
 ┌───────────────┐
 │    Whisper    │
@@ -295,6 +315,7 @@ While TTS is playing, echo rejection and stop commands are handled with fast tex
 
 **Stop detection:**
 - Text-based: Read `stop_commands` and `stop_command_fuzzy_ratio` from loaded settings. An empty phrase list disables this text-based interruption path. Apply the same configured fuzzy threshold to short-control detection and standalone-control echo priority. Check configured phrases such as "stop", "quiet" and "shut up". Ignore empty or whitespace-only entries; normalise Unicode composition, casing, punctuation and whitespace before comparison. Exact configured phrases match complete whitespace or punctuation-delimited tokens, including phrases inside longer speech. Approximation compares the complete short utterance with a configured phrase, never a single word inside unrelated speech. Combining marks remain part of their token; phrases in scripts without word separators remain eligible as standalone controls.
+- **Acoustic shush detection:** During TTS, the audio worker checks for sustained broadband high-frequency frication at the actual microphone rate. Sustained narrowband tones cannot qualify. At a 20 ms frame size the default 15-frame streak spans 300 ms of captured audio. The check runs before transcription. Callbacks snapshot the active playback request at entry. The streak requires consecutive blocks for the same capture generation and playback, and excludes partial frames that cross a playback boundary or capture gap. The worker interrupts only that request while it is still eligible. Disabling acoustic detection preserves the spoken stop controls.
 - Intent judge can also detect stop commands
 - During active TTS, a standalone configured stop phrase (including a fuzzy transcription) retains immediate interruption priority. Longer literal echoes of the current TTS text are rejected even when they contain a configured stop phrase. Unicode punctuation and casing are normalised without language-specific patterns; an appended user command remains eligible for interruption.
 
@@ -303,7 +324,7 @@ While TTS is playing, echo rejection and stop commands are handled with fast tex
 - Transcripts during TTS are flagged with `is_during_tts=true`
 - Intent judge uses this context to identify echo
 
-**Request locale:** Query collection stores accepted text and the detected language of its latest accepted segment as one immutable value. Clearing collection returns that snapshot and resets both fields. Rejected recognition, TTS echo, interruption-only controls and rejected intent decisions cannot replace a pending request's locale. An accepted segment with unknown language records `None`, which lets tools use their normal locale fallback. Dispatch carries the snapshot's language explicitly through the shared query lock to the reply engine.
+**Request locale:** Query collection stores accepted text and the detected language of its latest accepted segment as one immutable value. Clearing collection returns that snapshot and resets both fields. Rejected recognition, TTS echo, interruption-only controls and rejected intent decisions cannot replace a pending request's locale. An accepted segment with unknown language records `None`, which lets tools use their normal locale fallback. Dispatch carries the snapshot's language explicitly through the shared query lock to the reply engine. It also declares `spoken_output` from the listener's enabled TTS instance. The listener owns playback callbacks; speech-language guidance follows this delivery declaration even though generation receives `tts=None`. Disabled or unavailable speech leaves the reply unconstrained by the speech backend's English policy.
 
 ## Rolling Transcript Buffer
 
@@ -408,7 +429,12 @@ feedback, IPC notifications or a dedicated notification worker.
   "intent_judge_timeout_sec": 6.0,
 
   "hot_window_seconds": 3.0,
-  "echo_tolerance": 0.3
+  "echo_tolerance": 0.3,
+
+  "shush_detection_enabled": true,
+  "shush_high_low_ratio": 3.0,
+  "shush_energy_floor": 0.002,
+  "shush_consecutive_frames": 15
 }
 ```
 
@@ -417,6 +443,11 @@ feedback, IPC notifications or a dedicated notification worker.
 | `transcript_buffer_duration_sec` | 120 | Duration (seconds) for rolling ambient speech transcript. Provides reference speech for classification, routing, planning and replies when someone involves Jarvis. Separate from dialogue memory. |
 | `whisper_min_confidence` | 0.3 | Minimum `avg_logprob`-derived confidence score for a transcribed segment. Segments below this are discarded before the intent judge sees them. |
 | `whisper_no_speech_threshold` | 0.5 | Hard cutoff on Whisper's `no_speech_prob` field. Any segment at or above this value is discarded **regardless of `avg_logprob`** — Whisper can be confident about a hallucinated phrase even when no real speech is present (e.g. the "MBC 뉴스" hallucination on background noise). This filter runs before the `avg_logprob` check so it catches high-confidence hallucinations that would otherwise survive. Applies to both the faster-whisper and MLX backends. |
+
+| `shush_detection_enabled` | true | Enable acoustic shush detection during TTS playback. |
+| `shush_high_low_ratio` | 3.0 | Minimum ratio of high-band (2–8 kHz) to low-band (0–500 Hz) energy density for a frame to count as fricative. |
+| `shush_energy_floor` | 0.002 | Minimum RMS energy to distinguish shush from silence. |
+| `shush_consecutive_frames` | 15 | Number of consecutive shush-like frames required before triggering (at 20 ms/frame, 15 = 300 ms). |
 
 Note: Intent judge is always used when available (no enable flag). Falls back to simple wake word detection when Ollama is unavailable.
 
@@ -448,6 +479,11 @@ Microphone Audio
 Sounddevice Callback → _audio_q
     ↓
 Main Loop: Get Frames → VAD Check
+    ↓                      ↓ (during TTS)
+    │                 Shush Detector
+    │                 (spectral check per frame)
+    │                      ↓ sustained?
+    │                 Interrupt captured playback
     ↓
 Speech Detected → Accumulate Frames
     ↓
@@ -595,3 +631,11 @@ A control captured before that request cannot cancel it after delayed recognitio
 The matching preparation request handle owns interruption, preserving queued
 replacements when synthesis finishes during control recognition. The control
 remains valid when that same utterance starts playback before recognition ends.
+
+Configured stop commands and directed stop judgements dismiss current timer
+notifications and alarms without cancelling future countdowns. Outside speech,
+a configured stop must have been captured while the alarm was ringing.
+
+Delayed captures from finished timer speech retain literal stop-echo rejection
+for their matching speech context. Standalone configured stop commands keep
+priority and dismiss the captured alarm without interrupting unrelated speech.
