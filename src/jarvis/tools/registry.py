@@ -53,6 +53,7 @@ _mcp_tools_cache_lock = threading.Lock()
 _mcp_config_cache: Dict[str, Any] = {}
 _pending_mcp_actions: Dict[int, "_PendingMCPAction"] = {}
 _pending_mcp_actions_lock = threading.Lock()
+_MCP_ACTION_CONFIRMATION_TTL_SEC = 600
 
 
 @dataclass(frozen=True)
@@ -134,7 +135,6 @@ class ToolSpec:
     name: str  # canonical tool identifier (camelCase)
     description: str  # Human-readable description (matches MCP format)
     inputSchema: Optional[Dict[str, Any]] = None  # JSON Schema for arguments (matches MCP format)
-    readOnlyHint: bool = False
 
 
 def _mcp_error_detail(error: Exception) -> str:
@@ -183,16 +183,10 @@ def discover_mcp_tools(mcps_config: Dict[str, Any]) -> Tuple[Dict[str, ToolSpec]
                     # Create a ToolSpec for this MCP tool
                     description = tool_info.get("description", f"Tool from {server_name} MCP server")
                     input_schema = tool_info.get("inputSchema", {"type": "object", "properties": {}, "required": []})
-                    annotations = tool_info.get("annotations") or {}
-                    read_only_hint = (
-                        isinstance(annotations, dict)
-                        and annotations.get("readOnlyHint") is True
-                    )
                     discovered_tools[full_tool_name] = ToolSpec(
                         name=full_tool_name,
                         description=description,
                         inputSchema=input_schema,
-                        readOnlyHint=read_only_hint,
                     )
 
             except Exception as e:
@@ -333,11 +327,7 @@ def clear_pending_mcp_actions(db=None) -> None:
 
 
 def _mcp_action_summary(server_name: str, tool_name: str, arguments: Dict[str, Any]) -> str:
-    try:
-        raw = json.dumps(arguments or {}, ensure_ascii=False, sort_keys=True)
-    except Exception:
-        raw = str(arguments or {})
-    raw = raw[:500] + ("…" if len(raw) > 500 else "")
+    raw = json.dumps(arguments or {}, ensure_ascii=False, sort_keys=True)
     return f"{server_name}/{tool_name} with arguments {raw}"
 
 
@@ -355,7 +345,14 @@ def handle_mcp_confirmation(db, text: str, cancel_event=None) -> Tuple[bool, Opt
             return True, ToolExecutionResult(
                 success=False,
                 reply_text="That confirmation code is not pending. No action was performed.",
-                error_message="Unknown or expired MCP confirmation code.",
+                error_message="Unknown MCP confirmation code.",
+            )
+        if time.monotonic() - pending.created_at >= _MCP_ACTION_CONFIRMATION_TTL_SEC:
+            _pending_mcp_actions.pop(key, None)
+            return True, ToolExecutionResult(
+                success=False,
+                reply_text="That confirmation code has expired. No action was performed.",
+                error_message="MCP confirmation expired.",
             )
         if command == "CANCEL":
             _pending_mcp_actions.pop(key, None)
@@ -417,9 +414,17 @@ def run_tool_with_retries(
                 if MCPClient is None:
                     return ToolExecutionResult(success=False, reply_text=None, error_message="MCP client not available. Install 'mcp' package.")
 
-                with _mcp_tools_cache_lock:
-                    spec = _mcp_tools_cache.get(raw_name)
-                read_only = bool(spec and spec.readOnlyHint)
+                server_config = mcps_config.get(server_name)
+                read_only_tools = (
+                    server_config.get("read_only_tools", [])
+                    if isinstance(server_config, dict)
+                    else []
+                )
+                # MCP annotations are server-provided hints, not user approval.
+                read_only = (
+                    isinstance(read_only_tools, list)
+                    and mcp_tool_name in read_only_tools
+                )
                 if not read_only:
                     nonce = secrets.token_hex(4).upper()
                     arguments = tool_args or {}

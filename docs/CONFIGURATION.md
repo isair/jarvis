@@ -293,11 +293,20 @@ providers. Those services are available only when you configure and launch your
 own local MCP connector for them. Jarvis will not assume credentials or service
 access, and setup/discovery errors are reported rather than guessed.
 
-Discovery and drafting are separate from execution. Read-only connector tools
-can search and prepare drafts. Sending a message, making a call, changing an
-account or any other consequential connector tool requires an exact
-`CONFIRM <code>` reply. `CANCEL <code>` cancels it. Review recipient, content
-and other arguments before confirming.
+Discovery and drafting are separate from execution. By default, every
+connector tool requires an exact `CONFIRM <code>` reply before it runs.
+`CANCEL <code>` cancels it. Confirmation codes expire after ten minutes.
+To allow a verified read-only tool to run without a per-call confirmation, add
+its exact name to that server's local
+`read_only_tools` list, for example:
+
+```json
+"read_only_tools": ["search_messages", "get_message"]
+```
+
+This local allowlist, not the MCP server's `readOnlyHint` annotation, controls
+whether confirmation is skipped. Review recipient, content and other arguments
+before confirming a consequential action.
 
 > **Session persistence:** each MCP server is launched once and its stdio session is kept open across tool calls. Stateful servers (e.g. browser automation, where the server owns a long-running Chrome process) work correctly. If you have a server you'd rather not keep resident, set `"idle_timeout_sec": 300` on its config entry and Jarvis will free it after that long without activity. If a server's tools legitimately run long (e.g. delegating a task to an external CLI agent), set `"timeout_sec": 600` to raise its 120-second default call timeout.
 

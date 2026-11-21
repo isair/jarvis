@@ -51,14 +51,19 @@ def test_mcp_tools_integrated_with_reply_engine():
 @pytest.mark.integration 
 def test_mcp_tool_execution_in_context():
     """Test MCP tool execution with proper context and error handling."""
-    from jarvis.tools.registry import run_tool_with_retries, ToolExecutionResult, ToolSpec, _mcp_tools_cache, _mcp_tools_cache_lock
+    from jarvis.tools.registry import run_tool_with_retries, ToolExecutionResult
     
     class MockDB:
         pass
     
     class MockConfig:
         def __init__(self):
-            self.mcps = {"test-server": {"command": "fake"}}
+            self.mcps = {
+                "test-server": {
+                    "command": "fake",
+                    "read_only_tools": ["example_tool"],
+                }
+            }
             self.voice_debug = False
     
     # Mock successful execution
@@ -69,10 +74,6 @@ def test_mcp_tool_execution_in_context():
         def invoke_tool(self, server_name, tool_name, arguments):
             return {"text": f"Executed {tool_name} on {server_name}", "isError": False}
     
-    with _mcp_tools_cache_lock:
-        _mcp_tools_cache["test-server__example_tool"] = ToolSpec(
-            name="test-server__example_tool", description="Example", readOnlyHint=True,
-        )
     with patch('jarvis.tools.registry.MCPClient', FakeMCPClient):
         result = run_tool_with_retries(
             db=MockDB(),
@@ -84,24 +85,26 @@ def test_mcp_tool_execution_in_context():
             redacted_text="test",
             max_retries=0
         )
-    with _mcp_tools_cache_lock:
-        _mcp_tools_cache.pop("test-server__example_tool", None)
-        
-        assert result.success is True
-        assert "Executed example_tool on test-server" in result.reply_text
+    assert result.success is True
+    assert "Executed example_tool on test-server" in result.reply_text
 
 
 @pytest.mark.integration
 def test_mcp_error_handling_in_context():
     """Test that MCP errors are properly handled in execution context."""
-    from jarvis.tools.registry import run_tool_with_retries, ToolSpec, _mcp_tools_cache, _mcp_tools_cache_lock
+    from jarvis.tools.registry import run_tool_with_retries
     
     class MockDB:
         pass
     
     class MockConfig:
         def __init__(self):
-            self.mcps = {"test-server": {"command": "fake"}}
+            self.mcps = {
+                "test-server": {
+                    "command": "fake",
+                    "read_only_tools": ["failing_tool"],
+                }
+            }
             self.voice_debug = False
     
     # Mock failing execution
@@ -112,10 +115,6 @@ def test_mcp_error_handling_in_context():
         def invoke_tool(self, server_name, tool_name, arguments):
             return {"text": "Tool failed", "isError": True}
     
-    with _mcp_tools_cache_lock:
-        _mcp_tools_cache["test-server__failing_tool"] = ToolSpec(
-            name="test-server__failing_tool", description="Failing", readOnlyHint=True,
-        )
     with patch('jarvis.tools.registry.MCPClient', FailingMCPClient):
         result = run_tool_with_retries(
             db=MockDB(),
@@ -127,11 +126,8 @@ def test_mcp_error_handling_in_context():
             redacted_text="test",
             max_retries=0
         )
-    with _mcp_tools_cache_lock:
-        _mcp_tools_cache.pop("test-server__failing_tool", None)
-        
-        assert result.success is False
-        assert result.error_message == "Tool failed"
+    assert result.success is False
+    assert result.error_message == "Tool failed"
 
 
 @pytest.mark.integration
@@ -141,14 +137,19 @@ def test_mcp_exception_with_empty_message_still_yields_diagnosable_error():
     trailing colon — callers need at least the exception type name to
     diagnose the failure from the log line alone.
     """
-    from jarvis.tools.registry import run_tool_with_retries, ToolSpec, _mcp_tools_cache, _mcp_tools_cache_lock
+    from jarvis.tools.registry import run_tool_with_retries
 
     class MockDB:
         pass
 
     class MockConfig:
         def __init__(self):
-            self.mcps = {"test-server": {"command": "fake"}}
+            self.mcps = {
+                "test-server": {
+                    "command": "fake",
+                    "read_only_tools": ["slow_tool"],
+                }
+            }
             self.voice_debug = False
 
     class TimingOutMCPClient:
@@ -158,10 +159,6 @@ def test_mcp_exception_with_empty_message_still_yields_diagnosable_error():
         def invoke_tool(self, server_name, tool_name, arguments):
             raise TimeoutError()  # empty str(e), as raised on a bare invoke timeout
 
-    with _mcp_tools_cache_lock:
-        _mcp_tools_cache["test-server__slow_tool"] = ToolSpec(
-            name="test-server__slow_tool", description="Slow", readOnlyHint=True,
-        )
     with patch('jarvis.tools.registry.MCPClient', TimingOutMCPClient):
         result = run_tool_with_retries(
             db=MockDB(),
@@ -173,17 +170,14 @@ def test_mcp_exception_with_empty_message_still_yields_diagnosable_error():
             redacted_text="test",
             max_retries=0
         )
-    with _mcp_tools_cache_lock:
-        _mcp_tools_cache.pop("test-server__slow_tool", None)
-
-        assert result.success is False
-        assert result.error_message.strip().endswith(":") is False
-        assert "TimeoutError" in result.error_message
+    assert result.success is False
+    assert result.error_message.strip().endswith(":") is False
+    assert "TimeoutError" in result.error_message
 
 
 @pytest.mark.integration
 def test_mcp_action_requires_explicit_confirmation_before_execution():
-    """A discovered MCP tool that is not marked read-only must stop before side effects."""
+    """A discovered MCP tool without a local read-only allowlist must not run."""
     from jarvis.tools.registry import (
         run_tool_with_retries,
         clear_pending_mcp_actions,
@@ -228,14 +222,44 @@ def test_mcp_action_requires_explicit_confirmation_before_execution():
 
 
 @pytest.mark.integration
+def test_mcp_confirmation_prompt_shows_all_action_arguments():
+    from jarvis.tools.registry import (
+        run_tool_with_retries,
+        clear_pending_mcp_actions,
+    )
+
+    class MockDB:
+        pass
+
+    class MockConfig:
+        mcps = {"test-server": {"command": "fake"}}
+        voice_debug = False
+
+    clear_pending_mcp_actions()
+    result = run_tool_with_retries(
+        db=MockDB(),
+        cfg=MockConfig(),
+        tool_name="test-server__send_message",
+        tool_args={"message": "x" * 600, "recipient": "Asha"},
+        system_prompt="test",
+        original_prompt="Send a message",
+        redacted_text="Send a message",
+        max_retries=0,
+    )
+
+    assert result.confirmation_required
+    assert "recipient" in result.reply_text
+    assert "Asha" in result.reply_text
+    assert ("x" * 600) in result.reply_text
+    clear_pending_mcp_actions()
+
+
+@pytest.mark.integration
 def test_mcp_exact_confirmation_executes_pending_action_once():
     from jarvis.tools.registry import (
         run_tool_with_retries,
         handle_mcp_confirmation,
         clear_pending_mcp_actions,
-        _mcp_tools_cache,
-        _mcp_tools_cache_lock,
-        ToolSpec,
     )
 
     class MockDB:
@@ -283,13 +307,58 @@ def test_mcp_exact_confirmation_executes_pending_action_once():
 
 
 @pytest.mark.integration
-def test_mcp_read_only_annotation_allows_read_without_confirmation():
+def test_expired_mcp_confirmation_does_not_execute_action(monkeypatch):
+    from jarvis.tools import registry
+
+    class MockDB:
+        pass
+
+    class MockConfig:
+        mcps = {"test-server": {"command": "fake"}}
+        voice_debug = False
+
+    class TrackingMCPClient:
+        calls = 0
+
+        def __init__(self, config):
+            pass
+
+        def invoke_tool(self, server_name, tool_name, arguments):
+            TrackingMCPClient.calls += 1
+            return {"text": "sent", "isError": False}
+
+    registry.clear_pending_mcp_actions()
+    db = MockDB()
+    monkeypatch.setattr(registry.time, "monotonic", lambda: 100.0)
+    with patch("jarvis.tools.registry.MCPClient", TrackingMCPClient):
+        held = registry.run_tool_with_retries(
+            db=db,
+            cfg=MockConfig(),
+            tool_name="test-server__send_message",
+            tool_args={"recipient": "Asha", "message": "Hello"},
+            system_prompt="test",
+            original_prompt="Send Hello to Asha",
+            redacted_text="Send Hello to Asha",
+            max_retries=0,
+        )
+        monkeypatch.setattr(registry.time, "monotonic", lambda: 1000.0)
+        matched, result = registry.handle_mcp_confirmation(
+            db,
+            f"CONFIRM {held.confirmation_required}",
+        )
+
+    assert matched is True
+    assert result.success is False
+    assert "expired" in result.reply_text
+    assert TrackingMCPClient.calls == 0
+    registry.clear_pending_mcp_actions()
+
+
+@pytest.mark.integration
+def test_unallowlisted_mcp_tool_requires_confirmation():
     from jarvis.tools.registry import (
         run_tool_with_retries,
         clear_pending_mcp_actions,
-        _mcp_tools_cache,
-        _mcp_tools_cache_lock,
-        ToolSpec,
     )
 
     class MockDB:
@@ -310,12 +379,56 @@ def test_mcp_read_only_annotation_allows_read_without_confirmation():
             return {"text": "results", "isError": False}
 
     clear_pending_mcp_actions()
-    with _mcp_tools_cache_lock:
-        _mcp_tools_cache["test-server__search"] = ToolSpec(
-            name="test-server__search",
-            description="Search",
-            readOnlyHint=True,
-        )
+    try:
+        with patch("jarvis.tools.registry.MCPClient", TrackingMCPClient):
+            result = run_tool_with_retries(
+                db=MockDB(),
+                cfg=MockConfig(),
+                tool_name="test-server__search",
+                tool_args={"query": "Asha"},
+                system_prompt="test",
+                original_prompt="Search for Asha",
+                redacted_text="Search for Asha",
+                max_retries=0,
+            )
+        assert result.success is False
+        assert result.confirmation_required
+        assert "CONFIRM " in result.reply_text
+        assert TrackingMCPClient.calls == 0
+    finally:
+        clear_pending_mcp_actions()
+
+
+@pytest.mark.integration
+def test_mcp_locally_allowlisted_read_only_tool_runs_without_confirmation():
+    from jarvis.tools.registry import (
+        run_tool_with_retries,
+        clear_pending_mcp_actions,
+    )
+
+    class MockDB:
+        pass
+
+    class MockConfig:
+        mcps = {
+            "test-server": {
+                "command": "fake",
+                "read_only_tools": ["search"],
+            }
+        }
+        voice_debug = False
+
+    class TrackingMCPClient:
+        calls = 0
+
+        def __init__(self, config):
+            pass
+
+        def invoke_tool(self, server_name, tool_name, arguments):
+            TrackingMCPClient.calls += 1
+            return {"text": "results", "isError": False}
+
+    clear_pending_mcp_actions()
     try:
         with patch("jarvis.tools.registry.MCPClient", TrackingMCPClient):
             result = run_tool_with_retries(
@@ -332,8 +445,7 @@ def test_mcp_read_only_annotation_allows_read_without_confirmation():
         assert result.confirmation_required is None
         assert TrackingMCPClient.calls == 1
     finally:
-        with _mcp_tools_cache_lock:
-            _mcp_tools_cache.pop("test-server__search", None)
+        clear_pending_mcp_actions()
 
 
 @pytest.mark.integration
@@ -369,3 +481,32 @@ def test_reply_engine_intercepts_confirmation_before_planner(monkeypatch):
         dialogue_memory=None,
     )
     assert result == "Message sent"
+
+
+@pytest.mark.integration
+def test_confirmed_action_with_empty_result_still_returns_a_reply(monkeypatch):
+    from jarvis.reply import engine
+    from jarvis.tools.types import ToolExecutionResult
+
+    class MockDB:
+        pass
+
+    class MockConfig:
+        pass
+
+    monkeypatch.setattr(
+        engine,
+        "handle_mcp_confirmation",
+        lambda db, text, cancel_event=None: (
+            True,
+            ToolExecutionResult(success=True),
+        ),
+    )
+    result = engine.run_reply_engine(
+        MockDB(),
+        MockConfig(),
+        None,
+        "CONFIRM 12345678",
+        dialogue_memory=None,
+    )
+    assert result

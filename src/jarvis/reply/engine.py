@@ -1041,7 +1041,15 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 confirmation_result.error_message or "MCP confirmation was not completed",
                 "mcp",
             )
-        return confirmation_result.reply_text or confirmation_result.error_message
+        return (
+            confirmation_result.reply_text
+            or confirmation_result.error_message
+            or (
+                "The confirmed action completed."
+                if confirmation_result.success
+                else "The confirmed action could not be completed."
+            )
+        )
 
     transcript_context = speech_context.render() if speech_context else ""
     context_signature = sha256(transcript_context.encode()).hexdigest() if transcript_context else ""

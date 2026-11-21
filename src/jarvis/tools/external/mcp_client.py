@@ -219,18 +219,10 @@ class MCPClient:
             result = []
             for t in tools_list:
                 # Handle Tool objects with attributes
-                annotations = getattr(t, "annotations", None)
-                if annotations is not None and hasattr(annotations, "model_dump"):
-                    annotations = annotations.model_dump(exclude_none=True)
-                elif annotations is not None and hasattr(annotations, "dict"):
-                    annotations = annotations.dict(exclude_none=True)
-                elif not isinstance(annotations, dict):
-                    annotations = None
                 tool_info = {
                     "name": getattr(t, "name", None),
                     "description": getattr(t, "description", None),
                     "inputSchema": getattr(t, "inputSchema", None),
-                    "annotations": annotations,
                 }
                 result.append(tool_info)
             return result
@@ -260,19 +252,11 @@ class MCPClient:
         tools_list = getattr(res, "tools", res) if hasattr(res, "tools") else res
         result: List[Dict[str, Any]] = []
         for t in tools_list:
-            annotations = getattr(t, "annotations", None)
-            if annotations is not None and hasattr(annotations, "model_dump"):
-                annotations = annotations.model_dump(exclude_none=True)
-            elif annotations is not None and hasattr(annotations, "dict"):
-                annotations = annotations.dict(exclude_none=True)
-            elif not isinstance(annotations, dict):
-                annotations = None
             result.append(
                 {
                     "name": getattr(t, "name", None),
                     "description": getattr(t, "description", None),
                     "inputSchema": getattr(t, "inputSchema", None),
-                    "annotations": annotations,
                 }
             )
         return result

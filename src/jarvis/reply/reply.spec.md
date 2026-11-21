@@ -327,10 +327,12 @@ Turn 4: LLM → {content: "Here's a comprehensive comparison of the iPhone 15 mo
   - `tool_result_digest_enabled` (default `null` = auto-on for SMALL models ≤7B) distils raw tool-result payloads (especially webSearch UNTRUSTED WEB EXTRACT blocks and fetch_web_page responses) into a short attributed fact note before appending as a tool-role message. Auto-on for small models mitigates large payloads (fetch_web_page truncates at 50,000 chars) blowing the 8192 num_ctx window. Set to `true` to force on, `false` to force off. See **Tool-Result Digest for Small Models** below.
 - Tools and MCP:
   - All builtin tools are always available; MCP servers added from `cfg.mcps`.
-  - MCP annotations mark read-only tools. Tools not explicitly marked read-only
-    require exact action confirmation before invocation. The reply engine stops
-    at the confirmation prompt and handles `CONFIRM <nonce>` or `CANCEL <nonce>`
-    before any planner or model turn. This gate applies to voice and text chat.
+  - Only exact tool names in a server's locally configured `read_only_tools`
+    list bypass action confirmation; MCP server annotations do not grant
+    permission. All other MCP tools require exact action confirmation before
+    invocation. The reply engine stops at the confirmation prompt and handles
+    `CONFIRM <nonce>` or `CANCEL <nonce>` before any planner or model turn. This
+    gate applies to voice and text chat.
 - Agentic loop:
   - `agentic_max_turns` maximum turns in the agentic loop (default 8)
   - `tool_search_max_calls` (default 3) caps `toolSearchTool` invocations per reply. Extra calls return a tool-error nudging the model to decide with what is already available.
