@@ -176,9 +176,16 @@ def test_local_files_write_append_delete():
 
 
 @pytest.mark.unit
+@pytest.mark.usefixtures('no_network')
 def test_fetch_web_page_success(monkeypatch):
     """Test fetchWebPage tool with a mocked successful response."""
+    import socket
     from jarvis.tools.builtin import fetch_web_page
+
+    def reject_dns(*args, **kwargs):
+        raise AssertionError('The page fixture must not resolve network destinations')
+
+    monkeypatch.setattr(socket, 'getaddrinfo', reject_dns)
     
     # Mock a successful HTTP response
     class MockResponse:
@@ -206,8 +213,7 @@ def test_fetch_web_page_success(monkeypatch):
         def raise_for_status(self):
             pass
 
-        # The production tool wraps the response in ``with requests.get(...)``
-        # so the connection is released deterministically — mirror that here.
+        # The page transport supplies a response context manager.
         def __enter__(self):
             return self
 
@@ -235,6 +241,8 @@ def test_fetch_web_page_success(monkeypatch):
     
     assert isinstance(res, ToolExecutionResult)
     assert res.success is True
+    assert 'Test Page' in res.reply_text
+    assert 'This is a test page with some content.' in res.reply_text
     # Should contain the URL even without BeautifulSoup
     assert "https://example.com" in (res.reply_text or "")
 
