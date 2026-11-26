@@ -209,6 +209,31 @@ class TestKeywordStrategy:
 class TestEmbeddingStrategy:
 
     @pytest.mark.unit
+    def test_reuses_tool_embeddings_for_unchanged_catalogue(self):
+        """Only the query is re-embedded when the tool catalogue is stable."""
+        backend = _embedding_backend({"weather": [1.0, 0.0, 0.0, 0.0]})
+        builtin = _builtin()
+
+        select_tools(
+            "what's the weather",
+            builtin, {},
+            strategy=ToolSelectionStrategy.EMBEDDING,
+            embedding_backend=backend,
+            embed_model="nomic-embed-text",
+        )
+        first_call_count = backend.embed.call_count
+
+        select_tools(
+            "what's the weather",
+            builtin, {},
+            strategy=ToolSelectionStrategy.EMBEDDING,
+            embedding_backend=backend,
+            embed_model="nomic-embed-text",
+        )
+
+        assert backend.embed.call_count == first_call_count + 1
+
+    @pytest.mark.unit
     def test_selects_similar_tools(self):
         """Weather query should rank getWeather highest."""
         backend = _embedding_backend({

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import re
+import weakref
 from enum import Enum
 from typing import Dict, List, Optional, TYPE_CHECKING
 
@@ -77,6 +78,11 @@ _STOP_WORDS = frozenset({
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 _CAMEL_RE = re.compile(r"(?<=[a-z])(?=[A-Z])")
+
+# Tool descriptions change only when the registry changes, but embedding
+# selection runs for every routed request. Keep the stable catalogue vectors
+# alongside the backend so each request only embeds its query.
+_TOOL_EMBEDDING_CACHE: "weakref.WeakKeyDictionary[object, dict]" = weakref.WeakKeyDictionary()
 
 
 # ---------------------------------------------------------------------------
@@ -194,14 +200,33 @@ def _select_embedding(
     for name, spec in mcp_tools.items():
         all_tools[name] = _tool_summary(name, spec.description)
 
-    for name, summary in all_tools.items():
-        tool_vec = embedding_backend.embed(summary, embed_model, timeout_sec=embed_timeout_sec)
-        if tool_vec is None:
-            continue
-        tool_arr = np.array(tool_vec, dtype=np.float32)
-        t_norm = np.linalg.norm(tool_arr)
-        if t_norm > 0:
-            tool_arr = tool_arr / t_norm
+    catalogue_key = (embed_model, tuple(all_tools.items()))
+    try:
+        backend_cache = _TOOL_EMBEDDING_CACHE.setdefault(embedding_backend, {})
+    except TypeError:
+        # A custom backend may not support weak references. Preserve the
+        # uncached behaviour rather than imposing a backend protocol change.
+        backend_cache = {}
+    cached_vectors = backend_cache.get(catalogue_key)
+    if cached_vectors is None:
+        cached_vectors = []
+        cacheable = True
+        for name, summary in all_tools.items():
+            tool_vec = embedding_backend.embed(
+                summary, embed_model, timeout_sec=embed_timeout_sec,
+            )
+            if tool_vec is None:
+                cacheable = False
+                continue
+            tool_arr = np.array(tool_vec, dtype=np.float32)
+            t_norm = np.linalg.norm(tool_arr)
+            if t_norm > 0:
+                tool_arr = tool_arr / t_norm
+            cached_vectors.append((name, tool_arr))
+        if cacheable:
+            backend_cache[catalogue_key] = cached_vectors
+
+    for name, tool_arr in cached_vectors:
         sim = float(np.dot(query_arr, tool_arr))
         similarities.append((name, sim))
 
